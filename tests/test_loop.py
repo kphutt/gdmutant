@@ -4,24 +4,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from conftest import MarkerRunner
 
 from gdmutant.engine.loop import BaselineFailed, Verdict, run
 from gdmutant.engine.operators import TableOperator
 from gdmutant.engine.runner import SuiteResult
-
-
-@dataclass
-class MarkerFakeRunner:
-    """Simulates a test that 'catches' a mutation: the suite fails iff the target file contains
-    `kill_marker`. Reads the file each call, so it reacts to whatever the loop wrote to disk."""
-
-    target: str
-    kill_marker: str
-    tests: int = 3
-
-    def run(self, project_dir: str) -> SuiteResult:
-        content = Path(self.target).read_text(encoding="utf-8")
-        return SuiteResult(tests=self.tests, failures=int(self.kill_marker in content), errors=0)
 
 
 @dataclass
@@ -73,13 +60,15 @@ def test_killed_survived_and_score(tmp_path: Path) -> None:
     src = "func f(a, b):\n\treturn a > b and a < b\n"
     path = _write(tmp_path, "f.gd", src)
     # The "test" only catches the mutation that yields ">=", i.e. the '>' -> '>=' comparison mutant.
-    result = run(str(tmp_path), path, src, MarkerFakeRunner(target=path, kill_marker=">="))
+    result = run(str(tmp_path), path, src, MarkerRunner(target=path, kill_marker=">="))
 
     assert (result.killed, result.survived, result.invalid) == (1, 2, 0)
     assert result.mutation_score == pytest.approx(1 / 3)
     (killed,) = [o.mutant for o in result.outcomes if o.verdict is Verdict.KILLED]
     assert (killed.original, killed.replacement) == (">", ">=")
-    assert {(m.original, m.replacement) for m in result.survivors} == {("<", "<="), ("and", "or")}
+    # Ordered, not a set: survivors are reported in the order mutants were generated (NF-1), which
+    # the report's mutant ids and the console survivor list both depend on.
+    assert [(m.original, m.replacement) for m in result.survivors] == [("and", "or"), ("<", "<=")]
     assert all(m.path == path for m in result.survivors)  # the real path flows to each mutant
     assert Path(path).read_text(encoding="utf-8") == src  # restored
 
@@ -88,7 +77,7 @@ def test_invalid_mutant_is_nf5_classified(tmp_path: Path) -> None:
     src = "func f(a, b):\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
     bad = TableOperator("bad", {">": ("))",)})  # produces unparseable GDScript
-    result = run(str(tmp_path), path, src, MarkerFakeRunner(path, "ZZZ"), catalog=(bad,))
+    result = run(str(tmp_path), path, src, MarkerRunner(path, "ZZZ"), catalog=(bad,))
 
     assert [o.verdict for o in result.outcomes] == [Verdict.INVALID]
     invalid = result.outcomes[0].mutant  # the outcome carries the real mutant, not a placeholder
@@ -104,7 +93,7 @@ def test_invalid_mutant_does_not_stop_later_mutants(tmp_path: Path) -> None:
     src = "func f(a):\n\treturn a > 5\n"
     path = _write(tmp_path, "f.gd", src)
     catalog = (TableOperator("x", {">": ("))",), "5": ("6",)}),)
-    result = run(str(tmp_path), path, src, MarkerFakeRunner(path, "ZZZ"), catalog=catalog)
+    result = run(str(tmp_path), path, src, MarkerRunner(path, "ZZZ"), catalog=catalog)
     assert [o.verdict for o in result.outcomes] == [Verdict.INVALID, Verdict.SURVIVED]
     assert {(o.mutant.original, o.mutant.replacement) for o in result.outcomes} == {
         (">", "))"),
@@ -128,7 +117,7 @@ def test_baseline_failure_raises(tmp_path: Path) -> None:
     path = _write(tmp_path, "f.gd", src)
     # The marker is present in the ORIGINAL source, so the unmutated baseline "fails".
     with pytest.raises(BaselineFailed, match=r"the unmutated test suite failed"):
-        run(str(tmp_path), path, src, MarkerFakeRunner(target=path, kill_marker=">"))
+        run(str(tmp_path), path, src, MarkerRunner(target=path, kill_marker=">"))
     assert Path(path).read_text(encoding="utf-8") == src
 
 
@@ -166,6 +155,6 @@ def test_runner_error_on_a_later_mutant_preserves_earlier_verdicts(tmp_path: Pat
 def test_run_is_deterministic(tmp_path: Path) -> None:
     src = "func f(a, b):\n\treturn a > b and a < b\n"
     path = _write(tmp_path, "f.gd", src)
-    r1 = run(str(tmp_path), path, src, MarkerFakeRunner(target=path, kill_marker=">="))
-    r2 = run(str(tmp_path), path, src, MarkerFakeRunner(target=path, kill_marker=">="))
+    r1 = run(str(tmp_path), path, src, MarkerRunner(target=path, kill_marker=">="))
+    r2 = run(str(tmp_path), path, src, MarkerRunner(target=path, kill_marker=">="))
     assert r1.outcomes == r2.outcomes

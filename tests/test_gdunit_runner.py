@@ -43,6 +43,31 @@ def test_run_parses_the_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert result.failed is True
 
 
+def test_run_invokes_subprocess_with_the_constructed_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The subprocess seam is the tool's only bridge to real Godot. Assert run() actually USES the
+    # constructed command, runs in the project dir, honors the timeout, and passes check=False
+    # (GdUnit4 exits non-zero on test failures — the report decides, not the exit code). Without
+    # this, a run() that shelled out to the wrong command would pass every other test.
+    report = _report(tmp_path)
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def capture(*args: object, **kwargs: object) -> None:
+        calls.append((args, kwargs))
+        report.write_text('<testsuite tests="1" failures="0"/>', encoding="utf-8")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", capture)
+    runner = GdUnit4Runner(test_path="res://t", godot="godot4", timeout=42.0)
+    runner.run(str(tmp_path))
+
+    (args, kwargs) = calls[0]
+    assert args[0] == runner.command(str(tmp_path))
+    assert kwargs["cwd"] == str(tmp_path)
+    assert kwargs["timeout"] == 42.0
+    assert kwargs["check"] is False
+
+
 def test_run_reflects_latest_report_on_repeated_calls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
