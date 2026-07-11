@@ -34,7 +34,15 @@ class GdUnit4Runner:
     timeout: float = 600.0
 
     def command(self, project_dir: str) -> list[str]:
-        """The ``godot --headless`` command that runs the GdUnit4 suite for `project_dir`."""
+        """The ``godot --headless`` command that runs the GdUnit4 suite for `project_dir`.
+
+        ``-rc 1`` (report-count = 1) is essential: GdUnit4's CI runner otherwise keeps a report
+        history, writing each invocation to an incrementing ``reports/report_N/`` dir. Since the
+        engine calls this once per mutant against the same project, re-reading a fixed
+        ``report_path`` would then return the *baseline's* stale report for every mutant — silently
+        marking every mutant SURVIVED. ``-rc 1`` forces overwrite-in-place so `report_path` is
+        always the latest run.
+        """
         return [
             self.godot,
             "--headless",
@@ -44,6 +52,8 @@ class GdUnit4Runner:
             _GDUNIT_CMD_TOOL,
             "-a",
             self.test_path,
+            "-rc",
+            "1",
         ]
 
     def run(self, project_dir: str) -> SuiteResult:

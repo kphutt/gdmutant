@@ -20,6 +20,8 @@ def test_command_construction() -> None:
         "res://addons/gdUnit4/bin/GdUnitCmdTool.gd",
         "-a",
         "res://test",
+        "-rc",
+        "1",  # report-count=1: overwrite one report dir (don't increment) — see runner.py
     ]
 
 
@@ -34,6 +36,29 @@ def test_run_parses_the_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     assert (result.tests, result.failures) == (4, 1)
     assert result.failed is True
+
+
+def test_run_reflects_latest_report_on_repeated_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The engine calls run() many times against the same project. With -rc 1, GdUnit4 overwrites
+    # one report dir, so each run must reflect its OWN result — never a stale earlier one.
+    report = tmp_path / "reports" / "report_1" / "results.xml"
+    report.parent.mkdir(parents=True)
+    outcomes = iter(
+        [
+            '<testsuite tests="3" failures="0" errors="0"/>',  # baseline: passes
+            '<testsuite tests="3" failures="1" errors="0"/>',  # mutant: fails
+        ]
+    )
+
+    def fake_run(*args: object, **kwargs: object) -> None:
+        report.write_text(next(outcomes), encoding="utf-8")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    runner = GdUnit4Runner()
+    assert runner.run(str(tmp_path)).failed is False  # baseline
+    assert runner.run(str(tmp_path)).failed is True  # mutant reflects the fresh report
 
 
 def test_gdunit4_runner_satisfies_the_protocol() -> None:
