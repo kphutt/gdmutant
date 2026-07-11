@@ -24,7 +24,7 @@ complements the coverage gate — coverage says a line *ran*, mutation says a bu
 
 ## Current result
 
-**523 / 540 mutants killed — the remaining 17 are equivalent mutants** (changes that cannot alter
+**541 / 558 mutants killed — the remaining 17 are equivalent mutants** (changes that cannot alter
 observable behavior, so no test *can* catch them; this is the well-known
 [equivalent mutant problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)).
 Rather than contort the suite to "kill" them — which would only pin implementation trivia — they are
@@ -34,7 +34,7 @@ below for what that set covers).
 ### Scope: what the 540 covers
 
 mutmut 3.6 mutates **module-level functions only** — it does not generate mutants for class-method
-bodies. So the 540 spans the package's 23 module-level functions (the operator catalog, spans, mutant
+bodies. So the 558 spans the package's 24 module-level functions (the operator catalog, spans, mutant
 generation, the loop, JUnit parsing, the reporter, the CLI, the adapter), but **not** the method
 bodies: `GdUnit4Runner.run`/`command`, the two `replacements` implementations, `MutationRun`'s
 properties, `Mutant.apply`, `Span.__post_init__`, and `SuiteResult.failed`/`passed`. Those are

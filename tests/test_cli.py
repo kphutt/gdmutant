@@ -49,6 +49,32 @@ def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFi
     assert "Wrote report to" in capsys.readouterr().out  # the confirmation line is printed
 
 
+def test_run_mutation_emits_per_mutant_progress_to_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Per-mutant progress goes to stderr (LOD-86) so a real run doesn't look hung; the "[i/N]"
+    # counter proves one line per mutant. The default (non --json -) summary is on stdout, so the
+    # progress lines must NOT be there.
+    path = _gd(tmp_path)  # 3 mutants
+    run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), ">="))
+    captured = capsys.readouterr()
+    assert "[1/3]" in captured.err and "[3/3]" in captured.err
+    assert "... killed" in captured.err
+    assert "[1/3]" not in captured.out  # progress never pollutes stdout
+
+
+def test_run_mutation_json_dash_keeps_progress_off_stdout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # With --json - stdout must be pure JSON: the progress lines go to stderr alongside the summary.
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), ">="), json_path="-")
+    assert rc == 0
+    captured = capsys.readouterr()
+    json.loads(captured.out)  # stdout is still valid JSON, nothing mixed in
+    assert "[1/3]" in captured.err  # progress landed on stderr
+
+
 def test_run_mutation_json_dash_writes_pure_json_to_stdout(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

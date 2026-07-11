@@ -152,6 +152,41 @@ def test_runner_error_on_a_later_mutant_preserves_earlier_verdicts(tmp_path: Pat
     assert Path(path).read_text(encoding="utf-8") == src
 
 
+def test_progress_callback_fires_once_per_mutant_in_order(tmp_path: Path) -> None:
+    # Progress must fire once per mutant, in generation order, with the exact
+    # "[i/N] path:line:col  a -> b  ... verdict" format — pinned exactly so a mutated separator,
+    # index base, or verdict label is caught (LOD-86). Source has 3 mutants: >, and, <.
+    src = "func f(a, b):\n\treturn a > b and a < b\n"
+    path = _write(tmp_path, "f.gd", src)
+    lines: list[str] = []
+    runner = MarkerRunner(target=path, kill_marker=">=")
+    run(str(tmp_path), path, src, runner, progress=lines.append)
+    assert lines == [
+        f"[1/3] {path}:2:11  > -> >=  ... killed",
+        f"[2/3] {path}:2:15  and -> or  ... survived",
+        f"[3/3] {path}:2:21  < -> <=  ... survived",
+    ]
+
+
+def test_progress_reports_invalid_verdict(tmp_path: Path) -> None:
+    # An invalid (unparseable) mutant is still reported, labelled "invalid" — the progress line is
+    # emitted for every mutant, not only the ones that reach the runner.
+    src = "func f(a, b):\n\treturn a > b\n"
+    path = _write(tmp_path, "f.gd", src)
+    bad = TableOperator("bad", {">": ("))",)})
+    lines: list[str] = []
+    run(str(tmp_path), path, src, MarkerRunner(path, "ZZZ"), catalog=(bad,), progress=lines.append)
+    assert lines == [f"[1/1] {path}:2:11  > -> ))  ... invalid"]
+
+
+def test_progress_defaults_to_silent(tmp_path: Path) -> None:
+    # Omitting progress must run without error and produce the same outcomes — it is opt-in.
+    src = "func f(a, b):\n\treturn a > b\n"
+    path = _write(tmp_path, "f.gd", src)
+    result = run(str(tmp_path), path, src, MarkerRunner(path, ">="))
+    assert [o.verdict for o in result.outcomes] == [Verdict.KILLED]
+
+
 def test_run_is_deterministic(tmp_path: Path) -> None:
     src = "func f(a, b):\n\treturn a > b and a < b\n"
     path = _write(tmp_path, "f.gd", src)
