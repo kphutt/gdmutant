@@ -62,14 +62,18 @@ says a line *ran*; mutation says a bug there would be *caught*. That gap is the 
   - **GDScript adapter first** (the gap; via gdtoolkit's parser).
   - **TypeScript:** don't compete with Stryker — *delegate* to it, or skip. Adapters are independent.
 
-## Architecture (the shape, not built yet)
+## Architecture (as built)
 ```
-engine/            language-neutral loop: select → mutate → run → tally → report; coverage-gated selection
-  operators/       language-neutral operator CATALOG (boolean/comparison/const/arith swaps, stmt deletion)
-adapters/
-  gdscript/        gdtoolkit AST: apply operators → unparse; run `godot --headless` + GUT/GdUnit
-  <lang>/          (future) one small module per language
-cli/               the standalone entry point a non-AI dev runs
+gdmutant/
+  engine/          language-neutral loop: select → mutate → run → tally → mutation score
+    operators/     operator catalog (boolean/comparison/arithmetic/constant/numeric-literal swaps)
+    spans.py       AST-guided source-span editing (docs/decisions/0002)
+    runner.py      the Runner interface + JUnit-XML parsing
+    report.py      Stryker mutation-testing-elements JSON + a console summary
+  adapters/
+    gdscript/      gdtoolkit AST → locate token → mutate → NF-5 re-parse guard; the GdUnit4 runner
+  cli.py           the standalone `gdmutant run` entry point (no AI required)
+corpus/            a real GDScript fixture module + GdUnit4 suite (the end-to-end proof)
 ```
 Two modes, one engine: a **deterministic operator core** (reproducible — the mode a merge-gate can trust) and,
 later, an optional **LLM-semantic mode** (plausible-bug mutants: off-by-one, dropped-last-element, swallowed
