@@ -127,6 +127,12 @@ Other flags: `--report-path` if your project writes GdUnit4's JUnit XML somewher
 default `reports/report_1/results.xml`, and `--timeout` (seconds, default 600) for the per-mutant
 test-run limit. `gdmutant run --help` lists them all.
 
+> **Your code is safe, but commit first.** gdmutant mutates the source file **in place**, restoring
+> it after each mutant and on a normal exit or Ctrl-C — but a hard kill (SIGKILL / power loss) could
+> leave one swap on disk, and an open Godot editor may hot-reload mid-run. So commit or stash before
+> a run. gdmutant **warns** if the target has uncommitted git changes; pass `--require-clean` to make
+> that a hard stop instead.
+
 > The live `godot --headless` path is pending CI validation (`ROADMAP.md`); `--dry-run` needs no Godot.
 
 ## Next steps

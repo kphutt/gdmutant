@@ -24,17 +24,17 @@ complements the coverage gate — coverage says a line *ran*, mutation says a bu
 
 ## Current result
 
-**609 / 626 mutants killed — the remaining 17 are equivalent mutants** (changes that cannot alter
+**668 / 686 mutants killed — the remaining 18 are equivalent mutants** (changes that cannot alter
 observable behavior, so no test *can* catch them; this is the well-known
 [equivalent mutant problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)).
 Rather than contort the suite to "kill" them — which would only pin implementation trivia — they are
 enumerated and justified here. Every behavioral mutant mutmut generates is killed (see the scope note
 below for what that set covers).
 
-### Scope: what the 626 covers
+### Scope: what the 686 covers
 
 mutmut 3.6 mutates **module-level functions only** — it does not generate mutants for class-method
-bodies. So the 626 spans the package's 26 module-level functions (the operator catalog, spans, mutant
+bodies. So the 686 spans the package's 27 module-level functions (the operator catalog, spans, mutant
 generation, the loop, JUnit parsing, the reporter, the CLI, the adapter), but **not** the method
 bodies: `GdUnit4Runner.run`/`command`, the two `replacements` implementations, `MutationRun`'s
 properties, `Mutant.apply`, `Span.__post_init__`, and `SuiteResult.failed`/`passed`. Those are
@@ -42,7 +42,7 @@ covered by unit tests but are not *mutation-measured* here — so read the score
 mutant mutmut generates is killed," over the module-level surface. Closing that gap with a
 method-mutating tool (e.g. cosmic-ray) is tracked as follow-up.
 
-### The 17 equivalent mutants
+### The 18 equivalent mutants
 
 **1. `encoding="utf-8"` → `encoding=None` / omitted / `"UTF-8"`  (11 mutants)**
 In `engine/loop.py` (`_run_one`, writing and restoring the mutated file) and `cli.py`
@@ -66,6 +66,15 @@ In `adapters/gdscript/_span_of`: `assert line and col and end_line and end_col`.
 type-narrowing guard for the `Optional[int]` token-position types. Because lark always populates
 those positions (each is `>= 1`, i.e. truthy), every `and`/`or` re-association of always-truthy
 operands evaluates identically — the guard never trips, so no test can observe a difference.
+
+**4. `"git"` → `"GIT"` in the uncommitted-changes check  (1 mutant)**
+In `cli._has_uncommitted_changes`, which shells out to `git status --porcelain`. On a
+**case-insensitive filesystem** — the macOS default, where this dogfood runs — the OS resolves
+`GIT` to the same `git` binary, so the mutant behaves identically and no test can catch it. On a
+case-sensitive filesystem (Linux CI) `GIT` is not found, the helper returns `False`, and the
+dirty-tree test kills it. So this is *environment-equivalent*, not universally so; the other
+mutations of that argument list (`status`, `--porcelain`, and the `--` separator — the last pinned
+by a dash-prefixed-filename test) are all killed.
 
 If any of these stops being equivalent (e.g. a future code path reads `Tree` node metadata, making
 mutant group 2 observable), it will resurface as a survivor and get a real test.

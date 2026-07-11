@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -43,6 +44,34 @@ def _load_gdscript(source_path: str) -> str | None:
         print(f"error: {source_path} is not valid GDScript", file=sys.stderr)
         return None
     return source
+
+
+def _has_uncommitted_changes(source_path: str) -> bool:
+    """True only if `source_path` is inside a git work tree and has uncommitted changes (tracked
+    and modified, or untracked). False when it is clean, not under git, or git isn't available.
+
+    gdmutant mutates the file in place and restores it in a ``finally`` — safe for a normal exit or
+    Ctrl-C, but a hard kill (SIGKILL / power loss) could leave one swap on disk. Warning when the
+    file is dirty lets the user commit or stash first. We only positively confirm *dirty*: anything
+    we can't check (no git, not a repo) returns False, because gdmutant must run fine outside git.
+    """
+    path = Path(source_path)
+    try:
+        # No check=: git exits non-zero outside a repo (the default check=False), and we read the
+        # returncode ourselves below. The `--` guards a filename that starts with "-".
+        completed = subprocess.run(
+            ["git", "status", "--porcelain", "--", path.name],
+            cwd=path.parent,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False  # git not installed, or the working directory is gone
+    if completed.returncode != 0:
+        return False  # not a git work tree, etc.
+    # `--porcelain` prints one line per changed path and nothing at all when clean. Comparing to ""
+    # (not bool()) also kills a `text=True`->False mutant: raw bytes never equal the str "".
+    return completed.stdout != ""
 
 
 def _missing_executable(error: BaselineFailed) -> str | None:
@@ -175,6 +204,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", dest="json_path", help="write the Stryker JSON report here (use - for stdout)"
     )
     run_parser.add_argument(
+        "--require-clean",
+        action="store_true",
+        help="refuse to run if the source file has uncommitted git changes (default: warn only)",
+    )
+    run_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="list the mutants without running any tests (no Godot needed)",
@@ -195,6 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--tests", args.tests, "res://test"),
                     ("--report-path", args.report_path, DEFAULT_REPORT_PATH),
                     ("--timeout", args.timeout, DEFAULT_TIMEOUT),
+                    ("--require-clean", args.require_clean, False),
                     ("--json", args.json_path, None),
                 )
                 if value != default
@@ -206,6 +241,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                     file=sys.stderr,
                 )
             return list_mutants(args.source)
+        # In-place-mutation safety (LOD-88): the run edits the source file per mutant. Warn (or,
+        # with --require-clean, refuse) on a dirty tree so a hard interrupt can't lose uncommitted
+        # work.
+        if _has_uncommitted_changes(args.source):
+            if args.require_clean:
+                print(
+                    f"error: {args.source} has uncommitted changes and --require-clean was given. "
+                    "Commit or stash first.",
+                    file=sys.stderr,
+                )
+                return 2
+            print(
+                f"warning: {args.source} has uncommitted changes — gdmutant mutates it in place "
+                "(restoring it when done), so a hard kill could leave it modified. Commit or stash "
+                "first to be safe. Continuing ...",
+                file=sys.stderr,
+            )
         project_dir = args.project or str(Path(args.source).resolve().parent)
         runner = GdUnit4Runner(
             test_path=args.tests,
