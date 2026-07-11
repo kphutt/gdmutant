@@ -1,7 +1,7 @@
-"""Bootstrap smoke tests — prove the package imports and the CLI entry point resolves.
+"""Smoke tests — the package imports and the CLI entry point resolves.
 
-Real engine tests (mutation operators, the GDScript adapter, the fixture corpus) land
-in the v0.1 engine milestone. These keep CI meaningful while the tree is still scaffolding.
+The engine's behavior is covered by the dedicated modules (test_spans, test_operators, test_mutants,
+test_loop, test_report, test_gdscript_adapter, test_gdunit_runner, test_cli, test_end_to_end).
 """
 
 import pytest
