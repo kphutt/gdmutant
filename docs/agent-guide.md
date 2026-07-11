@@ -90,3 +90,7 @@ stash first, or pass `--require-clean`.
 
 A well-behaved fixer loop terminates because every survivor is either killed (step 3) or suppressed
 as equivalent (step 4) — never retried forever.
+
+For a fuller, copy-pasteable version of this loop with a real worked example (a killable survivor
+and a genuine equivalent from the bundled corpus), see
+[`mutation-fixer-recipe.md`](mutation-fixer-recipe.md).
