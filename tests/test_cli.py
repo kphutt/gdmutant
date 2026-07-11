@@ -1,6 +1,7 @@
 """Tests for the CLI (`gdmutant run`), driven without Godot via an injected fake runner."""
 
 import json
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -8,8 +9,24 @@ import pytest
 from conftest import MarkerRunner
 
 import gdmutant.cli as cli
-from gdmutant.cli import build_parser, list_mutants, main, run_mutation
+from gdmutant.cli import _has_uncommitted_changes, build_parser, list_mutants, main, run_mutation
 from gdmutant.engine.runner import SuiteResult
+
+
+def _git(repo: Path, *args: str) -> None:
+    """Run a git command in `repo`, failing the test loudly on error."""
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+
+
+def _committed_repo(tmp_path: Path) -> Path:
+    """A git repo containing a committed, clean f.gd — the base for the dirty-tree tests."""
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    _gd(tmp_path)  # writes f.gd
+    _git(tmp_path, "add", "f.gd")
+    _git(tmp_path, "commit", "-m", "add f.gd")
+    return tmp_path
 
 
 def _gd(tmp_path: Path) -> Path:
@@ -328,15 +345,16 @@ def test_main_dry_run_lists_every_ignored_flag_in_order(
             "r",
             "--timeout",
             "1",
+            "--require-clean",
             "--json",
             "j",
         ]
     )
-    # Every run-only flag, in declaration order — pins each label (--report-path/--timeout included)
-    # and the ", " join, so a mutated label or a dropped flag is caught.
+    # Every run-only flag, in declaration order — pins each label (--report-path/--timeout/
+    # --require-clean included) and the ", " join, so a mutated label or a dropped flag is caught.
     assert capsys.readouterr().err.strip() == (
         "note: --dry-run runs no tests, so "
-        "--project, --godot, --tests, --report-path, --timeout, --json are ignored"
+        "--project, --godot, --tests, --report-path, --timeout, --require-clean, --json are ignored"
     )
 
 
@@ -376,6 +394,7 @@ def test_parser_defaults() -> None:
     assert args.dry_run is False
     assert args.report_path == "reports/report_1/results.xml"
     assert args.timeout == 600.0
+    assert args.require_clean is False
 
 
 def test_parser_help_text(
@@ -404,6 +423,7 @@ def test_parser_help_text(
         "the GdUnit4 test path (default: res://test)",
         "GdUnit4 JUnit-XML path, relative to the project dir (default: reports/report_1/results.xml)",  # noqa: E501
         "per-mutant test-run timeout, in seconds (default: 600)",
+        "refuse to run if the source file has uncommitted git changes (default: warn only)",
         "write the Stryker JSON report here (use - for stdout)",
         "list the mutants without running any tests (no Godot needed)",
     ):
@@ -520,3 +540,159 @@ def test_main_threads_json_path_to_run_mutation(
 def test_main_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == 0
     assert "usage" in capsys.readouterr().out  # the help text, not just a silent exit 0
+
+
+# ---- LOD-88: warn before mutating an uncommitted working tree ----------------------------------
+
+
+# Exact messages, pinned so mutmut's string mutation is caught.
+def _dirty_warning(source: str) -> str:
+    return (
+        f"warning: {source} has uncommitted changes — gdmutant mutates it in place "
+        "(restoring it when done), so a hard kill could leave it modified. Commit or stash "
+        "first to be safe. Continuing ..."
+    )
+
+
+def _require_clean_error(source: str) -> str:
+    return (
+        f"error: {source} has uncommitted changes and --require-clean was given. "
+        "Commit or stash first."
+    )
+
+
+def test_has_uncommitted_changes_true_when_modified(tmp_path: Path) -> None:
+    repo = _committed_repo(tmp_path)
+    (repo / "f.gd").write_text("func f(a, b):\n\treturn a >= b\n", encoding="utf-8")  # now modified
+    assert _has_uncommitted_changes(str(repo / "f.gd")) is True
+
+
+def test_has_uncommitted_changes_false_when_clean(tmp_path: Path) -> None:
+    repo = _committed_repo(tmp_path)  # committed, unmodified
+    assert _has_uncommitted_changes(str(repo / "f.gd")) is False
+
+
+def test_has_uncommitted_changes_true_when_untracked(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    path = _gd(tmp_path)  # written but never `git add`ed
+    assert _has_uncommitted_changes(str(path)) is True
+
+
+def test_has_uncommitted_changes_handles_dash_prefixed_filename(tmp_path: Path) -> None:
+    # The `--` before the pathspec matters for a filename starting with "-" (git would otherwise
+    # parse it as an option). A dash-named, untracked file must still report dirty — this pins the
+    # `--` so dropping/mangling it is caught.
+    _git(tmp_path, "init")
+    weird = tmp_path / "-weird.gd"
+    weird.write_text("func f():\n\treturn 1\n", encoding="utf-8")
+    assert _has_uncommitted_changes(str(weird)) is True
+
+
+def test_has_uncommitted_changes_false_outside_git(tmp_path: Path) -> None:
+    # No repo at all: gdmutant must run fine outside git, so "can't check" reads as not-dirty.
+    path = _gd(tmp_path)
+    assert _has_uncommitted_changes(str(path)) is False
+
+
+def test_has_uncommitted_changes_false_when_git_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # git not installed (subprocess raises FileNotFoundError) must be swallowed, not crash.
+    path = _gd(tmp_path)
+
+    def raise_fnf(*args: object, **kwargs: object) -> object:
+        raise FileNotFoundError("git not found")
+
+    monkeypatch.setattr(cli.subprocess, "run", raise_fnf)
+    assert _has_uncommitted_changes(str(path)) is False
+
+
+@dataclass
+class RunBoomRunner:
+    """A runner that's cheap to construct but explodes if actually run — proves --require-clean
+    short-circuits before any suite (Godot) invocation."""
+
+    def run(self, project_dir: str) -> SuiteResult:
+        raise AssertionError("--require-clean must return before running the suite")
+
+
+def test_run_mutation_warns_on_dirty_tree_but_proceeds(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A dirty source warns (in-place mutation is risky under a hard kill) but does NOT block —
+    # gdmutant is driven by headless agents, so it must never wait on an interactive prompt.
+    repo = _committed_repo(tmp_path)
+    path = repo / "f.gd"
+    path.write_text("func f(a, b):\n\treturn a >= b and a < b\n", encoding="utf-8")  # dirty
+    rc = run_mutation(str(path), str(repo), MarkerRunner(str(path), "ZZZ"))
+    assert rc == 0  # warned, then ran
+    assert _dirty_warning(str(path)) in capsys.readouterr().err
+
+
+def test_run_mutation_no_warning_on_clean_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _committed_repo(tmp_path)  # committed, unmodified => clean
+    path = repo / "f.gd"
+    rc = run_mutation(str(path), str(repo), MarkerRunner(str(path), "ZZZ"))
+    assert rc == 0
+    assert "uncommitted changes" not in capsys.readouterr().err  # silent when clean
+
+
+def test_run_mutation_require_clean_refuses_dirty_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # require_clean turns the warning into a hard exit 2, without ever running the suite (the
+    # RunBoomRunner would raise if reached) — so it's enforceable with no Godot present.
+    repo = _committed_repo(tmp_path)
+    path = repo / "f.gd"
+    path.write_text("func f(a, b):\n\treturn a >= b\n", encoding="utf-8")  # dirty
+    rc = run_mutation(str(path), str(repo), RunBoomRunner(), require_clean=True)
+    assert rc == 2
+    assert capsys.readouterr().err == _require_clean_error(str(path)) + "\n"
+
+
+def test_run_mutation_require_clean_allows_clean_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # require_clean is a no-op on a clean tree: the run proceeds normally.
+    repo = _committed_repo(tmp_path)
+    path = repo / "f.gd"
+    rc = run_mutation(str(path), str(repo), MarkerRunner(str(path), "ZZZ"), require_clean=True)
+    assert rc == 0
+    assert "uncommitted changes" not in capsys.readouterr().err
+
+
+def test_run_mutation_read_error_precedes_dirty_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Ordering (the LOD-88 re-review nit): a tracked-but-deleted source is BOTH dirty (git sees the
+    # deletion) and unreadable. The read error must come first, with no misleading "Continuing ..."
+    # dirty-warning printed ahead of it. Guards the git check sitting after _load_gdscript.
+    repo = _committed_repo(tmp_path)
+    (repo / "f.gd").unlink()  # deleted => dirty AND unreadable
+    rc = run_mutation(str(repo / "f.gd"), str(repo), MarkerRunner("x", "y"))
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "cannot read" in err
+    assert "Continuing ..." not in err  # no dirty-warning before the read error
+
+
+def test_main_threads_require_clean_to_run_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # --require-clean must reach run_mutation as require_clean=True, and default to False otherwise.
+    path = _gd(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_run_mutation(*args: object, **kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli, "run_mutation", fake_run_mutation)
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
+    main(["run", str(path), "--project", str(tmp_path), "--require-clean"])
+    assert captured["require_clean"] is True
+    captured.clear()
+    main(["run", str(path), "--project", str(tmp_path)])
+    assert captured["require_clean"] is False
