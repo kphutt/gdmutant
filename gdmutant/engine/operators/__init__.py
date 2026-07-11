@@ -3,7 +3,9 @@
 An `Operator` produces, for a source token, the mutated token(s) to try — each becomes one
 candidate mutant when an adapter finds that token in real source and applies the swap via
 `engine.spans`. The catalog covers DESIGN.md FG-2.1's token-level mutations: comparison, boolean,
-arithmetic, and constant (a boolean-literal flip **and** a numeric-literal bump).
+arithmetic, and constant (a boolean-literal flip **and** a numeric-literal bump). Beyond the FG-2.1
+minimum it also covers constructs common in real code: compound assignment (`+=`↔`-=`, `*=`↔`/=`),
+modulo (`%`→`*`/`/`), and unary-`not` removal (a token-level deletion).
 
 Two shapes implement the `Operator` protocol:
 
@@ -94,10 +96,34 @@ BOOLEAN = TableOperator("boolean", {"and": ("or",), "or": ("and",)})
 ARITHMETIC = TableOperator("arithmetic", {"+": ("-",), "-": ("+",), "*": ("/",), "/": ("*",)})
 CONSTANT = TableOperator("constant", {"true": ("false",), "false": ("true",)})
 NUMERIC = NumericBumpOperator()
+#: Compound assignment — gdtoolkit tokenizes ``+=``/``-=``/``*=``/``/=`` atomically, so these are a
+#: plain involutive swap. Without it, ``energy += speed`` produces **zero** mutants.
+COMPOUND_ASSIGN = TableOperator(
+    "compound-assign", {"+=": ("-=",), "-=": ("+=",), "*=": ("/=",), "/=": ("*=",)}
+)
+#: Modulo — swap ``%`` for ``*`` or ``/``. Directional on purpose: it targets the ``%`` the catalog
+#: otherwise ignores, without adding a ``%`` mutant to every ``*``/``/`` in the codebase. GDScript
+#: overloads ``%`` for string formatting, so the GDScript adapter's `find_sites` skips a ``%`` whose
+#: left operand is a string literal (formatting, not modulo). Not involutive (see operator tests).
+MODULO = TableOperator("modulo", {"%": ("*", "/")})
+#: Unary ``not`` removal — deleting the keyword flips the guarded condition, a strong mutation.
+#: Modelled as a swap to the empty string (a token-level deletion); the adapter's NF-5 re-parse
+#: drops any result that doesn't parse. Not involutive: ``""`` is not a token to swap back.
+LOGICAL_NOT = TableOperator("logical-not", {"not": ("",)})
 
-#: The default catalog, in a stable order. The intermediate list widens the heterogeneous
-#: operator types to the `Operator` protocol before forming the tuple.
-_CATALOG: list[Operator] = [COMPARISON, BOOLEAN, ARITHMETIC, CONSTANT, NUMERIC]
+#: The default catalog, in a stable order (new operators appended so existing mutant ids/order are
+#: unchanged — NF-1). The intermediate list widens the heterogeneous operator types to the
+#: `Operator` protocol before forming the tuple.
+_CATALOG: list[Operator] = [
+    COMPARISON,
+    BOOLEAN,
+    ARITHMETIC,
+    CONSTANT,
+    NUMERIC,
+    COMPOUND_ASSIGN,
+    MODULO,
+    LOGICAL_NOT,
+]
 CATALOG: tuple[Operator, ...] = tuple(_CATALOG)
 
 

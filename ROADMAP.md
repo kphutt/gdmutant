@@ -37,10 +37,6 @@
   aggregate mutation score (today: one `.gd` file per invocation), plus a helper to merge the
   per-file Stryker reports. Running the CLI once per file already works (mutation is in-place in the
   real project tree, so cross-file class references resolve), but there's no aggregate score.
-- **More operators for real code** — unary `not`, modulo `%`, and compound assignment
-  (`+=`↔`-=`, `*=`↔`/=`, which gdtoolkit tokenizes atomically) all appear in real logic the current
-  token-swap catalog can't mutate.
-
 ## Later (deferred — do not build now)
 - Method-body mutation coverage in the dogfood — mutmut 3 mutates only module-level functions, not
   class methods (see `docs/mutation-testing.md`); evaluate cosmic-ray (or a config/upstream fix) to
