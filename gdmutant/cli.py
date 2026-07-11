@@ -117,14 +117,19 @@ def list_mutants(source_path: str) -> int:
 
 
 def run_mutation(
-    source_path: str, project_dir: str, runner: Runner, *, json_path: str | None = None
+    source_path: str,
+    project_dir: str,
+    runner: Runner,
+    *,
+    json_path: str | None = None,
+    require_clean: bool = False,
 ) -> int:
     """Mutate `source_path`, run the suite via `runner`, print the summary, optionally write JSON.
 
     Returns 0 on a completed pass — **survivors are report output, not a failure** (FG-6.2) — 1 if
     the unmutated baseline suite fails, and 2 if the source can't be read, isn't valid GDScript, the
-    project directory doesn't exist, the test-runner executable isn't found, or the JSON report
-    can't be written.
+    project directory doesn't exist, `require_clean` is set and the source has uncommitted changes,
+    the test-runner executable isn't found, or the JSON report can't be written.
     """
     source = _load_gdscript(source_path)
     if source is None:
@@ -136,6 +141,24 @@ def run_mutation(
     if not Path(project_dir).is_dir():
         print(f"error: project directory not found: {project_dir}", file=sys.stderr)
         return 2
+    # In-place-mutation safety (LOD-88): the run edits the source file per mutant. Warn (or, with
+    # require_clean, refuse) on a dirty tree so a hard interrupt can't lose uncommitted work.
+    # Ordered after the read/parse validation above so a genuine read error is reported first,
+    # not preceded by a "Continuing ..." warning.
+    if _has_uncommitted_changes(source_path):
+        if require_clean:
+            print(
+                f"error: {source_path} has uncommitted changes and --require-clean was given. "
+                "Commit or stash first.",
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            f"warning: {source_path} has uncommitted changes — gdmutant mutates it in place "
+            "(restoring it when done), so a hard kill could leave it modified. Commit or stash "
+            "first to be safe. Continuing ...",
+            file=sys.stderr,
+        )
     path = Path(source_path)
     # Progress goes to stderr unconditionally: a real run boots Godot per mutant, so without it the
     # tool looks hung. stderr keeps stdout clean for --json - (pure JSON) and the human summary.
@@ -241,23 +264,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     file=sys.stderr,
                 )
             return list_mutants(args.source)
-        # In-place-mutation safety (LOD-88): the run edits the source file per mutant. Warn (or,
-        # with --require-clean, refuse) on a dirty tree so a hard interrupt can't lose uncommitted
-        # work.
-        if _has_uncommitted_changes(args.source):
-            if args.require_clean:
-                print(
-                    f"error: {args.source} has uncommitted changes and --require-clean was given. "
-                    "Commit or stash first.",
-                    file=sys.stderr,
-                )
-                return 2
-            print(
-                f"warning: {args.source} has uncommitted changes — gdmutant mutates it in place "
-                "(restoring it when done), so a hard kill could leave it modified. Commit or stash "
-                "first to be safe. Continuing ...",
-                file=sys.stderr,
-            )
         project_dir = args.project or str(Path(args.source).resolve().parent)
         runner = GdUnit4Runner(
             test_path=args.tests,
@@ -265,7 +271,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             report_path=args.report_path,
             timeout=args.timeout,
         )
-        return run_mutation(args.source, project_dir, runner, json_path=args.json_path)
+        return run_mutation(
+            args.source,
+            project_dir,
+            runner,
+            json_path=args.json_path,
+            require_clean=args.require_clean,
+        )
     parser.print_help()
     return 0
 
