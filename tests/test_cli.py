@@ -1,5 +1,6 @@
 """Tests for the CLI (`gdmutant run`), driven without Godot via an injected fake runner."""
 
+import argparse
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,19 +39,25 @@ def test_run_mutation_prints_summary_and_returns_zero_with_survivors(
     out = capsys.readouterr().out
     assert "Mutation score:" in out
     assert "Survivors" in out
+    assert str(path) in out  # each survivor line names the real source path
 
 
-def test_run_mutation_writes_valid_json(tmp_path: Path) -> None:
+def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = _gd(tmp_path)
     report_file = tmp_path / "report.json"
     rc = run_mutation(
         str(path), str(tmp_path), MarkerRunner(str(path), ">="), json_path=str(report_file)
     )
     assert rc == 0
-    data = json.loads(report_file.read_text(encoding="utf-8"))
+    text = report_file.read_text(encoding="utf-8")
+    # Pretty-printed with indent=2 exactly — catches compact (indent=None) and indent=3 mutants.
+    assert '\n  "schemaVersion"' in text
+    data = json.loads(text)
     assert data["schemaVersion"] == "2"
     assert str(path) in data["files"]
     assert data["files"][str(path)]["mutants"]
+    assert data["files"][str(path)]["source"] == path.read_text(encoding="utf-8")  # real source
+    assert "Wrote report to" in capsys.readouterr().out  # the confirmation line is printed
 
 
 def test_run_mutation_baseline_failure_returns_one(
@@ -92,6 +99,31 @@ def test_parser_run_subcommand() -> None:
     assert args.json_path == "r.json"
 
 
+def test_parser_prog_and_description() -> None:
+    parser = build_parser()
+    assert parser.prog == "gdmutant"
+    assert parser.description == "Mutation testing for GDScript (and, in time, other languages)."
+
+
+def test_parser_run_help_defaults_and_arg_help() -> None:
+    # Pin the run subcommand's help, each argument's help text, and the two defaults. This is the
+    # CLI's user-facing contract, so every help/default string mutation is caught here.
+    parser = build_parser()
+    sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    run_help = next(c for c in sub._choices_actions if c.dest == "run")
+    assert run_help.help == "mutate a GDScript file and report survivors"
+
+    by_dest = {a.dest: a for a in sub.choices["run"]._actions}
+    assert by_dest["source"].help == "the .gd file to mutate"
+    assert by_dest["project"].help == "the Godot project dir (default: the source's dir)"
+    assert by_dest["project"].default is None
+    assert by_dest["godot"].default == "godot"
+    assert by_dest["godot"].help == "the Godot executable (default: godot)"
+    assert by_dest["tests"].default == "res://test"
+    assert by_dest["tests"].help == "the GdUnit4 test path (default: res://test)"
+    assert by_dest["json_path"].help == "write the Stryker JSON report here"
+
+
 def test_main_dispatches_run_with_injected_runner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -122,6 +154,46 @@ def test_main_default_project_uses_the_source_dir(
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
     assert main(["run", str(path)]) == 0  # no --project given
     assert runner.seen[0] == str(path.resolve().parent)  # defaulted to the source's directory
+
+
+def test_main_constructs_runner_with_test_path_and_godot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # main must build the GdUnit4Runner from the parsed --tests and --godot values (both kwargs,
+    # correct values) — mutants that drop a kwarg or null a value are caught by the exact dict.
+    path = _gd(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_runner(**kwargs: object) -> RecordingRunner:
+        captured.update(kwargs)
+        return RecordingRunner()
+
+    monkeypatch.setattr(cli, "GdUnit4Runner", fake_runner)
+    main(
+        [
+            "run",
+            str(path),
+            "--project",
+            str(tmp_path),
+            "--godot",
+            "godot4",
+            "--tests",
+            "res://custom",
+        ]
+    )
+    assert captured == {"test_path": "res://custom", "godot": "godot4"}
+
+
+def test_main_threads_json_path_to_run_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # --json must reach run_mutation as json_path; a mutant that nulls/drops it writes no report.
+    path = _gd(tmp_path)
+    report = tmp_path / "out.json"
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: MarkerRunner(str(path), ">="))
+    rc = main(["run", str(path), "--project", str(tmp_path), "--json", str(report)])
+    assert rc == 0
+    assert report.exists()
 
 
 def test_main_no_command_prints_help() -> None:
