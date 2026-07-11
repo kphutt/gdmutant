@@ -29,6 +29,14 @@ def test_crlf_line_endings_preserved() -> None:
     assert result == "if a >= b:\r\nx = 1\r\n"
 
 
+def test_splits_only_on_newline_not_other_boundaries() -> None:
+    # A form feed (\x0c) is a line boundary to str.splitlines() but NOT to gdtoolkit/lark,
+    # which counts only "\n". It must be ordinary content so our line numbers match the
+    # parser's. (Regression for the ADR-0002 line-counting P2.)
+    # columns: a=1  \x0c=2  b=3  space=4  '>'=5
+    assert apply_replacement("a\x0cb > c\n", Span(1, 5, 1, 6), ">=") == "a\x0cb >= c\n"
+
+
 def test_replacement_can_be_empty_or_longer() -> None:
     assert apply_replacement("a + b\n", Span(1, 3, 1, 4), "") == "a  b\n"
     assert apply_replacement("a + b\n", Span(1, 3, 1, 4), "plus") == "a plus b\n"

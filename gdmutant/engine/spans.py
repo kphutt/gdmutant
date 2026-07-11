@@ -29,20 +29,21 @@ class Span:
             raise ValueError(f"span end precedes start: {self!r}")
 
 
-def _newline_len(line: str) -> int:
-    """Length of the trailing newline sequence on `line` (0, 1 for \\n, or 2 for \\r\\n)."""
-    if line.endswith("\r\n"):
-        return 2
-    if line.endswith(("\n", "\r")):
-        return 1
-    return 0
+# Split source lines ONLY on "\n", matching gdtoolkit/lark's line counter
+# (lark.lexer.LineCounter uses newline_char="\n"). Python's str.splitlines() also treats
+# vertical tab, form feed, \x1c-\x1e, NEL (\x85), and U+2028/U+2029 — and a lone \r — as line
+# boundaries; any of those before the mutated line would desync our line numbers from the
+# parser's and edit the wrong line (docs/decisions/0002 / NF-5). A trailing \r (CRLF) stays
+# in the line's content, exactly as the parser sees it.
+_NEWLINE = "\n"
 
 
 def apply_replacement(source: str, span: Span, replacement: str) -> str:
     """Return `source` with the text in `span` replaced by `replacement`.
 
-    Only single-line spans are supported — mutation operators act within one line. The replaced
-    region must fall within that line's content (excluding its trailing newline).
+    Only single-line spans are supported — mutation operators act within one line. Lines are
+    counted by literal ``\\n`` only, matching gdtoolkit/lark, so token positions from the parser
+    line up with the edit. The replaced region must fall within that line's content.
 
     Raises:
         ValueError: if the span covers more than one line.
@@ -51,19 +52,18 @@ def apply_replacement(source: str, span: Span, replacement: str) -> str:
     if span.line != span.end_line:
         raise ValueError(f"multi-line spans are not supported: {span!r}")
 
-    lines = source.splitlines(keepends=True)
+    lines = source.split(_NEWLINE)
     if not (1 <= span.line <= len(lines)):
         raise IndexError(f"line {span.line} out of range (source has {len(lines)} lines)")
 
     line = lines[span.line - 1]
-    content_len = len(line) - _newline_len(line)
     start = span.column - 1
     end = span.end_column - 1
-    if not (0 <= start <= end <= content_len):
+    if not (0 <= start <= end <= len(line)):
         raise IndexError(
             f"columns {span.column}..{span.end_column} out of range for a line of "
-            f"{content_len} characters"
+            f"{len(line)} characters"
         )
 
     lines[span.line - 1] = line[:start] + replacement + line[end:]
-    return "".join(lines)
+    return _NEWLINE.join(lines)

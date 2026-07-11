@@ -40,3 +40,18 @@ def test_boolean_operator_span_is_located_and_mutated() -> None:
 
     assert "return a or b" in mutated
     _parse(mutated)
+
+
+def test_special_line_char_before_mutation_does_not_desync() -> None:
+    # A form feed inside a string literal is NOT a line boundary to gdtoolkit/lark (it counts
+    # only "\n"), though Python's str.splitlines() would treat it as one. The span editor must
+    # agree with the parser's line numbering, or it edits the wrong line. (Regression for the
+    # ADR-0002 P2.)
+    src = 'func f(a, b):\n\tvar s = "x\x0cy"\n\tif a > b:\n\t\treturn true\n\treturn false\n'
+    tok = _first_token(_parse(src), ">")
+    span = Span(tok.line, tok.column, tok.end_line, tok.end_column)
+
+    mutated = apply_replacement(src, span, ">=")
+
+    assert "a >= b" in mutated
+    _parse(mutated)  # NF-5: still valid GDScript
