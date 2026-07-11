@@ -14,10 +14,19 @@ from pathlib import Path
 
 from gdmutant import __version__
 from gdmutant.adapters.gdscript import generate_mutants, is_valid_gdscript
-from gdmutant.adapters.gdscript.runner import GdUnit4Runner
+from gdmutant.adapters.gdscript.runner import (
+    DEFAULT_REPORT_PATH,
+    DEFAULT_TIMEOUT,
+    GdUnit4Runner,
+)
 from gdmutant.engine.loop import BaselineFailed, run
 from gdmutant.engine.report import console_summary, stryker_report
 from gdmutant.engine.runner import Runner
+
+_MISSING_GODOT_MACOS_HINT = (
+    "  On macOS, Godot ships as an app bundle and is never on PATH — pass the binary directly:\n"
+    "    --godot /Applications/Godot.app/Contents/MacOS/Godot"
+)
 
 
 def _load_gdscript(source_path: str) -> str | None:
@@ -34,6 +43,34 @@ def _load_gdscript(source_path: str) -> str | None:
         print(f"error: {source_path} is not valid GDScript", file=sys.stderr)
         return None
     return source
+
+
+def _missing_executable(error: BaselineFailed) -> str | None:
+    """The executable name if `error` was caused by a not-found test runner binary, else None.
+
+    The baseline runner raising `FileNotFoundError` (e.g. no ``godot`` on PATH) is a *setup*
+    error, not a red suite — the loop wraps it as `BaselineFailed` but preserves the original via
+    ``__cause__``. Reading the missing name here lets the CLI print an actionable hint instead of a
+    raw errno, and exit 2 (bad setup) rather than 1 (baseline failed)."""
+    cause = error.__cause__
+    if isinstance(cause, FileNotFoundError):
+        return cause.filename or "the test runner"
+    return None
+
+
+def _missing_executable_hint(filename: str) -> str:
+    """A friendly, actionable message for a not-found test-runner executable named `filename`.
+
+    Generic by default (install it / pass its full path); adds the macOS Godot app-bundle path when
+    the missing binary looks like Godot — the single most common first-run failure, since most Godot
+    users are on macOS where Godot is never on PATH (LOD-87)."""
+    lines = [
+        f"error: could not run the test suite — executable {filename!r} not found.",
+        "  Install it and put it on your PATH, or pass its full path with --godot.",
+    ]
+    if sys.platform == "darwin" and "godot" in filename.lower():
+        lines.append(_MISSING_GODOT_MACOS_HINT)
+    return "\n".join(lines)
 
 
 def list_mutants(source_path: str) -> int:
@@ -56,11 +93,19 @@ def run_mutation(
     """Mutate `source_path`, run the suite via `runner`, print the summary, optionally write JSON.
 
     Returns 0 on a completed pass — **survivors are report output, not a failure** (FG-6.2) — 1 if
-    the unmutated baseline suite fails, and 2 if the source can't be read, isn't valid GDScript, or
-    the JSON report can't be written.
+    the unmutated baseline suite fails, and 2 if the source can't be read, isn't valid GDScript, the
+    project directory doesn't exist, the test-runner executable isn't found, or the JSON report
+    can't be written.
     """
     source = _load_gdscript(source_path)
     if source is None:
+        return 2
+    # Validate project_dir up front: the runner shells out with `cwd=project_dir`, so a missing dir
+    # raises FileNotFoundError too — indistinguishable by type from a missing `godot`. Catching it
+    # here keeps _missing_executable's FileNotFoundError unambiguously about the executable, and
+    # gives a bad --project its own clear message.
+    if not Path(project_dir).is_dir():
+        print(f"error: project directory not found: {project_dir}", file=sys.stderr)
         return 2
     path = Path(source_path)
     # Progress goes to stderr unconditionally: a real run boots Godot per mutant, so without it the
@@ -74,6 +119,10 @@ def run_mutation(
             progress=lambda line: print(line, file=sys.stderr),
         )
     except BaselineFailed as error:
+        missing = _missing_executable(error)
+        if missing is not None:
+            print(_missing_executable_hint(missing), file=sys.stderr)
+            return 2
         print(f"error: {error}", file=sys.stderr)
         return 1
     # With --json - the report goes to stdout, so keep the human summary on stderr — an agent
@@ -111,6 +160,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--tests", default="res://test", help="the GdUnit4 test path (default: res://test)"
     )
     run_parser.add_argument(
+        "--report-path",
+        default=DEFAULT_REPORT_PATH,
+        help="GdUnit4 JUnit-XML path, relative to the project dir "
+        f"(default: {DEFAULT_REPORT_PATH})",
+    )
+    run_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"per-mutant test-run timeout, in seconds (default: {DEFAULT_TIMEOUT:g})",
+    )
+    run_parser.add_argument(
         "--json", dest="json_path", help="write the Stryker JSON report here (use - for stdout)"
     )
     run_parser.add_argument(
@@ -132,6 +193,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--project", args.project, None),
                     ("--godot", args.godot, "godot"),
                     ("--tests", args.tests, "res://test"),
+                    ("--report-path", args.report_path, DEFAULT_REPORT_PATH),
+                    ("--timeout", args.timeout, DEFAULT_TIMEOUT),
                     ("--json", args.json_path, None),
                 )
                 if value != default
@@ -144,7 +207,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             return list_mutants(args.source)
         project_dir = args.project or str(Path(args.source).resolve().parent)
-        runner = GdUnit4Runner(test_path=args.tests, godot=args.godot)
+        runner = GdUnit4Runner(
+            test_path=args.tests,
+            godot=args.godot,
+            report_path=args.report_path,
+            timeout=args.timeout,
+        )
         return run_mutation(args.source, project_dir, runner, json_path=args.json_path)
     parser.print_help()
     return 0

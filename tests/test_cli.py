@@ -101,6 +101,117 @@ def test_run_mutation_baseline_failure_returns_one(
     assert "unmutated test suite failed" in capsys.readouterr().err
 
 
+@dataclass
+class MissingGodotRunner:
+    """Raises FileNotFoundError on the baseline run, as subprocess does when `godot` isn't found.
+
+    `filename=None` models the case where the OS error carries no filename (the `.filename or ...`
+    fallback path)."""
+
+    filename: str | None = "godot"
+
+    def run(self, project_dir: str) -> SuiteResult:
+        raise FileNotFoundError(2, "No such file or directory", self.filename)
+
+
+# The exact messages, pinned in full (as a stderr *suffix* — the baseline-progress notice prints
+# first) so mutmut's string mutation is caught: a wrapped "XX…--godot.XX\n" fails an endswith of the
+# verbatim block, where a loose "--godot" in err would not.
+_GENERIC_GODOT_MISSING = (
+    "error: could not run the test suite — executable 'godot' not found.\n"
+    "  Install it and put it on your PATH, or pass its full path with --godot.\n"
+)
+_MACOS_GODOT_MISSING = (
+    _GENERIC_GODOT_MISSING
+    + "  On macOS, Godot ships as an app bundle and is never on PATH — pass the binary directly:\n"
+    + "    --godot /Applications/Godot.app/Contents/MacOS/Godot\n"
+)
+_FALLBACK_MISSING = (
+    "error: could not run the test suite — executable 'the test runner' not found.\n"
+    "  Install it and put it on your PATH, or pass its full path with --godot.\n"
+)
+
+
+def test_run_mutation_missing_godot_returns_two_with_exact_generic_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A not-found runner executable is a SETUP error (exit 2), not a red baseline (exit 1). Off
+    # darwin the message is exactly the generic two lines — no macOS hint, no raw errno.
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MissingGodotRunner())
+    assert rc == 2  # setup error, distinct from baseline-red (1)
+    err = capsys.readouterr().err
+    assert err.endswith(_GENERIC_GODOT_MISSING)  # exact message, verbatim
+    assert "Godot.app" not in err  # macOS-only hint suppressed off darwin
+    assert "Errno" not in err  # the raw errno never leaks
+
+
+def test_run_mutation_missing_godot_shows_exact_macos_hint_on_darwin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # On macOS — where most Godot users are and Godot is never on PATH — the generic message is
+    # followed by the exact app-bundle path to pass to --godot.
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MissingGodotRunner())
+    assert rc == 2
+    assert capsys.readouterr().err.endswith(_MACOS_GODOT_MISSING)
+
+
+def test_run_mutation_missing_non_godot_binary_omits_godot_specific_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The macOS app-bundle hint is Godot-specific: a different missing binary (even on darwin) gets
+    # the generic message only, so the hint can't misfire for a non-Godot runner.
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MissingGodotRunner(filename="some-runner"))
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "executable 'some-runner' not found." in err  # the missing name is substituted in
+    assert "Godot.app" not in err
+
+
+def test_run_mutation_missing_executable_with_no_filename_uses_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # When the OS error carries no filename, the message names "the test runner" rather than an
+    # empty ''. Exercises the `.filename or "the test runner"` fallback so the literal can't rot.
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MissingGodotRunner(filename=None))
+    assert rc == 2
+    assert capsys.readouterr().err.endswith(_FALLBACK_MISSING)
+
+
+def test_run_mutation_nonexistent_project_dir_reports_directory_not_executable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A bad --project must report a *directory* problem, not be mistaken for a missing godot binary
+    # (both surface as FileNotFoundError once the runner shells out with cwd=project_dir). The
+    # MissingGodotRunner would raise the executable error if reached — so this also proves the
+    # project-dir check fires *before* the runner runs.
+    path = _gd(tmp_path)
+    missing_dir = tmp_path / "no-such-project"
+    rc = run_mutation(str(path), str(missing_dir), MissingGodotRunner())
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err == f"error: project directory not found: {missing_dir}\n"
+    assert "executable" not in err  # never misreported as a missing binary
+
+
+def test_baseline_red_is_still_exit_one_not_mistaken_for_missing_executable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A genuinely failing baseline (no FileNotFoundError cause) must stay exit 1 — the missing-exe
+    # path must not swallow it. Guards the __cause__ discrimination in _missing_executable.
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), ">"))
+    assert rc == 1
+    assert "unmutated test suite failed" in capsys.readouterr().err
+
+
 def test_run_mutation_missing_file_returns_two(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -213,12 +324,19 @@ def test_main_dry_run_lists_every_ignored_flag_in_order(
             "g",
             "--tests",
             "t",
+            "--report-path",
+            "r",
+            "--timeout",
+            "1",
             "--json",
             "j",
         ]
     )
+    # Every run-only flag, in declaration order — pins each label (--report-path/--timeout included)
+    # and the ", " join, so a mutated label or a dropped flag is caught.
     assert capsys.readouterr().err.strip() == (
-        "note: --dry-run runs no tests, so --project, --godot, --tests, --json are ignored"
+        "note: --dry-run runs no tests, so "
+        "--project, --godot, --tests, --report-path, --timeout, --json are ignored"
     )
 
 
@@ -256,6 +374,8 @@ def test_parser_defaults() -> None:
     assert args.project is None
     assert args.json_path is None
     assert args.dry_run is False
+    assert args.report_path == "reports/report_1/results.xml"
+    assert args.timeout == 600.0
 
 
 def test_parser_help_text(
@@ -282,6 +402,8 @@ def test_parser_help_text(
         "the Godot project dir (default: the source's dir)",
         "the Godot executable (default: godot)",
         "the GdUnit4 test path (default: res://test)",
+        "GdUnit4 JUnit-XML path, relative to the project dir (default: reports/report_1/results.xml)",  # noqa: E501
+        "per-mutant test-run timeout, in seconds (default: 600)",
         "write the Stryker JSON report here (use - for stdout)",
         "list the mutants without running any tests (no Godot needed)",
     ):
@@ -345,7 +467,42 @@ def test_main_constructs_runner_with_test_path_and_godot(
             "res://custom",
         ]
     )
-    assert captured == {"test_path": "res://custom", "godot": "godot4"}
+    # report_path/timeout are passed too — defaulted here (not on the command line).
+    assert captured == {
+        "test_path": "res://custom",
+        "godot": "godot4",
+        "report_path": "reports/report_1/results.xml",
+        "timeout": 600.0,
+    }
+
+
+def test_main_threads_report_path_and_timeout_to_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # --report-path and --timeout must reach the GdUnit4Runner (both kwargs, parsed values; the
+    # timeout coerced to float). A mutant that drops either kwarg or skips the type= coercion fails.
+    path = _gd(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_runner(**kwargs: object) -> RecordingRunner:
+        captured.update(kwargs)
+        return RecordingRunner()
+
+    monkeypatch.setattr(cli, "GdUnit4Runner", fake_runner)
+    main(
+        [
+            "run",
+            str(path),
+            "--project",
+            str(tmp_path),
+            "--report-path",
+            "out/custom.xml",
+            "--timeout",
+            "42",
+        ]
+    )
+    assert captured["report_path"] == "out/custom.xml"
+    assert captured["timeout"] == 42.0 and isinstance(captured["timeout"], float)
 
 
 def test_main_threads_json_path_to_run_mutation(
