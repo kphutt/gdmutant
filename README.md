@@ -62,23 +62,39 @@ says a line *ran*; mutation says a bug there would be *caught*. That gap is the 
   - **GDScript adapter first** (the gap; via gdtoolkit's parser).
   - **TypeScript:** don't compete with Stryker — *delegate* to it, or skip. Adapters are independent.
 
-## Architecture (the shape, not built yet)
+## Architecture (as built)
 ```
-engine/            language-neutral loop: select → mutate → run → tally → report; coverage-gated selection
-  operators/       language-neutral operator CATALOG (boolean/comparison/const/arith swaps, stmt deletion)
-adapters/
-  gdscript/        gdtoolkit AST: apply operators → unparse; run `godot --headless` + GUT/GdUnit
-  <lang>/          (future) one small module per language
-cli/               the standalone entry point a non-AI dev runs
+gdmutant/
+  engine/          language-neutral loop: select → mutate → run → tally → mutation score
+    operators/     operator catalog (boolean/comparison/arithmetic/constant/numeric-literal swaps)
+    spans.py       AST-guided source-span editing (docs/decisions/0002)
+    runner.py      the Runner interface + JUnit-XML parsing
+    report.py      Stryker mutation-testing-elements JSON + a console summary
+  adapters/
+    gdscript/      gdtoolkit AST → locate token → mutate → NF-5 re-parse guard; the GdUnit4 runner
+  cli.py           the standalone `gdmutant run` entry point (no AI required)
+corpus/            a real GDScript fixture module + GdUnit4 suite (the end-to-end proof)
 ```
 Two modes, one engine: a **deterministic operator core** (reproducible — the mode a merge-gate can trust) and,
 later, an optional **LLM-semantic mode** (plausible-bug mutants: off-by-one, dropped-last-element, swallowed
 error) for *hardening*, kept out of the gate because it's nondeterministic.
 
 ## Status
-**Bootstrapped — hardening, toolchain, and the docs spine are in place; the engine is not built yet.**
-Spun off from `project-rampart` (a Godot roguelike) so it has its own home and context. Next is the
-`DESIGN.md` gate, then the engine loop + GDScript adapter — see NEXT STEPS and `ROADMAP.md`.
+**v0.1 works — gdmutant mutates real GDScript and reports survivors end-to-end.** From a `.gd` file it
+generates AST-based mutants (comparison / boolean / arithmetic / constant / numeric-literal), runs the
+project's GdUnit4 suite per mutant, classifies killed / survived / invalid / error, computes a mutation
+score, and emits a console summary + a Stryker `mutation-testing-elements` JSON report — via the
+standalone `gdmutant run` CLI (no AI required). Proven end-to-end on the bundled `corpus/` module; the
+**live `godot --headless` + GdUnit4** invocation is pending CI validation (see `ROADMAP.md`). Spun off
+from `project-rampart` (a Godot roguelike) so it has its own home.
+
+## Usage
+```sh
+uv sync --frozen   # install deps (or, once published: pipx install gdmutant)
+uv run gdmutant run path/to/module.gd --project path/to/godot-project [--json report.json]
+```
+Prints each surviving mutant (`file:line` + the swap) and a mutation score, and optionally writes a
+`mutation-testing-elements` report. Running the real suite needs Godot + the GdUnit4 addon on the project.
 
 ## Next steps
 1. ✅ **Repo hardened + stack chosen.** Security baseline + Python CI (ruff / mypy / pytest+coverage /
@@ -86,12 +102,13 @@ Spun off from `project-rampart` (a Godot roguelike) so it has its own home and c
    `docs/decisions/0001`), with **GdUnit4** as the first test-runner adapter.
 2. ✅ **Name cleared** — `gdmutant` is free on PyPI, npm, and GitHub (re-check + a trademark sense-check
    before any public launch).
-3. **Write `DESIGN.md` (the design gate)** — goals, FG/NF requirements, the architecture (named metaphor +
-   Mermaid + component-role table), build plan. Get it reviewed, *then* build the engine loop + adapter.
-4. **Build v0.1 against a bundled `corpus/` fixture** — a small GDScript module + a GdUnit4 suite,
-   reproducible and doubling as the tool's own regression tests. (`project-rampart` has no GDScript or
-   tests yet, so fixture-first *is* the extract-from-use path; dogfood its real systems once they exist.)
-5. Decide public timing (private now; flip when v0.1 mutates real code + shows survivors — never launch empty).
+3. ✅ **`DESIGN.md` design gate written + reviewed** — goals, FG/NF requirements, the "Saboteur & the
+   Jury" architecture, and the build plan (`docs/design/DESIGN.md`).
+4. ✅ **v0.1 built against the bundled `corpus/` fixture** — engine loop, operator catalog, GDScript
+   adapter (NF-5 guard), GdUnit4 runner, Stryker reporter, and the `gdmutant run` CLI. Mutates
+   `corpus/turn_order.gd` (13 mutants) and prints survivors end-to-end.
+5. **Remaining before a public launch** (see `ROADMAP.md`): live CI Godot/GdUnit4 validation of the
+   runner, the statement-deletion operator, then flip the repo public — never launch empty.
 
 ## Where it fits in your CI
 This tool answers one question a green CI build can't: *"do the tests actually bite?"* It's an **advisory**
