@@ -60,6 +60,13 @@ def _string_format_percents(tree: Tree[Token]) -> set[tuple[int | None, int | No
     ``d[...]`` ``subscr_expr`` subtree, not a string), so a token-adjacency check would wrongly drop
     it. Here each ``%`` in an ``mdr_expr`` (mul/div/remainder) node is skipped only when the node
     child *directly* to its left is a ``string`` node.
+
+    Scope (deliberate): only a **bare string-literal** left operand is recognised. A *computed*
+    string — concatenation like ``("Hi " + name) % x`` — is not, so its ``%`` is still mutated as
+    modulo. Distinguishing that needs type inference (``(a + "b") % x`` is formatting or a type
+    error depending on ``a``'s runtime type), which is out of scope for v0.1. This is the *noise*
+    direction (a format ``%`` mutated to ``*``/``/`` errors at runtime — an ERROR verdict, never a
+    silently-wrong survivor), unlike dropping a genuine modulo site. Tracked as a follow-up.
     """
     skip: set[tuple[int | None, int | None]] = set()
     for node in tree.iter_subtrees():

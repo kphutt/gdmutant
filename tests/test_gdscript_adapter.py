@@ -155,6 +155,15 @@ def test_modulo_on_a_parenthesised_expression_ending_in_a_string_is_still_a_site
     assert any(s.token == "%" for s in find_sites(src))
 
 
+def test_computed_string_before_percent_is_a_known_scope_limitation() -> None:
+    # DOCUMENTED SCOPE: only a bare string *literal* left operand is recognised as string-format.
+    # A computed string (concatenation) is NOT — distinguishing it needs type inference — so its
+    # `%` is (rarely) still mutated as modulo. That's the NF-5-safe noise direction; pinned here as
+    # intentional, tracked as a follow-up. If this starts skipping, the follow-up landed.
+    src = 'func f(name, x):\n\treturn ("Hi " + name) % x\n'
+    assert any(s.token == "%" for s in find_sites(src))
+
+
 def test_not_deletion_removes_the_keyword_and_stays_valid() -> None:
     # Pin the exact deletion: `if not alive:` -> `if  alive:` (the `not` token gone), still valid.
     src = "func f(alive):\n\tif not alive:\n\t\treturn 0\n\treturn 1\n"
