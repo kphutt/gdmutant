@@ -4,9 +4,10 @@
 
 [project]
 name = "gdmutant"
-version = "0.1.0"                       # the built v0.1 feature set. This is the in-repo version
-                                        # string only — a tagged PyPI *release* still waits on live
-                                        # Godot/GdUnit4 CI validation (ROADMAP.md). Nothing published.
+version = "0.1.0"                       # tracks the built v0.1 feature set (see docs/decisions/0005),
+                                        # NOT a claim of "released". A tagged PyPI release + going
+                                        # public stay gated on the two ROADMAP.md items — live
+                                        # Godot/GdUnit4 CI validation + the statement-deletion operator.
 description = "An AST-based, language-agnostic mutation-testing tool for GDScript/Godot."
 readme = "README.md"
 requires-python = ">=3.12"

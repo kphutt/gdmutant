@@ -86,8 +86,9 @@ project's GdUnit4 suite per mutant, classifies killed / survived / invalid / err
 score, and emits a console summary + a Stryker `mutation-testing-elements` JSON report — via the
 standalone `gdmutant run` CLI (no AI required). Proven end-to-end on the bundled `corpus/` module; the
 **live `godot --headless` + GdUnit4** invocation is pending CI validation (see `ROADMAP.md`). The
-package version is `0.1.0` (the built feature set); a tagged **release** waits on that validation.
-Spun off from `project-rampart` (a Godot roguelike) so it has its own home.
+version `0.1.0` tracks the built feature set (not "released" — see `docs/decisions/0005`); a tagged
+**release** + going public stay gated on the two remaining v0.1 items: live CI validation and the
+statement-deletion operator. Spun off from `project-rampart` (a Godot roguelike) so it has its own home.
 
 ## Quickstart
 Clone the repo, then install the pinned toolchain + locked deps:

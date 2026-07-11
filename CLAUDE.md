@@ -16,7 +16,9 @@ adapter, the GdUnit4 runner, the Stryker reporter, and the `gdmutant run` CLI ar
 (and the suite is mutation-tested against itself, see `docs/mutation-testing.md`). Two things remain
 before a public launch (see [`ROADMAP.md`](ROADMAP.md)): **live CI validation** of the
 `godot --headless` + GdUnit4 path, and the **statement-deletion operator** (the last DESIGN.md FG-2.1
-mutation). The package version is `0.1.0` (the built feature set); a tagged **release** follows those.
+mutation). The version is `0.1.0` — it tracks the built feature set, not "released" (see
+[`docs/decisions/0005`](docs/decisions/0005-version-tracks-built-feature-set.md)); a tagged **release**
++ going public stay gated on those two.
 
 ## Setup
 
