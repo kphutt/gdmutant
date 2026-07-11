@@ -135,6 +135,10 @@ test-run limit. `gdmutant run --help` lists them all.
 
 > The live `godot --headless` path is pending CI validation (`ROADMAP.md`); `--dry-run` needs no Godot.
 
+**Driving gdmutant from an AI agent?** See [`docs/agent-guide.md`](docs/agent-guide.md) — the exact
+invocation, the JSON schema, the `0`/`1`/`2` exit-code contract, the "never leaves your tree mutated"
+guarantee, and the survivor→killing-test loop, in one read.
+
 ## Next steps
 1. ✅ **Repo hardened + stack chosen.** Security baseline + Python CI (ruff / mypy / pytest+coverage /
    pip-audit, plus a gitleaks secret-scan). The engine is **Python + uv + gdtoolkit** (see

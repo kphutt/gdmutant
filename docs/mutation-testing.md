@@ -14,8 +14,9 @@ uv run mutmut show <id>  # show one mutant's diff
 ```
 
 Configuration lives in `pyproject.toml` under `[tool.mutmut]`. mutmut runs the suite from a copied
-`mutants/` tree, so the corpus fixture is copied in via `also_copy`, and coverage is turned off for
-those runs (pure per-mutant overhead).
+`mutants/` tree, so the corpus fixture and `docs/` (read by the end-to-end and guide-consistency
+tests) are copied in via `also_copy`, and coverage is turned off for those runs (pure per-mutant
+overhead).
 
 CI runs mutmut in **report mode** as an **advisory, non-blocking** job (`continue-on-error`, and not
 a required status check): it surfaces the score on the run summary but never fails the build. It

@@ -89,7 +89,8 @@ source = ["gdmutant"]
 [tool.mutmut]
 # Mutation-test gdmutant's own library with mutmut (dogfood).
 source_paths = ["gdmutant"]
-# mutmut runs the suite from a copied "mutants/" tree; the end-to-end test reads the corpus,
-# so it must be copied in too. Skip coverage — it is pure overhead per mutant run.
-also_copy = ["corpus"]
+# mutmut runs the suite from a copied "mutants/" tree; tests read the corpus (end-to-end) and
+# docs/agent-guide.md (the guide-consistency test), so both must be copied in too. Skip coverage —
+# it is pure overhead per mutant run.
+also_copy = ["corpus", "docs"]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
