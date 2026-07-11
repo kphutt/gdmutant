@@ -25,6 +25,7 @@ mutmut-results.db
 .claude/settings.local.json
 .claude/worktrees/
 .claude/projects/
+.claude/scheduled_tasks.lock
 # OS/editor
 .DS_Store
 Thumbs.db
