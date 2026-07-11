@@ -74,8 +74,9 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
 ### FG-6 — CLI
 - **FG-6.1** A standalone `gdmutant` command runs a full mutation pass over a configured set of source
   files against the project's tests, with no AI involved.
-- **FG-6.2** It exits non-zero on operational failure (e.g. FG-3.3 abort), **not** on surviving mutants —
-  survivors are report output, not a gate (see NF-1 rationale).
+- **FG-6.2** It exits non-zero on operational failure (e.g. FG-3.3 abort), **not** on surviving mutants.
+  Survivors are report output, not a pass/fail gate: mutation results are **advisory** (report-mode),
+  complementary to coverage — a project decides what to do with them.
 
 ---
 
