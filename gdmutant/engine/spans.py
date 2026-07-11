@@ -38,12 +38,11 @@ class Span:
 _NEWLINE = "\n"
 
 
-def apply_replacement(source: str, span: Span, replacement: str) -> str:
-    """Return `source` with the text in `span` replaced by `replacement`.
+def _resolve(source: str, span: Span) -> tuple[list[str], int, int, int]:
+    """Validate `span` against `source`; return ``(lines, line_index, start, end)`` for slicing.
 
-    Only single-line spans are supported — mutation operators act within one line. Lines are
-    counted by literal ``\\n`` only, matching gdtoolkit/lark, so token positions from the parser
-    line up with the edit. The replaced region must fall within that line's content.
+    Lines are counted by literal ``\\n`` only, matching gdtoolkit/lark (so parser token positions
+    line up with the edit). Single-line spans only.
 
     Raises:
         ValueError: if the span covers more than one line.
@@ -64,6 +63,26 @@ def apply_replacement(source: str, span: Span, replacement: str) -> str:
             f"columns {span.column}..{span.end_column} out of range for a line of "
             f"{len(line)} characters"
         )
+    return lines, span.line - 1, start, end
 
-    lines[span.line - 1] = line[:start] + replacement + line[end:]
+
+def text_at(source: str, span: Span) -> str:
+    """Return the source text within `span` (single-line; same coordinate rules as apply)."""
+    lines, index, start, end = _resolve(source, span)
+    return lines[index][start:end]
+
+
+def apply_replacement(source: str, span: Span, replacement: str) -> str:
+    """Return `source` with the text in `span` replaced by `replacement`.
+
+    Only single-line spans are supported — mutation operators act within one line, counted by
+    literal ``\\n`` (matching gdtoolkit/lark). The replaced region must fall within the line.
+
+    Raises:
+        ValueError: if the span covers more than one line.
+        IndexError: if the line is out of range, or the columns fall outside the line's content.
+    """
+    lines, index, start, end = _resolve(source, span)
+    line = lines[index]
+    lines[index] = line[:start] + replacement + line[end:]
     return _NEWLINE.join(lines)
