@@ -57,9 +57,18 @@ class GdUnit4Runner:
         ]
 
     def run(self, project_dir: str) -> SuiteResult:
+        report = Path(project_dir) / self.report_path
+        # Read THIS run's report, never a stale one from a previous mutant: remove it first and
+        # require it to reappear. If GdUnit4/Godot writes no report (a crash, an addon-load
+        # failure, or a mutant that errors at load time), that's an execution failure — raise so
+        # the loop tallies it as ERROR rather than silently inheriting the old verdict (NF-5).
+        report.unlink(missing_ok=True)
         # check=False: GdUnit4 exits non-zero on test failures (expected) — the report decides.
         subprocess.run(
             self.command(project_dir), cwd=project_dir, timeout=self.timeout, check=False
         )
-        report = Path(project_dir) / self.report_path
+        if not report.exists():
+            raise RuntimeError(
+                f"GdUnit4 wrote no report at {report} — Godot may have failed to run"
+            )
         return parse_junit_xml(report.read_text(encoding="utf-8"))
