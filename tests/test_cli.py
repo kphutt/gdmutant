@@ -337,6 +337,10 @@ def test_main_dry_run_lists_every_ignored_flag_in_order(
             "--dry-run",
             "--project",
             "p",
+            "--runner",
+            "command",
+            "--command",
+            "c",
             "--godot",
             "g",
             "--tests",
@@ -350,11 +354,11 @@ def test_main_dry_run_lists_every_ignored_flag_in_order(
             "j",
         ]
     )
-    # Every run-only flag, in declaration order — pins each label (--report-path/--timeout/
-    # --require-clean included) and the ", " join, so a mutated label or a dropped flag is caught.
+    # Every run-only flag, in declaration order — pins each label (--runner/--command included) and
+    # the ", " join, so a mutated label or a dropped flag is caught.
     assert capsys.readouterr().err.strip() == (
-        "note: --dry-run runs no tests, so "
-        "--project, --godot, --tests, --report-path, --timeout, --require-clean, --json are ignored"
+        "note: --dry-run runs no tests, so --project, --runner, --command, --godot, --tests, "
+        "--report-path, --timeout, --require-clean, --json are ignored"
     )
 
 
@@ -395,6 +399,22 @@ def test_parser_defaults() -> None:
     assert args.report_path == "reports/report_1/results.xml"
     assert args.timeout == 600.0
     assert args.require_clean is False
+    assert args.runner == "gdunit4"
+    assert args.test_command is None
+
+
+def test_parser_rejects_an_unknown_runner() -> None:
+    # `choices` must reject a runner it doesn't know — a mutant that drops the choices list would
+    # silently accept "nope".
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["run", "x.gd", "--runner", "nope"])
+
+
+def test_parser_accepts_both_runner_choices() -> None:
+    # Both valid runners parse — pins each choice literal (so "gdunit4" -> "GDUNIT4" is caught: an
+    # explicit --runner gdunit4 would then be rejected).
+    for name in ("gdunit4", "command"):
+        assert build_parser().parse_args(["run", "x.gd", "--runner", name]).runner == name
 
 
 def test_parser_help_text(
@@ -419,6 +439,8 @@ def test_parser_help_text(
     for expected in (
         "the .gd file to mutate",
         "the Godot project dir (default: the source's dir)",
+        "test runner: gdunit4 (JUnit XML) or command (any harness, by exit code) (default: gdunit4)",  # noqa: E501
+        "test command for --runner command (exit 0 = pass), e.g. 'godot --headless --script res://tests/run_tests.gd'",  # noqa: E501
         "the Godot executable (default: godot)",
         "the GdUnit4 test path (default: res://test)",
         "GdUnit4 JUnit-XML path, relative to the project dir (default: reports/report_1/results.xml)",  # noqa: E501
@@ -535,6 +557,52 @@ def test_main_threads_json_path_to_run_mutation(
     rc = main(["run", str(path), "--project", str(tmp_path), "--json", str(report)])
     assert rc == 0
     assert report.exists()
+
+
+def test_main_command_runner_builds_from_shlex_split_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # --runner command builds a CommandRunner whose command is the shlex-split --command string,
+    # with --timeout threaded through — and it does NOT build a GdUnit4Runner.
+    path = _gd(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_command_runner(**kwargs: object) -> RecordingRunner:
+        captured.update(kwargs)
+        return RecordingRunner()
+
+    def boom_gdunit(**kwargs: object) -> object:
+        raise AssertionError("GdUnit4Runner must not be built for --runner command")
+
+    monkeypatch.setattr(cli, "CommandRunner", fake_command_runner)
+    monkeypatch.setattr(cli, "GdUnit4Runner", boom_gdunit)
+    rc = main(
+        [
+            "run",
+            str(path),
+            "--project",
+            str(tmp_path),
+            "--runner",
+            "command",
+            "--command",
+            "godot --headless --script res://tests/run.gd",
+            "--timeout",
+            "30",
+        ]
+    )
+    assert rc == 0
+    assert captured["command"] == ["godot", "--headless", "--script", "res://tests/run.gd"]
+    assert captured["timeout"] == 30.0
+
+
+def test_main_command_runner_requires_the_command_flag(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --runner command with no --command is a usage error (exit 2), reported before anything runs.
+    path = _gd(tmp_path)
+    rc = main(["run", str(path), "--project", str(tmp_path), "--runner", "command"])
+    assert rc == 2
+    assert capsys.readouterr().err.strip() == "error: --runner command requires --command"
 
 
 def test_main_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:

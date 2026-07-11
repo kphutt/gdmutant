@@ -1,11 +1,14 @@
 """Tests for the runner interface + JUnit-XML parsing."""
 
+import subprocess
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from xml.etree.ElementTree import ParseError
 
 import pytest
 
-from gdmutant.engine.runner import Runner, SuiteResult, parse_junit_xml
+from gdmutant.engine.runner import CommandRunner, Runner, SuiteResult, parse_junit_xml
 
 
 @dataclass
@@ -103,3 +106,49 @@ def test_fake_runner_satisfies_the_protocol() -> None:
     runner: Runner = fake  # static conformance
     assert runner.run("some/dir").passed
     assert fake.calls == ["some/dir"]
+
+
+def _exits(code: int) -> list[str]:
+    return [sys.executable, "-c", f"import sys; sys.exit({code})"]
+
+
+def test_command_runner_exit_zero_is_a_passing_suite(tmp_path: Path) -> None:
+    result = CommandRunner(_exits(0)).run(str(tmp_path))
+    assert result.passed is True
+    assert (result.tests, result.failures, result.errors) == (1, 0, 0)
+
+
+def test_command_runner_nonzero_exit_is_a_failing_suite(tmp_path: Path) -> None:
+    # Any non-zero exit — not just 1 — means the suite failed (a mutant was killed).
+    for code in (1, 2, 127):
+        result = CommandRunner(_exits(code)).run(str(tmp_path))
+        assert result.failed is True, f"exit {code} should be a failure"
+        assert (result.tests, result.failures) == (1, 1)
+
+
+def test_command_runner_runs_in_the_project_dir(tmp_path: Path) -> None:
+    # cwd must be the project dir: the command exits 0 only if it sees a marker file in cwd.
+    (tmp_path / "marker").write_text("x", encoding="utf-8")
+    cmd = [sys.executable, "-c", "import os, sys; sys.exit(0 if os.path.exists('marker') else 1)"]
+    runner = CommandRunner(cmd)
+    assert runner.run(str(tmp_path)).passed is True
+    other = tmp_path / "other"
+    other.mkdir()
+    assert runner.run(str(other)).failed is True  # marker not visible from a different cwd
+
+
+def test_command_runner_satisfies_the_protocol() -> None:
+    assert isinstance(CommandRunner(_exits(0)), Runner)
+
+
+def test_command_runner_honours_timeout(tmp_path: Path) -> None:
+    slow = [sys.executable, "-c", "import time; time.sleep(5)"]
+    with pytest.raises(subprocess.TimeoutExpired):
+        CommandRunner(slow, timeout=0.2).run(str(tmp_path))
+
+
+def test_command_runner_missing_executable_raises(tmp_path: Path) -> None:
+    # A command that can't be executed at all raises (the engine tallies it as ERROR / the CLI
+    # surfaces the not-found hint) — it is never silently treated as a passing or failing suite.
+    with pytest.raises(FileNotFoundError):
+        CommandRunner(["gdmutant-no-such-binary-xyz"]).run(str(tmp_path))

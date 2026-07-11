@@ -8,6 +8,8 @@ GDScript-adapter concern that lands with the end-to-end slice (it needs real God
 
 from __future__ import annotations
 
+import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 from xml.etree import ElementTree
@@ -37,6 +39,37 @@ class Runner(Protocol):
     """Runs a target project's test suite once and reports the aggregate result."""
 
     def run(self, project_dir: str) -> SuiteResult: ...
+
+
+@dataclass(frozen=True)
+class CommandRunner:
+    """Runs an arbitrary test command and maps its **exit code** to a `SuiteResult`: exit 0 means
+    the suite passed, any non-zero exit means it failed.
+
+    For projects whose test harness signals pass/fail via the exit code and produces no JUnit XML —
+    e.g. a hand-rolled ``godot --headless --script res://tests/run_tests.gd`` runner. This is
+    language- and framework-neutral (it only shells out and reads the exit code), so it lives in the
+    engine, not an adapter. The convention is documented in docs/decisions/0005.
+
+    The exit code is a coarser signal than JUnit XML: it can't separate a *test failure* from the
+    harness itself *erroring* (both are non-zero), so a mutant that makes the run crash counts as
+    killed. The NF-5 re-parse guard still filters mutants that don't parse before they ever run, and
+    a command that can't be executed at all raises (the engine tallies that as ERROR).
+    """
+
+    command: Sequence[str]
+    timeout: float = 600.0
+
+    def run(self, project_dir: str) -> SuiteResult:
+        completed = subprocess.run(
+            list(self.command),
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+        )
+        # One suite as a single pass/fail unit — per-test counts aren't available without a report.
+        return SuiteResult(tests=1, failures=1 if completed.returncode != 0 else 0, errors=0)
 
 
 def parse_junit_xml(xml: str) -> SuiteResult:
