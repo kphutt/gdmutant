@@ -50,6 +50,16 @@ def test_gdmutant_ignore_marker_suppresses_a_line() -> None:
     assert {s.token for s in find_sites(plain)} == {">", "<"}
 
 
+def test_gdmutant_ignore_is_line_scoped_not_statement_scoped() -> None:
+    # Documented behavior (docs/decisions/0004): the marker is scoped to its *physical* line, like
+    # # noqa. On a condition wrapped across lines, only the marked line's tokens are suppressed —
+    # the '>' on the earlier line still generates a mutant. Pin it so the caveat can't regress.
+    src = "func f(a, b):\n\tif (\n\t\ta > b\n\t\tand a < b  # gdmutant: ignore\n\t):\n\t\tpass\n"
+    tokens = {s.token for s in find_sites(src)}
+    assert ">" in tokens  # line 3, NOT suppressed (a different physical line)
+    assert "and" not in tokens and "<" not in tokens  # line 4 (marked) is suppressed
+
+
 def test_find_sites_and_generate_thread_a_custom_catalog_through() -> None:
     # A custom operator that mutates a token the DEFAULT catalog ignores (the identifier `b`).
     # Both find_sites and generate_mutants must use THIS catalog — a mutant that falls back to the

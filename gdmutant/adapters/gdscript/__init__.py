@@ -53,7 +53,8 @@ def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[Mut
     Filtering by "does the catalog mutate this value" is sufficient: gdtoolkit never surfaces
     tokens from inside string literals or comments, so this never edits within one. `catalog` is
     threaded through so site selection matches generation (a custom catalog finds its own sites).
-    Tokens on a line marked ``# gdmutant: ignore`` are skipped, so no mutants are generated there.
+    Tokens on a *physical* line marked ``# gdmutant: ignore`` are skipped — line-scoped, like
+    ``# noqa`` (a multi-line statement needs the marker on each line; see docs/decisions/0004).
     """
     ignored = _ignored_lines(source)
     return [

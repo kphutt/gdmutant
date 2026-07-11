@@ -21,8 +21,12 @@ Use **(a): an inline `# gdmutant: ignore` comment.** Any token on a source line 
 that marker is skipped — the adapter generates **no mutants** for it, so it never appears as a
 survivor and never affects the score.
 
-- **Granularity: the line.** All operators on the annotated line are suppressed. Matches how
-  `# noqa` / `# type: ignore` work, and is the unit a human reasons about.
+- **Granularity: the *physical* line.** All operators on the annotated line are suppressed —
+  matching how `# noqa` / `# type: ignore` work, and the unit a human reasons about. A logical
+  statement wrapped across multiple lines (a parenthesized or `\`-continued condition) is **not**
+  suppressed as a whole: mark each physical line whose tokens you want excluded. This is a
+  deliberate line-scoped design; whole-statement scope would need the enclosing AST node and is
+  future work.
 - **Where it lives: the adapter, not the engine.** `# …` is GDScript comment syntax, so the GDScript
   adapter (`find_sites`) detects it by scanning the raw source (comments aren't tokens). The
   language-neutral engine stays unaware of it — no new verdict, no engine change (respects NF-3).
