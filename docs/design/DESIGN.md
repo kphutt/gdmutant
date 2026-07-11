@@ -61,8 +61,9 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
 
 ### FG-4 — Verdict tally
 - **FG-4.1** Each mutant is classified: **killed** (a test failed), **survived** (all tests passed),
-  **no-coverage** (no test exercised the line — v0.1 may fold this into *survived* until coverage exists),
-  or **error** (the mutant didn't run — e.g. an invalid mutant; see NF-5).
+  **no-coverage** (no test exercised the line — v0.1 folds this into *survived* until coverage exists),
+  **invalid** (the mutant didn't parse — NF-5), or **error** (the runner failed to execute it, e.g. a
+  crash/timeout). Invalid and error mutants are excluded from the score.
 - **FG-4.2** The system shall compute the **mutation score** = killed / (killed + survived), and totals.
 
 ### FG-5 — Reporting

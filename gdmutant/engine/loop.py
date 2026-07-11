@@ -5,7 +5,9 @@ suite via a `Runner`, and classifies the outcome:
 
 * **killed** — the suite failed (a test caught the mutation),
 * **survived** — the suite passed (no test caught it),
-* **invalid** — the mutant didn't parse (NF-5); never counted as killed, never run.
+* **invalid** — the mutant didn't parse (NF-5); never counted as killed, never run,
+* **error** — the runner failed to execute the mutant (e.g. a Godot crash/timeout); tallied so
+  one bad run doesn't discard the whole pass, and excluded from the score.
 
 no-coverage is folded into *survived* for v0.1 (DESIGN.md FG-4.1) until coverage-gating lands. Each
 mutant is applied in isolation and the original restored in a ``finally`` — see docs/decisions/0003.
@@ -31,6 +33,7 @@ class Verdict(Enum):
     KILLED = "killed"
     SURVIVED = "survived"
     INVALID = "invalid"
+    ERROR = "error"
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,10 @@ class MutationRun:
     @property
     def invalid(self) -> int:
         return self._count(Verdict.INVALID)
+
+    @property
+    def errors(self) -> int:
+        return self._count(Verdict.ERROR)
 
     @property
     def survivors(self) -> tuple[Mutant, ...]:
@@ -102,7 +109,12 @@ def _run_one(project_dir: str, path: str, source: str, mutated: str, runner: Run
     target = Path(path)
     try:
         target.write_text(mutated, encoding="utf-8")
-        result = runner.run(project_dir)
+        try:
+            result = runner.run(project_dir)
+        except Exception:
+            # The runner failed to execute this mutant (e.g. a Godot crash/timeout). Tally it as
+            # ERROR and carry on — one bad run must not discard the whole pass (FG-4.1).
+            return Verdict.ERROR
+        return Verdict.KILLED if result.failed else Verdict.SURVIVED
     finally:
         target.write_text(source, encoding="utf-8")  # never leave the project mutated
-    return Verdict.KILLED if result.failed else Verdict.SURVIVED

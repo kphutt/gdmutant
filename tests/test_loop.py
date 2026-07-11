@@ -26,7 +26,7 @@ class MarkerFakeRunner:
 
 @dataclass
 class RaiseAfterBaselineRunner:
-    """Passes the baseline (first call), then raises — to test restore-on-exception."""
+    """Passes the baseline (first call), then raises — to test the ERROR verdict + restore."""
 
     calls: int = 0
 
@@ -35,6 +35,21 @@ class RaiseAfterBaselineRunner:
         if self.calls == 1:
             return SuiteResult(tests=1, failures=0, errors=0)
         raise RuntimeError("runner boom")
+
+
+@dataclass
+class ScriptedRunner:
+    """Returns or raises per call, from a fixed script — for exercising mid-run failures."""
+
+    script: list[SuiteResult | Exception]
+    calls: int = 0
+
+    def run(self, project_dir: str) -> SuiteResult:
+        item = self.script[self.calls]
+        self.calls += 1
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 
 def _write(tmp_path: Path, name: str, text: str) -> str:
@@ -78,12 +93,26 @@ def test_baseline_failure_raises(tmp_path: Path) -> None:
     assert Path(path).read_text(encoding="utf-8") == src
 
 
-def test_restores_file_on_runner_exception(tmp_path: Path) -> None:
-    src = "func f(a, b):\n\treturn a > b\n"
+def test_runner_exception_is_tallied_as_error_and_file_restored(tmp_path: Path) -> None:
+    src = "func f(a, b):\n\treturn a > b\n"  # one mutant: '>'
     path = _write(tmp_path, "f.gd", src)
-    with pytest.raises(RuntimeError, match="boom"):
-        run(str(tmp_path), path, src, RaiseAfterBaselineRunner())
-    assert Path(path).read_text(encoding="utf-8") == src  # restored despite the exception
+    result = run(str(tmp_path), path, src, RaiseAfterBaselineRunner())
+    assert [o.verdict for o in result.outcomes] == [Verdict.ERROR]
+    assert result.errors == 1 and result.mutation_score is None
+    assert Path(path).read_text(encoding="utf-8") == src  # restored despite the runner error
+
+
+def test_runner_error_on_a_later_mutant_preserves_earlier_verdicts(tmp_path: Path) -> None:
+    src = "func f(a, b):\n\treturn a > b and a < b\n"  # 3 mutants: >, and, <
+    path = _write(tmp_path, "f.gd", src)
+    ok = SuiteResult(tests=1, failures=0, errors=0)
+    kill = SuiteResult(tests=1, failures=1, errors=0)
+    # baseline ok; mutant 1 killed; mutant 2 raises mid-run; mutant 3 survived.
+    runner = ScriptedRunner([ok, kill, RuntimeError("boom"), ok])
+    result = run(str(tmp_path), path, src, runner)
+    assert [o.verdict for o in result.outcomes] == [Verdict.KILLED, Verdict.ERROR, Verdict.SURVIVED]
+    assert (result.killed, result.errors, result.survived) == (1, 1, 1)
+    assert Path(path).read_text(encoding="utf-8") == src
 
 
 def test_run_is_deterministic(tmp_path: Path) -> None:
