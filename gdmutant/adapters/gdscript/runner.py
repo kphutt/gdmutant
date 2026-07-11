@@ -64,11 +64,20 @@ class GdUnit4Runner:
         # the loop tallies it as ERROR rather than silently inheriting the old verdict (NF-5).
         report.unlink(missing_ok=True)
         # check=False: GdUnit4 exits non-zero on test failures (expected) — the report decides.
-        subprocess.run(
-            self.command(project_dir), cwd=project_dir, timeout=self.timeout, check=False
+        # capture_output: keep per-mutant Godot/GdUnit4 chatter off the console, and retain it so a
+        # failed run can be diagnosed instead of vanishing.
+        completed = subprocess.run(
+            self.command(project_dir),
+            cwd=project_dir,
+            timeout=self.timeout,
+            check=False,
+            capture_output=True,
+            text=True,
         )
         if not report.exists():
+            detail = (completed.stderr or completed.stdout or "").strip()
             raise RuntimeError(
                 f"GdUnit4 wrote no report at {report} — Godot may have failed to run"
+                + (f":\n{detail[-1000:]}" if detail else "")
             )
         return parse_junit_xml(report.read_text(encoding="utf-8"))

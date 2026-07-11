@@ -44,6 +44,7 @@ def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFi
     assert data["schemaVersion"] == "2"
     assert str(path) in data["files"]
     assert data["files"][str(path)]["mutants"]
+    assert data["files"][str(path)]["language"] == "gdscript"  # CLI passes the language through
     assert data["files"][str(path)]["source"] == path.read_text(encoding="utf-8")  # real source
     assert "Wrote report to" in capsys.readouterr().out  # the confirmation line is printed
 

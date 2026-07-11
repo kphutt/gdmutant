@@ -1,11 +1,11 @@
 # gdmutant — contributor & AI-assistant guide
 
 A language-agnostic **mutation-testing** tool — the first *usable* one for GDScript/Godot. It
-mutates a project's source (flip `>`↔`>=`, `and`↔`or`, drop a `return`, …), reruns the tests per
+mutates a project's source (flip `>`↔`>=`, `and`↔`or`, bump a number, …), reruns the tests per
 mutant, and reports **survivors** — lines a bug could live on that no test catches. This is the
 fast-orientation guide for anyone (human or AI) working on the code; the product rationale is in
-[`README.md`](README.md), and the authoritative design will live in `docs/design/DESIGN.md`
-(written next).
+[`README.md`](README.md), and the authoritative design is in
+[`docs/design/DESIGN.md`](docs/design/DESIGN.md).
 
 > `gdmutant` is a provisional codename, not yet cleared for public use.
 
@@ -13,9 +13,10 @@ fast-orientation guide for anyone (human or AI) working on the code; the product
 
 v0.1 built — the language-neutral engine (mutate → run → tally → score → report), the GDScript
 adapter, the GdUnit4 runner, the Stryker reporter, and the `gdmutant run` CLI are all in and tested
-(and the suite is mutation-tested against itself, see `docs/mutation-testing.md`). The one thing left
-before a public launch is **live CI validation** of the `godot --headless` + GdUnit4 path (see
-[`ROADMAP.md`](ROADMAP.md)).
+(and the suite is mutation-tested against itself, see `docs/mutation-testing.md`). Two things remain
+before a public launch (see [`ROADMAP.md`](ROADMAP.md)): **live CI validation** of the
+`godot --headless` + GdUnit4 path, and the **statement-deletion operator** (the last DESIGN.md FG-2.1
+mutation). The package stays version `0.0.0` until both land, then tags `0.1.0`.
 
 ## Setup
 
@@ -59,8 +60,8 @@ uv run pip-audit               # dependency audit
   language specifics live only in `gdmutant/adapters/<lang>/`.
 - **The mutation-operator core is deterministic** — the reproducible mode a CI check can trust; any
   future LLM-semantic mode stays out of it.
-- **Sensitive paths** (CI, scripts, toolchain, and — once they exist — the mutation-operator catalog
-  + the GDScript adapter) are in `CODEOWNERS` and stay human-reviewed. The adapter is the real
+- **Sensitive paths** (CI, scripts, toolchain, the mutation-operator catalog, and the GDScript
+  adapter) are in `CODEOWNERS` and stay human-reviewed. The adapter is the real
   technical risk: a wrong mutant means a silently wrong survivor report.
 
 ## Design goals (keep these in mind)
@@ -72,7 +73,7 @@ uv run pip-audit               # dependency audit
 ## Docs — where things live
 
 - [`README.md`](README.md) — what it is and why.
-- `docs/design/DESIGN.md` — authoritative design (written next; not in the tree yet).
+- [`docs/design/DESIGN.md`](docs/design/DESIGN.md) — authoritative design (goals, FG/NF requirements, architecture).
 - [`ROADMAP.md`](ROADMAP.md) — the backlog.
 - `docs/decisions/NNNN-*.md` — append-only ADRs (`ls` is the index).
 - [`CREDITS.md`](CREDITS.md) — third-party licenses.
