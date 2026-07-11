@@ -1,8 +1,7 @@
 # gdmutant
 
-> **`gdmutant` is a provisional codename** — clear it (no existing tool uses it) before any public
-> launch, exactly like a game title. It lives in ONE place: this README + the repo name (`gh repo rename`
-> while private is free).
+> **`gdmutant` is a provisional codename**, not yet cleared for public use. It lives in one
+> place: this README + the repo name.
 
 **A mutation-testing tool — the first *usable* one for GDScript/Godot, built to be language-agnostic.** Point it at a
 codebase with a test suite; it mutates the source (flip `>`↔`>=`, `and`↔`or`, drop a `return`, …), reruns
@@ -52,7 +51,7 @@ says a line *ran*; mutation says a bug there would be *caught*. That gap is the 
   [mutation-testing-in-patterns](https://github.com/atodorov/mutation-testing-in-patterns). Closest engine to
   copy the shape of: **mutmut** (Python + AST, like ours).
 
-## North star (the product bar)
+## Design goals
 - **Ship fast.** A working v0.1 that mutates one real module and prints survivors beats a perfect framework.
 - **Standalone. Usable by anyone — no Claude, no AI required.** A normal CLI a developer installs and runs,
   exactly like Stryker is in its domain. AI is *optional upside* (see modes), never a dependency. This is the
@@ -77,20 +76,27 @@ later, an optional **LLM-semantic mode** (plausible-bug mutants: off-by-one, dro
 error) for *hardening*, kept out of the gate because it's nondeterministic.
 
 ## Status
-**Seed only — no code yet.** This repo was spun off from `project-rampart`'s planning so it has its own home
-and context. Design rationale is captured across `project-rampart` ADR-0002 + `docs/agent-workflow/confidence-signals.md`
-(Litmus/mutation split) — this is the standalone continuation.
+**Bootstrapped — hardening, toolchain, and the docs spine are in place; the engine is not built yet.**
+Spun off from `project-rampart` (a Godot roguelike) so it has its own home and context. Next is the
+`DESIGN.md` gate, then the engine loop + GDScript adapter — see NEXT STEPS and `ROADMAP.md`.
 
-## NEXT STEPS (for a fresh session picking this up cold)
-1. **Harden the repo** — run the house baseline (`~/dev/ai-toolkit/docs/repo-hardening-checklist.md`): §1
-   spine + pick the engine's stack (Python is natural — gdtoolkit is Python — so the engine + GDScript
-   adapter can share a runtime; wire pip-audit/ruff/pytest CI). Add the standard docs skeleton.
-2. **Clear the name** (no existing tool uses `gdmutant`; check PyPI/npm/GitHub) or rename.
-3. **Build the engine loop** + the **GDScript adapter** against a real `project-rampart` module (extract-from-use).
-4. **Dogfood on rampart's procgen-connectivity + turn-scheduler tests** — the original need.
+## Next steps
+1. ✅ **Repo hardened + stack chosen.** Security baseline + Python CI (ruff / mypy / pytest+coverage /
+   pip-audit, plus a gitleaks secret-scan). The engine is **Python + uv + gdtoolkit** (see
+   `docs/decisions/0001`), with **GdUnit4** as the first test-runner adapter.
+2. ✅ **Name cleared** — `gdmutant` is free on PyPI, npm, and GitHub (re-check + a trademark sense-check
+   before any public launch).
+3. **Write `DESIGN.md` (the design gate)** — goals, FG/NF requirements, the architecture (named metaphor +
+   Mermaid + component-role table), build plan. Get it reviewed, *then* build the engine loop + adapter.
+4. **Build v0.1 against a bundled `corpus/` fixture** — a small GDScript module + a GdUnit4 suite,
+   reproducible and doubling as the tool's own regression tests. (`project-rampart` has no GDScript or
+   tests yet, so fixture-first *is* the extract-from-use path; dogfood its real systems once they exist.)
 5. Decide public timing (private now; flip when v0.1 mutates real code + shows survivors — never launch empty).
 
-## Relationship to Litmus (a peer, not a parent)
-Litmus (the grounded PR reviewer, in `ai-toolkit/prompts/litmus/`) and this tool are **two advisory signals
-in the same merge gate** — *"did we build the right thing?"* (Litmus) vs *"do the tests actually bite?"*
-(gdmutant) — but they share **no code**. This is its own repo on purpose. Other repos merely *reference* it.
+## Where it fits in your CI
+This tool answers one question a green CI build can't: *"do the tests actually bite?"* It's an **advisory**
+signal — report-mode, never a hard gate — complementary to coverage, run alongside whatever review and
+CI a project already has. It shares no code with any reviewer tool; it's a standalone CLI on purpose.
+
+## License
+[MIT](LICENSE) — © 2026 Karsten Huttelmaier. Third-party licenses are logged in [CREDITS.md](CREDITS.md).
