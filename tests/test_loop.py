@@ -93,6 +93,15 @@ def test_baseline_failure_raises(tmp_path: Path) -> None:
     assert Path(path).read_text(encoding="utf-8") == src
 
 
+def test_baseline_runner_exception_becomes_baseline_failed(tmp_path: Path) -> None:
+    # A runner that can't even run the unmutated suite (e.g. a missing godot binary) surfaces as
+    # BaselineFailed, not a raw traceback.
+    src = "func f(a, b):\n\treturn a > b\n"
+    path = _write(tmp_path, "f.gd", src)
+    with pytest.raises(BaselineFailed):
+        run(str(tmp_path), path, src, ScriptedRunner([RuntimeError("godot missing")]))
+
+
 def test_runner_exception_is_tallied_as_error_and_file_restored(tmp_path: Path) -> None:
     src = "func f(a, b):\n\treturn a > b\n"  # one mutant: '>'
     path = _write(tmp_path, "f.gd", src)

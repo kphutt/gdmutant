@@ -9,6 +9,12 @@ from gdmutant.adapters.gdscript.runner import GdUnit4Runner
 from gdmutant.engine.runner import Runner
 
 
+def _report(tmp_path: Path) -> Path:
+    path = tmp_path / "reports" / "report_1" / "results.xml"
+    path.parent.mkdir(parents=True)
+    return path
+
+
 def test_command_construction() -> None:
     cmd = GdUnit4Runner(test_path="res://test", godot="godot4").command("/proj")
     assert cmd == [
@@ -26,11 +32,10 @@ def test_command_construction() -> None:
 
 
 def test_run_parses_the_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Simulate GdUnit4 having written a JUnit report; mock the subprocess so no Godot runs.
-    report = tmp_path / "reports" / "report_1" / "results.xml"
-    report.parent.mkdir(parents=True)
-    report.write_text('<testsuite tests="4" failures="1" errors="0"/>', encoding="utf-8")
-    monkeypatch.setattr(runner_mod.subprocess, "run", lambda *a, **k: None)
+    report = _report(tmp_path)
+    xml = '<testsuite tests="4" failures="1" errors="0"/>'
+    # The mock stands in for Godot writing the report this invocation.
+    monkeypatch.setattr(runner_mod.subprocess, "run", lambda *a, **k: report.write_text(xml))
 
     result = GdUnit4Runner().run(str(tmp_path))
 
@@ -41,10 +46,9 @@ def test_run_parses_the_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 def test_run_reflects_latest_report_on_repeated_calls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The engine calls run() many times against the same project. With -rc 1, GdUnit4 overwrites
-    # one report dir, so each run must reflect its OWN result — never a stale earlier one.
-    report = tmp_path / "reports" / "report_1" / "results.xml"
-    report.parent.mkdir(parents=True)
+    # The engine calls run() many times against the same project; each run must reflect its OWN
+    # result — never a stale earlier one.
+    report = _report(tmp_path)
     outcomes = iter(
         [
             '<testsuite tests="3" failures="0" errors="0"/>',  # baseline: passes
@@ -57,8 +61,30 @@ def test_run_reflects_latest_report_on_repeated_calls(
 
     monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
     runner = GdUnit4Runner()
-    assert runner.run(str(tmp_path)).failed is False  # baseline
-    assert runner.run(str(tmp_path)).failed is True  # mutant reflects the fresh report
+    assert runner.run(str(tmp_path)).failed is False
+    assert runner.run(str(tmp_path)).failed is True
+
+
+def test_run_does_not_return_a_stale_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A previous mutant's (passing) report is on disk, and THIS invocation writes nothing (a Godot
+    # crash / addon-load failure). It must raise, not silently return the stale passing verdict —
+    # the tool's worst failure mode (NF-5).
+    report = _report(tmp_path)
+    report.write_text('<testsuite tests="9" failures="0" errors="0"/>', encoding="utf-8")
+    monkeypatch.setattr(runner_mod.subprocess, "run", lambda *a, **k: None)
+
+    with pytest.raises(RuntimeError, match="no report"):
+        GdUnit4Runner().run(str(tmp_path))
+
+
+def test_run_raises_when_no_report_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner_mod.subprocess, "run", lambda *a, **k: None)
+    with pytest.raises(RuntimeError, match="no report"):
+        GdUnit4Runner().run(str(tmp_path))
 
 
 def test_gdunit4_runner_satisfies_the_protocol() -> None:
