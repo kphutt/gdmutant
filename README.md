@@ -101,7 +101,7 @@ uv sync --frozen   # installs the exact locked dependencies
 uv run gdmutant run corpus/turn_order.gd --dry-run
 ```
 ```
-15 mutants for corpus/turn_order.gd:
+16 mutants for corpus/turn_order.gd:
   corpus/turn_order.gd:8:17  comparison  > -> >=
   corpus/turn_order.gd:13:11  comparison  < -> <=
   corpus/turn_order.gd:13:13  numeric  0 -> 1
@@ -150,7 +150,7 @@ guarantee, and the survivor→killing-test loop, in one read.
    Jury" architecture, and the build plan (`docs/design/DESIGN.md`).
 4. ✅ **v0.1 built against the bundled `corpus/` fixture** — engine loop, operator catalog, GDScript
    adapter (NF-5 guard), GdUnit4 runner, Stryker reporter, and the `gdmutant run` CLI. Mutates
-   `corpus/turn_order.gd` (15 mutants) and prints survivors end-to-end.
+   `corpus/turn_order.gd` (16 mutants) and prints survivors end-to-end.
 5. **Remaining before a public launch** (see `ROADMAP.md`): live CI Godot/GdUnit4 validation of the
    runner, the statement-deletion operator, then flip the repo public — never launch empty.
 

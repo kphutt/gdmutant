@@ -93,3 +93,30 @@ def test_apply_mutant_flags_invalid_mutant_nf5() -> None:
     mutated, valid = apply_mutant(broken, src)
     assert "a ) b" in mutated
     assert valid is False
+
+
+def test_new_operators_generate_valid_mutants() -> None:
+    # Compound assignment, modulo, and unary-not removal must all be found as sites and produce
+    # parseable GDScript. The `not` case is the subtle one: it's a swap to "" (a token deletion),
+    # so verify it doesn't leave broken syntax behind.
+    src = (
+        "func f(e, s, x, alive):\n\te += s\n\tvar r = x % 2\n"
+        "\tif not alive:\n\t\treturn 0\n\treturn e\n"
+    )
+    by_op: dict[str, set[tuple[str, str]]] = {}
+    for m in generate_mutants("f.gd", src):
+        _, valid = apply_mutant(m, src)
+        assert valid, f"{m.operator_id} {m.original!r}->{m.replacement!r} produced invalid GDScript"
+        by_op.setdefault(m.operator_id, set()).add((m.original, m.replacement))
+    assert by_op["compound-assign"] == {("+=", "-=")}
+    assert by_op["modulo"] == {("%", "*"), ("%", "/")}
+    assert by_op["logical-not"] == {("not", "")}  # deletion, and the result still parses
+
+
+def test_not_deletion_removes_the_keyword_and_stays_valid() -> None:
+    # Pin the exact deletion: `if not alive:` -> `if  alive:` (the `not` token gone), still valid.
+    src = "func f(alive):\n\tif not alive:\n\t\treturn 0\n\treturn 1\n"
+    (mutant,) = [m for m in generate_mutants("f.gd", src) if m.operator_id == "logical-not"]
+    mutated, valid = apply_mutant(mutant, src)
+    assert valid is True
+    assert "if  alive:" in mutated  # the `not` and only the `not` was removed
