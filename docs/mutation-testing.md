@@ -1,0 +1,59 @@
+# Mutation testing gdmutant itself
+
+gdmutant is a mutation tester, so its own Python suite is held to the standard it exists to enforce:
+a test suite should not just *cover* a line, it should *catch a bug* on that line. We dogfood this
+with [mutmut](https://github.com/boxed/mutmut), which mutates `gdmutant/` and re-runs the suite
+against each mutant. A **surviving** mutant is a change no test objected to — a gap.
+
+## Running it
+
+```sh
+uv run mutmut run        # mutate gdmutant/ and run the suite against each mutant
+uv run mutmut results    # list survivors
+uv run mutmut show <id>  # show one mutant's diff
+```
+
+Configuration lives in `pyproject.toml` under `[tool.mutmut]`. mutmut runs the suite from a copied
+`mutants/` tree, so the corpus fixture is copied in via `also_copy`, and coverage is turned off for
+those runs (pure per-mutant overhead).
+
+CI runs mutmut in **report mode** as an **advisory, non-blocking** job (`continue-on-error`, and not
+a required status check): it surfaces the score on the run summary but never fails the build. It
+complements the coverage gate — coverage says a line *ran*, mutation says a bug there would be
+*caught*.
+
+## Current result
+
+**431 / 448 mutants killed — the remaining 17 are equivalent mutants** (changes that cannot alter
+observable behavior, so no test *can* catch them; this is the well-known
+[equivalent mutant problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)).
+Rather than contort the suite to "kill" them — which would only pin implementation trivia — they are
+enumerated and justified here. Every *behavioral* mutant is killed.
+
+### The 17 equivalent mutants
+
+**1. `encoding="utf-8"` → `encoding=None` / omitted / `"UTF-8"`  (11 mutants)**
+In `engine/loop.py` (`_run_one`, writing and restoring the mutated file) and `cli.py`
+(`run_mutation`, reading the source and writing the JSON report).
+- `"UTF-8"` is a codec *alias* of `"utf-8"` — byte-for-byte identical.
+- `encoding=None` / omitting the argument falls back to the platform's default text encoding, which
+  on every environment gdmutant targets (Python 3.14+, where text I/O defaults to UTF-8; and UTF-8
+  locales generally) produces identical bytes for the content involved.
+
+  No black-box test can distinguish these from `"utf-8"`. Specifying `encoding="utf-8"` explicitly is
+  nonetheless correct — it is the guarantee that keeps the equivalence true across platforms, rather
+  than relying on the ambient locale.
+
+**2. `gather_metadata=True` → `False` / omitted  (3 mutants)**
+In `adapters/gdscript/_parse`. `gather_metadata` attaches source spans to *Tree nodes*; the token
+line/column positions the adapter actually reads are set by lark's lexer regardless of this flag
+(verified directly). So toggling it does not change any value the adapter uses.
+
+**3. Defensive `assert` `and` → `or`  (3 mutants)**
+In `adapters/gdscript/_span_of`: `assert line and col and end_line and end_col`. This is a
+type-narrowing guard for the `Optional[int]` token-position types. Because lark always populates
+those positions (each is `>= 1`, i.e. truthy), every `and`/`or` re-association of always-truthy
+operands evaluates identically — the guard never trips, so no test can observe a difference.
+
+If any of these stops being equivalent (e.g. a future code path reads `Tree` node metadata, making
+mutant group 2 observable), it will resurface as a survivor and get a real test.

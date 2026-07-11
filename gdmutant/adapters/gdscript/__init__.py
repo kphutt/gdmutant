@@ -21,13 +21,15 @@ from gdmutant.engine.spans import Span
 
 
 def _parse(source: str) -> Tree[Token]:
+    # gather_metadata attaches spans to Tree *nodes*; the token line/column positions this adapter
+    # reads come from lark's lexer regardless. Kept on for any future tree-level use (harmless).
     tree: Tree[Token] = _gdparser.parse(source, gather_metadata=True)
     return tree
 
 
 def _span_of(tok: Token) -> Span:
     line, col, end_line, end_col = tok.line, tok.column, tok.end_line, tok.end_column
-    # gather_metadata=True populates positions; guard defensively for the type-checker.
+    # lark's lexer always sets token positions; assert non-None only to satisfy the Optional types.
     assert line and col and end_line and end_col  # pragma: no cover
     return Span(line, col, end_line, end_col)
 
