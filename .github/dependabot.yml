@@ -1,0 +1,26 @@
+# Dependabot — the counterweight to SHA-pinning + hash-locking: keeps pinned
+# GitHub Actions and Python deps from silently rotting.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+    labels: ["dependencies"]
+
+  # Python deps (reads pyproject.toml; updates the uv.lock ecosystem).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      python:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+    labels: ["dependencies"]
