@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from gdmutant import __version__
+from gdmutant.adapters.gdscript import is_valid_gdscript
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner
 from gdmutant.engine.loop import BaselineFailed, run
 from gdmutant.engine.report import console_summary, stryker_report
@@ -25,7 +26,8 @@ def run_mutation(
     """Mutate `source_path`, run the suite via `runner`, print the summary, optionally write JSON.
 
     Returns 0 on a completed pass — **survivors are report output, not a failure** (FG-6.2) — 1 if
-    the unmutated baseline suite fails, and 2 if the source file can't be read.
+    the unmutated baseline suite fails, and 2 if the source can't be read, isn't valid GDScript, or
+    the JSON report can't be written.
     """
     path = Path(source_path)
     try:
@@ -35,6 +37,11 @@ def run_mutation(
         # exits 2 gracefully instead of crashing.
         print(f"error: cannot read {source_path}: {error}", file=sys.stderr)
         return 2
+    if not is_valid_gdscript(source):
+        # A .gd file that doesn't parse can't be mutated — exit 2 instead of leaking a parser
+        # traceback (the most likely bad input for a source-mutating tool).
+        print(f"error: {source_path} is not valid GDScript", file=sys.stderr)
+        return 2
     try:
         result = run(project_dir, str(path), source, runner)
     except BaselineFailed as error:
@@ -42,9 +49,13 @@ def run_mutation(
         return 1
     print(console_summary(result))
     if json_path is not None:
-        Path(json_path).write_text(
-            json.dumps(stryker_report(result, str(path), source), indent=2), encoding="utf-8"
-        )
+        try:
+            Path(json_path).write_text(
+                json.dumps(stryker_report(result, str(path), source), indent=2), encoding="utf-8"
+            )
+        except OSError as error:
+            print(f"error: cannot write report to {json_path}: {error}", file=sys.stderr)
+            return 2
         print(f"\nWrote report to {json_path}")
     return 0
 
