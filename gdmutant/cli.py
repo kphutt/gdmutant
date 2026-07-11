@@ -111,6 +111,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "run":
         if args.dry_run:
+            ignored = [
+                flag
+                for flag, value, default in (
+                    ("--project", args.project, None),
+                    ("--godot", args.godot, "godot"),
+                    ("--tests", args.tests, "res://test"),
+                    ("--json", args.json_path, None),
+                )
+                if value != default
+            ]
+            if ignored:
+                print(
+                    f"note: --dry-run runs no tests, so {', '.join(ignored)} "
+                    f"{'is' if len(ignored) == 1 else 'are'} ignored",
+                    file=sys.stderr,
+                )
             return list_mutants(args.source)
         project_dir = args.project or str(Path(args.source).resolve().parent)
         runner = GdUnit4Runner(test_path=args.tests, godot=args.godot)

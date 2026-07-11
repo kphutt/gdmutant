@@ -148,7 +148,43 @@ def test_main_dry_run_needs_no_runner(
     monkeypatch.setattr(cli, "GdUnit4Runner", boom)
     rc = main(["run", str(path), "--dry-run"])
     assert rc == 0
-    assert "mutants for" in capsys.readouterr().out
+    out = capsys.readouterr()
+    assert "mutants for" in out.out
+    assert "ignored" not in out.err  # no notice when no run-only flags are passed
+
+
+def test_main_dry_run_lists_every_ignored_flag_in_order(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Exact message pins each flag label, the ", " join, and the plural "are" (a bare substring
+    # check would still match a wrapped/renamed label).
+    path = _gd(tmp_path)
+    main(
+        [
+            "run",
+            str(path),
+            "--dry-run",
+            "--project",
+            "p",
+            "--godot",
+            "g",
+            "--tests",
+            "t",
+            "--json",
+            "j",
+        ]
+    )
+    assert capsys.readouterr().err.strip() == (
+        "note: --dry-run runs no tests, so --project, --godot, --tests, --json are ignored"
+    )
+
+
+def test_main_dry_run_singular_message_for_one_ignored_flag(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _gd(tmp_path)
+    main(["run", str(path), "--dry-run", "--json", "j"])
+    assert capsys.readouterr().err.strip() == "note: --dry-run runs no tests, so --json is ignored"
 
 
 def test_parser_run_subcommand() -> None:
