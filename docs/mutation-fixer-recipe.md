@@ -65,14 +65,20 @@ func test_clamp_initiative_lower_boundary() -> void:
 
 Re-run: the mutant is now `Killed`.
 
-**A genuine equivalent.** The comparison mutant `< -> <=` on the *same* line (`if value <= 0`) can
-**never** be caught: at `value == 0` the original falls through and returns `value` (which is `0`),
-and the mutant returns `0` directly — identical for every input. No test can kill it, so suppress it:
+**A genuine equivalent.** The comparison mutant `> -> >=` on the *upper* clamp
+(`if value >= max_value`) can **never** be caught: at `value == max_value` the original falls through
+to `return value` — which *is* `max_value` — while the mutant returns `max_value` directly. For
+`value > max_value` both return `max_value`; for `value < max_value` both fall through. Identical for
+every input (no matter the sign of `max_value`), so suppress it:
 
 ```gdscript
-	if value < 0:  # gdmutant: ignore  (<= is equivalent here: value is 0 at the boundary)
-		return 0
+	if value > max_value:  # gdmutant: ignore  (>= is equivalent: value == max_value returns max either way)
+		return max_value
 ```
+
+(Beware near-misses: the *lower* clamp's `< -> <=` looks equivalent too, but it isn't — at
+`value == 0, max_value == -1` the original returns `-1` while `<= 0` returns `0`, so a test kills it.
+Only suppress a mutant you've *proven* equivalent across all inputs, not one that merely looks it.)
 
 Now the survivor set an agent sees is *actionable*: everything left is a real gap to close.
 
