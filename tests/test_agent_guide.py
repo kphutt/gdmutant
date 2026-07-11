@@ -2,6 +2,7 @@
 they describe, so changing a status string, the schema version, or the ignore marker without
 updating the guide fails CI."""
 
+import re
 from pathlib import Path
 
 from gdmutant.adapters.gdscript import _IGNORE_MARKER
@@ -44,3 +45,18 @@ def test_guide_states_the_full_exit_code_contract() -> None:
     text = _text()
     for code in ("**`0`**", "**`1`**", "**`2`**"):
         assert code in text
+
+
+def test_guide_local_links_resolve() -> None:
+    # Every relative markdown link in the guide must point at a file that exists — nothing in CI
+    # link-checks docs, so a broken cross-reference (e.g. ../AGENTS.md when the file is CLAUDE.md)
+    # would otherwise ship silently.
+    for target in re.findall(r"\]\(([^)]+)\)", _text()):
+        if target.startswith(("http://", "https://", "mailto:")):
+            continue
+        target = target.split("#", 1)[0]  # drop any in-page anchor
+        if not target:
+            continue
+        assert (_GUIDE.parent / target).resolve().exists(), (
+            f"broken link in agent-guide.md: {target}"
+        )
