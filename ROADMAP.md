@@ -27,9 +27,21 @@
   `runner` and `catalog` already are (a small `Adapter` protocol or two callables). Mechanical
   (~20 lines + tests); no functional impact today, since GDScript is the only adapter.
 
+## Real-project adoption (beyond the bundled corpus)
+*What a real Godot project needs before it can point gdmutant at its own systems.*
+- **Framework-agnostic test runner** — a second `Runner` (the `Runner` protocol already exists for
+  this) that runs a project's *own* headless test script and reads a simple stdout/exit-code
+  convention, so gdmutant works against projects that don't use the GdUnit4 addon. Needs an ADR for
+  the convention. This is the main thing gating adoption by projects with a hand-rolled test harness.
+- **Multi-file / directory targets** — mutate a set of files (or a directory) in one run with an
+  aggregate mutation score (today: one `.gd` file per invocation), plus a helper to merge the
+  per-file Stryker reports. Running the CLI once per file already works (mutation is in-place in the
+  real project tree, so cross-file class references resolve), but there's no aggregate score.
+- **More operators for real code** — unary `not`, modulo `%`, and compound assignment
+  (`+=`↔`-=`, `*=`↔`/=`, which gdtoolkit tokenizes atomically) all appear in real logic the current
+  token-swap catalog can't mutate.
+
 ## Later (deferred — do not build now)
-- Compound-assignment operators (`+=`↔`-=`, `*=`↔`/=`) — gdtoolkit tokenizes these atomically, so
-  the current token-swap catalog never mutates them.
 - Coverage-gated mutant selection (the #1 speedup; GDScript coverage tooling is immature).
 - HTML report output; incremental / diff-scoped (per-PR) mode.
 - Optional LLM-semantic mutants (plausible-bug mode) — kept *out* of the deterministic path.
