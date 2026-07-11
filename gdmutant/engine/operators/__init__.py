@@ -74,6 +74,8 @@ class NumericBumpOperator:
         if not (digits.isascii() and digits.isdigit()):
             return ()
         n = int(token)
+        if token.startswith("-") and n == 0:
+            return ()  # "-0" isn't a real negative literal; skip it (keeps bumps reversible)
         return (str(n + 1), str(n - 1))
 
 

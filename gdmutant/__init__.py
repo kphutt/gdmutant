@@ -1,8 +1,8 @@
 """gdmutant — a language-agnostic mutation-testing tool (GDScript first).
 
-See docs/decisions/0001 for the Python/gdtoolkit rationale and README.md for the
-design goals. The mutate -> run -> tally -> report engine lands in the v0.1 engine
-milestone, behind the approved DESIGN.md; this package is a skeleton until then.
+See docs/decisions/0001 for the Python/gdtoolkit rationale and README.md for the design goals.
+The v0.1 engine (mutate -> run -> tally -> report) is built: the language-neutral `gdmutant.engine`
++ the `gdmutant.adapters.gdscript` adapter, run via the `gdmutant run` CLI.
 """
 
 from importlib.metadata import PackageNotFoundError, version
