@@ -121,7 +121,8 @@ def run(
             f"could not run the unmutated suite for {project_dir!r}: {error}"
         ) from error
     if baseline.failed:
-        raise BaselineFailed(f"the unmutated test suite failed for {project_dir!r}")
+        detail = f":\n{baseline.detail}" if baseline.detail else ""
+        raise BaselineFailed(f"the unmutated test suite failed for {project_dir!r}{detail}")
 
     outcomes: list[MutantOutcome] = []
     mutants = generate_mutants(path, source, catalog)

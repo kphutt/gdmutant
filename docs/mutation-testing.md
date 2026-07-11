@@ -25,22 +25,22 @@ complements the coverage gate — coverage says a line *ran*, mutation says a bu
 
 ## Current result
 
-**749 / 767 mutants killed — the remaining 18 are equivalent mutants** (changes that cannot alter
+**758 / 776 mutants killed — the remaining 18 are equivalent mutants** (changes that cannot alter
 observable behavior, so no test *can* catch them; this is the well-known
 [equivalent mutant problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)).
 Rather than contort the suite to "kill" them — which would only pin implementation trivia — they are
 enumerated and justified here. Every behavioral mutant mutmut generates is killed (see the scope note
 below for what that set covers).
 
-### Scope: what the 767 covers
+### Scope: what the 776 covers
 
 mutmut 3.6 mutates **module-level functions only** — it does not generate mutants for class-method
-bodies. So the 767 spans the package's 28 module-level functions (the operator catalog, spans, mutant
+bodies. So the 776 spans the package's 28 module-level functions (the operator catalog, spans, mutant
 generation, the loop, JUnit parsing, the reporter, the CLI, the adapter), but **not** the method
 bodies: `GdUnit4Runner.run`/`command`, `CommandRunner.run`, the two `replacements` implementations,
 `MutationRun`'s properties, `Mutant.apply`, `Span.__post_init__`, and `SuiteResult.failed`/`passed`.
-Those are
-covered by unit tests but are not *mutation-measured* here — so read the score as "every behavioral
+Those are covered by unit tests but are not *mutation-measured* here — so read the score as "every
+behavioral
 mutant mutmut generates is killed," over the module-level surface. Closing that gap with a
 method-mutating tool (e.g. cosmic-ray) is tracked as follow-up.
 

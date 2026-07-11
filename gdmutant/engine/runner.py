@@ -23,6 +23,10 @@ class SuiteResult:
     failures: int
     errors: int
     skipped: int = 0
+    #: Optional runner-supplied diagnostic (e.g. a failing command's captured output). Surfaced in
+    #: the *baseline*-failure message so a first run that can't even go green is debuggable; ignored
+    #: for per-mutant results, so it adds no noise during the run.
+    detail: str = ""
 
     @property
     def failed(self) -> bool:
@@ -68,8 +72,13 @@ class CommandRunner:
             text=True,
             timeout=self.timeout,
         )
+        if completed.returncode == 0:
+            return SuiteResult(tests=1, failures=0, errors=0)
         # One suite as a single pass/fail unit — per-test counts aren't available without a report.
-        return SuiteResult(tests=1, failures=1 if completed.returncode != 0 else 0, errors=0)
+        # Keep the command's own output so a *baseline* failure (a first-run misconfiguration, the
+        # common case) can be diagnosed instead of vanishing; tail it to stay bounded.
+        detail = (completed.stderr or completed.stdout or "").strip()
+        return SuiteResult(tests=1, failures=1, errors=0, detail=detail[-2000:])
 
 
 def parse_junit_xml(xml: str) -> SuiteResult:

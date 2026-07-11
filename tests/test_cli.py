@@ -602,7 +602,37 @@ def test_main_command_runner_requires_the_command_flag(
     path = _gd(tmp_path)
     rc = main(["run", str(path), "--project", str(tmp_path), "--runner", "command"])
     assert rc == 2
-    assert capsys.readouterr().err.strip() == "error: --runner command requires --command"
+    assert (
+        capsys.readouterr().err.strip() == "error: --runner command requires a non-empty --command"
+    )
+
+
+def test_main_command_runner_rejects_a_whitespace_only_command(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A whitespace-only --command shlex-splits to [], which would otherwise crash deep in the run
+    # with a confusing IndexError; it must hit the same clean usage error (exit 2).
+    path = _gd(tmp_path)
+    rc = main(
+        ["run", str(path), "--project", str(tmp_path), "--runner", "command", "--command", "   "]
+    )
+    assert rc == 2
+    assert (
+        capsys.readouterr().err.strip() == "error: --runner command requires a non-empty --command"
+    )
+
+
+def test_main_command_without_runner_command_is_flagged_not_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --command left on the default --runner gdunit4 is a footgun: warn instead of silently
+    # discarding it (and still build the GdUnit4 runner).
+    path = _gd(tmp_path)
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: MarkerRunner(str(path), ">="))
+    rc = main(["run", str(path), "--project", str(tmp_path), "--command", "godot --headless"])
+    assert rc == 0
+    # Trailing newline so a wrapped "XX...XX" mutant (which keeps the text a substring) still fails.
+    assert "note: --command is ignored unless --runner command is set\n" in capsys.readouterr().err
 
 
 def test_main_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:

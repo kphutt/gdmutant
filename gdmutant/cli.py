@@ -283,11 +283,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         project_dir = args.project or str(Path(args.source).resolve().parent)
         runner: Runner
         if args.runner == "command":
-            if not args.test_command:
-                print("error: --runner command requires --command", file=sys.stderr)
+            # shlex-split first, then require a non-empty result: this rejects a missing --command
+            # AND a whitespace-only one (which would otherwise become `[]` -> a confusing subprocess
+            # IndexError deep in the run).
+            test_command = shlex.split(args.test_command) if args.test_command else []
+            if not test_command:
+                print("error: --runner command requires a non-empty --command", file=sys.stderr)
                 return 2
-            runner = CommandRunner(command=shlex.split(args.test_command), timeout=args.timeout)
+            runner = CommandRunner(command=test_command, timeout=args.timeout)
         else:
+            if args.test_command:
+                # --command only applies to --runner command; flag it rather than silently drop it.
+                print("note: --command is ignored unless --runner command is set", file=sys.stderr)
             runner = GdUnit4Runner(
                 test_path=args.tests,
                 godot=args.godot,

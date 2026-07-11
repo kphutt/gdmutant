@@ -147,6 +147,23 @@ def test_command_runner_honours_timeout(tmp_path: Path) -> None:
         CommandRunner(slow, timeout=0.2).run(str(tmp_path))
 
 
+def test_command_runner_failure_captures_output_as_detail(tmp_path: Path) -> None:
+    # A failed run keeps the command's own output (so a baseline misconfiguration is debuggable,
+    # not silently swallowed). Prefers stderr.
+    cmd = [
+        sys.executable,
+        "-c",
+        "import sys; print('boom-on-stderr', file=sys.stderr); sys.exit(1)",
+    ]
+    result = CommandRunner(cmd).run(str(tmp_path))
+    assert result.failed is True
+    assert "boom-on-stderr" in result.detail
+
+
+def test_command_runner_success_has_no_detail(tmp_path: Path) -> None:
+    assert CommandRunner(_exits(0)).run(str(tmp_path)).detail == ""
+
+
 def test_command_runner_missing_executable_raises(tmp_path: Path) -> None:
     # A command that can't be executed at all raises (the engine tallies it as ERROR / the CLI
     # surfaces the not-found hint) — it is never silently treated as a passing or failing suite.
