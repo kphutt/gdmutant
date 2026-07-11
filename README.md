@@ -153,7 +153,7 @@ so it renders in that ecosystem's interactive viewer. Save this next to your `re
 `view.html`:
 ```html
 <mutation-test-report-app></mutation-test-report-app>
-<script src="https://www.unpkg.com/mutation-testing-elements"></script>
+<script src="https://www.unpkg.com/mutation-testing-elements@3.8.4"></script>
 <script>
   fetch("report.json")
     .then((r) => r.json())
