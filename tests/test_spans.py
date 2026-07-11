@@ -2,7 +2,7 @@
 
 import pytest
 
-from gdmutant.engine.spans import Span, apply_replacement
+from gdmutant.engine.spans import Span, apply_replacement, text_at
 
 
 def test_replace_single_char_operator() -> None:
@@ -22,6 +22,16 @@ def test_replacement_preserves_other_lines() -> None:
 
 def test_no_trailing_newline_on_last_line() -> None:
     assert apply_replacement("a > b", Span(1, 3, 1, 4), ">=") == "a >= b"
+
+
+def test_text_at_returns_the_span_text() -> None:
+    assert text_at("if a > b:\n", Span(1, 6, 1, 7)) == ">"
+    assert text_at("return a and b\n", Span(1, 10, 1, 13)) == "and"
+
+
+def test_text_at_out_of_range() -> None:
+    with pytest.raises(IndexError):
+        text_at("ab\n", Span(1, 1, 1, 9))
 
 
 def test_crlf_line_endings_preserved() -> None:
