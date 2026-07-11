@@ -53,7 +53,7 @@ says a line *ran*; mutation says a bug there would be *caught*. That gap is the 
 
 ## Design goals
 - **Ship fast.** A working v0.1 that mutates one real module and prints survivors beats a perfect framework.
-- **Standalone. Usable by anyone — no Claude, no AI required.** A normal CLI a developer installs and runs,
+- **Standalone. Usable by anyone — no AI required.** A normal CLI a developer installs and runs,
   exactly like Stryker is in its domain. AI is *optional upside* (see modes), never a dependency. This is the
   #1 design constraint: **a non-AI developer must be able to pick it up and use it from the README alone.**
 - **Generic engine, per-language adapters.** The loop (mutate → run tests → killed/survived → report) is

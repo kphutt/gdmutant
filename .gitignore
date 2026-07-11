@@ -21,11 +21,6 @@ mutants/
 mutmut-results.db
 # Godot (test fixtures may include a small Godot project)
 .godot/
-# Claude Code
-.claude/settings.local.json
-.claude/worktrees/
-.claude/projects/
-.claude/scheduled_tasks.lock
 # OS/editor
 .DS_Store
 Thumbs.db
