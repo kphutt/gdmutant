@@ -31,6 +31,14 @@ def test_generate_mutants_records_path_and_every_mutant_is_valid() -> None:
         assert valid, f"catalog mutant should be valid GDScript: {m}"
 
 
+def test_find_sites_pins_duplicate_tokens_in_document_order() -> None:
+    # Two '>' on one line must yield TWO distinct sites (a dedup-by-value bug would silently drop
+    # the second, under-generating mutants — the product's core output). Sites come back in
+    # document (left-to-right) order.
+    sites = find_sites("func f(a, b, c, d):\n\treturn a > b and c > d\n")
+    assert [(s.token, s.span.column) for s in sites] == [(">", 11), ("and", 15), (">", 21)]
+
+
 def test_find_sites_and_generate_thread_a_custom_catalog_through() -> None:
     # A custom operator that mutates a token the DEFAULT catalog ignores (the identifier `b`).
     # Both find_sites and generate_mutants must use THIS catalog — a mutant that falls back to the
