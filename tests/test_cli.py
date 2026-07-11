@@ -52,7 +52,7 @@ def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFi
 def test_run_mutation_emits_per_mutant_progress_to_stderr(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Per-mutant progress goes to stderr (LOD-86) so a real run doesn't look hung; the "[i/N]"
+    # Per-mutant progress goes to stderr so a real run doesn't look hung; the "[i/N]"
     # counter proves one line per mutant. The default (non --json -) summary is on stdout, so the
     # progress lines must NOT be there.
     path = _gd(tmp_path)  # 3 mutants

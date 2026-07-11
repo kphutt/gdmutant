@@ -81,7 +81,7 @@ class MutationRun:
 
 
 def _progress_line(index: int, total: int, outcome: MutantOutcome) -> str:
-    """One human-readable progress line for a finished mutant (LOD-86).
+    """One human-readable progress line for a finished mutant.
 
     Format: ``[i/N] path:line:col  original -> replacement  ... verdict`` — enough to see the run
     advancing (a real run boots Godot per mutant, so silence reads as a hang) and which mutant just
@@ -107,10 +107,13 @@ def run(
     Raises `BaselineFailed` if the unmutated suite doesn't pass first (FG-3.3). The file at `path`
     must hold `source` when this is called; it is restored to `source` before returning.
 
-    If `progress` is given, it is called once per mutant — after that mutant's verdict is known —
-    with a `_progress_line` string, in generation order. The CLI wires it to stderr so a long run
-    shows steady output instead of looking hung (LOD-86); passing `None` runs silently.
+    If `progress` is given, it is called with the baseline notice and then once per mutant — after
+    that mutant's verdict is known — with a `_progress_line` string, in generation order. The CLI
+    wires it to stderr so a long run shows steady output instead of looking hung; `None` runs
+    silently.
     """
+    if progress is not None:
+        progress("running the unmutated (baseline) suite ...")
     try:
         baseline = runner.run(project_dir)
     except Exception as error:  # a runner that can't even run the unmutated suite is a setup error

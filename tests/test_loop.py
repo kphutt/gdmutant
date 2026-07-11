@@ -153,30 +153,43 @@ def test_runner_error_on_a_later_mutant_preserves_earlier_verdicts(tmp_path: Pat
 
 
 def test_progress_callback_fires_once_per_mutant_in_order(tmp_path: Path) -> None:
-    # Progress must fire once per mutant, in generation order, with the exact
-    # "[i/N] path:line:col  a -> b  ... verdict" format — pinned exactly so a mutated separator,
-    # index base, or verdict label is caught (LOD-86). Source has 3 mutants: >, and, <.
+    # Progress fires the baseline notice, then once per mutant in generation order, with the exact
+    # "[i/N] path:line:col  a -> b  ... verdict" format — pinned so a mutated separator, index base,
+    # or verdict label is caught. Source has 3 mutants: >, and, <.
     src = "func f(a, b):\n\treturn a > b and a < b\n"
     path = _write(tmp_path, "f.gd", src)
     lines: list[str] = []
     runner = MarkerRunner(target=path, kill_marker=">=")
     run(str(tmp_path), path, src, runner, progress=lines.append)
     assert lines == [
+        "running the unmutated (baseline) suite ...",
         f"[1/3] {path}:2:11  > -> >=  ... killed",
         f"[2/3] {path}:2:15  and -> or  ... survived",
         f"[3/3] {path}:2:21  < -> <=  ... survived",
     ]
 
 
-def test_progress_reports_invalid_verdict(tmp_path: Path) -> None:
-    # An invalid (unparseable) mutant is still reported, labelled "invalid" — the progress line is
-    # emitted for every mutant, not only the ones that reach the runner.
+def test_progress_reports_invalid_and_error_verdicts(tmp_path: Path) -> None:
+    # Every mutant is reported regardless of verdict — an invalid (unparseable) mutant labelled
+    # "invalid", and a mutant whose runner raises labelled "error" (not only the ones that pass).
     src = "func f(a, b):\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
+    invalid: list[str] = []
     bad = TableOperator("bad", {">": ("))",)})
-    lines: list[str] = []
-    run(str(tmp_path), path, src, MarkerRunner(path, "ZZZ"), catalog=(bad,), progress=lines.append)
-    assert lines == [f"[1/1] {path}:2:11  > -> ))  ... invalid"]
+    run(
+        str(tmp_path), path, src, MarkerRunner(path, "ZZZ"), catalog=(bad,), progress=invalid.append
+    )
+    assert invalid == [
+        "running the unmutated (baseline) suite ...",
+        f"[1/1] {path}:2:11  > -> ))  ... invalid",
+    ]
+
+    errored: list[str] = []
+    run(str(tmp_path), path, src, RaiseAfterBaselineRunner(), progress=errored.append)
+    assert errored == [
+        "running the unmutated (baseline) suite ...",
+        f"[1/1] {path}:2:11  > -> >=  ... error",
+    ]
 
 
 def test_progress_defaults_to_silent(tmp_path: Path) -> None:
