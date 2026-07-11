@@ -37,8 +37,8 @@ In `engine/loop.py` (`_run_one`, writing and restoring the mutated file) and `cl
 (`run_mutation`, reading the source and writing the JSON report).
 - `"UTF-8"` is a codec *alias* of `"utf-8"` — byte-for-byte identical.
 - `encoding=None` / omitting the argument falls back to the platform's default text encoding, which
-  on every environment gdmutant targets (Python 3.14+, where text I/O defaults to UTF-8; and UTF-8
-  locales generally) produces identical bytes for the content involved.
+  on a UTF-8 locale — the CI runner and every environment gdmutant is used in — is itself UTF-8, so
+  the bytes are identical.
 
   No black-box test can distinguish these from `"utf-8"`. Specifying `encoding="utf-8"` explicitly is
   nonetheless correct — it is the guarantee that keeps the equivalence true across platforms, rather
