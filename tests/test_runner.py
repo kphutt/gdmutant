@@ -65,8 +65,31 @@ def test_parse_missing_attributes_default_to_zero() -> None:
 
 
 def test_parse_no_testsuite_raises() -> None:
-    with pytest.raises(ValueError, match="no <testsuite>"):
+    # Anchored so a mutant that wraps or re-cases the message ("...JUnit XML" -> "...junit xml")
+    # is still caught, not just any string containing "no <testsuite>".
+    with pytest.raises(ValueError, match=r"^no <testsuite> element in JUnit XML$"):
         parse_junit_xml("<other/>")
+
+
+def test_parse_missing_count_attr_defaults_to_zero() -> None:
+    # With the `tests` attribute absent, the "0" default must be used (not a crash): a mutant that
+    # drops or corrupts that default (None, "XX0XX") would raise on int() instead.
+    r = parse_junit_xml('<testsuite failures="0" errors="0"/>')
+    assert (r.tests, r.failures, r.errors) == (0, 0, 0)
+    assert r.passed is True
+
+
+def test_parse_sums_every_field_across_suites() -> None:
+    # Two suites each contributing to every field, with distinct values, so a mutant that assigns
+    # (`x = ...`) instead of accumulating (`x += ...`) yields the last suite's value, not the sum.
+    xml = (
+        "<testsuites>"
+        '<testsuite tests="1" failures="1" errors="1" skipped="1"/>'
+        '<testsuite tests="1" failures="2" errors="3" skipped="4"/>'
+        "</testsuites>"
+    )
+    r = parse_junit_xml(xml)
+    assert (r.tests, r.failures, r.errors, r.skipped) == (2, 3, 4, 5)
 
 
 def test_parse_malformed_xml_raises() -> None:
