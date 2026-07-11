@@ -1,7 +1,7 @@
 """Tests for the CLI (`gdmutant run`), driven without Godot via an injected fake runner."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -71,6 +71,16 @@ def test_run_mutation_missing_file_returns_two(
     assert "cannot read" in capsys.readouterr().err
 
 
+def test_run_mutation_invalid_utf8_returns_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "bad.gd"
+    path.write_bytes(b"\xff\xfe not valid utf-8")
+    rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), "x"))
+    assert rc == 2  # UnicodeDecodeError is handled, not a crash
+    assert "cannot read" in capsys.readouterr().err
+
+
 def test_parser_run_subcommand() -> None:
     args = build_parser().parse_args(
         ["run", "f.gd", "--godot", "godot4", "--tests", "res://t", "--json", "r.json"]
@@ -91,6 +101,27 @@ def test_main_dispatches_run_with_injected_runner(
     rc = main(["run", str(path), "--project", str(tmp_path)])
     assert rc == 0
     assert "Mutation score:" in capsys.readouterr().out
+
+
+@dataclass
+class RecordingRunner:
+    """Records the project_dir it was called with (all-pass, so mutants survive)."""
+
+    seen: list[str] = field(default_factory=list)
+
+    def run(self, project_dir: str) -> SuiteResult:
+        self.seen.append(project_dir)
+        return SuiteResult(tests=3, failures=0, errors=0)
+
+
+def test_main_default_project_uses_the_source_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _gd(tmp_path)
+    runner = RecordingRunner()
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
+    assert main(["run", str(path)]) == 0  # no --project given
+    assert runner.seen[0] == str(path.resolve().parent)  # defaulted to the source's directory
 
 
 def test_main_no_command_prints_help() -> None:

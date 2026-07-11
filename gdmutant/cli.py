@@ -30,7 +30,9 @@ def run_mutation(
     path = Path(source_path)
     try:
         source = path.read_text(encoding="utf-8")
-    except OSError as error:
+    except (OSError, UnicodeDecodeError) as error:
+        # UnicodeDecodeError is a ValueError, not an OSError — catch it so a non-UTF-8 .gd file
+        # exits 2 gracefully instead of crashing.
         print(f"error: cannot read {source_path}: {error}", file=sys.stderr)
         return 2
     try:
