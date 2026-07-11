@@ -39,6 +39,17 @@ def test_find_sites_pins_duplicate_tokens_in_document_order() -> None:
     assert [(s.token, s.span.column) for s in sites] == [(">", 11), ("and", 15), (">", 21)]
 
 
+def test_gdmutant_ignore_marker_suppresses_a_line() -> None:
+    # A line marked `# gdmutant: ignore` (optionally with a reason) contributes no sites/mutants —
+    # for equivalent/unkillable mutants; other lines are unaffected.
+    src = "func f(a, b):\n\treturn a > b  # gdmutant: ignore (equivalent)\n\treturn a < b\n"
+    assert {s.token for s in find_sites(src)} == {"<"}  # the '>' on the ignored line is gone
+    assert {(m.original, m.replacement) for m in generate_mutants("f.gd", src)} == {("<", "<=")}
+    # Without the marker, both operators are sites — proving the marker (not the layout) did it.
+    plain = "func f(a, b):\n\treturn a > b\n\treturn a < b\n"
+    assert {s.token for s in find_sites(plain)} == {">", "<"}
+
+
 def test_find_sites_and_generate_thread_a_custom_catalog_through() -> None:
     # A custom operator that mutates a token the DEFAULT catalog ignores (the identifier `b`).
     # Both find_sites and generate_mutants must use THIS catalog — a mutant that falls back to the

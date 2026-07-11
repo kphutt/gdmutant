@@ -34,17 +34,32 @@ def _span_of(tok: Token) -> Span:
     return Span(line, col, end_line, end_col)
 
 
+_IGNORE_MARKER = "# gdmutant: ignore"
+
+
+def _ignored_lines(source: str) -> set[int]:
+    """1-based line numbers carrying a ``# gdmutant: ignore`` marker — a ``# noqa``-style opt-out
+    for lines whose mutants are equivalent (unkillable) or otherwise not worth reporting.
+
+    Comments aren't tokens, so this scans the raw source. Lines are split on ``\\n`` only, matching
+    the engine's line counting (spans.py), so the numbers line up with token positions.
+    """
+    return {i for i, line in enumerate(source.split("\n"), start=1) if _IGNORE_MARKER in line}
+
+
 def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[MutationSite]:
     """Every token in `source` that `catalog` can mutate, located via gdtoolkit.
 
     Filtering by "does the catalog mutate this value" is sufficient: gdtoolkit never surfaces
     tokens from inside string literals or comments, so this never edits within one. `catalog` is
     threaded through so site selection matches generation (a custom catalog finds its own sites).
+    Tokens on a line marked ``# gdmutant: ignore`` are skipped, so no mutants are generated there.
     """
+    ignored = _ignored_lines(source)
     return [
         MutationSite(tok.value, _span_of(tok))
         for tok in _parse(source).scan_values(lambda v: isinstance(v, Token))
-        if all_replacements(tok.value, catalog)
+        if all_replacements(tok.value, catalog) and tok.line not in ignored
     ]
 
 
