@@ -119,6 +119,14 @@ For each mutant it reruns the project's GdUnit4 suite, prints the survivors (`fi
 with a mutation score, and optionally writes a `mutation-testing-elements` JSON report (`--json report.json`,
 or `--json -` to stream it to stdout). (Once published: `pipx install gdmutant`.)
 
+> **macOS:** Godot ships as an app bundle and is never on your PATH, so point `--godot` at the binary
+> inside it: `--godot /Applications/Godot.app/Contents/MacOS/Godot`. (gdmutant tells you this if it
+> can't find Godot.)
+
+Other flags: `--report-path` if your project writes GdUnit4's JUnit XML somewhere other than the
+default `reports/report_1/results.xml`, and `--timeout` (seconds, default 600) for the per-mutant
+test-run limit. `gdmutant run --help` lists them all.
+
 > The live `godot --headless` path is pending CI validation (`ROADMAP.md`); `--dry-run` needs no Godot.
 
 ## Next steps

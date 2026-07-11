@@ -19,6 +19,12 @@ from gdmutant.engine.runner import SuiteResult, parse_junit_xml
 
 _GDUNIT_CMD_TOOL = "res://addons/gdUnit4/bin/GdUnitCmdTool.gd"
 
+# The runner's defaults, exposed so the CLI can present them (and its --report-path/--timeout
+# defaults) from one source, without reading them off the class at parse time (which breaks when a
+# test monkeypatches GdUnit4Runner).
+DEFAULT_REPORT_PATH = "reports/report_1/results.xml"
+DEFAULT_TIMEOUT = 600.0
+
 
 @dataclass
 class GdUnit4Runner:
@@ -29,9 +35,9 @@ class GdUnit4Runner:
     """
 
     test_path: str = "res://test"
-    report_path: str = "reports/report_1/results.xml"
+    report_path: str = DEFAULT_REPORT_PATH
     godot: str = "godot"
-    timeout: float = 600.0
+    timeout: float = DEFAULT_TIMEOUT
 
     def command(self, project_dir: str) -> list[str]:
         """The ``godot --headless`` command that runs the GdUnit4 suite for `project_dir`.
