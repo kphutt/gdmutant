@@ -18,17 +18,19 @@ CORPUS = Path(__file__).resolve().parent.parent / "corpus" / "turn_order.gd"
 
 def test_corpus_generates_the_exact_deterministic_mutant_set() -> None:
     # The corpus is fixed, so its mutant set is fully deterministic — pin it exactly. A loose `>=`
-    # would hide an under-generating adapter (e.g. one that dropped duplicate `>`/`0`/`-` tokens),
-    # and all five catalog operators are exercised through the real parser here.
+    # would hide an under-generating adapter (e.g. one that dropped duplicate `>`/`0`/`-` tokens).
+    # Six operators are exercised through the real parser here (the corpus has no `%` or compound
+    # assignment, so `modulo`/`compound-assign` aren't represented — that's expected).
     source = CORPUS.read_text(encoding="utf-8")
     mutants = generate_mutants(str(CORPUS), source)
-    assert len(mutants) == 15
+    assert len(mutants) == 16
     assert Counter(m.operator_id for m in mutants) == {
         "comparison": 4,
         "numeric": 6,
         "arithmetic": 3,
         "boolean": 1,
         "constant": 1,
+        "logical-not": 1,  # `alive and not stunned` in can_act
     }
 
 

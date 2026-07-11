@@ -93,3 +93,81 @@ def test_apply_mutant_flags_invalid_mutant_nf5() -> None:
     mutated, valid = apply_mutant(broken, src)
     assert "a ) b" in mutated
     assert valid is False
+
+
+def test_new_operators_generate_valid_mutants() -> None:
+    # Compound assignment, modulo, and unary-not removal must all be found as sites and produce
+    # parseable GDScript. The `not` case is the subtle one: it's a swap to "" (a token deletion),
+    # so verify it doesn't leave broken syntax behind.
+    src = (
+        "func f(e, s, x, alive):\n\te += s\n\tvar r = x % 2\n"
+        "\tif not alive:\n\t\treturn 0\n\treturn e\n"
+    )
+    by_op: dict[str, set[tuple[str, str]]] = {}
+    for m in generate_mutants("f.gd", src):
+        _, valid = apply_mutant(m, src)
+        assert valid, f"{m.operator_id} {m.original!r}->{m.replacement!r} produced invalid GDScript"
+        by_op.setdefault(m.operator_id, set()).add((m.original, m.replacement))
+    assert by_op["compound-assign"] == {("+=", "-=")}
+    assert by_op["modulo"] == {("%", "*"), ("%", "/")}
+    assert by_op["logical-not"] == {("not", "")}  # deletion, and the result still parses
+
+
+def test_arithmetic_modulo_is_a_mutation_site() -> None:
+    # A real arithmetic `%` must be found and produce modulo mutants.
+    src = "func f(a, b):\n\treturn a % b\n"
+    assert any(s.token == "%" for s in find_sites(src))
+    assert any(m.operator_id == "modulo" for m in generate_mutants("f.gd", src))
+
+
+def test_string_format_percent_is_not_a_mutation_site() -> None:
+    # GDScript overloads `%` for string formatting; a `%` whose left operand is a string literal is
+    # formatting, not modulo, so it must NOT be mutated (double/single/triple-quoted forms).
+    for src in (
+        'func f(x):\n\treturn "Hi %s" % x\n',
+        "func f(x):\n\treturn 'Hi %s' % x\n",
+        'func f(x):\n\treturn """Hi %s""" % x\n',
+    ):
+        assert not any(s.token == "%" for s in find_sites(src)), src
+        assert not any(m.operator_id == "modulo" for m in generate_mutants("f.gd", src)), src
+
+
+def test_modulo_after_a_non_string_operand_is_still_a_site() -> None:
+    # The skip is specific to a *string* left operand — `x % 2` (name on the left) stays a site,
+    # so genuine modulo isn't over-suppressed just because a string appears elsewhere on the line.
+    src = 'func f(x):\n\treturn x % 2 + len("s")\n'
+    assert any(s.token == "%" for s in find_sites(src))
+
+
+def test_modulo_on_a_string_keyed_index_is_still_a_site() -> None:
+    # `d["k"] % x` is genuine modulo on a dict/array value — a common real pattern (`state["frame"]
+    # % 2`). The token immediately before `%` is the index string "k", but its *left operand* is the
+    # `d[...]` subscript, so the tree-based check must keep it (a token-adjacency check dropped it).
+    src = 'func f(d, x):\n\treturn d["k"] % x\n'
+    assert any(s.token == "%" for s in find_sites(src)), "genuine modulo site was skipped"
+    assert any(m.operator_id == "modulo" for m in generate_mutants("f.gd", src))
+
+
+def test_modulo_on_a_parenthesised_expression_ending_in_a_string_is_still_a_site() -> None:
+    # Same class as the subscript case: the left operand is a ternary, not a bare string literal,
+    # even though its last token is a string — must stay a modulo site.
+    src = 'func f(c, x):\n\treturn (x if c else "b") % 2\n'
+    assert any(s.token == "%" for s in find_sites(src))
+
+
+def test_computed_string_before_percent_is_a_known_scope_limitation() -> None:
+    # DOCUMENTED SCOPE: only a bare string *literal* left operand is recognised as string-format.
+    # A computed string (concatenation) is NOT — distinguishing it needs type inference — so its
+    # `%` is (rarely) still mutated as modulo. That's the NF-5-safe noise direction; pinned here as
+    # intentional, tracked as a follow-up. If this starts skipping, the follow-up landed.
+    src = 'func f(name, x):\n\treturn ("Hi " + name) % x\n'
+    assert any(s.token == "%" for s in find_sites(src))
+
+
+def test_not_deletion_removes_the_keyword_and_stays_valid() -> None:
+    # Pin the exact deletion: `if not alive:` -> `if  alive:` (the `not` token gone), still valid.
+    src = "func f(alive):\n\tif not alive:\n\t\treturn 0\n\treturn 1\n"
+    (mutant,) = [m for m in generate_mutants("f.gd", src) if m.operator_id == "logical-not"]
+    mutated, valid = apply_mutant(mutant, src)
+    assert valid is True
+    assert "if  alive:" in mutated  # the `not` and only the `not` was removed
