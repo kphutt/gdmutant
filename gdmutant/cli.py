@@ -1,18 +1,50 @@
-"""Standalone CLI entry point.
+"""Standalone CLI: ``gdmutant run <file.gd>`` mutates a GDScript file and reports survivors.
 
-Design goal: a developer runs this exactly like Stryker, no AI required. The
-engine loop (mutate -> run -> tally -> report) lands in the v0.1 engine milestone,
-behind the approved DESIGN.md; for now this only wires the entry point + --version so
-the console script resolves and CI has a real surface to exercise.
+No AI required — a normal command-line tool (the #1 design goal). `run_mutation` is the testable
+core (inject any `Runner`); `main` wires the real `GdUnit4Runner`.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from gdmutant import __version__
+from gdmutant.adapters.gdscript.runner import GdUnit4Runner
+from gdmutant.engine.loop import BaselineFailed, run
+from gdmutant.engine.report import console_summary, stryker_report
+from gdmutant.engine.runner import Runner
+
+
+def run_mutation(
+    source_path: str, project_dir: str, runner: Runner, *, json_path: str | None = None
+) -> int:
+    """Mutate `source_path`, run the suite via `runner`, print the summary, optionally write JSON.
+
+    Returns 0 on a completed pass — **survivors are report output, not a failure** (FG-6.2) — 1 if
+    the unmutated baseline suite fails, and 2 if the source file can't be read.
+    """
+    path = Path(source_path)
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as error:
+        print(f"error: cannot read {source_path}: {error}", file=sys.stderr)
+        return 2
+    try:
+        result = run(project_dir, str(path), source, runner)
+    except BaselineFailed as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(console_summary(result))
+    if json_path is not None:
+        Path(json_path).write_text(
+            json.dumps(stryker_report(result, str(path), source), indent=2), encoding="utf-8"
+        )
+        print(f"\nWrote report to {json_path}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,22 +52,31 @@ def build_parser() -> argparse.ArgumentParser:
         prog="gdmutant",
         description="Mutation testing for GDScript (and, in time, other languages).",
     )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"gdmutant {__version__}",
+    parser.add_argument("--version", action="version", version=f"gdmutant {__version__}")
+    sub = parser.add_subparsers(dest="command")
+    run_parser = sub.add_parser("run", help="mutate a GDScript file and report survivors")
+    run_parser.add_argument("source", help="the .gd file to mutate")
+    run_parser.add_argument("--project", help="the Godot project dir (default: the source's dir)")
+    run_parser.add_argument(
+        "--godot", default="godot", help="the Godot executable (default: godot)"
     )
+    run_parser.add_argument(
+        "--tests", default="res://test", help="the GdUnit4 test path (default: res://test)"
+    )
+    run_parser.add_argument("--json", dest="json_path", help="write the Stryker JSON report here")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    parser.parse_args(argv)
-    # No subcommands yet — the engine loop lands in the v0.1 engine milestone (see ROADMAP.md).
+    args = parser.parse_args(argv)
+    if args.command == "run":
+        project_dir = args.project or str(Path(args.source).resolve().parent)
+        runner = GdUnit4Runner(test_path=args.tests, godot=args.godot)
+        return run_mutation(args.source, project_dir, runner, json_path=args.json_path)
     parser.print_help()
-    print("\ngdmutant is scaffolding — the mutate/run/report engine is not built yet.")
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())
