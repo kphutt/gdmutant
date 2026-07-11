@@ -8,7 +8,7 @@ created: 2026-07-11
 
 A one-read guide for an AI agent (e.g. one working in `project-rampart`) to run gdmutant and act on
 the results correctly. This is a *how-to-use-the-tool* guide for consumers — distinct from
-[`CLAUDE.md`](../CLAUDE.md), which is for contributors *to* gdmutant.
+[`AGENTS.md`](../AGENTS.md), which is for contributors *to* gdmutant.
 
 ## Invoke
 
