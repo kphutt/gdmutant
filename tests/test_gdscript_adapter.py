@@ -7,6 +7,7 @@ from gdmutant.adapters.gdscript import (
     is_valid_gdscript,
 )
 from gdmutant.engine.mutants import Mutant
+from gdmutant.engine.operators import TableOperator
 
 
 def test_find_sites_locates_operators_and_literals() -> None:
@@ -28,6 +29,17 @@ def test_generate_mutants_records_path_and_every_mutant_is_valid() -> None:
     for m in mutants:
         _mutated, valid = apply_mutant(m, src)
         assert valid, f"catalog mutant should be valid GDScript: {m}"
+
+
+def test_find_sites_and_generate_thread_a_custom_catalog_through() -> None:
+    # A custom operator that mutates a token the DEFAULT catalog ignores (the identifier `b`).
+    # Both find_sites and generate_mutants must use THIS catalog — a mutant that falls back to the
+    # default would never surface `b`, so it finds nothing here.
+    custom = (TableOperator("ident", {"b": ("c",)}),)
+    src = "func f(a, b):\n\treturn b > a\n"
+    assert {s.token for s in find_sites(src, catalog=custom)} == {"b"}
+    mutants = generate_mutants("f.gd", src, catalog=custom)
+    assert mutants and {(m.original, m.replacement) for m in mutants} == {("b", "c")}
 
 
 def test_negative_literal_is_located_and_mutated() -> None:
