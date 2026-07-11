@@ -7,7 +7,10 @@ from gdmutant.engine.operators import (
     BOOLEAN,
     CATALOG,
     COMPARISON,
+    COMPOUND_ASSIGN,
     CONSTANT,
+    LOGICAL_NOT,
+    MODULO,
     NUMERIC,
     TableOperator,
     all_replacements,
@@ -15,6 +18,9 @@ from gdmutant.engine.operators import (
 )
 
 _TABLE_OPS = [op for op in CATALOG if isinstance(op, TableOperator)]
+#: Operators whose swaps are a reversible pairing. `modulo` (one-directional) and `logical-not`
+#: (a deletion to "") are non-involutive by design and are exercised by their own tests below.
+_INVOLUTIVE_OPS = [COMPARISON, BOOLEAN, ARITHMETIC, CONSTANT, COMPOUND_ASSIGN]
 
 
 def test_comparison_swaps() -> None:
@@ -37,6 +43,29 @@ def test_arithmetic_swaps() -> None:
 def test_constant_boolean_swaps() -> None:
     assert CONSTANT.replacements("true") == ("false",)
     assert CONSTANT.replacements("false") == ("true",)
+
+
+def test_compound_assignment_swaps() -> None:
+    assert COMPOUND_ASSIGN.replacements("+=") == ("-=",)
+    assert COMPOUND_ASSIGN.replacements("-=") == ("+=",)
+    assert COMPOUND_ASSIGN.replacements("*=") == ("/=",)
+    assert COMPOUND_ASSIGN.replacements("/=") == ("*=",)
+    assert COMPOUND_ASSIGN.replacements("=") == ()  # plain assignment is not mutated
+
+
+def test_modulo_swaps() -> None:
+    # Directional (not a reversible pairing): `%` -> `*`/`/`, but `*`/`/` are left to ARITHMETIC.
+    assert MODULO.replacements("%") == ("*", "/")
+    assert MODULO.replacements("*") == ()
+    assert MODULO.replacements("/") == ()
+
+
+def test_logical_not_deletes() -> None:
+    # Removing `not` is modelled as a swap to the empty string; the adapter's NF-5 re-parse guards
+    # any result that wouldn't parse.
+    assert LOGICAL_NOT.replacements("not") == ("",)
+    assert applies(LOGICAL_NOT, "not") is True
+    assert LOGICAL_NOT.replacements("and") == ()  # only the `not` keyword
 
 
 def test_numeric_bump() -> None:
@@ -79,8 +108,10 @@ def test_no_table_operator_maps_a_token_to_itself(op: TableOperator) -> None:
         assert token not in repls, f"{op.id} maps {token!r} to itself"
 
 
-@pytest.mark.parametrize("op", _TABLE_OPS)
-def test_table_swaps_are_involutive(op: TableOperator) -> None:
+@pytest.mark.parametrize("op", _INVOLUTIVE_OPS)
+def test_swap_operators_are_involutive(op: TableOperator) -> None:
+    # The reversible-pairing operators only (see _INVOLUTIVE_OPS): every swap can be undone, so a
+    # mutation is always a clean flip. `modulo` and `logical-not` are intentionally not in this set.
     for token, repls in op.table.items():
         for repl in repls:
             assert token in op.replacements(repl), f"{op.id}: {token}->{repl} is not reversible"
@@ -92,7 +123,16 @@ def test_catalog_has_unique_ids() -> None:
 
 
 def test_catalog_contents() -> None:
-    assert CATALOG == (COMPARISON, BOOLEAN, ARITHMETIC, CONSTANT, NUMERIC)
+    assert CATALOG == (
+        COMPARISON,
+        BOOLEAN,
+        ARITHMETIC,
+        CONSTANT,
+        NUMERIC,
+        COMPOUND_ASSIGN,
+        MODULO,
+        LOGICAL_NOT,
+    )
 
 
 def test_all_replacements_collects_across_catalog() -> None:

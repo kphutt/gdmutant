@@ -11,6 +11,8 @@ operator. The Godot test runner is a separate concern (Slice 4).
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 from gdtoolkit.parser import parser as _gdparser
 from lark import Token, Tree
 from lark.exceptions import LarkError
@@ -47,6 +49,40 @@ def _ignored_lines(source: str) -> set[int]:
     return {i for i, line in enumerate(source.split("\n"), start=1) if _IGNORE_MARKER in line}
 
 
+def _string_format_percents(tree: Tree[Token]) -> set[tuple[int | None, int | None]]:
+    """Positions ``(line, column)`` of ``%`` tokens that are the **string-format** operator, which
+    the modulo operator must not mutate.
+
+    ``%`` is overloaded in GDScript: arithmetic modulo *and* string formatting (``"fmt" % args``).
+    The distinction is the direct **left operand**: a bare string literal means formatting. That has
+    to be read from the parse tree, not the flat token stream — ``d["k"] % x`` is genuine modulo,
+    but its token immediately before ``%`` is the *index* string ``"k"`` (its left operand is the
+    ``d[...]`` ``subscr_expr`` subtree, not a string), so a token-adjacency check would wrongly drop
+    it. Here each ``%`` in an ``mdr_expr`` (mul/div/remainder) node is skipped only when the node
+    child *directly* to its left is a ``string`` node.
+
+    Scope (deliberate): only a **bare string-literal** left operand is recognised. A *computed*
+    string — concatenation like ``("Hi " + name) % x`` — is not, so its ``%`` is still mutated as
+    modulo. Distinguishing that needs type inference (``(a + "b") % x`` is formatting or a type
+    error depending on ``a``'s runtime type), which is out of scope for v0.1. This is the *noise*
+    direction (a format ``%`` mutated to ``*``/``/`` errors at runtime — an ERROR verdict, never a
+    silently-wrong survivor), unlike dropping a genuine modulo site. Tracked as a follow-up.
+    """
+    skip: set[tuple[int | None, int | None]] = set()
+    for node in tree.iter_subtrees():
+        if node.data != "mdr_expr":
+            continue
+        for prev, cur in pairwise(node.children):
+            if (
+                isinstance(cur, Token)
+                and cur.value == "%"
+                and isinstance(prev, Tree)
+                and prev.data == "string"
+            ):
+                skip.add((cur.line, cur.column))
+    return skip
+
+
 def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[MutationSite]:
     """Every token in `source` that `catalog` can mutate, located via gdtoolkit.
 
@@ -55,12 +91,17 @@ def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[Mut
     threaded through so site selection matches generation (a custom catalog finds its own sites).
     Tokens on a *physical* line marked ``# gdmutant: ignore`` are skipped — line-scoped, like
     ``# noqa`` (a multi-line statement needs the marker on each line; see docs/decisions/0004).
+    A ``%`` used as the string-format operator is skipped too (see `_string_format_percents`).
     """
     ignored = _ignored_lines(source)
+    tree = _parse(source)
+    format_percents = _string_format_percents(tree)
     return [
         MutationSite(tok.value, _span_of(tok))
-        for tok in _parse(source).scan_values(lambda v: isinstance(v, Token))
-        if all_replacements(tok.value, catalog) and tok.line not in ignored
+        for tok in tree.scan_values(lambda v: isinstance(v, Token))
+        if all_replacements(tok.value, catalog)
+        and tok.line not in ignored
+        and (tok.line, tok.column) not in format_percents
     ]
 
 
