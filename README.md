@@ -146,6 +146,25 @@ test-run limit. `gdmutant run --help` lists them all.
 
 > The live `godot --headless` path is pending CI validation (`ROADMAP.md`); `--dry-run` needs no Godot.
 
+**Turn the JSON into a rich, clickable HTML report — no extra tooling from us.** The `--json` output
+is the standard Stryker
+[`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema,
+so it renders in that ecosystem's interactive viewer. Save this next to your `report.json` as
+`view.html`:
+```html
+<mutation-test-report-app></mutation-test-report-app>
+<script src="https://www.unpkg.com/mutation-testing-elements"></script>
+<script>
+  fetch("report.json")
+    .then((r) => r.json())
+    .then((report) => (document.querySelector("mutation-test-report-app").report = report));
+</script>
+```
+then serve the folder and open it (`python3 -m http.server` → visit `view.html`) for a
+source-highlighted, survivor-by-survivor view. Once the repo is public, the free
+[Stryker Dashboard](https://dashboard.stryker-mutator.io) can also host the report and produce a
+mutation-score **badge** — all from the JSON gdmutant already emits.
+
 **Driving gdmutant from an AI agent?** See [`docs/agent-guide.md`](docs/agent-guide.md) — the exact
 invocation, the JSON schema, the `0`/`1`/`2` exit-code contract, the "never leaves your tree mutated"
 guarantee, and the survivor→killing-test loop, in one read.
