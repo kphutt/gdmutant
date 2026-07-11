@@ -20,3 +20,13 @@ static func clamp_initiative(value: int, max_value: int) -> int:
 # True if two grid cells are orthogonally adjacent (Manhattan distance 1).
 static func is_adjacent(ax: int, ay: int, bx: int, by: int) -> bool:
 	return abs(ax - bx) + abs(ay - by) == 1
+
+
+# True if an actor may act this round: alive and not stunned.
+static func can_act(alive: bool, stunned: bool) -> bool:
+	return alive and not stunned
+
+
+# Whether ties favor the earlier actor — a fixed rule of this system.
+static func ties_favor_earlier() -> bool:
+	return true
