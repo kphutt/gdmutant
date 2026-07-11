@@ -185,6 +185,22 @@ def test_run_mutation_missing_executable_with_no_filename_uses_fallback(
     assert capsys.readouterr().err.endswith(_FALLBACK_MISSING)
 
 
+def test_run_mutation_nonexistent_project_dir_reports_directory_not_executable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A bad --project must report a *directory* problem, not be mistaken for a missing godot binary
+    # (both surface as FileNotFoundError once the runner shells out with cwd=project_dir). The
+    # MissingGodotRunner would raise the executable error if reached — so this also proves the
+    # project-dir check fires *before* the runner runs.
+    path = _gd(tmp_path)
+    missing_dir = tmp_path / "no-such-project"
+    rc = run_mutation(str(path), str(missing_dir), MissingGodotRunner())
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err == f"error: project directory not found: {missing_dir}\n"
+    assert "executable" not in err  # never misreported as a missing binary
+
+
 def test_baseline_red_is_still_exit_one_not_mistaken_for_missing_executable(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

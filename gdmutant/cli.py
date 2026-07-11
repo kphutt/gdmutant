@@ -94,10 +94,18 @@ def run_mutation(
 
     Returns 0 on a completed pass — **survivors are report output, not a failure** (FG-6.2) — 1 if
     the unmutated baseline suite fails, and 2 if the source can't be read, isn't valid GDScript, the
-    test-runner executable isn't found, or the JSON report can't be written.
+    project directory doesn't exist, the test-runner executable isn't found, or the JSON report
+    can't be written.
     """
     source = _load_gdscript(source_path)
     if source is None:
+        return 2
+    # Validate project_dir up front: the runner shells out with `cwd=project_dir`, so a missing dir
+    # raises FileNotFoundError too — indistinguishable by type from a missing `godot`. Catching it
+    # here keeps _missing_executable's FileNotFoundError unambiguously about the executable, and
+    # gives a bad --project its own clear message.
+    if not Path(project_dir).is_dir():
+        print(f"error: project directory not found: {project_dir}", file=sys.stderr)
         return 2
     path = Path(source_path)
     # Progress goes to stderr unconditionally: a real run boots Godot per mutant, so without it the
