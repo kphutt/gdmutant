@@ -4,8 +4,8 @@ A language-agnostic **mutation-testing** tool — the first *usable* one for GDS
 mutates a project's source (flip `>`↔`>=`, `and`↔`or`, drop a `return`, …), reruns the tests per
 mutant, and reports **survivors** — lines a bug could live on that no test catches. This is the
 fast-orientation guide for anyone (human or AI) working on the code; the product rationale is in
-[`README.md`](README.md), and the authoritative design will live in
-[`docs/design/DESIGN.md`](docs/design/DESIGN.md).
+[`README.md`](README.md), and the authoritative design will live in `docs/design/DESIGN.md`
+(written next).
 
 > `gdmutant` is a provisional codename, not yet cleared for public use.
 
@@ -70,7 +70,7 @@ uv run pip-audit               # dependency audit
 ## Docs — where things live
 
 - [`README.md`](README.md) — what it is and why.
-- [`docs/design/DESIGN.md`](docs/design/DESIGN.md) — authoritative design (written next).
+- `docs/design/DESIGN.md` — authoritative design (written next; not in the tree yet).
 - [`ROADMAP.md`](ROADMAP.md) — the backlog.
 - `docs/decisions/NNNN-*.md` — append-only ADRs (`ls` is the index).
 - [`CREDITS.md`](CREDITS.md) — third-party licenses.
