@@ -8,6 +8,8 @@ GDScript-adapter concern that lands with the end-to-end slice (it needs real God
 
 from __future__ import annotations
 
+import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 from xml.etree import ElementTree
@@ -21,6 +23,10 @@ class SuiteResult:
     failures: int
     errors: int
     skipped: int = 0
+    #: Optional runner-supplied diagnostic (e.g. a failing command's captured output). Surfaced in
+    #: the *baseline*-failure message so a first run that can't even go green is debuggable; ignored
+    #: for per-mutant results, so it adds no noise during the run.
+    detail: str = ""
 
     @property
     def failed(self) -> bool:
@@ -37,6 +43,42 @@ class Runner(Protocol):
     """Runs a target project's test suite once and reports the aggregate result."""
 
     def run(self, project_dir: str) -> SuiteResult: ...
+
+
+@dataclass(frozen=True)
+class CommandRunner:
+    """Runs an arbitrary test command and maps its **exit code** to a `SuiteResult`: exit 0 means
+    the suite passed, any non-zero exit means it failed.
+
+    For projects whose test harness signals pass/fail via the exit code and produces no JUnit XML —
+    e.g. a hand-rolled ``godot --headless --script res://tests/run_tests.gd`` runner. This is
+    language- and framework-neutral (it only shells out and reads the exit code), so it lives in the
+    engine, not an adapter. The convention is documented in docs/decisions/0005.
+
+    The exit code is a coarser signal than JUnit XML: it can't separate a *test failure* from the
+    harness itself *erroring* (both are non-zero), so a mutant that makes the run crash counts as
+    killed. The NF-5 re-parse guard still filters mutants that don't parse before they ever run, and
+    a command that can't be executed at all raises (the engine tallies that as ERROR).
+    """
+
+    command: Sequence[str]
+    timeout: float = 600.0
+
+    def run(self, project_dir: str) -> SuiteResult:
+        completed = subprocess.run(
+            list(self.command),
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+        )
+        if completed.returncode == 0:
+            return SuiteResult(tests=1, failures=0, errors=0)
+        # One suite as a single pass/fail unit — per-test counts aren't available without a report.
+        # Keep the command's own output so a *baseline* failure (a first-run misconfiguration, the
+        # common case) can be diagnosed instead of vanishing; tail it to stay bounded.
+        detail = (completed.stderr or completed.stdout or "").strip()
+        return SuiteResult(tests=1, failures=1, errors=0, detail=detail[-2000:])
 
 
 def parse_junit_xml(xml: str) -> SuiteResult:

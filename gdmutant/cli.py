@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -22,7 +23,7 @@ from gdmutant.adapters.gdscript.runner import (
 )
 from gdmutant.engine.loop import BaselineFailed, run
 from gdmutant.engine.report import console_summary, stryker_report
-from gdmutant.engine.runner import Runner
+from gdmutant.engine.runner import CommandRunner, Runner
 
 _MISSING_GODOT_MACOS_HINT = (
     "  On macOS, Godot ships as an app bundle and is never on PATH — pass the binary directly:\n"
@@ -206,6 +207,19 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("source", help="the .gd file to mutate")
     run_parser.add_argument("--project", help="the Godot project dir (default: the source's dir)")
     run_parser.add_argument(
+        "--runner",
+        choices=("gdunit4", "command"),
+        default="gdunit4",
+        help="test runner: gdunit4 (JUnit XML) or command (any harness, by exit code) "
+        "(default: gdunit4)",
+    )
+    run_parser.add_argument(
+        "--command",
+        dest="test_command",  # not "command": that dest holds the subcommand name ("run")
+        help="test command for --runner command (exit 0 = pass), e.g. "
+        "'godot --headless --script res://tests/run_tests.gd'",
+    )
+    run_parser.add_argument(
         "--godot", default="godot", help="the Godot executable (default: godot)"
     )
     run_parser.add_argument(
@@ -248,6 +262,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 flag
                 for flag, value, default in (
                     ("--project", args.project, None),
+                    ("--runner", args.runner, "gdunit4"),
+                    ("--command", args.test_command, None),
                     ("--godot", args.godot, "godot"),
                     ("--tests", args.tests, "res://test"),
                     ("--report-path", args.report_path, DEFAULT_REPORT_PATH),
@@ -265,12 +281,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             return list_mutants(args.source)
         project_dir = args.project or str(Path(args.source).resolve().parent)
-        runner = GdUnit4Runner(
-            test_path=args.tests,
-            godot=args.godot,
-            report_path=args.report_path,
-            timeout=args.timeout,
-        )
+        runner: Runner
+        if args.runner == "command":
+            # shlex-split first, then require a non-empty result: this rejects a missing --command
+            # AND a whitespace-only one (which would otherwise become `[]` -> a confusing subprocess
+            # IndexError deep in the run). Unbalanced quotes make shlex raise ValueError — surface
+            # it as a clean exit-2, not a raw traceback, like every other bad-input case here.
+            try:
+                test_command = shlex.split(args.test_command) if args.test_command else []
+            except ValueError as error:
+                print(f"error: could not parse --command: {error}", file=sys.stderr)
+                return 2
+            if not test_command:
+                print("error: --runner command requires a non-empty --command", file=sys.stderr)
+                return 2
+            runner = CommandRunner(command=test_command, timeout=args.timeout)
+        else:
+            if args.test_command:
+                # --command only applies to --runner command; flag it rather than silently drop it.
+                print("note: --command is ignored unless --runner command is set", file=sys.stderr)
+            runner = GdUnit4Runner(
+                test_path=args.tests,
+                godot=args.godot,
+                report_path=args.report_path,
+                timeout=args.timeout,
+            )
         return run_mutation(
             args.source,
             project_dir,

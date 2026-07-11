@@ -25,6 +25,9 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
   agents).
 - Other flags: `--tests res://test`, `--godot <path>`, `--report-path <rel>`, `--timeout <seconds>`.
   `gdmutant run --help` lists them all.
+- **No GdUnit4?** Use `--runner command --command "<test cmd>"` — any command that exits non-zero on
+  failure (e.g. a hand-rolled `godot --headless --script res://tests/run_tests.gd`). See
+  [`docs/decisions/0005`](decisions/0005-exit-code-test-runner-convention.md).
 
 ## Exit codes (the contract)
 

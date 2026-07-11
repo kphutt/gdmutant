@@ -115,10 +115,27 @@ def test_runner_receives_the_real_project_dir_for_every_call(tmp_path: Path) -> 
 def test_baseline_failure_raises(tmp_path: Path) -> None:
     src = "func f(a, b):\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
-    # The marker is present in the ORIGINAL source, so the unmutated baseline "fails".
-    with pytest.raises(BaselineFailed, match=r"the unmutated test suite failed"):
+    # The marker is present in the ORIGINAL source, so the unmutated baseline "fails". `$`-anchored
+    # on the project-dir repr: with no runner detail the message ends cleanly at the quote (catches
+    # a mutant that appends junk in the empty-detail branch).
+    with pytest.raises(BaselineFailed, match=r"the unmutated test suite failed for '.+'$"):
         run(str(tmp_path), path, src, MarkerRunner(target=path, kill_marker=">"))
     assert Path(path).read_text(encoding="utf-8") == src
+
+
+def test_baseline_failure_message_includes_suite_detail(tmp_path: Path) -> None:
+    # When the baseline fails, any runner-supplied `detail` (e.g. a failing command's output) is
+    # surfaced in the BaselineFailed message so a first run that can't go green is debuggable.
+    src = "func f(a, b):\n\treturn a > b\n"
+    path = _write(tmp_path, "f.gd", src)
+
+    @dataclass
+    class DetailRunner:
+        def run(self, project_dir: str) -> SuiteResult:
+            return SuiteResult(tests=1, failures=1, errors=0, detail="harness said: boom")
+
+    with pytest.raises(BaselineFailed, match=r"boom"):
+        run(str(tmp_path), path, src, DetailRunner())
 
 
 def test_baseline_runner_exception_becomes_baseline_failed(tmp_path: Path) -> None:
