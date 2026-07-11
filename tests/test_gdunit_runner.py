@@ -1,5 +1,6 @@
 """Tests for the GdUnit4 runner (subprocess mocked — no real Godot)."""
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,8 @@ def test_run_invokes_subprocess_with_the_constructed_command(
     assert kwargs["cwd"] == str(tmp_path)
     assert kwargs["timeout"] == 42.0
     assert kwargs["check"] is False
+    assert kwargs["capture_output"] is True  # per-mutant chatter is captured, not inherited
+    assert kwargs["text"] is True
 
 
 def test_run_reflects_latest_report_on_repeated_calls(
@@ -98,7 +101,9 @@ def test_run_does_not_return_a_stale_report(
     # the tool's worst failure mode (NF-5).
     report = _report(tmp_path)
     report.write_text('<testsuite tests="9" failures="0" errors="0"/>', encoding="utf-8")
-    monkeypatch.setattr(runner_mod.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, "", "")
+    )
 
     with pytest.raises(RuntimeError, match="no report"):
         GdUnit4Runner().run(str(tmp_path))
@@ -107,8 +112,24 @@ def test_run_does_not_return_a_stale_report(
 def test_run_raises_when_no_report_is_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(runner_mod.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, "", "")
+    )
     with pytest.raises(RuntimeError, match="no report"):
+        GdUnit4Runner().run(str(tmp_path))
+
+
+def test_run_surfaces_godot_output_when_no_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # When Godot writes no report, its captured stderr is included in the error so the failure can
+    # be diagnosed instead of vanishing.
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess([], 1, "", "SCRIPT ERROR: boom"),
+    )
+    with pytest.raises(RuntimeError, match="SCRIPT ERROR: boom"):
         GdUnit4Runner().run(str(tmp_path))
 
 

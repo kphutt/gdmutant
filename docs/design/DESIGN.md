@@ -94,8 +94,13 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
 - **NF-4 — Language-neutral operators.** The operator catalog is expressed against an abstract notion of
   nodes/tokens; adapters bind operators to a real AST.
 - **NF-5 — Mutant validity.** The adapter must never hand the runner un-parseable source. A mutation that
-  would produce invalid GDScript is detected (re-parse check) and classified `error`/`skipped-invalid`,
-  never counted as `killed`. A wrong mutant means a silently wrong survivor report — the worst failure.
+  would produce invalid GDScript is detected (re-parse check) and classified `invalid` (→ `CompileError`
+  in the report), never counted as `killed`. A wrong mutant means a silently wrong survivor report — the
+  worst failure. **Oracle boundary:** the validity check is gdtoolkit's parser, not Godot itself — a
+  mutant gdtoolkit accepts but Godot rejects at load fails toward score-*inflation* (the suite errors →
+  `error`, or writes no report → `error` via the runner's freshness guard), never toward a false
+  survivor. The live-CI validation (ROADMAP.md) should include a gdtoolkit-vs-Godot parse-agreement spot
+  check to bound this.
 - **NF-6 — Performance headroom.** v0.1 runs the full suite per mutant (simple, correct). Booting Godot
   per mutant is slow, so the design must leave a clean seam for the deferred **coverage-gated selection**
   (only run tests that cover the mutated line) without reshaping the engine.

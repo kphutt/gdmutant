@@ -285,6 +285,7 @@ version = "0.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "gdtoolkit" },
+    { name = "lark" },
 ]
 
 [package.dev-dependencies]
@@ -298,7 +299,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "gdtoolkit", specifier = ">=4.5,<5" }]
+requires-dist = [
+    { name = "gdtoolkit", specifier = ">=4.5,<5" },
+    { name = "lark", specifier = ">=1.2,<2" },
+]
 
 [package.metadata.requires-dev]
 dev = [
