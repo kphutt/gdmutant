@@ -1,27 +1,15 @@
 """Tests for the CLI (`gdmutant run`), driven without Godot via an injected fake runner."""
 
-import argparse
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from conftest import MarkerRunner
 
 import gdmutant.cli as cli
 from gdmutant.cli import build_parser, main, run_mutation
 from gdmutant.engine.runner import SuiteResult
-
-
-@dataclass
-class MarkerRunner:
-    """A fake suite that fails iff the target file contains `kill_marker`."""
-
-    target: str
-    kill_marker: str
-
-    def run(self, project_dir: str) -> SuiteResult:
-        content = Path(self.target).read_text(encoding="utf-8")
-        return SuiteResult(tests=3, failures=int(self.kill_marker in content), errors=0)
 
 
 def _gd(tmp_path: Path) -> Path:
@@ -67,7 +55,7 @@ def test_run_mutation_baseline_failure_returns_one(
     # marker present in the ORIGINAL source -> the unmutated baseline "fails".
     rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), ">"))
     assert rc == 1
-    assert "error" in capsys.readouterr().err.lower()
+    assert "unmutated test suite failed" in capsys.readouterr().err
 
 
 def test_run_mutation_missing_file_returns_two(
@@ -88,6 +76,34 @@ def test_run_mutation_invalid_utf8_returns_two(
     assert "cannot read" in capsys.readouterr().err
 
 
+def test_run_mutation_unparseable_gdscript_returns_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A syntactically invalid .gd file can't be mutated — exit 2 with a clear message, not a raw
+    # lark traceback (the most likely bad input for a source-mutating tool).
+    path = tmp_path / "broken.gd"
+    path.write_text("func broken(:\n", encoding="utf-8")
+    rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), "x"))
+    assert rc == 2
+    assert "not valid GDScript" in capsys.readouterr().err
+
+
+def test_run_mutation_unwritable_json_path_returns_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The mutation run succeeds, but the --json target can't be written (its parent is a file, not
+    # a dir): exit 2 with a message instead of an uncaught OSError.
+    path = _gd(tmp_path)
+    not_a_dir = tmp_path / "afile"
+    not_a_dir.write_text("x", encoding="utf-8")
+    bad_json = not_a_dir / "report.json"  # parent is a regular file -> write fails
+    rc = run_mutation(
+        str(path), str(tmp_path), MarkerRunner(str(path), ">="), json_path=str(bad_json)
+    )
+    assert rc == 2
+    assert "cannot write report" in capsys.readouterr().err
+
+
 def test_parser_run_subcommand() -> None:
     args = build_parser().parse_args(
         ["run", "f.gd", "--godot", "godot4", "--tests", "res://t", "--json", "r.json"]
@@ -105,23 +121,43 @@ def test_parser_prog_and_description() -> None:
     assert parser.description == "Mutation testing for GDScript (and, in time, other languages)."
 
 
-def test_parser_run_help_defaults_and_arg_help() -> None:
-    # Pin the run subcommand's help, each argument's help text, and the two defaults. This is the
-    # CLI's user-facing contract, so every help/default string mutation is caught here.
-    parser = build_parser()
-    sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
-    run_help = next(c for c in sub._choices_actions if c.dest == "run")
-    assert run_help.help == "mutate a GDScript file and report survivors"
+def test_parser_defaults() -> None:
+    # The parsed Namespace pins each argument's default (public API — a mutant that drops or nulls
+    # a default is caught here).
+    args = build_parser().parse_args(["run", "x.gd"])
+    assert args.godot == "godot"
+    assert args.tests == "res://test"
+    assert args.project is None
+    assert args.json_path is None
 
-    by_dest = {a.dest: a for a in sub.choices["run"]._actions}
-    assert by_dest["source"].help == "the .gd file to mutate"
-    assert by_dest["project"].help == "the Godot project dir (default: the source's dir)"
-    assert by_dest["project"].default is None
-    assert by_dest["godot"].default == "godot"
-    assert by_dest["godot"].help == "the Godot executable (default: godot)"
-    assert by_dest["tests"].default == "res://test"
-    assert by_dest["tests"].help == "the GdUnit4 test path (default: res://test)"
-    assert by_dest["json_path"].help == "write the Stryker JSON report here"
+
+def test_parser_help_text(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Pin the user-facing help via the public --help output (no argparse internals). Wide COLUMNS
+    # keeps help strings on one line so they appear verbatim. This is the CLI's contract, so every
+    # help-string mutation is caught.
+    monkeypatch.setenv("COLUMNS", "200")
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--help"])
+    top = capsys.readouterr().out
+    # Each help string ends its line, so assert it WITH the trailing newline. That also catches a
+    # mutant that wraps the string ("XX...XX") — a bare substring check would still match the
+    # wrapped form, since the original is a substring of it. (The description is pinned exactly by
+    # test_parser_prog_and_description.)
+    assert "mutate a GDScript file and report survivors\n" in top  # the run subcommand's help
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run", "--help"])
+    run_help = capsys.readouterr().out
+    for expected in (
+        "the .gd file to mutate",
+        "the Godot project dir (default: the source's dir)",
+        "the Godot executable (default: godot)",
+        "the GdUnit4 test path (default: res://test)",
+        "write the Stryker JSON report here",
+    ):
+        assert f"{expected}\n" in run_help
 
 
 def test_main_dispatches_run_with_injected_runner(
@@ -196,5 +232,6 @@ def test_main_threads_json_path_to_run_mutation(
     assert report.exists()
 
 
-def test_main_no_command_prints_help() -> None:
+def test_main_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == 0
+    assert "usage" in capsys.readouterr().out  # the help text, not just a silent exit 0
