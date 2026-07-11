@@ -1,0 +1,9 @@
+; Minimal Godot project for the gdmutant corpus fixture. The GdUnit4 addon is installed
+; in CI (not vendored here) for the live end-to-end run — see the runner + the tracker task.
+
+config_version=5
+
+[application]
+
+config/name="gdmutant-corpus"
+config/features=PackedStringArray("4.4")
