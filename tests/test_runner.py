@@ -45,6 +45,14 @@ def test_parse_nested_suites_are_summed() -> None:
     assert r.failed is True
 
 
+def test_parse_nested_testsuite_is_not_double_counted() -> None:
+    # A <testsuite> may nest child <testsuite>s whose totals already roll up into the parent's
+    # attributes; sum only the outer suite, don't descend (Litmus P3).
+    xml = '<testsuite tests="5" failures="1"><testsuite tests="2" failures="1"/></testsuite>'
+    r = parse_junit_xml(xml)
+    assert (r.tests, r.failures) == (5, 1)
+
+
 def test_parse_all_green_passes() -> None:
     xml = '<testsuites><testsuite tests="5" failures="0" errors="0"/></testsuites>'
     assert parse_junit_xml(xml).passed is True

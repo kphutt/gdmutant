@@ -47,14 +47,16 @@ def parse_junit_xml(xml: str) -> SuiteResult:
     ``ValueError`` if it contains no ``<testsuite>``.
     """
     root = ElementTree.fromstring(xml)
+    # Sum direct <testsuite> elements only: a root <testsuite> itself, or the children of a
+    # <testsuites>. A <testsuite> may nest child <testsuite>s whose totals already roll up into the
+    # parent's attributes, so descending (`.iter`) would double-count `tests`/`skipped`.
+    suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+    if not suites:
+        raise ValueError("no <testsuite> element in JUnit XML")
     tests = failures = errors = skipped = 0
-    found = False
-    for suite in root.iter("testsuite"):
-        found = True
+    for suite in suites:
         tests += int(suite.get("tests", "0"))
         failures += int(suite.get("failures", "0"))
         errors += int(suite.get("errors", "0"))
         skipped += int(suite.get("skipped", "0"))
-    if not found:
-        raise ValueError("no <testsuite> element in JUnit XML")
     return SuiteResult(tests=tests, failures=failures, errors=errors, skipped=skipped)
