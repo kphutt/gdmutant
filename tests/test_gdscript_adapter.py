@@ -113,6 +113,32 @@ def test_new_operators_generate_valid_mutants() -> None:
     assert by_op["logical-not"] == {("not", "")}  # deletion, and the result still parses
 
 
+def test_arithmetic_modulo_is_a_mutation_site() -> None:
+    # A real arithmetic `%` must be found and produce modulo mutants.
+    src = "func f(a, b):\n\treturn a % b\n"
+    assert any(s.token == "%" for s in find_sites(src))
+    assert any(m.operator_id == "modulo" for m in generate_mutants("f.gd", src))
+
+
+def test_string_format_percent_is_not_a_mutation_site() -> None:
+    # GDScript overloads `%` for string formatting; a `%` whose left operand is a string literal is
+    # formatting, not modulo, so it must NOT be mutated (double/single/triple-quoted forms).
+    for src in (
+        'func f(x):\n\treturn "Hi %s" % x\n',
+        "func f(x):\n\treturn 'Hi %s' % x\n",
+        'func f(x):\n\treturn """Hi %s""" % x\n',
+    ):
+        assert not any(s.token == "%" for s in find_sites(src)), src
+        assert not any(m.operator_id == "modulo" for m in generate_mutants("f.gd", src)), src
+
+
+def test_modulo_after_a_non_string_operand_is_still_a_site() -> None:
+    # The skip is specific to a *string* left operand — `x % "s"` (name on the left) stays a site,
+    # so genuine modulo isn't over-suppressed just because a string appears elsewhere.
+    src = 'func f(x):\n\treturn x % 2 + len("s")\n'
+    assert any(s.token == "%" for s in find_sites(src))
+
+
 def test_not_deletion_removes_the_keyword_and_stays_valid() -> None:
     # Pin the exact deletion: `if not alive:` -> `if  alive:` (the `not` token gone), still valid.
     src = "func f(alive):\n\tif not alive:\n\t\treturn 0\n\treturn 1\n"

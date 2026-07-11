@@ -11,6 +11,8 @@ operator. The Godot test runner is a separate concern (Slice 4).
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 from gdtoolkit.parser import parser as _gdparser
 from lark import Token, Tree
 from lark.exceptions import LarkError
@@ -57,10 +59,23 @@ def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[Mut
     ``# noqa`` (a multi-line statement needs the marker on each line; see docs/decisions/0004).
     """
     ignored = _ignored_lines(source)
+    tokens = list(_parse(source).scan_values(lambda v: isinstance(v, Token)))
+    # `%` is overloaded in GDScript: arithmetic modulo AND the string-format operator
+    # (``"fmt" % args``). A `%` whose left operand is a string literal is *formatting*, not modulo —
+    # mutating it would only add report noise, so skip it. Source order is needed to see the left
+    # neighbour; the returned list keeps scan_values order so mutant ids/order are unchanged (NF-1).
+    ordered = sorted(tokens, key=lambda t: (t.line, t.column))
+    format_percents = {
+        (cur.line, cur.column)
+        for prev, cur in pairwise(ordered)
+        if cur.value == "%" and prev.type.endswith("STRING")
+    }
     return [
         MutationSite(tok.value, _span_of(tok))
-        for tok in _parse(source).scan_values(lambda v: isinstance(v, Token))
-        if all_replacements(tok.value, catalog) and tok.line not in ignored
+        for tok in tokens
+        if all_replacements(tok.value, catalog)
+        and tok.line not in ignored
+        and (tok.line, tok.column) not in format_percents
     ]
 
 

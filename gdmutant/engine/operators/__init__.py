@@ -101,9 +101,10 @@ NUMERIC = NumericBumpOperator()
 COMPOUND_ASSIGN = TableOperator(
     "compound-assign", {"+=": ("-=",), "-=": ("+=",), "*=": ("/=",), "/=": ("*=",)}
 )
-#: Modulo — swap ``%`` for ``*`` or ``/`` (both parse, so any survivor is a real gap). Directional
-#: on purpose: it targets the ``%`` the catalog otherwise ignores, without adding a ``%`` mutant to
-#: every ``*``/``/`` in the codebase. Not involutive (see the operator tests).
+#: Modulo — swap ``%`` for ``*`` or ``/``. Directional on purpose: it targets the ``%`` the catalog
+#: otherwise ignores, without adding a ``%`` mutant to every ``*``/``/`` in the codebase. GDScript
+#: overloads ``%`` for string formatting, so the GDScript adapter's `find_sites` skips a ``%`` whose
+#: left operand is a string literal (formatting, not modulo). Not involutive (see operator tests).
 MODULO = TableOperator("modulo", {"%": ("*", "/")})
 #: Unary ``not`` removal — deleting the keyword flips the guarded condition, a strong mutation.
 #: Modelled as a swap to the empty string (a token-level deletion); the adapter's NF-5 re-parse
