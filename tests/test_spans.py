@@ -30,7 +30,7 @@ def test_text_at_returns_the_span_text() -> None:
 
 
 def test_text_at_out_of_range() -> None:
-    with pytest.raises(IndexError):
+    with pytest.raises(IndexError, match=r"out of range for a line of"):
         text_at("ab\n", Span(1, 1, 1, 9))
 
 
@@ -76,12 +76,13 @@ def test_multiline_span_rejected() -> None:
 
 
 def test_line_out_of_range() -> None:
-    with pytest.raises(IndexError):
+    # The message is asserted so a mutant that blanks it (raise IndexError(None)) is caught.
+    with pytest.raises(IndexError, match=r"line 5 out of range \(source has 2 lines\)"):
         apply_replacement("a\n", Span(5, 1, 5, 2), "x")
 
 
 def test_column_out_of_range() -> None:
-    with pytest.raises(IndexError):
+    with pytest.raises(IndexError, match=r"columns 1\.\.9 out of range for a line of 2 characters"):
         apply_replacement("ab\n", Span(1, 1, 1, 9), "x")
 
 

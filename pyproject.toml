@@ -41,6 +41,7 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.11",
   "pip-audit>=2.7",
+  "mutmut>=3.6.0",
 ]
 
 [build-system]
@@ -53,6 +54,8 @@ packages = ["gdmutant"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+# mutmut writes a generated copy of the project here while it runs; never lint/format it.
+extend-exclude = ["mutants"]
 
 [tool.ruff.lint]
 # A pragmatic-but-real invariant set (not just style): pyflakes, pycodestyle,
@@ -63,6 +66,8 @@ select = ["E", "F", "I", "B", "C4", "UP", "SIM"]
 python_version = "3.12"
 strict = true
 warn_unused_configs = true
+# mutmut's generated copy of the source (created only while it runs) must not be type-checked.
+exclude = ["^mutants/"]
 
 [[tool.mypy.overrides]]
 # gdtoolkit ships no type stubs / py.typed marker; treat it as untyped at the adapter boundary.
@@ -76,3 +81,11 @@ addopts = "--cov=gdmutant --cov-report=term-missing"
 [tool.coverage.run]
 branch = true
 source = ["gdmutant"]
+
+[tool.mutmut]
+# Mutation-test gdmutant's own library with mutmut (dogfood).
+source_paths = ["gdmutant"]
+# mutmut runs the suite from a copied "mutants/" tree; the end-to-end test reads the corpus,
+# so it must be copied in too. Skip coverage — it is pure overhead per mutant run.
+also_copy = ["corpus"]
+pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]

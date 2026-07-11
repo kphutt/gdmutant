@@ -72,6 +72,21 @@ def test_console_summary_score_counts_and_survivors() -> None:
     assert "f.gd:2:15  boolean  and -> or" in out
 
 
+def test_console_summary_exact_layout() -> None:
+    # Pin the whole rendered block: the blank separator line before "Survivors" and the "\n" join
+    # (mutants that turn "" into junk or join on a different separator are caught).
+    assert console_summary(_run()) == (
+        "Mutation score: 50.0%\n"
+        "  killed:   1\n"
+        "  survived: 1\n"
+        "  invalid:  1\n"
+        "  error:    1\n"
+        "\n"
+        "Survivors (1):\n"
+        "  f.gd:2:15  boolean  and -> or"
+    )
+
+
 def test_console_summary_score_na_when_no_killable_mutants() -> None:
     run = MutationRun(
         (MutantOutcome(Mutant("f.gd", Span(1, 1, 1, 2), "x", "a", "b"), Verdict.INVALID),)

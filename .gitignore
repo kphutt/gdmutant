@@ -16,6 +16,9 @@ dist/
 .coverage
 htmlcov/
 .mutmut-cache
+# mutmut v3 writes a generated copy of the project + its result DB here while it runs
+mutants/
+mutmut-results.db
 # Godot (test fixtures may include a small Godot project)
 .godot/
 # Claude Code
