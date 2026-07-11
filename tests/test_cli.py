@@ -49,6 +49,22 @@ def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFi
     assert "Wrote report to" in capsys.readouterr().out  # the confirmation line is printed
 
 
+def test_run_mutation_json_dash_writes_pure_json_to_stdout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --json - streams the report to stdout (for agents piping it); the human summary moves to
+    # stderr so stdout parses as clean JSON.
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), ">="), json_path="-")
+    assert rc == 0
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)  # stdout is valid JSON, nothing else mixed in
+    assert data["schemaVersion"] == "2"
+    assert data["files"][str(path)]["language"] == "gdscript"
+    assert "Mutation score:" in captured.err  # the human summary went to stderr
+    assert "Mutation score:" not in captured.out
+
+
 def test_run_mutation_baseline_failure_returns_one(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -240,7 +256,7 @@ def test_parser_help_text(
         "the Godot project dir (default: the source's dir)",
         "the Godot executable (default: godot)",
         "the GdUnit4 test path (default: res://test)",
-        "write the Stryker JSON report here",
+        "write the Stryker JSON report here (use - for stdout)",
         "list the mutants without running any tests (no Godot needed)",
     ):
         assert f"{expected}\n" in run_help

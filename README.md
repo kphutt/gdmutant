@@ -116,8 +116,8 @@ addon installed in the target project (under `res://addons/gdUnit4/`):
 uv run gdmutant run path/to/module.gd --project path/to/godot-project [--json report.json]
 ```
 For each mutant it reruns the project's GdUnit4 suite, prints the survivors (`file:line:col` + the swap)
-with a mutation score, and optionally writes a `mutation-testing-elements` JSON report. (Once published:
-`pipx install gdmutant`.)
+with a mutation score, and optionally writes a `mutation-testing-elements` JSON report (`--json report.json`,
+or `--json -` to stream it to stdout). (Once published: `pipx install gdmutant`.)
 
 > The live `godot --headless` path is pending CI validation (`ROADMAP.md`); `--dry-run` needs no Godot.
 
