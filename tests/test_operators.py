@@ -52,7 +52,8 @@ def test_numeric_bump_handles_negative_literals() -> None:
 
 
 def test_numeric_only_applies_to_bare_decimal_integers() -> None:
-    for non_int in ("and", "3.5", "-3.5", "0x1f", "1_000", "", "-", "٣"):  # noqa: RUF001 (AN 3)
+    # "-0" is excluded too: it isn't a real negative literal and wouldn't round-trip.
+    for non_int in ("and", "3.5", "-3.5", "0x1f", "1_000", "", "-", "-0", "٣"):  # noqa: RUF001 (AN 3)
         assert NUMERIC.replacements(non_int) == (), f"unexpectedly mutated {non_int!r}"
 
 

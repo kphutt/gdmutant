@@ -4,8 +4,8 @@
 
 [project]
 name = "gdmutant"
-version = "0.0.0"                       # pre-0.1: no engine yet. Bumps to 0.1.0 when
-                                        # it mutates real code + prints survivors.
+version = "0.0.0"                       # engine + CLI are built; bump to 0.1.0 after the live
+                                        # Godot/GdUnit4 CI validation confirms the end-to-end.
 description = "An AST-based, language-agnostic mutation-testing tool for GDScript/Godot."
 readme = "README.md"
 requires-python = ">=3.12"

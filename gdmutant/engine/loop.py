@@ -91,7 +91,13 @@ def run(
     Raises `BaselineFailed` if the unmutated suite doesn't pass first (FG-3.3). The file at `path`
     must hold `source` when this is called; it is restored to `source` before returning.
     """
-    if runner.run(project_dir).failed:
+    try:
+        baseline = runner.run(project_dir)
+    except Exception as error:  # a runner that can't even run the unmutated suite is a setup error
+        raise BaselineFailed(
+            f"could not run the unmutated suite for {project_dir!r}: {error}"
+        ) from error
+    if baseline.failed:
         raise BaselineFailed(f"the unmutated test suite failed for {project_dir!r}")
 
     outcomes: list[MutantOutcome] = []

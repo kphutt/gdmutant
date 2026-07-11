@@ -34,6 +34,24 @@ def test_text_at_out_of_range() -> None:
         text_at("ab\n", Span(1, 1, 1, 9))
 
 
+def test_apply_and_text_at_column_one() -> None:
+    # start column 1 (index 0) must work — pins the `0 <= start` boundary.
+    assert apply_replacement("a + b\n", Span(1, 1, 1, 2), "x") == "x + b\n"
+    assert text_at("a + b\n", Span(1, 1, 1, 2)) == "a"
+
+
+def test_zero_width_span_inserts() -> None:
+    # start == end is a valid insertion point — pins `start <= end` and the Span end==start guard.
+    assert apply_replacement("ab\n", Span(1, 2, 1, 2), "X") == "aXb\n"
+    assert Span(1, 3, 1, 3).column == 3  # an equal-coordinate span constructs without error
+
+
+def test_span_reaching_end_of_line() -> None:
+    # end reaching the line's last column must work — pins `end <= len(line)`.
+    assert apply_replacement("ab\n", Span(1, 1, 1, 3), "X") == "X\n"
+    assert text_at("ab\n", Span(1, 1, 1, 3)) == "ab"
+
+
 def test_crlf_line_endings_preserved() -> None:
     result = apply_replacement("if a > b:\r\nx = 1\r\n", Span(1, 6, 1, 7), ">=")
     assert result == "if a >= b:\r\nx = 1\r\n"
