@@ -622,6 +622,28 @@ def test_main_command_runner_rejects_a_whitespace_only_command(
     )
 
 
+def test_main_command_runner_rejects_unbalanced_quotes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # An unbalanced quote makes shlex.split raise ValueError; surface it as a clean exit 2 with a
+    # message, not a raw traceback out of main().
+    path = _gd(tmp_path)
+    rc = main(
+        [
+            "run",
+            str(path),
+            "--project",
+            str(tmp_path),
+            "--runner",
+            "command",
+            "--command",
+            'godot "unterminated',
+        ]
+    )
+    assert rc == 2
+    assert capsys.readouterr().err.startswith("error: could not parse --command:")
+
+
 def test_main_command_without_runner_command_is_flagged_not_dropped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -285,8 +285,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.runner == "command":
             # shlex-split first, then require a non-empty result: this rejects a missing --command
             # AND a whitespace-only one (which would otherwise become `[]` -> a confusing subprocess
-            # IndexError deep in the run).
-            test_command = shlex.split(args.test_command) if args.test_command else []
+            # IndexError deep in the run). Unbalanced quotes make shlex raise ValueError — surface
+            # it as a clean exit-2, not a raw traceback, like every other bad-input case here.
+            try:
+                test_command = shlex.split(args.test_command) if args.test_command else []
+            except ValueError as error:
+                print(f"error: could not parse --command: {error}", file=sys.stderr)
+                return 2
             if not test_command:
                 print("error: --runner command requires a non-empty --command", file=sys.stderr)
                 return 2
