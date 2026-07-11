@@ -15,6 +15,7 @@ mutant is applied in isolation and the original restored in a ``finally`` — se
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -79,18 +80,40 @@ class MutationRun:
         return self.killed / scored if scored else None
 
 
+def _progress_line(index: int, total: int, outcome: MutantOutcome) -> str:
+    """One human-readable progress line for a finished mutant.
+
+    Format: ``[i/N] path:line:col  original -> replacement  ... verdict`` — enough to see the run
+    advancing (a real run boots Godot per mutant, so silence reads as a hang) and which mutant just
+    resolved. The engine formats it; the caller (the CLI) decides where it goes — always stderr, so
+    ``--json -`` keeps stdout pure JSON.
+    """
+    m = outcome.mutant
+    loc = f"{m.path}:{m.span.line}:{m.span.column}"
+    return f"[{index}/{total}] {loc}  {m.original} -> {m.replacement}  ... {outcome.verdict.value}"
+
+
 def run(
     project_dir: str,
     path: str,
     source: str,
     runner: Runner,
     catalog: tuple[Operator, ...] = CATALOG,
+    *,
+    progress: Callable[[str], None] | None = None,
 ) -> MutationRun:
     """Run the full mutation pass over `source` (the contents of `path`) using `runner`.
 
     Raises `BaselineFailed` if the unmutated suite doesn't pass first (FG-3.3). The file at `path`
     must hold `source` when this is called; it is restored to `source` before returning.
+
+    If `progress` is given, it is called with the baseline notice and then once per mutant — after
+    that mutant's verdict is known — with a `_progress_line` string, in generation order. The CLI
+    wires it to stderr so a long run shows steady output instead of looking hung; `None` runs
+    silently.
     """
+    if progress is not None:
+        progress("running the unmutated (baseline) suite ...")
     try:
         baseline = runner.run(project_dir)
     except Exception as error:  # a runner that can't even run the unmutated suite is a setup error
@@ -101,13 +124,15 @@ def run(
         raise BaselineFailed(f"the unmutated test suite failed for {project_dir!r}")
 
     outcomes: list[MutantOutcome] = []
-    for mutant in generate_mutants(path, source, catalog):
+    mutants = generate_mutants(path, source, catalog)
+    total = len(mutants)
+    for index, mutant in enumerate(mutants, start=1):
         mutated, valid = apply_mutant(mutant, source)
-        if not valid:
-            outcomes.append(MutantOutcome(mutant, Verdict.INVALID))
-            continue
-        verdict = _run_one(project_dir, path, source, mutated, runner)
-        outcomes.append(MutantOutcome(mutant, verdict))
+        verdict = _run_one(project_dir, path, source, mutated, runner) if valid else Verdict.INVALID
+        outcome = MutantOutcome(mutant, verdict)
+        outcomes.append(outcome)
+        if progress is not None:
+            progress(_progress_line(index, total, outcome))
     return MutationRun(tuple(outcomes))
 
 
