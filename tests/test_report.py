@@ -28,7 +28,7 @@ def _run() -> MutationRun:
 
 
 def test_stryker_report_top_level_and_file_shape() -> None:
-    report = stryker_report(_run(), "f.gd", _SRC)
+    report = stryker_report(_run(), "f.gd", _SRC, "gdscript")
     assert report["schemaVersion"] == "2"
     assert report["thresholds"] == {"high": 80, "low": 60}
     file = report["files"]["f.gd"]
@@ -38,12 +38,12 @@ def test_stryker_report_top_level_and_file_shape() -> None:
 
 
 def test_stryker_report_status_mapping() -> None:
-    mutants = stryker_report(_run(), "f.gd", _SRC)["files"]["f.gd"]["mutants"]
+    mutants = stryker_report(_run(), "f.gd", _SRC, "gdscript")["files"]["f.gd"]["mutants"]
     assert [m["status"] for m in mutants] == ["Killed", "Survived", "CompileError", "RuntimeError"]
 
 
 def test_stryker_report_mutant_fields_and_location() -> None:
-    first = stryker_report(_run(), "f.gd", _SRC)["files"]["f.gd"]["mutants"][0]
+    first = stryker_report(_run(), "f.gd", _SRC, "gdscript")["files"]["f.gd"]["mutants"][0]
     assert first["id"] == "0"
     assert first["mutatorName"] == "comparison"
     assert first["replacement"] == ">="
@@ -54,11 +54,11 @@ def test_stryker_report_mutant_fields_and_location() -> None:
 
 
 def test_stryker_report_ids_are_unique() -> None:
-    mutants = stryker_report(_run(), "f.gd", _SRC)["files"]["f.gd"]["mutants"]
+    mutants = stryker_report(_run(), "f.gd", _SRC, "gdscript")["files"]["f.gd"]["mutants"]
     assert len({m["id"] for m in mutants}) == len(mutants)
 
 
-def test_stryker_report_language_is_overridable() -> None:
+def test_stryker_report_carries_the_given_language() -> None:
     report = stryker_report(_run(), "x.py", "pass\n", language="python")
     assert report["files"]["x.py"]["language"] == "python"
 

@@ -8,6 +8,7 @@ clean. **Re-verify each license at the moment of use** — licenses and repos ch
 | Library | Use | License | Source | Verified |
 |---|---|---|---|---|
 | gdtoolkit | The GDScript parser/formatter the adapter mutates | MIT | https://github.com/Scony/godot-gdscript-toolkit | 2026-07-10 |
+| lark | Parser toolkit whose `Token`/`Tree` types the adapter uses directly (also gdtoolkit's parser) | MIT | https://github.com/lark-parser/lark | 2026-07-11 |
 
 ## Interoperability / formats
 | Item | Use | License | Notes |

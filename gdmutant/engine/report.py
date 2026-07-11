@@ -25,10 +25,12 @@ _STATUS: dict[Verdict, str] = {
 }
 
 
-def stryker_report(
-    run: MutationRun, path: str, source: str, language: str = "gdscript"
-) -> dict[str, Any]:
-    """Build the mutation-testing-elements report dict for a single-file `run`."""
+def stryker_report(run: MutationRun, path: str, source: str, language: str) -> dict[str, Any]:
+    """Build the mutation-testing-elements report dict for a single-file `run`.
+
+    `language` is supplied by the caller (the adapter/CLI knows it) — the reporter stays
+    language-neutral and carries no default.
+    """
     mutants: list[dict[str, Any]] = [
         {
             "id": str(index),

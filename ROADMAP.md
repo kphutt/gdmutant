@@ -20,7 +20,16 @@
   `pass`), so it needs AST statement-node handling rather than a token swap.
 - Then flip the repo **public** (private now; never launch empty).
 
+## Known debt (pre-public cleanup)
+- **NF-3 — the engine hard-imports the GDScript adapter.** `engine/loop.py` imports
+  `apply_mutant`/`generate_mutants` from `adapters/gdscript` directly, so the engine is not yet the
+  language-neutral core DESIGN.md NF-3 requires. Fix: inject the adapter into `run()` the way
+  `runner` and `catalog` already are (a small `Adapter` protocol or two callables). Mechanical
+  (~20 lines + tests); no functional impact today, since GDScript is the only adapter.
+
 ## Later (deferred — do not build now)
+- Compound-assignment operators (`+=`↔`-=`, `*=`↔`/=`) — gdtoolkit tokenizes these atomically, so
+  the current token-swap catalog never mutates them.
 - Coverage-gated mutant selection (the #1 speedup; GDScript coverage tooling is immature).
 - HTML report output; incremental / diff-scoped (per-PR) mode.
 - Optional LLM-semantic mutants (plausible-bug mode) — kept *out* of the deterministic path.
