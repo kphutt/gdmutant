@@ -1,0 +1,66 @@
+name: CI
+
+# Security checks + the Python verify gate.
+# Trigger on pull_request (never pull_request_target — that would run fork code
+# with repo secrets). Scope push to main only.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege at the workflow level; jobs opt into more only where needed.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --- Security spine: secret scanning from commit #1 -----------------------
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # --- Verify: lint + typecheck + tests + supply-chain audit ----------------
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      # uv installs the exact locked deps (hashes) — reproducible across machines.
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+
+      - name: Install deps (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Typecheck (mypy)
+        run: uv run mypy gdmutant
+
+      - name: Tests + coverage
+        run: uv run pytest
+
+      - name: Supply-chain audit (pip-audit)
+        run: uv run pip-audit
