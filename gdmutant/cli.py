@@ -63,8 +63,16 @@ def run_mutation(
     if source is None:
         return 2
     path = Path(source_path)
+    # Progress goes to stderr unconditionally: a real run boots Godot per mutant, so without it the
+    # tool looks hung. stderr keeps stdout clean for --json - (pure JSON) and the human summary.
     try:
-        result = run(project_dir, str(path), source, runner)
+        result = run(
+            project_dir,
+            str(path),
+            source,
+            runner,
+            progress=lambda line: print(line, file=sys.stderr),
+        )
     except BaselineFailed as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
