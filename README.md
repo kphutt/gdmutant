@@ -4,16 +4,16 @@
 > place: this README + the repo name.
 
 **A mutation-testing tool — the first *usable* one for GDScript/Godot, built to be language-agnostic.** Point it at a
-codebase with a test suite; it mutates the source (flip `>`↔`>=`, `and`↔`or`, drop a `return`, …), reruns
+GDScript module with a test suite; it mutates the source (flip `>`↔`>=`, `and`↔`or`, bump a number, …), reruns
 the tests per mutant, and reports **survivors** — lines a bug could live on and no test would catch. Coverage
 says a line *ran*; mutation says a bug there would be *caught*. That gap is the product.
 
 ## Why this exists (the opening)
 - **No *usable* mutation tester exists for GDScript.** [Stryker](https://stryker-mutator.io/) does JS/TS,
-  C#, Scala; mutmut does Python; PIT does Java. GDScript has only a **dormant 0-star unlicensed POC**
+  C#, Scala; mutmut does Python; PIT does Java. GDScript has only a **dormant, unlicensed proof-of-concept**
   ([hanse7962/GodotMutationTesting](https://github.com/hanse7962/GodotMutationTesting) — a few weeks of work
-  in Apr–May 2026, no README, no license, undiscoverable), so the space for a real, adopted, documented tool
-  is open. And the AST work is nearly free now that
+  in Apr–May 2026, no README, no license), so the space for a documented, adopted tool is open. And the AST
+  work is nearly free now that
   [`gdtoolkit`](https://github.com/Scony/godot-gdscript-toolkit) ships a real GDScript parser.
 - **AI just opened the demand.** When an AI writes the tests, coverage is *especially* a lie (models write
   tests that pin the code they just wrote). Mutation is one of the few **executable, model-independent**
@@ -24,7 +24,7 @@ says a line *ran*; mutation says a bug there would be *caught*. That gap is the 
 
 ## Prior art, licenses & why build (not extend)
 - **Can't build on the GDScript POC.** `hanse7962/GodotMutationTesting` is **unlicensed** (all rights
-  reserved) — legally untouchable, and a dormant undocumented 0-star experiment anyway. Study for ideas only.
+  reserved) — legally untouchable, and a dormant undocumented experiment anyway. Study for ideas only.
 - **No pluggable engine to "just add GDScript to."** Stryker is a *family of separate per-language tools*
   (StrykerJS/.NET/Scala), not one core with a language-plugin API — adding GDScript ≈ writing a whole new
   Stryker. The one deliberately language-extensible tool, `universalmutator`, is **regex-based** (text-rule
@@ -73,9 +73,9 @@ gdmutant/
   adapters/
     gdscript/      gdtoolkit AST → locate token → mutate → NF-5 re-parse guard; the GdUnit4 runner
   cli.py           the standalone `gdmutant run` entry point (no AI required)
-corpus/            a real GDScript fixture module + GdUnit4 suite (the end-to-end proof)
+corpus/            a real GDScript fixture module + GdUnit4 suite (intentionally under-tested, so a real run surfaces live survivors)
 ```
-Two modes, one engine: a **deterministic operator core** (reproducible — the mode a merge-gate can trust) and,
+Two modes, one engine: a **deterministic operator core** (reproducible — the mode a CI check can trust) and,
 later, an optional **LLM-semantic mode** (plausible-bug mutants: off-by-one, dropped-last-element, swallowed
 error) for *hardening*, kept out of the gate because it's nondeterministic.
 
@@ -85,28 +85,54 @@ generates AST-based mutants (comparison / boolean / arithmetic / constant / nume
 project's GdUnit4 suite per mutant, classifies killed / survived / invalid / error, computes a mutation
 score, and emits a console summary + a Stryker `mutation-testing-elements` JSON report — via the
 standalone `gdmutant run` CLI (no AI required). Proven end-to-end on the bundled `corpus/` module; the
-**live `godot --headless` + GdUnit4** invocation is pending CI validation (see `ROADMAP.md`). Spun off
-from `project-rampart` (a Godot roguelike) so it has its own home.
+**live `godot --headless` + GdUnit4** invocation is pending CI validation (see `ROADMAP.md`), so the
+package stays version `0.0.0` until that lands, then tags `0.1.0`. Spun off from `project-rampart` (a
+Godot roguelike) so it has its own home.
 
-## Usage
+## Quickstart
+Clone the repo, then install the pinned toolchain + locked deps:
 ```sh
-uv sync --frozen   # install deps (or, once published: pipx install gdmutant)
+mise install       # installs the pinned Python + uv  (or install uv yourself, then skip this)
+uv sync --frozen   # installs the exact locked dependencies
+```
+
+**See it work without Godot** — list the mutants gdmutant generates for the bundled fixture:
+```sh
+uv run gdmutant run corpus/turn_order.gd --dry-run
+```
+```
+15 mutants for corpus/turn_order.gd:
+  corpus/turn_order.gd:8:17  comparison  > -> >=
+  corpus/turn_order.gd:13:11  comparison  < -> <=
+  corpus/turn_order.gd:13:13  numeric  0 -> 1
+  ...
+  corpus/turn_order.gd:27:15  boolean  and -> or
+  corpus/turn_order.gd:32:9  constant  true -> false
+```
+
+**Run the real thing** — needs Godot 4.4+ and the [GdUnit4](https://github.com/MikeSchulze/gdUnit4)
+addon installed in the target project (under `res://addons/gdUnit4/`):
+```sh
 uv run gdmutant run path/to/module.gd --project path/to/godot-project [--json report.json]
 ```
-Prints each surviving mutant (`file:line` + the swap) and a mutation score, and optionally writes a
-`mutation-testing-elements` report. Running the real suite needs Godot + the GdUnit4 addon on the project.
+For each mutant it reruns the project's GdUnit4 suite, prints the survivors (`file:line:col` + the swap)
+with a mutation score, and optionally writes a `mutation-testing-elements` JSON report. (Once published:
+`pipx install gdmutant`.)
+
+> The live `godot --headless` path is pending CI validation (`ROADMAP.md`); `--dry-run` needs no Godot.
 
 ## Next steps
 1. ✅ **Repo hardened + stack chosen.** Security baseline + Python CI (ruff / mypy / pytest+coverage /
    pip-audit, plus a gitleaks secret-scan). The engine is **Python + uv + gdtoolkit** (see
    `docs/decisions/0001`), with **GdUnit4** as the first test-runner adapter.
-2. ✅ **Name cleared** — `gdmutant` is free on PyPI, npm, and GitHub (re-check + a trademark sense-check
-   before any public launch).
+2. **Name — availability checked, clearance pending.** `gdmutant` is free on PyPI, npm, and GitHub as of
+   this writing; the final name + a trademark sense-check are settled before public launch (see the
+   provisional-codename note up top).
 3. ✅ **`DESIGN.md` design gate written + reviewed** — goals, FG/NF requirements, the "Saboteur & the
    Jury" architecture, and the build plan (`docs/design/DESIGN.md`).
 4. ✅ **v0.1 built against the bundled `corpus/` fixture** — engine loop, operator catalog, GDScript
    adapter (NF-5 guard), GdUnit4 runner, Stryker reporter, and the `gdmutant run` CLI. Mutates
-   `corpus/turn_order.gd` (13 mutants) and prints survivors end-to-end.
+   `corpus/turn_order.gd` (15 mutants) and prints survivors end-to-end.
 5. **Remaining before a public launch** (see `ROADMAP.md`): live CI Godot/GdUnit4 validation of the
    runner, the statement-deletion operator, then flip the repo public — never launch empty.
 
