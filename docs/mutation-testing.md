@@ -31,7 +31,7 @@ Rather than contort the suite to "kill" them — which would only pin implementa
 enumerated and justified here. Every behavioral mutant mutmut generates is killed (see the scope note
 below for what that set covers).
 
-### Scope: what the 448 covers
+### Scope: what the 460 covers
 
 mutmut 3.6 mutates **module-level functions only** — it does not generate mutants for class-method
 bodies. So the 460 spans the package's 20 module-level functions (the operator catalog, spans, mutant
