@@ -32,16 +32,17 @@ def _span_of(tok: Token) -> Span:
     return Span(line, col, end_line, end_col)
 
 
-def find_sites(source: str) -> list[MutationSite]:
-    """Every mutable token in `source`, located via gdtoolkit.
+def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[MutationSite]:
+    """Every token in `source` that `catalog` can mutate, located via gdtoolkit.
 
-    Filtering tokens by "does the catalog mutate this value" is sufficient: gdtoolkit never
-    surfaces tokens from inside string literals or comments, so this never edits within one.
+    Filtering by "does the catalog mutate this value" is sufficient: gdtoolkit never surfaces
+    tokens from inside string literals or comments, so this never edits within one. `catalog` is
+    threaded through so site selection matches generation (a custom catalog finds its own sites).
     """
     return [
         MutationSite(tok.value, _span_of(tok))
         for tok in _parse(source).scan_values(lambda v: isinstance(v, Token))
-        if all_replacements(tok.value)
+        if all_replacements(tok.value, catalog)
     ]
 
 
@@ -49,7 +50,7 @@ def generate_mutants(
     path: str, source: str, catalog: tuple[Operator, ...] = CATALOG
 ) -> list[Mutant]:
     """All mutants for `source`; `path` is recorded on each mutant for reporting."""
-    return generate(path, find_sites(source), catalog)
+    return generate(path, find_sites(source, catalog), catalog)
 
 
 def is_valid_gdscript(source: str) -> bool:
