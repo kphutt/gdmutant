@@ -72,7 +72,8 @@ def run_mutation(
     if json_path is not None:
         try:
             Path(json_path).write_text(
-                json.dumps(stryker_report(result, str(path), source), indent=2), encoding="utf-8"
+                json.dumps(stryker_report(result, str(path), source, "gdscript"), indent=2),
+                encoding="utf-8",
             )
         except OSError as error:
             print(f"error: cannot write report to {json_path}: {error}", file=sys.stderr)
