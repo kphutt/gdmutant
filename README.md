@@ -73,7 +73,7 @@ gdmutant/
   adapters/
     gdscript/      gdtoolkit AST → locate token → mutate → NF-5 re-parse guard; the GdUnit4 runner
   cli.py           the standalone `gdmutant run` entry point (no AI required)
-corpus/            a real GDScript fixture module + GdUnit4 suite (intentionally under-tested, so a real run surfaces live survivors)
+corpus/            a real GDScript fixture module + GdUnit4 suite (intentionally under-tested — and with a few equivalent mutants — so a real run surfaces live survivors, as real mutation testing does)
 ```
 Two modes, one engine: a **deterministic operator core** (reproducible — the mode a CI check can trust) and,
 later, an optional **LLM-semantic mode** (plausible-bug mutants: off-by-one, dropped-last-element, swallowed

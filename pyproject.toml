@@ -4,8 +4,9 @@
 
 [project]
 name = "gdmutant"
-version = "0.0.0"                       # engine + CLI are built; bump to 0.1.0 after the live
-                                        # Godot/GdUnit4 CI validation confirms the end-to-end.
+version = "0.0.0"                       # engine + CLI are built; bump to 0.1.0 after the two
+                                        # remaining v0.1 items land (ROADMAP.md): live Godot/GdUnit4
+                                        # CI validation + the statement-deletion operator.
 description = "An AST-based, language-agnostic mutation-testing tool for GDScript/Godot."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,10 +21,13 @@ classifiers = [
   "Topic :: Software Development :: Testing",
 ]
 
-# Runtime dependency: gdtoolkit ships the real GDScript parser the adapter mutates
-# (see docs/decisions/0001). MIT-licensed — recorded in CREDITS.md.
+# Runtime dependencies (both MIT — recorded in CREDITS.md):
+# - gdtoolkit ships the real GDScript parser the adapter mutates (see docs/decisions/0001).
+# - lark: the adapter imports its Token/Tree/LarkError types directly, so it is a declared
+#   direct dependency, not only a gdtoolkit transitive one.
 dependencies = [
   "gdtoolkit>=4.5,<5",
+  "lark>=1.2,<2",
 ]
 
 [project.urls]
