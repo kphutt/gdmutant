@@ -42,6 +42,9 @@
   token-swap catalog can't mutate.
 
 ## Later (deferred — do not build now)
+- Method-body mutation coverage in the dogfood — mutmut 3 mutates only module-level functions, not
+  class methods (see `docs/mutation-testing.md`); evaluate cosmic-ray (or a config/upstream fix) to
+  cover method bodies too.
 - Coverage-gated mutant selection (the #1 speedup; GDScript coverage tooling is immature).
 - HTML report output; incremental / diff-scoped (per-PR) mode.
 - Optional LLM-semantic mutants (plausible-bug mode) — kept *out* of the deterministic path.
