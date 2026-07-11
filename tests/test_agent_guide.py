@@ -3,12 +3,16 @@ they describe, so changing a status string, the schema version, or the ignore ma
 updating the guide fails CI."""
 
 import re
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from gdmutant.adapters.gdscript import _IGNORE_MARKER
 from gdmutant.engine.report import _STATUS, SCHEMA_VERSION
 
-_GUIDE = Path(__file__).resolve().parent.parent / "docs" / "agent-guide.md"
+_REPO = Path(__file__).resolve().parent.parent
+_GUIDE = _REPO / "docs" / "agent-guide.md"
 
 
 def _text() -> str:
@@ -68,3 +72,23 @@ def test_guide_references_agents_md_not_claude_md() -> None:
     text = _text()
     assert "AGENTS.md" in text
     assert "CLAUDE.md" not in text
+
+
+def test_no_tracked_agent_tool_config() -> None:
+    # Agent-agnostic: no tool-specific config directory should be committed. Enforced in-repo (a CI
+    # guard, not a .gitignore entry) so the "stays out" guarantee travels with the repo rather than
+    # depending on a machine-global gitignore — and without adding a pro-tooling ignore line. A
+    # future `git add -A` that re-tracks such a directory then fails CI.
+    try:
+        listed = subprocess.run(
+            ["git", "ls-files", "--", ".claude/", ".cursor/", ".aider*"],
+            cwd=_REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:  # pragma: no cover - git absent
+        pytest.skip("git not available")
+    if listed.returncode != 0:  # pragma: no cover - not a git work tree (e.g. an sdist)
+        pytest.skip("not a git work tree")
+    assert listed.stdout == "", f"tool-specific config must not be tracked:\n{listed.stdout}"
