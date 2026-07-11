@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -43,6 +44,34 @@ def _load_gdscript(source_path: str) -> str | None:
         print(f"error: {source_path} is not valid GDScript", file=sys.stderr)
         return None
     return source
+
+
+def _has_uncommitted_changes(source_path: str) -> bool:
+    """True only if `source_path` is inside a git work tree and has uncommitted changes (tracked
+    and modified, or untracked). False when it is clean, not under git, or git isn't available.
+
+    gdmutant mutates the file in place and restores it in a ``finally`` — safe for a normal exit or
+    Ctrl-C, but a hard kill (SIGKILL / power loss) could leave one swap on disk. Warning when the
+    file is dirty lets the user commit or stash first. We only positively confirm *dirty*: anything
+    we can't check (no git, not a repo) returns False, because gdmutant must run fine outside git.
+    """
+    path = Path(source_path)
+    try:
+        # No check=: git exits non-zero outside a repo (the default check=False), and we read the
+        # returncode ourselves below. The `--` guards a filename that starts with "-".
+        completed = subprocess.run(
+            ["git", "status", "--porcelain", "--", path.name],
+            cwd=path.parent,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False  # git not installed, or the working directory is gone
+    if completed.returncode != 0:
+        return False  # not a git work tree, etc.
+    # `--porcelain` prints one line per changed path and nothing at all when clean. Comparing to ""
+    # (not bool()) also kills a `text=True`->False mutant: raw bytes never equal the str "".
+    return completed.stdout != ""
 
 
 def _missing_executable(error: BaselineFailed) -> str | None:
@@ -88,14 +117,19 @@ def list_mutants(source_path: str) -> int:
 
 
 def run_mutation(
-    source_path: str, project_dir: str, runner: Runner, *, json_path: str | None = None
+    source_path: str,
+    project_dir: str,
+    runner: Runner,
+    *,
+    json_path: str | None = None,
+    require_clean: bool = False,
 ) -> int:
     """Mutate `source_path`, run the suite via `runner`, print the summary, optionally write JSON.
 
     Returns 0 on a completed pass — **survivors are report output, not a failure** (FG-6.2) — 1 if
     the unmutated baseline suite fails, and 2 if the source can't be read, isn't valid GDScript, the
-    project directory doesn't exist, the test-runner executable isn't found, or the JSON report
-    can't be written.
+    project directory doesn't exist, `require_clean` is set and the source has uncommitted changes,
+    the test-runner executable isn't found, or the JSON report can't be written.
     """
     source = _load_gdscript(source_path)
     if source is None:
@@ -107,6 +141,24 @@ def run_mutation(
     if not Path(project_dir).is_dir():
         print(f"error: project directory not found: {project_dir}", file=sys.stderr)
         return 2
+    # In-place-mutation safety ([ticket]): the run edits the source file per mutant. Warn (or, with
+    # require_clean, refuse) on a dirty tree so a hard interrupt can't lose uncommitted work.
+    # Ordered after the read/parse validation above so a genuine read error is reported first,
+    # not preceded by a "Continuing ..." warning.
+    if _has_uncommitted_changes(source_path):
+        if require_clean:
+            print(
+                f"error: {source_path} has uncommitted changes and --require-clean was given. "
+                "Commit or stash first.",
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            f"warning: {source_path} has uncommitted changes — gdmutant mutates it in place "
+            "(restoring it when done), so a hard kill could leave it modified. Commit or stash "
+            "first to be safe. Continuing ...",
+            file=sys.stderr,
+        )
     path = Path(source_path)
     # Progress goes to stderr unconditionally: a real run boots Godot per mutant, so without it the
     # tool looks hung. stderr keeps stdout clean for --json - (pure JSON) and the human summary.
@@ -175,6 +227,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", dest="json_path", help="write the Stryker JSON report here (use - for stdout)"
     )
     run_parser.add_argument(
+        "--require-clean",
+        action="store_true",
+        help="refuse to run if the source file has uncommitted git changes (default: warn only)",
+    )
+    run_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="list the mutants without running any tests (no Godot needed)",
@@ -195,6 +252,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--tests", args.tests, "res://test"),
                     ("--report-path", args.report_path, DEFAULT_REPORT_PATH),
                     ("--timeout", args.timeout, DEFAULT_TIMEOUT),
+                    ("--require-clean", args.require_clean, False),
                     ("--json", args.json_path, None),
                 )
                 if value != default
@@ -213,7 +271,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             report_path=args.report_path,
             timeout=args.timeout,
         )
-        return run_mutation(args.source, project_dir, runner, json_path=args.json_path)
+        return run_mutation(
+            args.source,
+            project_dir,
+            runner,
+            json_path=args.json_path,
+            require_clean=args.require_clean,
+        )
     parser.print_help()
     return 0
 
