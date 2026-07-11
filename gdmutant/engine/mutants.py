@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from gdmutant.engine.operators import CATALOG, Operator
-from gdmutant.engine.spans import Span, apply_replacement
+from gdmutant.engine.spans import Span, apply_replacement, text_at
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,21 @@ class Mutant:
     replacement: str
 
     def apply(self, source: str) -> str:
-        """Return `source` with this mutation applied (one span edit)."""
+        """Return `source` with this mutation applied (one span edit).
+
+        Fails fast if the text at `span` in `source` isn't `original` — a mismatch means a stale
+        or misplaced span, the silent-wrong-mutant case NF-5 guards against.
+
+        Raises:
+            ValueError: if `source` at `span` != `original`, or the span is multi-line.
+            IndexError: if the span falls outside `source`.
+        """
+        actual = text_at(source, self.span)
+        if actual != self.original:
+            raise ValueError(
+                f"span/original mismatch: expected {self.original!r} at {self.span!r}, "
+                f"found {actual!r}"
+            )
         return apply_replacement(source, self.span, self.replacement)
 
 

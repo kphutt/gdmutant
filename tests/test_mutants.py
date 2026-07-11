@@ -1,5 +1,6 @@
 """Tests for the language-neutral mutant model and generation."""
 
+import pytest
 from lark import Token, Tree
 
 from gdmutant.engine.mutants import Mutant, MutationSite, generate
@@ -10,6 +11,15 @@ from gdmutant.engine.spans import Span
 def test_mutant_apply_edits_the_span() -> None:
     m = Mutant("x.gd", Span(1, 3, 1, 4), "comparison", ">", ">=")
     assert m.apply("a > b\n") == "a >= b\n"
+
+
+def test_apply_rejects_span_original_mismatch() -> None:
+    # A Mutant whose recorded `original` doesn't match the text at its span must fail fast, never
+    # silently clobber a different token (the NF-5 worst case). Here the span points at ">" but
+    # `original` claims "==".
+    m = Mutant("x.gd", Span(1, 3, 1, 4), "comparison", "==", "!=")
+    with pytest.raises(ValueError, match="mismatch"):
+        m.apply("a > b\n")
 
 
 def test_generate_one_mutant_per_replacement() -> None:

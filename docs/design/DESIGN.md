@@ -37,7 +37,8 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
 
 ### FG-1 — Mutant generation
 - **FG-1.1** Given a GDScript source file, the system shall parse it, apply each applicable operator to
-  each applicable AST node, and produce one **mutant** per (node, operator) pair.
+  each applicable AST node, and produce one **mutant** per (node, operator, replacement) — an operator
+  may offer more than one replacement for a node (e.g. a numeric-literal bump yields `n+1` and `n-1`).
 - **FG-1.2** Each mutant is a single, isolated change (one operator at one site) — never two at once, so a
   survivor points at exactly one line.
 - **FG-1.3** The system shall record each mutant's identity: file, line/column span, operator id, and the
