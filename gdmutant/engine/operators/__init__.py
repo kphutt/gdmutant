@@ -13,8 +13,9 @@ Two shapes implement the `Operator` protocol:
   domain, so they can't be a static table — which is why the operator interface is a protocol, not
   a single table type (Slice 3's adapter binds against this shape).
 
-Structural statement-deletion (also FG-2.1) removes an AST statement, not a token, so it is applied
-by the adapter (Slice 3), which has the parse tree. See docs/decisions/0002.
+Structural statement-deletion (also FG-2.1) removes an AST statement, not a token — it needs
+statement-node handling rather than a token swap, so it lands in its own later slice (tracked
+separately), not this token catalog. See docs/decisions/0002.
 """
 
 from __future__ import annotations
@@ -56,25 +57,23 @@ class TableOperator:
 
 @dataclass(frozen=True)
 class NumericBumpOperator:
-    """Bump a non-negative integer literal — the FG-2.1 "bump an int literal" case.
+    """Bump an integer literal by ±1 — the FG-2.1 "bump an int literal" case.
 
-    Integer literals are an infinite domain, so this is a computed rule, not a table. Only bare
-    decimal-digit tokens are handled (a leading sign is a separate token; floats, hex, and
-    digit-separator forms are left for a later slice — they'd need their own token recognition).
-
-    Replacements are always **non-negative bare integers** (`n+1`, and `n-1` when `n > 0`), so a
-    mutant token is itself a plain literal the operator recognizes — the mutation stays a single
-    token and is reversible, and it never introduces a sign token.
+    Integer literals are an infinite domain, so this is a computed rule, not a table. gdtoolkit
+    folds a leading sign into the ``NUMBER`` token (``-5`` is one token, not ``-`` + ``5``), so
+    negative literals are handled here too: ``n`` -> ``n+1``, ``n-1`` (e.g. ``5`` -> ``6``, ``4``;
+    ``0`` -> ``1``, ``-1``; ``-5`` -> ``-4``, ``-6``). Every replacement is itself an integer
+    literal the operator recognizes, so mutations are reversible. Only bare decimal integers;
+    floats, hex, and digit-separator forms are left for a later slice.
     """
 
     id: str = "numeric"
 
     def replacements(self, token: str) -> tuple[str, ...]:
-        if not (token.isascii() and token.isdigit()):
+        digits = token[1:] if token.startswith("-") else token
+        if not (digits.isascii() and digits.isdigit()):
             return ()
         n = int(token)
-        if n == 0:
-            return ("1",)
         return (str(n + 1), str(n - 1))
 
 

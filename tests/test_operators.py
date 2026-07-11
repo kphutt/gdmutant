@@ -40,19 +40,25 @@ def test_constant_boolean_swaps() -> None:
 
 
 def test_numeric_bump() -> None:
-    assert NUMERIC.replacements("0") == ("1",)  # no -1: replacements stay non-negative
+    assert NUMERIC.replacements("0") == ("1", "-1")
     assert NUMERIC.replacements("5") == ("6", "4")
     assert NUMERIC.replacements("42") == ("43", "41")
 
 
+def test_numeric_bump_handles_negative_literals() -> None:
+    # gdtoolkit folds the sign into the NUMBER token, so "-5" is a single token.
+    assert NUMERIC.replacements("-5") == ("-4", "-6")
+    assert NUMERIC.replacements("-1") == ("0", "-2")
+
+
 def test_numeric_only_applies_to_bare_decimal_integers() -> None:
-    for non_int in ("and", "3.5", "0x1f", "1_000", "", "-3", "٣"):  # noqa: RUF001 (Arabic-Indic 3)
+    for non_int in ("and", "3.5", "-3.5", "0x1f", "1_000", "", "-", "٣"):  # noqa: RUF001 (AN 3)
         assert NUMERIC.replacements(non_int) == (), f"unexpectedly mutated {non_int!r}"
 
 
 def test_numeric_bump_is_reversible() -> None:
     # n is reachable from each of its bumps, so every numeric mutation can be undone.
-    for token in ("0", "1", "7", "100"):
+    for token in ("0", "1", "7", "100", "-1", "-5"):
         for repl in NUMERIC.replacements(token):
             assert token in NUMERIC.replacements(repl)
 
@@ -91,7 +97,7 @@ def test_catalog_contents() -> None:
 def test_all_replacements_collects_across_catalog() -> None:
     assert all_replacements(">") == [("comparison", ">=")]
     assert all_replacements("and") == [("boolean", "or")]
-    assert all_replacements("0") == [("numeric", "1")]
+    assert all_replacements("0") == [("numeric", "1"), ("numeric", "-1")]
     assert all_replacements("nonsense") == []
 
 

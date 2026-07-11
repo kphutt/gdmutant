@@ -30,6 +30,14 @@ def test_generate_mutants_records_path_and_every_mutant_is_valid() -> None:
         assert valid, f"catalog mutant should be valid GDScript: {m}"
 
 
+def test_negative_literal_is_located_and_mutated() -> None:
+    # gdtoolkit tokenizes -5 as a single NUMBER token; the numeric operator must still bump it.
+    src = "func f():\n\treturn -5\n"
+    assert any(s.token == "-5" for s in find_sites(src))
+    mutants = generate_mutants("f.gd", src)
+    assert any(m.operator_id == "numeric" and m.original == "-5" for m in mutants)
+
+
 def test_is_valid_gdscript() -> None:
     assert is_valid_gdscript("func f():\n\treturn 1\n") is True
     assert is_valid_gdscript("func f(:\n") is False
