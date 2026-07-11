@@ -38,7 +38,7 @@
   per-file Stryker reports. Running the CLI once per file already works (mutation is in-place in the
   real project tree, so cross-file class references resolve), but there's no aggregate score.
 - **More operators for real code** — unary `not`, modulo `%`, and compound assignment
-  (`+=`/`-=`/`*=`/`/=`, which gdtoolkit tokenizes atomically) all appear in real logic the current
+  (`+=`↔`-=`, `*=`↔`/=`, which gdtoolkit tokenizes atomically) all appear in real logic the current
   token-swap catalog can't mutate.
 
 ## Later (deferred — do not build now)
