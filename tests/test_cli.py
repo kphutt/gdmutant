@@ -8,7 +8,7 @@ import pytest
 from conftest import MarkerRunner
 
 import gdmutant.cli as cli
-from gdmutant.cli import build_parser, main, run_mutation
+from gdmutant.cli import build_parser, list_mutants, main, run_mutation
 from gdmutant.engine.runner import SuiteResult
 
 
@@ -104,6 +104,53 @@ def test_run_mutation_unwritable_json_path_returns_two(
     assert "cannot write report" in capsys.readouterr().err
 
 
+def test_list_mutants_prints_every_mutant_and_returns_zero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # _gd is "func f(a, b):\n\treturn a > b and a < b\n" -> 3 mutants: >, and, <.
+    path = _gd(tmp_path)
+    rc = list_mutants(str(path))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.startswith("3 mutants for ")
+    assert f"  {path}:2:11  comparison  > -> >=" in out  # exact loc + format for the '>' mutant
+    assert "boolean  and -> or" in out
+    assert "comparison  < -> <=" in out
+
+
+def test_list_mutants_unreadable_returns_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = list_mutants(str(tmp_path / "nope.gd"))
+    assert rc == 2
+    assert "cannot read" in capsys.readouterr().err
+
+
+def test_list_mutants_unparseable_returns_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "broken.gd"
+    path.write_text("func broken(:\n", encoding="utf-8")
+    rc = list_mutants(str(path))
+    assert rc == 2
+    assert "not valid GDScript" in capsys.readouterr().err
+
+
+def test_main_dry_run_needs_no_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --dry-run must not construct a runner or need Godot: fail loudly if it tries.
+    path = _gd(tmp_path)
+
+    def boom(**kwargs: object) -> object:
+        raise AssertionError("dry-run must not construct a runner")
+
+    monkeypatch.setattr(cli, "GdUnit4Runner", boom)
+    rc = main(["run", str(path), "--dry-run"])
+    assert rc == 0
+    assert "mutants for" in capsys.readouterr().out
+
+
 def test_parser_run_subcommand() -> None:
     args = build_parser().parse_args(
         ["run", "f.gd", "--godot", "godot4", "--tests", "res://t", "--json", "r.json"]
@@ -129,6 +176,7 @@ def test_parser_defaults() -> None:
     assert args.tests == "res://test"
     assert args.project is None
     assert args.json_path is None
+    assert args.dry_run is False
 
 
 def test_parser_help_text(
@@ -156,6 +204,7 @@ def test_parser_help_text(
         "the Godot executable (default: godot)",
         "the GdUnit4 test path (default: res://test)",
         "write the Stryker JSON report here",
+        "list the mutants without running any tests (no Godot needed)",
     ):
         assert f"{expected}\n" in run_help
 

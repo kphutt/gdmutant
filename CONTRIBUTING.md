@@ -1,8 +1,9 @@
 # Contributing to gdmutant
 
-Thanks for your interest! gdmutant is early (pre-v0.1) — the engine is still being built — so
-the most useful contributions right now are issues: bug reports, GDScript patterns that should
-be mutated, and real-world use cases.
+Thanks for your interest! gdmutant is early (pre-v0.1): the engine, GDScript adapter, GdUnit4
+runner, reporter, and CLI are built and tested, with live Godot CI validation the last step before
+a public launch. The most useful contributions right now are issues: bug reports, GDScript patterns
+that should be mutated, and real-world use cases.
 
 ## Development setup
 

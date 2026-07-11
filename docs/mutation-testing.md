@@ -24,17 +24,17 @@ complements the coverage gate — coverage says a line *ran*, mutation says a bu
 
 ## Current result
 
-**443 / 460 mutants killed — the remaining 17 are equivalent mutants** (changes that cannot alter
+**475 / 492 mutants killed — the remaining 17 are equivalent mutants** (changes that cannot alter
 observable behavior, so no test *can* catch them; this is the well-known
 [equivalent mutant problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)).
 Rather than contort the suite to "kill" them — which would only pin implementation trivia — they are
 enumerated and justified here. Every behavioral mutant mutmut generates is killed (see the scope note
 below for what that set covers).
 
-### Scope: what the 460 covers
+### Scope: what the 492 covers
 
 mutmut 3.6 mutates **module-level functions only** — it does not generate mutants for class-method
-bodies. So the 460 spans the package's 20 module-level functions (the operator catalog, spans, mutant
+bodies. So the 492 spans the package's 22 module-level functions (the operator catalog, spans, mutant
 generation, the loop, JUnit parsing, the reporter, the CLI, the adapter), but **not** the method
 bodies: `GdUnit4Runner.run`/`command`, the two `replacements` implementations, `MutationRun`'s
 properties, `Mutant.apply`, `Span.__post_init__`, and `SuiteResult.failed`/`passed`. Those are
@@ -46,7 +46,7 @@ method-mutating tool (e.g. cosmic-ray) is tracked as follow-up.
 
 **1. `encoding="utf-8"` → `encoding=None` / omitted / `"UTF-8"`  (11 mutants)**
 In `engine/loop.py` (`_run_one`, writing and restoring the mutated file) and `cli.py`
-(`run_mutation`, reading the source and writing the JSON report).
+(`_load_gdscript` reading the source, `run_mutation` writing the JSON report).
 - `"UTF-8"` is a codec *alias* of `"utf-8"` — byte-for-byte identical.
 - `encoding=None` / omitting the argument falls back to the platform's default text encoding, which
   on a UTF-8 locale — the CI runner and every environment gdmutant is used in — is itself UTF-8, so
