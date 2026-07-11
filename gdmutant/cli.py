@@ -68,17 +68,21 @@ def run_mutation(
     except BaselineFailed as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    print(console_summary(result))
+    # With --json - the report goes to stdout, so keep the human summary on stderr — an agent
+    # capturing stdout then gets pure JSON.
+    report_to_stdout = json_path == "-"
+    print(console_summary(result), file=sys.stderr if report_to_stdout else sys.stdout)
     if json_path is not None:
-        try:
-            Path(json_path).write_text(
-                json.dumps(stryker_report(result, str(path), source, "gdscript"), indent=2),
-                encoding="utf-8",
-            )
-        except OSError as error:
-            print(f"error: cannot write report to {json_path}: {error}", file=sys.stderr)
-            return 2
-        print(f"\nWrote report to {json_path}")
+        report = json.dumps(stryker_report(result, str(path), source, "gdscript"), indent=2)
+        if report_to_stdout:
+            print(report)
+        else:
+            try:
+                Path(json_path).write_text(report, encoding="utf-8")
+            except OSError as error:
+                print(f"error: cannot write report to {json_path}: {error}", file=sys.stderr)
+                return 2
+            print(f"\nWrote report to {json_path}")
     return 0
 
 
@@ -98,7 +102,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--tests", default="res://test", help="the GdUnit4 test path (default: res://test)"
     )
-    run_parser.add_argument("--json", dest="json_path", help="write the Stryker JSON report here")
+    run_parser.add_argument(
+        "--json", dest="json_path", help="write the Stryker JSON report here (use - for stdout)"
+    )
     run_parser.add_argument(
         "--dry-run",
         action="store_true",
