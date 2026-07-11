@@ -49,6 +49,33 @@ def _ignored_lines(source: str) -> set[int]:
     return {i for i, line in enumerate(source.split("\n"), start=1) if _IGNORE_MARKER in line}
 
 
+def _string_format_percents(tree: Tree[Token]) -> set[tuple[int | None, int | None]]:
+    """Positions ``(line, column)`` of ``%`` tokens that are the **string-format** operator, which
+    the modulo operator must not mutate.
+
+    ``%`` is overloaded in GDScript: arithmetic modulo *and* string formatting (``"fmt" % args``).
+    The distinction is the direct **left operand**: a bare string literal means formatting. That has
+    to be read from the parse tree, not the flat token stream — ``d["k"] % x`` is genuine modulo,
+    but its token immediately before ``%`` is the *index* string ``"k"`` (its left operand is the
+    ``d[...]`` ``subscr_expr`` subtree, not a string), so a token-adjacency check would wrongly drop
+    it. Here each ``%`` in an ``mdr_expr`` (mul/div/remainder) node is skipped only when the node
+    child *directly* to its left is a ``string`` node.
+    """
+    skip: set[tuple[int | None, int | None]] = set()
+    for node in tree.iter_subtrees():
+        if node.data != "mdr_expr":
+            continue
+        for prev, cur in pairwise(node.children):
+            if (
+                isinstance(cur, Token)
+                and cur.value == "%"
+                and isinstance(prev, Tree)
+                and prev.data == "string"
+            ):
+                skip.add((cur.line, cur.column))
+    return skip
+
+
 def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[MutationSite]:
     """Every token in `source` that `catalog` can mutate, located via gdtoolkit.
 
@@ -57,22 +84,14 @@ def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[Mut
     threaded through so site selection matches generation (a custom catalog finds its own sites).
     Tokens on a *physical* line marked ``# gdmutant: ignore`` are skipped — line-scoped, like
     ``# noqa`` (a multi-line statement needs the marker on each line; see docs/decisions/0004).
+    A ``%`` used as the string-format operator is skipped too (see `_string_format_percents`).
     """
     ignored = _ignored_lines(source)
-    tokens = list(_parse(source).scan_values(lambda v: isinstance(v, Token)))
-    # `%` is overloaded in GDScript: arithmetic modulo AND the string-format operator
-    # (``"fmt" % args``). A `%` whose left operand is a string literal is *formatting*, not modulo —
-    # mutating it would only add report noise, so skip it. Source order is needed to see the left
-    # neighbour; the returned list keeps scan_values order so mutant ids/order are unchanged (NF-1).
-    ordered = sorted(tokens, key=lambda t: (t.line, t.column))
-    format_percents = {
-        (cur.line, cur.column)
-        for prev, cur in pairwise(ordered)
-        if cur.value == "%" and prev.type.endswith("STRING")
-    }
+    tree = _parse(source)
+    format_percents = _string_format_percents(tree)
     return [
         MutationSite(tok.value, _span_of(tok))
-        for tok in tokens
+        for tok in tree.scan_values(lambda v: isinstance(v, Token))
         if all_replacements(tok.value, catalog)
         and tok.line not in ignored
         and (tok.line, tok.column) not in format_percents

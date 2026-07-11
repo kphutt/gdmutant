@@ -133,9 +133,25 @@ def test_string_format_percent_is_not_a_mutation_site() -> None:
 
 
 def test_modulo_after_a_non_string_operand_is_still_a_site() -> None:
-    # The skip is specific to a *string* left operand — `x % "s"` (name on the left) stays a site,
-    # so genuine modulo isn't over-suppressed just because a string appears elsewhere.
+    # The skip is specific to a *string* left operand — `x % 2` (name on the left) stays a site,
+    # so genuine modulo isn't over-suppressed just because a string appears elsewhere on the line.
     src = 'func f(x):\n\treturn x % 2 + len("s")\n'
+    assert any(s.token == "%" for s in find_sites(src))
+
+
+def test_modulo_on_a_string_keyed_index_is_still_a_site() -> None:
+    # `d["k"] % x` is genuine modulo on a dict/array value — a common real pattern (`state["frame"]
+    # % 2`). The token immediately before `%` is the index string "k", but its *left operand* is the
+    # `d[...]` subscript, so the tree-based check must keep it (a token-adjacency check dropped it).
+    src = 'func f(d, x):\n\treturn d["k"] % x\n'
+    assert any(s.token == "%" for s in find_sites(src)), "genuine modulo site was skipped"
+    assert any(m.operator_id == "modulo" for m in generate_mutants("f.gd", src))
+
+
+def test_modulo_on_a_parenthesised_expression_ending_in_a_string_is_still_a_site() -> None:
+    # Same class as the subscript case: the left operand is a ternary, not a bare string literal,
+    # even though its last token is a string — must stay a modulo site.
+    src = 'func f(c, x):\n\treturn (x if c else "b") % 2\n'
     assert any(s.token == "%" for s in find_sites(src))
 
 
