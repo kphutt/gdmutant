@@ -1,0 +1,14 @@
+# Project toolchain pin (mise — https://mise.jdx.dev). Cross-machine, no admin,
+# user-local. A pinned toolchain so one command sets a machine up.
+#
+#   mise install        # installs the pinned Python + uv
+#   uv sync --frozen     # installs the exact locked deps (hashes) into .venv
+#
+# Install mise once per machine (the single documented seed):
+#   macOS:   brew install mise
+#   Windows: winget install jdx.mise   (or: scoop install mise)
+#   Linux:   curl https://mise.run | sh
+
+[tools]
+python = "3.12"
+uv = "0.11.28"

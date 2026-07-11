@@ -1,0 +1,24 @@
+# Code owners. With "require Code Owners review" branch protection, these paths
+# cannot merge without @kphutt review. Sensitive surfaces = the places where
+# tests can't save you (config, CI, secrets, self-executing code).
+
+# Default owner for everything.
+* @kphutt
+
+# --- Sensitive paths: always human-reviewed --------------------------------
+# CI / automation / anything self-executing on a runner.
+/.github/        @kphutt
+/scripts/        @kphutt
+# Toolchain + supply-chain surfaces.
+/pyproject.toml  @kphutt
+/uv.lock         @kphutt
+/mise.toml       @kphutt
+/.gitleaks.toml  @kphutt
+
+# --- Engine surfaces (land with the v0.1 milestone) ------------------------
+# The mutation-operator catalog + the GDScript adapter are the tool's real
+# technical risk (a wrong mutant = a silently wrong survivor report). Keep reviewed.
+/gdmutant/engine/            @kphutt
+/gdmutant/engine/operators/  @kphutt
+/gdmutant/adapters/          @kphutt
+/gdmutant/cli.py             @kphutt

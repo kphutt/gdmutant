@@ -1,0 +1,11 @@
+# Secret-scanning config — gitleaks runs as a CI check on every PR.
+# Extends the built-in gitleaks ruleset; only scoped, deliberate allowlisting below.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Scoped allowlist — never broaden without cause."
+paths = [
+  # Lockfiles carry high-entropy dependency hashes, not secrets.
+  '''uv\.lock''',
+]
