@@ -48,9 +48,9 @@ def test_guide_states_the_full_exit_code_contract() -> None:
 
 
 def test_guide_local_links_resolve() -> None:
-    # Every relative markdown link in the guide must point at a file that exists — nothing in CI
-    # link-checks docs, so a broken cross-reference (e.g. ../AGENTS.md when the file is CLAUDE.md)
-    # would otherwise ship silently.
+    # Every relative markdown link in the guide must point at a file that exists — nothing else in
+    # CI link-checks docs, so a broken cross-reference (a link to a file that isn't there) would
+    # otherwise ship silently.
     for target in re.findall(r"\]\(([^)]+)\)", _text()):
         if target.startswith(("http://", "https://", "mailto:")):
             continue
@@ -60,3 +60,11 @@ def test_guide_local_links_resolve() -> None:
         assert (_GUIDE.parent / target).resolve().exists(), (
             f"broken link in agent-guide.md: {target}"
         )
+
+
+def test_guide_references_agents_md_not_claude_md() -> None:
+    # The project is agent-agnostic: the contributor guide is AGENTS.md, and no `CLAUDE.md`
+    # reference should creep back in (this file was renamed from CLAUDE.md -> AGENTS.md).
+    text = _text()
+    assert "AGENTS.md" in text
+    assert "CLAUDE.md" not in text
