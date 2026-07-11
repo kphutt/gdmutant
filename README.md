@@ -85,9 +85,9 @@ generates AST-based mutants (comparison / boolean / arithmetic / constant / nume
 project's GdUnit4 suite per mutant, classifies killed / survived / invalid / error, computes a mutation
 score, and emits a console summary + a Stryker `mutation-testing-elements` JSON report — via the
 standalone `gdmutant run` CLI (no AI required). Proven end-to-end on the bundled `corpus/` module; the
-**live `godot --headless` + GdUnit4** invocation is pending CI validation (see `ROADMAP.md`), so the
-package stays version `0.0.0` until that lands, then tags `0.1.0`. Spun off from `project-rampart` (a
-Godot roguelike) so it has its own home.
+**live `godot --headless` + GdUnit4** invocation is pending CI validation (see `ROADMAP.md`). The
+package version is `0.1.0` (the built feature set); a tagged **release** waits on that validation.
+Spun off from `project-rampart` (a Godot roguelike) so it has its own home.
 
 ## Quickstart
 Clone the repo, then install the pinned toolchain + locked deps:
