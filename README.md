@@ -124,6 +124,16 @@ or `--json -` to stream it to stdout). (Once published: `pipx install gdmutant`.
 > inside it: `--godot /Applications/Godot.app/Contents/MacOS/Godot`. (gdmutant tells you this if it
 > can't find Godot.)
 
+**No GdUnit4?** For a project with a hand-rolled headless test harness (like `project-rampart`'s),
+use the exit-code runner instead — any command that exits non-zero on failure works, no JUnit XML
+needed:
+```sh
+uv run gdmutant run path/to/module.gd --project path/to/godot-project \
+  --runner command --command "godot --headless --script res://tests/run_tests.gd"
+```
+See [`docs/decisions/0005`](docs/decisions/0005-exit-code-test-runner-convention.md) for the
+convention (and its coarser killed/errored resolution vs GdUnit4's XML).
+
 Other flags: `--report-path` if your project writes GdUnit4's JUnit XML somewhere other than the
 default `reports/report_1/results.xml`, and `--timeout` (seconds, default 600) for the per-mutant
 test-run limit. `gdmutant run --help` lists them all.
