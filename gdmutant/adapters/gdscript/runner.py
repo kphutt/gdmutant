@@ -5,7 +5,7 @@ report it writes (via `engine.runner.parse_junit_xml`). GdUnit4 returns a non-ze
 tests fail, so the exit code is ignored — the report is the source of truth.
 
 The exact GdUnit4 CLI flags and report location are validated **live in CI** (they need real Godot
-+ the GdUnit4 addon); see the tracker. Unit tests here cover command construction and report
++ the GdUnit4 addon); see ROADMAP.md. Unit tests here cover command construction and report
 parsing with the subprocess mocked.
 """
 

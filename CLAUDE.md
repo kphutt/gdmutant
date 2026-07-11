@@ -11,8 +11,10 @@ fast-orientation guide for anyone (human or AI) working on the code; the product
 
 ## Status
 
-Pre-v0.1 — the engine isn't built yet; the package is an intentional skeleton (a CLI stub + smoke
-tests). Next is the `DESIGN.md` gate, then the engine loop + the GDScript adapter (see
+v0.1 built — the language-neutral engine (mutate → run → tally → score → report), the GDScript
+adapter, the GdUnit4 runner, the Stryker reporter, and the `gdmutant run` CLI are all in and tested
+(and the suite is mutation-tested against itself, see `docs/mutation-testing.md`). The one thing left
+before a public launch is **live CI validation** of the `godot --headless` + GdUnit4 path (see
 [`ROADMAP.md`](ROADMAP.md)).
 
 ## Setup
