@@ -19,6 +19,7 @@ clean. **Re-verify each license at the moment of use** — licenses and repos ch
 | Tool | Use | License |
 |---|---|---|
 | Godot Engine | Runs the GDScript test suites headlessly | MIT |
+| [GdUnit4](https://github.com/MikeSchulze/gdUnit4) (v6.1.3) | GDScript test framework; its addon is downloaded — not vendored — into the corpus fixture for the live self-test (`scripts/install-gdunit4.sh`) | MIT |
 | Python | Runtime | PSF |
 | uv | Dependency + environment manager | Apache-2.0 / MIT |
 | ruff · mypy · pytest · pip-audit | Lint / typecheck / test / audit | MIT / MIT / MIT / Apache-2.0 |

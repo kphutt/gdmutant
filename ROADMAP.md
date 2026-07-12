@@ -13,9 +13,11 @@
 - ~~`gdmutant run` CLI (standalone, no AI required)~~ ✅
 
 ## Remaining to finish v0.1 → public
-- **Live CI Godot validation** — a `setup-godot` job that installs Godot + the GdUnit4 addon and
-  validates `GdUnit4Runner`'s exact CLI + report path against real output (currently unit-tested with
-  the subprocess mocked).
+- ~~**Live CI Godot validation** — a `setup-godot` job that installs Godot + the GdUnit4 addon and
+  validates both runner paths against real output~~ ✅ — `tests/test_selftest_live.py` +
+  `scripts/install-gdunit4.sh` + the `selftest-godot` CI job drive the shipped CLI against **real
+  Godot**, pinned to exact per-mutant outcomes. Caught two real runner bugs (`--ignoreHeadlessMode`,
+  relative-project path). *Follow-up: flip the job to a required status check after a short soak.*
 - **Statement-deletion operator** — the last FG-2.1 mutation; structural (replace a statement with
   `pass`), so it needs AST statement-node handling rather than a token swap.
 - Then flip the repo **public** (private now; never launch empty).
