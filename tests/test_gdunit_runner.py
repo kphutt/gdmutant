@@ -29,7 +29,17 @@ def test_command_construction() -> None:
         "res://test",
         "-rc",
         "1",  # report-count=1: overwrite one report dir (don't increment) — see runner.py
+        "--ignoreHeadlessMode",  # modern GdUnit4 refuses --headless without it (verified live)
     ]
+
+
+def test_command_resolves_a_relative_project_dir_to_absolute() -> None:
+    # run() sets cwd=project_dir, so a relative --path would be applied twice (Godot would look for
+    # 'corpus/corpus' and abort). The --path arg must be absolute so it is cwd-independent.
+    cmd = GdUnit4Runner().command("corpus")
+    path_arg = cmd[cmd.index("--path") + 1]
+    assert Path(path_arg).is_absolute()
+    assert Path(path_arg) == Path("corpus").resolve()
 
 
 def test_run_parses_the_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
