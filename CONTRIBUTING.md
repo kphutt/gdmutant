@@ -1,9 +1,9 @@
 # Contributing to gdmutant
 
 Thanks for your interest! gdmutant is early (pre-v0.1): the engine, GDScript adapter, GdUnit4
-runner, reporter, and CLI are built and tested, with live Godot CI validation the last step before
-a public launch. The most useful contributions right now are issues: bug reports, GDScript patterns
-that should be mutated, and real-world use cases.
+runner, reporter, and CLI are built and tested — including a live self-test that runs both runner
+paths against real Godot in CI. The most useful contributions right now are issues: bug reports,
+GDScript patterns that should be mutated, and real-world use cases.
 
 ## Development setup
 
@@ -27,6 +27,14 @@ uv run ruff format .       # format (CI checks this with --check)
 uv run mypy gdmutant       # type check
 uv run pytest              # tests + coverage
 uv run pip-audit           # dependency vulnerability audit
+```
+
+The live self-test (`tests/test_selftest_live.py`) auto-skips unless you opt in with a real Godot.
+To run it locally:
+
+```sh
+scripts/install-gdunit4.sh                                   # download + verify the GdUnit4 addon
+GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-cov
 ```
 
 ## Pull request guidelines

@@ -56,6 +56,11 @@ jobs:
           uv run ruff check .
           uv run ruff format --check .
 
+      # Lint only the fixture's own GDScript (not the downloaded addon). gdlint ships with gdtoolkit,
+      # already in the lockfile — a step, not a separate job.
+      - name: Lint GDScript fixture (gdlint)
+        run: uv run gdlint corpus/turn_order.gd corpus/test corpus/harness
+
       - name: Typecheck (mypy)
         run: uv run mypy gdmutant
 
@@ -64,6 +69,64 @@ jobs:
 
       - name: Supply-chain audit (pip-audit)
         run: uv run pip-audit
+
+  # --- Live self-test: real Godot, end-to-end (closes LOD-73) ----------------
+  # Drives the shipped gdmutant CLI (via subprocess) against a real godot binary + the corpus,
+  # pinning EXACT per-mutant outcomes. This is the only check that proves the godot --headless path
+  # works against real Godot rather than a mock. One plain job (no matrix): a 2nd supported Godot
+  # version later adds a matrix + a finalize gate together — neither earns its keep for one version.
+  # Godot is pinned to an exact patch (semver resolution is an API-rate-limit + silent-drift vector);
+  # the mutation outcomes are Godot-version-independent for this pure-logic fixture.
+  selftest-godot:
+    name: Self-test (real Godot)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+
+      - name: Install deps (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Set up Godot
+        uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2.4.1
+        with:
+          version: 4.7.0
+          use-dotnet: false
+
+      # Fail loudly here if the binary/PATH isn't what we expect — not as a confusing skip at step N.
+      - name: Godot smoke check
+        run: godot --version
+
+      - name: Install GdUnit4 addon (pinned commit + tree-hash verified)
+        run: scripts/install-gdunit4.sh
+
+      # On failure the test prints the full per-mutant table + gdmutant's stdout/stderr, so a red run
+      # is diagnosable from this log alone. --no-cov: this job runs only the live test in isolation.
+      - name: Live self-test (real Godot)
+        run: GDMUTANT_GODOT=godot uv run pytest tests/test_selftest_live.py -v --no-cov
+
+      # A downloadable Stryker report of the corpus — the "run the real thing" demo artifact.
+      - name: Generate corpus mutation report
+        if: always()
+        run: |
+          GDMUTANT_GODOT=godot uv run python -m gdmutant.cli run corpus/turn_order.gd \
+            --project corpus --runner gdunit4 --godot godot --json report.json || true
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v7.0.1
+        with:
+          name: corpus-mutation-report
+          path: report.json
+          if-no-files-found: warn
 
   # --- Mutation testing (dogfood): advisory, never blocks the merge ---------
   # Reports gdmutant's own mutation score on the run summary. continue-on-error + NOT a required

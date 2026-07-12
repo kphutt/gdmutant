@@ -48,18 +48,29 @@ class GdUnit4Runner:
         ``report_path`` would then return the *baseline's* stale report for every mutant — silently
         marking every mutant SURVIVED. ``-rc 1`` forces overwrite-in-place so `report_path` is
         always the latest run.
+
+        ``--ignoreHeadlessMode`` is required: modern GdUnit4 (verified live against v6.1.3) aborts
+        under ``--headless`` with exit 103 and writes *no report* unless this flag is passed —
+        without it, the runner would raise on every invocation (see the live self-test that caught
+        this). Mutation testing is inherently a headless/CI activity over logic tests, so GdUnit4's
+        UI-interaction guard never applies here; ignoring it is always correct.
         """
+        # Resolve --path to an absolute path: run() sets ``cwd=project_dir``, so a *relative*
+        # project_dir (e.g. ``--project corpus``) would otherwise be applied twice — Godot would
+        # look for ``corpus/corpus`` and abort with "Invalid project path" (caught by the live
+        # self-test). An absolute --path is cwd-independent; absolute inputs are unchanged.
         return [
             self.godot,
             "--headless",
             "--path",
-            project_dir,
+            str(Path(project_dir).resolve()),
             "-s",
             _GDUNIT_CMD_TOOL,
             "-a",
             self.test_path,
             "-rc",
             "1",
+            "--ignoreHeadlessMode",
         ]
 
     def run(self, project_dir: str) -> SuiteResult:
