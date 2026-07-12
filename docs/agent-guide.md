@@ -71,8 +71,9 @@ stash first, or pass `--require-clean`.
 }
 ```
 
-- `status` is one of `Killed`, `Survived`, `CompileError` (the mutant didn't parse — **never**
-  counted as killed), or `RuntimeError` (the runner failed to execute it, e.g. a Godot crash).
+- `status` is one of `Killed`, `Survived`, `Timeout` (the mutation hung the suite — a detection, so
+  it **counts as killed**), `CompileError` (the mutant didn't parse — **never** counted as killed),
+  or `RuntimeError` (the runner failed to execute it, e.g. a Godot crash).
 - Locations are **1-based**; the `end` `column` is **exclusive**.
 - **Actionable survivors** are the mutants with `"status": "Survived"`. Those are the gaps a test
   should close.

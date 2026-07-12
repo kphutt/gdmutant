@@ -7,7 +7,7 @@ import pytest
 
 import gdmutant.adapters.gdscript.runner as runner_mod
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner
-from gdmutant.engine.runner import Runner
+from gdmutant.engine.runner import Runner, SuiteTimeout
 
 
 def _report(tmp_path: Path) -> Path:
@@ -141,6 +141,19 @@ def test_run_surfaces_godot_output_when_no_report(
     )
     with pytest.raises(RuntimeError, match="SCRIPT ERROR: boom"):
         GdUnit4Runner().run(str(tmp_path))
+
+
+def test_run_raises_suite_timeout_on_subprocess_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A GdUnit4 run that outruns its budget surfaces as SuiteTimeout (a detection), not a leaked
+    # subprocess.TimeoutExpired or a no-report RuntimeError.
+    def boom(*args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(cmd="godot", timeout=1.0)
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", boom)
+    with pytest.raises(SuiteTimeout):
+        GdUnit4Runner(timeout=1.0).run(str(tmp_path))
 
 
 def test_gdunit4_runner_satisfies_the_protocol() -> None:
