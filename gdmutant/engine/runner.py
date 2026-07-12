@@ -15,6 +15,16 @@ from typing import Protocol, runtime_checkable
 from xml.etree import ElementTree
 
 
+class SuiteTimeout(Exception):
+    """The test suite exceeded its time budget.
+
+    Distinct from a generic runner error: a mutation that makes the suite *hang* (an infinite loop)
+    is a **detection** — the change altered behavior observably — so the loop counts a timeout as
+    killed (Stryker's ``Timeout`` status), not as an ``error``. Runners raise this instead of
+    letting ``subprocess.TimeoutExpired`` leak, so the engine stays subprocess-agnostic.
+    """
+
+
 @dataclass(frozen=True)
 class SuiteResult:
     """The aggregate outcome of running a test suite once."""
@@ -65,13 +75,19 @@ class CommandRunner:
     timeout: float = 600.0
 
     def run(self, project_dir: str) -> SuiteResult:
-        completed = subprocess.run(
-            list(self.command),
-            cwd=project_dir,
-            capture_output=True,
-            text=True,
-            timeout=self.timeout,
-        )
+        try:
+            completed = subprocess.run(
+                list(self.command),
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+            )
+        except subprocess.TimeoutExpired as timeout:
+            # A mutation-induced hang is a detection, not a crash — surface it distinctly so the
+            # engine tallies Timeout (killed), not error. subprocess.run has already killed the
+            # child process by the time it raises.
+            raise SuiteTimeout(f"test command exceeded {self.timeout:g}s") from timeout
         if completed.returncode == 0:
             return SuiteResult(tests=1, failures=0, errors=0)
         # One suite as a single pass/fail unit — per-test counts aren't available without a report.

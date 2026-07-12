@@ -1,6 +1,5 @@
 """Tests for the runner interface + JUnit-XML parsing."""
 
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,7 +7,13 @@ from xml.etree.ElementTree import ParseError
 
 import pytest
 
-from gdmutant.engine.runner import CommandRunner, Runner, SuiteResult, parse_junit_xml
+from gdmutant.engine.runner import (
+    CommandRunner,
+    Runner,
+    SuiteResult,
+    SuiteTimeout,
+    parse_junit_xml,
+)
 
 
 @dataclass
@@ -141,9 +146,11 @@ def test_command_runner_satisfies_the_protocol() -> None:
     assert isinstance(CommandRunner(_exits(0)), Runner)
 
 
-def test_command_runner_honours_timeout(tmp_path: Path) -> None:
+def test_command_runner_timeout_raises_suite_timeout(tmp_path: Path) -> None:
+    # A command that outruns its budget raises SuiteTimeout (not a leaked TimeoutExpired), so the
+    # engine can tally it as a Timeout detection rather than a generic error.
     slow = [sys.executable, "-c", "import time; time.sleep(5)"]
-    with pytest.raises(subprocess.TimeoutExpired):
+    with pytest.raises(SuiteTimeout):
         CommandRunner(slow, timeout=0.2).run(str(tmp_path))
 
 

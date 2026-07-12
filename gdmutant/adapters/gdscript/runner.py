@@ -15,7 +15,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from gdmutant.engine.runner import SuiteResult, parse_junit_xml
+from gdmutant.engine.runner import SuiteResult, SuiteTimeout, parse_junit_xml
 
 _GDUNIT_CMD_TOOL = "res://addons/gdUnit4/bin/GdUnitCmdTool.gd"
 
@@ -83,14 +83,19 @@ class GdUnit4Runner:
         # check=False: GdUnit4 exits non-zero on test failures (expected) — the report decides.
         # capture_output: keep per-mutant Godot/GdUnit4 chatter off the console, and retain it so a
         # failed run can be diagnosed instead of vanishing.
-        completed = subprocess.run(
-            self.command(project_dir),
-            cwd=project_dir,
-            timeout=self.timeout,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            completed = subprocess.run(
+                self.command(project_dir),
+                cwd=project_dir,
+                timeout=self.timeout,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.TimeoutExpired as timeout:
+            # A mutation that makes the suite hang is a detection — surface it as a timeout so the
+            # engine tallies Timeout (killed), not a no-report error.
+            raise SuiteTimeout(f"GdUnit4 run exceeded {self.timeout:g}s") from timeout
         if not report.exists():
             detail = (completed.stderr or completed.stdout or "").strip()
             raise RuntimeError(

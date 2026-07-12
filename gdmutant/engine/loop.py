@@ -5,9 +5,11 @@ suite via a `Runner`, and classifies the outcome:
 
 * **killed** — the suite failed (a test caught the mutation),
 * **survived** — the suite passed (no test caught it),
+* **timeout** — the suite exceeded its time budget: a mutation-induced hang (infinite loop) *is* a
+  detection, so it counts as killed (Stryker's ``Timeout`` status),
 * **invalid** — the mutant didn't parse (NF-5); never counted as killed, never run,
-* **error** — the runner failed to execute the mutant (e.g. a Godot crash/timeout); tallied so
-  one bad run doesn't discard the whole pass, and excluded from the score.
+* **error** — the runner failed to execute the mutant (e.g. a Godot crash); tallied so one bad run
+  doesn't discard the whole pass, and excluded from the score.
 
 no-coverage is folded into *survived* for v0.1 (DESIGN.md FG-4.1) until coverage-gating lands. Each
 mutant is applied in isolation and the original restored in a ``finally`` — see docs/decisions/0003.
@@ -23,7 +25,7 @@ from pathlib import Path
 from gdmutant.adapters.gdscript import apply_mutant, generate_mutants
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import CATALOG, Operator
-from gdmutant.engine.runner import Runner
+from gdmutant.engine.runner import Runner, SuiteTimeout
 
 
 class BaselineFailed(Exception):
@@ -33,6 +35,7 @@ class BaselineFailed(Exception):
 class Verdict(Enum):
     KILLED = "killed"
     SURVIVED = "survived"
+    TIMEOUT = "timeout"
     INVALID = "invalid"
     ERROR = "error"
 
@@ -61,6 +64,10 @@ class MutationRun:
         return self._count(Verdict.SURVIVED)
 
     @property
+    def timeouts(self) -> int:
+        return self._count(Verdict.TIMEOUT)
+
+    @property
     def invalid(self) -> int:
         return self._count(Verdict.INVALID)
 
@@ -74,10 +81,17 @@ class MutationRun:
         return tuple(o.mutant for o in self.outcomes if o.verdict is Verdict.SURVIVED)
 
     @property
+    def detected(self) -> int:
+        """Mutants a test caught — killed outright *or* by hanging the suite (timeout)."""
+        return self.killed + self.timeouts
+
+    @property
     def mutation_score(self) -> float | None:
-        """``killed / (killed + survived)``; ``None`` when there are no killable mutants."""
-        scored = self.killed + self.survived
-        return self.killed / scored if scored else None
+        """``detected / (detected + survived)`` where detected = killed + timeouts; ``None`` when
+        there are no killable mutants. Timeouts count as detected (Stryker convention): a mutation
+        that hangs the suite was observably caught. invalid/error are excluded entirely."""
+        scored = self.detected + self.survived
+        return self.detected / scored if scored else None
 
 
 def _progress_line(index: int, total: int, outcome: MutantOutcome) -> str:
@@ -143,9 +157,13 @@ def _run_one(project_dir: str, path: str, source: str, mutated: str, runner: Run
         target.write_text(mutated, encoding="utf-8")
         try:
             result = runner.run(project_dir)
+        except SuiteTimeout:
+            # The mutation hung the suite — a detection, not a crash. Count it as killed
+            # (Stryker's Timeout status), distinct from ERROR below.
+            return Verdict.TIMEOUT
         except Exception:
-            # The runner failed to execute this mutant (e.g. a Godot crash/timeout). Tally it as
-            # ERROR and carry on — one bad run must not discard the whole pass (FG-4.1).
+            # The runner failed to execute this mutant (e.g. a Godot crash). Tally it as ERROR and
+            # carry on — one bad run must not discard the whole pass (FG-4.1).
             return Verdict.ERROR
         return Verdict.KILLED if result.failed else Verdict.SURVIVED
     finally:

@@ -3,7 +3,8 @@
 The JSON follows the mutation-testing-elements report schema (v2), so it renders in that
 ecosystem's HTML viewer. Verdicts map to the schema's ``MutantStatus``:
 
-    killed -> Killed, survived -> Survived, invalid -> CompileError, error -> RuntimeError.
+    killed -> Killed, survived -> Survived, timeout -> Timeout, invalid -> CompileError,
+    error -> RuntimeError.
 
 Locations are 1-based line + column with an exclusive end column, which is exactly what a
 `Span` carries, so no coordinate conversion is needed.
@@ -20,6 +21,7 @@ SCHEMA_VERSION = "2"
 _STATUS: dict[Verdict, str] = {
     Verdict.KILLED: "Killed",
     Verdict.SURVIVED: "Survived",
+    Verdict.TIMEOUT: "Timeout",
     Verdict.INVALID: "CompileError",
     Verdict.ERROR: "RuntimeError",
 }
@@ -61,6 +63,7 @@ def console_summary(run: MutationRun) -> str:
     lines = [
         f"Mutation score: {score_str}",
         f"  killed:   {run.killed}",
+        f"  timeout:  {run.timeouts}  (counted as killed)",
         f"  survived: {run.survived}",
         f"  invalid:  {run.invalid}",
         f"  error:    {run.errors}",
