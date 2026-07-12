@@ -1,0 +1,161 @@
+"""Live self-test — drive the REAL gdmutant CLI against a REAL Godot binary + the corpus.
+
+This is the end-to-end sanity check that closes the "never run against real Godot" gate ([ticket]):
+both runner paths are exercised through the *shipped* CLI (argparse / exit codes / Stryker JSON —
+via subprocess, never in-process) and pinned to *exact* per-mutant outcomes, not just "it ran".
+
+It is **env-gated** on ``GDMUTANT_GODOT`` (the path to a godot executable), so a plain
+``uv run pytest`` — local dev and the ``verify`` CI job — auto-skips it with zero config. Run it
+with, e.g.::
+
+    GDMUTANT_GODOT=godot uv run pytest tests/test_selftest_live.py -v
+
+The CommandRunner test needs only Godot. The GdUnit4 test additionally skips if the addon is not
+installed (run ``scripts/install-gdunit4.sh`` first).
+
+The pinned expectations below are the *observed* result of running gdmutant against the corpus on a
+real Godot — the three outcome classes the fixture is designed to show:
+  * **killed** — a test catches the change (e.g. line 8 ``>`` -> ``>=``);
+  * **coverage-gap survivors** — ``can_act`` / ``ties_favor_earlier`` are untested, and the clamp
+    boundary at line 13 is never probed;
+  * **equivalent survivors** — lines 13/15 ``<``/``>`` -> ``<=``/``>=`` yield the same value at the
+    boundary, so they survive *despite* coverage.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from collections import Counter
+from pathlib import Path
+
+import pytest
+
+_GODOT = os.environ.get("GDMUTANT_GODOT")
+
+pytestmark = pytest.mark.skipif(
+    not _GODOT, reason="set GDMUTANT_GODOT=<godot path> to run the live self-test"
+)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CORPUS = REPO_ROOT / "corpus"
+ADDON = CORPUS / "addons" / "gdUnit4"
+TARGET = "turn_order.gd"
+
+# The exact per-mutant outcome of running gdmutant against corpus/turn_order.gd on real Godot.
+# Survivors pinned as (line, column, replacement) so a regression that flips one verdict, shifts a
+# location, or drops a mutant is caught — a bare "score > 0" self-test would be worthless.
+EXPECTED_TOTAL = 16
+EXPECTED_KILLED = 9
+EXPECTED_SURVIVORS: set[tuple[int, int, str]] = {
+    (13, 11, "<="),  # equivalent: value < 0  ->  value <= 0  (same clamp result)
+    (13, 13, "1"),  # coverage gap: boundary at value 0 never probed
+    (13, 13, "-1"),  # coverage gap
+    (15, 11, ">="),  # equivalent: value > max  ->  value >= max
+    (27, 15, "or"),  # coverage gap: can_act is untested
+    (27, 19, ""),  # coverage gap: `not` deletion in can_act
+    (32, 9, "false"),  # coverage gap: ties_favor_earlier is untested
+}
+
+
+def _corpus_copy(tmp_path: Path) -> Path:
+    """Copy the corpus into a tmp dir and warm Godot's import cache; the repo copy is never touched.
+
+    ``.godot`` / ``reports`` from earlier local runs are excluded so each run starts clean.
+    """
+    dst = tmp_path / "corpus"
+    shutil.copytree(CORPUS, dst, ignore=shutil.ignore_patterns(".godot", "reports"))
+    # Warm-up: GdUnit4 references TurnOrder by class_name, which only the import scan writes into
+    # .godot/global_script_class_cache.cfg. Give it its own timeout and IGNORE its exit code
+    # (--import returns non-zero on benign addon/import chatter across versions); assert the
+    # artifact we actually need instead.
+    subprocess.run(
+        [_GODOT, "--headless", "--path", str(dst), "--import"],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert (dst / ".godot").is_dir(), "Godot --import did not create the .godot cache"
+    return dst
+
+
+def _run_gdmutant(project: Path, extra: list[str], out: Path) -> dict:
+    """Invoke the shipped CLI via subprocess and return the parsed Stryker JSON report."""
+    cmd = [
+        sys.executable,
+        "-m",
+        "gdmutant.cli",
+        "run",
+        str(project / TARGET),
+        "--project",
+        str(project),
+        "--json",
+        str(out),
+        *extra,
+    ]
+    completed = subprocess.run(cmd, capture_output=True, text=True, timeout=900, check=False)
+    assert completed.returncode == 0, (
+        f"gdmutant exited {completed.returncode}\n--- stdout ---\n{completed.stdout}\n"
+        f"--- stderr ---\n{completed.stderr}"
+    )
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+def _assert_pinned_outcomes(report: dict) -> None:
+    """Assert the report matches the pinned per-mutant outcomes exactly."""
+    files = report["files"]
+    assert len(files) == 1, f"expected one file in the report, got {list(files)}"
+    (file_obj,) = files.values()
+    mutants = file_obj["mutants"]
+    counts = Counter(m["status"] for m in mutants)
+
+    # Print the full table on any failure so a red CI run is diagnosable from the log alone.
+    table = "\n".join(
+        f"  {m['location']['start']['line']}:{m['location']['start']['column']}"
+        f"  {m['mutatorName']}  -> {m['replacement']!r}  {m['status']}"
+        for m in mutants
+    )
+    detail = f"\nstatus counts: {dict(counts)}\nmutants:\n{table}"
+
+    assert len(mutants) == EXPECTED_TOTAL, f"mutant count changed{detail}"
+    assert counts["CompileError"] == 0, f"a mutant failed to compile (INVALID){detail}"
+    assert counts["RuntimeError"] == 0, f"a mutant errored at runtime (ERROR){detail}"
+    assert counts["Killed"] == EXPECTED_KILLED, f"killed count changed{detail}"
+
+    survivors = {
+        (m["location"]["start"]["line"], m["location"]["start"]["column"], m["replacement"])
+        for m in mutants
+        if m["status"] == "Survived"
+    }
+    assert survivors == EXPECTED_SURVIVORS, f"survivor set changed{detail}"
+
+
+def test_command_runner_against_real_godot(tmp_path: Path) -> None:
+    """The CommandRunner path (ADR-0005, exit-code) needs NO addon — so it leads, isolating
+    'Godot runs' from 'GdUnit4 runs'. Drives the hand-rolled corpus/harness/run_tests.gd."""
+    project = _corpus_copy(tmp_path)
+    command = f"{_GODOT} --headless --path . --script res://harness/run_tests.gd"
+    report = _run_gdmutant(
+        project,
+        ["--runner", "command", "--command", command],
+        tmp_path / "command_report.json",
+    )
+    _assert_pinned_outcomes(report)
+
+
+def test_gdunit4_against_real_godot(tmp_path: Path) -> None:
+    """The GdUnit4 path — the [ticket] close: exercises the real ``-s GdUnitCmdTool.gd -a res://test
+    -rc 1 --ignoreHeadlessMode`` flags and reads the actual ``reports/report_1/results.xml``."""
+    if not ADDON.is_dir():
+        pytest.skip("GdUnit4 addon not installed — run scripts/install-gdunit4.sh")
+    project = _corpus_copy(tmp_path)
+    report = _run_gdmutant(
+        project,
+        ["--runner", "gdunit4", "--godot", str(_GODOT)],
+        tmp_path / "gdunit_report.json",
+    )
+    _assert_pinned_outcomes(report)

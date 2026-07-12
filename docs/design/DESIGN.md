@@ -99,8 +99,11 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
   worst failure. **Oracle boundary:** the validity check is gdtoolkit's parser, not Godot itself — a
   mutant gdtoolkit accepts but Godot rejects at load fails toward score-*inflation* (the suite errors →
   `error`, or writes no report → `error` via the runner's freshness guard), never toward a false
-  survivor. The live-CI validation (ROADMAP.md) should include a gdtoolkit-vs-Godot parse-agreement spot
-  check to bound this.
+  survivor. The live self-test (`tests/test_selftest_live.py`) bounds this for the corpus: it boots
+  all 16 gdtoolkit-accepted mutants into real Godot and asserts **zero `RuntimeError`** outcomes — so
+  for that mutant set, gdtoolkit and Godot's parsers are confirmed to agree (a Godot-rejected mutant
+  would surface as `error`, failing the assertion). A dedicated `godot --check-only` parse-agreement
+  probe over arbitrary mutants is a fast-follow.
 - **NF-6 — Performance headroom.** v0.1 runs the full suite per mutant (simple, correct). Booting Godot
   per mutant is slow, so the design must leave a clean seam for the deferred **coverage-gated selection**
   (only run tests that cover the mutated line) without reshaping the engine.

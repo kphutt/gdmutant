@@ -1,5 +1,7 @@
 # gdmutant
 
+[![CI](https://github.com/kphutt/gdmutant/actions/workflows/ci.yml/badge.svg)](https://github.com/kphutt/gdmutant/actions/workflows/ci.yml)
+
 > **`gdmutant` is a provisional codename**, not yet cleared for public use. It lives in one
 > place: this README + the repo name.
 
@@ -144,7 +146,9 @@ test-run limit. `gdmutant run --help` lists them all.
 > a run. gdmutant **warns** if the target has uncommitted git changes; pass `--require-clean` to make
 > that a hard stop instead.
 
-> The live `godot --headless` path is pending CI validation (`ROADMAP.md`); `--dry-run` needs no Godot.
+> The live `godot --headless` path is validated end-to-end in CI against **real Godot** — both the
+> GdUnit4 and exit-code runners, pinned to exact per-mutant outcomes (`tests/test_selftest_live.py`).
+> `--dry-run` still needs no Godot.
 
 **Turn the JSON into a rich, clickable HTML report — no extra tooling from us.** The `--json` output
 is the standard Stryker
@@ -181,13 +185,49 @@ guarantee, and the survivor→killing-test loop, in one read.
 4. ✅ **v0.1 built against the bundled `corpus/` fixture** — engine loop, operator catalog, GDScript
    adapter (NF-5 guard), GdUnit4 runner, Stryker reporter, and the `gdmutant run` CLI. Mutates
    `corpus/turn_order.gd` (16 mutants) and prints survivors end-to-end.
-5. **Remaining before a public launch** (see `ROADMAP.md`): live CI Godot/GdUnit4 validation of the
-   runner, the statement-deletion operator, then flip the repo public — never launch empty.
+5. ✅ **Live CI Godot validation** — both runner paths run against **real Godot** in CI, pinned to
+   exact per-mutant outcomes (`tests/test_selftest_live.py`, `scripts/install-gdunit4.sh`). This
+   caught two real runner bugs (headless-mode flag, relative project path).
+6. **Remaining before a public launch** (see `ROADMAP.md`): the statement-deletion operator and the
+   pre-public checklist, then flip the repo public — never launch empty.
 
 ## Where it fits in your CI
 This tool answers one question a green CI build can't: *"do the tests actually bite?"* It's an **advisory**
 signal — report-mode, never a hard gate — complementary to coverage, run alongside whatever review and
 CI a project already has. It shares no code with any reviewer tool; it's a standalone CLI on purpose.
+
+**Use in your CI.** A minimal advisory workflow — installs Godot, runs gdmutant against one module
+via your headless harness, and uploads the report. (This is the same invocation gdmutant's own
+self-test pins against real Godot, so it's known to work.)
+```yaml
+# .github/workflows/mutation.yml
+name: Mutation testing (advisory)
+on: [pull_request]
+jobs:
+  gdmutant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.4.0        # your project's Godot version
+          use-dotnet: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install git+https://github.com/kphutt/gdmutant@main   # (pip install gdmutant, once published)
+      - run: |
+          gdmutant run path/to/module.gd --project . \
+            --runner command --command "godot --headless --script res://tests/run_tests.gd" \
+            --json report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-report
+          path: report.json
+```
+Swap `--runner command --command "…"` for the default GdUnit4 runner (`--godot godot`) if your suite
+uses GdUnit4. Keep it advisory (no `needs:` gate) until you've triaged the first survivors.
 
 ## License
 [MIT](LICENSE) — © 2026 Karsten Huttelmaier. Third-party licenses are logged in [CREDITS.md](CREDITS.md).
