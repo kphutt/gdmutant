@@ -61,10 +61,12 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
 
 ### FG-4 — Verdict tally
 - **FG-4.1** Each mutant is classified: **killed** (a test failed), **survived** (all tests passed),
-  **no-coverage** (no test exercised the line — v0.1 folds this into *survived* until coverage exists),
-  **invalid** (the mutant didn't parse — NF-5), or **error** (the runner failed to execute it, e.g. a
-  crash/timeout). Invalid and error mutants are excluded from the score.
-- **FG-4.2** The system shall compute the **mutation score** = killed / (killed + survived), and totals.
+  **timeout** (the mutation hung the suite — a detection, counted as killed, Stryker's `Timeout`
+  status), **no-coverage** (no test exercised the line — v0.1 folds this into *survived* until
+  coverage exists), **invalid** (the mutant didn't parse — NF-5), or **error** (the runner failed to
+  execute it, e.g. a crash). Invalid and error mutants are excluded from the score.
+- **FG-4.2** The system shall compute the **mutation score** = (killed + timeout) /
+  (killed + timeout + survived), and totals. Timeouts count as detected (Stryker convention).
 
 ### FG-5 — Reporting
 - **FG-5.1** The system shall emit a report in Stryker's

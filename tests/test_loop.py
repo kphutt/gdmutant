@@ -8,7 +8,7 @@ from conftest import MarkerRunner
 
 from gdmutant.engine.loop import BaselineFailed, Verdict, run
 from gdmutant.engine.operators import TableOperator
-from gdmutant.engine.runner import SuiteResult
+from gdmutant.engine.runner import SuiteResult, SuiteTimeout
 
 
 @dataclass
@@ -154,6 +154,21 @@ def test_runner_exception_is_tallied_as_error_and_file_restored(tmp_path: Path) 
     assert [o.verdict for o in result.outcomes] == [Verdict.ERROR]
     assert result.errors == 1 and result.mutation_score is None
     assert Path(path).read_text(encoding="utf-8") == src  # restored despite the runner error
+
+
+def test_suite_timeout_is_tallied_as_timeout_and_counts_as_detected(tmp_path: Path) -> None:
+    # A mutation that hangs the suite (runner raises SuiteTimeout) is a DETECTION, not an error:
+    # tallied TIMEOUT, distinct from ERROR, and counted toward the score like a kill.
+    src = "func f(a, b):\n\treturn a > b\n"  # one mutant: '>'
+    path = _write(tmp_path, "f.gd", src)
+    ok = SuiteResult(tests=1, failures=0, errors=0)
+    runner = ScriptedRunner([ok, SuiteTimeout("hung")])  # baseline ok; mutant hangs
+    result = run(str(tmp_path), path, src, runner)
+    assert [o.verdict for o in result.outcomes] == [Verdict.TIMEOUT]
+    assert (result.timeouts, result.killed, result.errors) == (1, 0, 0)
+    assert result.detected == 1
+    assert result.mutation_score == 1.0  # timeout counts as detected → 1/1
+    assert Path(path).read_text(encoding="utf-8") == src  # restored despite the timeout
 
 
 def test_runner_error_on_a_later_mutant_preserves_earlier_verdicts(tmp_path: Path) -> None:

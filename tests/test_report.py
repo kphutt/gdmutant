@@ -42,6 +42,30 @@ def test_stryker_report_status_mapping() -> None:
     assert [m["status"] for m in mutants] == ["Killed", "Survived", "CompileError", "RuntimeError"]
 
 
+def test_timeout_maps_to_stryker_timeout_and_counts_as_detected() -> None:
+    # A timeout is a detection: it renders as Stryker "Timeout" and is counted toward the score like
+    # a kill (Stryker convention), not excluded like invalid/error.
+    run = MutationRun(
+        (
+            MutantOutcome(
+                Mutant("f.gd", Span(2, 9, 2, 10), "comparison", ">", ">="), Verdict.KILLED
+            ),
+            MutantOutcome(Mutant("f.gd", Span(2, 15, 2, 16), "numeric", "1", "0"), Verdict.TIMEOUT),
+            MutantOutcome(
+                Mutant("f.gd", Span(2, 21, 2, 22), "boolean", "and", "or"), Verdict.SURVIVED
+            ),
+        )
+    )
+    statuses = [
+        m["status"]
+        for m in stryker_report(run, "f.gd", _SRC, "gdscript")["files"]["f.gd"]["mutants"]
+    ]
+    assert statuses == ["Killed", "Timeout", "Survived"]
+    # detected = killed(1) + timeout(1) = 2; score = 2 / (2 + 1 survived)
+    assert run.mutation_score == 2 / 3
+    assert "timeout:  1  (counted as killed)" in console_summary(run)
+
+
 def test_stryker_report_mutant_fields_and_location() -> None:
     first = stryker_report(_run(), "f.gd", _SRC, "gdscript")["files"]["f.gd"]["mutants"][0]
     assert first["id"] == "0"
@@ -78,6 +102,7 @@ def test_console_summary_exact_layout() -> None:
     assert console_summary(_run()) == (
         "Mutation score: 50.0%\n"
         "  killed:   1\n"
+        "  timeout:  0  (counted as killed)\n"
         "  survived: 1\n"
         "  invalid:  1\n"
         "  error:    1\n"
