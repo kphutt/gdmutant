@@ -1,5 +1,7 @@
-; Minimal Godot project for the gdmutant corpus fixture. The GdUnit4 addon is installed
-; in CI (not vendored here) for the live end-to-end run — see the runner + ROADMAP.md.
+; Minimal Godot project for the gdmutant corpus fixture. The GdUnit4 addon is downloaded
+; (not vendored) by scripts/install-gdunit4.sh for the live self-test — see
+; tests/test_selftest_live.py. config/features stays "4.4" (the fixture's floor); CI runs a
+; newer Godot against it, and the pure-logic mutants are Godot-version-independent.
 
 config_version=5
 
