@@ -117,8 +117,13 @@ jobs:
       - name: Generate corpus mutation report
         if: always()
         run: |
+          # Warm Godot's import cache for the checked-out corpus so GdUnit4 can resolve
+          # `class_name TurnOrder` — the self-test only warms its own tmp copy, not this dir.
+          # --import's exit code is ignored (quirky across versions); the run below is the real check
+          # and is NOT `|| true`-swallowed, so a broken demo shows up instead of a silent empty upload.
+          godot --headless --path corpus --import || true
           GDMUTANT_GODOT=godot uv run python -m gdmutant.cli run corpus/turn_order.gd \
-            --project corpus --runner gdunit4 --godot godot --json report.json || true
+            --project corpus --runner gdunit4 --godot godot --json report.json
 
       - name: Upload mutation report
         if: always()
