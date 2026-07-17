@@ -73,7 +73,8 @@ class GdUnit4Runner:
             "--ignoreHeadlessMode",
         ]
 
-    def run(self, project_dir: str) -> SuiteResult:
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        budget = self.timeout if timeout is None else timeout
         report = Path(project_dir) / self.report_path
         # Read THIS run's report, never a stale one from a previous mutant: remove it first and
         # require it to reappear. If GdUnit4/Godot writes no report (a crash, an addon-load
@@ -87,15 +88,15 @@ class GdUnit4Runner:
             completed = subprocess.run(
                 self.command(project_dir),
                 cwd=project_dir,
-                timeout=self.timeout,
+                timeout=budget,
                 check=False,
                 capture_output=True,
                 text=True,
             )
-        except subprocess.TimeoutExpired as timeout:
+        except subprocess.TimeoutExpired as expired:
             # A mutation that makes the suite hang is a detection — surface it as a timeout so the
             # engine tallies Timeout (killed), not a no-report error.
-            raise SuiteTimeout(f"GdUnit4 run exceeded {self.timeout:g}s") from timeout
+            raise SuiteTimeout(f"GdUnit4 run exceeded {budget:g}s") from expired
         if not report.exists():
             detail = (completed.stderr or completed.stdout or "").strip()
             raise RuntimeError(
