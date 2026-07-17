@@ -127,7 +127,7 @@ class MissingGodotRunner:
 
     filename: str | None = "godot"
 
-    def run(self, project_dir: str) -> SuiteResult:
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         raise FileNotFoundError(2, "No such file or directory", self.filename)
 
 
@@ -397,7 +397,7 @@ def test_parser_defaults() -> None:
     assert args.json_path is None
     assert args.dry_run is False
     assert args.report_path == "reports/report_1/results.xml"
-    assert args.timeout == 600.0
+    assert args.timeout is None  # default: derived per-mutant from the baseline run time
     assert args.require_clean is False
     assert args.runner == "gdunit4"
     assert args.test_command is None
@@ -444,7 +444,7 @@ def test_parser_help_text(
         "the Godot executable (default: godot)",
         "the GdUnit4 test path (default: res://test)",
         "GdUnit4 JUnit-XML path, relative to the project dir (default: reports/report_1/results.xml)",  # noqa: E501
-        "per-mutant test-run timeout, in seconds (default: 600)",
+        "per-mutant test-run timeout, in seconds (default: derived from the baseline run — 10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",  # noqa: E501
         "refuse to run if the source file has uncommitted git changes (default: warn only)",
         "write the Stryker JSON report here (use - for stdout)",
         "list the mutants without running any tests (no Godot needed)",
@@ -469,7 +469,7 @@ class RecordingRunner:
 
     seen: list[str] = field(default_factory=list)
 
-    def run(self, project_dir: str) -> SuiteResult:
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         self.seen.append(project_dir)
         return SuiteResult(tests=3, failures=0, errors=0)
 
@@ -732,7 +732,7 @@ class RunBoomRunner:
     """A runner that's cheap to construct but explodes if actually run — proves --require-clean
     short-circuits before any suite (Godot) invocation."""
 
-    def run(self, project_dir: str) -> SuiteResult:
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         raise AssertionError("--require-clean must return before running the suite")
 
 

@@ -15,6 +15,6 @@ class MarkerRunner:
     kill_marker: str
     tests: int = 3
 
-    def run(self, project_dir: str) -> SuiteResult:
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         content = Path(self.target).read_text(encoding="utf-8")
         return SuiteResult(tests=self.tests, failures=int(self.kill_marker in content), errors=0)

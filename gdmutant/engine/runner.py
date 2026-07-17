@@ -50,9 +50,14 @@ class SuiteResult:
 
 @runtime_checkable
 class Runner(Protocol):
-    """Runs a target project's test suite once and reports the aggregate result."""
+    """Runs a target project's test suite once and reports the aggregate result.
 
-    def run(self, project_dir: str) -> SuiteResult: ...
+    `timeout` overrides the runner's own budget for this call (seconds); ``None`` uses the runner's
+    configured default. The engine derives a per-mutant budget from the baseline run and passes it
+    here, so a hanging mutant is cut off in seconds rather than blocking for the full default.
+    """
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult: ...
 
 
 @dataclass(frozen=True)
@@ -74,20 +79,21 @@ class CommandRunner:
     command: Sequence[str]
     timeout: float = 600.0
 
-    def run(self, project_dir: str) -> SuiteResult:
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        budget = self.timeout if timeout is None else timeout
         try:
             completed = subprocess.run(
                 list(self.command),
                 cwd=project_dir,
                 capture_output=True,
                 text=True,
-                timeout=self.timeout,
+                timeout=budget,
             )
-        except subprocess.TimeoutExpired as timeout:
+        except subprocess.TimeoutExpired as expired:
             # A mutation-induced hang is a detection, not a crash — surface it distinctly so the
             # engine tallies Timeout (killed), not error. subprocess.run has already killed the
             # child process by the time it raises.
-            raise SuiteTimeout(f"test command exceeded {self.timeout:g}s") from timeout
+            raise SuiteTimeout(f"test command exceeded {budget:g}s") from expired
         if completed.returncode == 0:
             return SuiteResult(tests=1, failures=0, errors=0)
         # One suite as a single pass/fail unit — per-test counts aren't available without a report.
