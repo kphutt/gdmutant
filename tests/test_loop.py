@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from conftest import MarkerRunner
 
-from gdmutant.engine.loop import BaselineFailed, Verdict, run
+from gdmutant.engine.loop import BaselineFailed, Verdict, _derive_timeout, run
 from gdmutant.engine.operators import TableOperator
 from gdmutant.engine.runner import SuiteResult, SuiteTimeout
 
@@ -17,7 +17,7 @@ class RaiseAfterBaselineRunner:
 
     calls: int = 0
 
-    def run(self, project_dir: str) -> SuiteResult:
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         self.calls += 1
         if self.calls == 1:
             return SuiteResult(tests=1, failures=0, errors=0)
@@ -31,7 +31,7 @@ class ScriptedRunner:
     script: list[SuiteResult | Exception]
     calls: int = 0
 
-    def run(self, project_dir: str) -> SuiteResult:
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         item = self.script[self.calls]
         self.calls += 1
         if isinstance(item, Exception):
@@ -45,8 +45,19 @@ class ProjectDirRecordingRunner:
 
     seen: list[str] = field(default_factory=list)
 
-    def run(self, project_dir: str) -> SuiteResult:
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         self.seen.append(project_dir)
+        return SuiteResult(tests=1, failures=0, errors=0)
+
+
+@dataclass
+class TimeoutRecordingRunner:
+    """Records the timeout handed to each run() call (baseline, then one per mutant); all-pass."""
+
+    seen: list[float | None] = field(default_factory=list)
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        self.seen.append(timeout)
         return SuiteResult(tests=1, failures=0, errors=0)
 
 
@@ -131,7 +142,7 @@ def test_baseline_failure_message_includes_suite_detail(tmp_path: Path) -> None:
 
     @dataclass
     class DetailRunner:
-        def run(self, project_dir: str) -> SuiteResult:
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
             return SuiteResult(tests=1, failures=1, errors=0, detail="harness said: boom")
 
     with pytest.raises(BaselineFailed, match=r"boom"):
@@ -171,6 +182,36 @@ def test_suite_timeout_is_tallied_as_timeout_and_counts_as_detected(tmp_path: Pa
     assert Path(path).read_text(encoding="utf-8") == src  # restored despite the timeout
 
 
+def test_derive_timeout_formula() -> None:
+    # Per-mutant budget = baseline * 10, floored at 10s and capped at 600s (a slow suite is never
+    # worse off than the historical flat default; a fast suite gets a tight budget so a hang is
+    # caught in seconds).
+    assert _derive_timeout(0.0) == 10.0  # floor
+    assert _derive_timeout(0.5) == 10.0  # 5s -> floored to 10
+    assert _derive_timeout(4.0) == 40.0  # 10x
+    assert _derive_timeout(100.0) == 600.0  # capped
+
+
+def test_derived_timeout_is_handed_to_each_mutant_when_unset(tmp_path: Path) -> None:
+    # No explicit timeout -> the loop derives one from the (instant) baseline and passes it to each
+    # mutant run; the baseline itself is called with the runner's own budget (timeout=None).
+    src = "func f(a, b):\n\treturn a > b and a < b\n"  # 3 mutants
+    path = _write(tmp_path, "f.gd", src)
+    runner = TimeoutRecordingRunner()
+    run(str(tmp_path), path, src, runner)
+    assert runner.seen[0] is None  # baseline uses the runner's configured budget
+    assert runner.seen[1:] == [10.0, 10.0, 10.0]  # instant baseline -> derived floor of 10s
+
+
+def test_explicit_timeout_overrides_derivation_for_each_mutant(tmp_path: Path) -> None:
+    src = "func f(a, b):\n\treturn a > b and a < b\n"  # 3 mutants
+    path = _write(tmp_path, "f.gd", src)
+    runner = TimeoutRecordingRunner()
+    run(str(tmp_path), path, src, runner, timeout=25.0)
+    assert runner.seen[0] is None  # baseline still uses the runner's own budget
+    assert runner.seen[1:] == [25.0, 25.0, 25.0]  # explicit value, not derived
+
+
 def test_runner_error_on_a_later_mutant_preserves_earlier_verdicts(tmp_path: Path) -> None:
     src = "func f(a, b):\n\treturn a > b and a < b\n"  # 3 mutants: >, and, <
     path = _write(tmp_path, "f.gd", src)
@@ -184,19 +225,23 @@ def test_runner_error_on_a_later_mutant_preserves_earlier_verdicts(tmp_path: Pat
     assert Path(path).read_text(encoding="utf-8") == src
 
 
-def test_progress_callback_fires_once_per_mutant_in_order(tmp_path: Path) -> None:
-    # Progress fires the baseline notice, then once per mutant in generation order, with the exact
-    # "[i/N] path:line:col  a -> b  ... verdict" format — pinned so a mutated separator, index base,
-    # or verdict label is caught. Source has 3 mutants: >, and, <.
+def test_progress_fires_a_heartbeat_then_a_verdict_per_mutant_in_order(tmp_path: Path) -> None:
+    # Progress fires the baseline notice, then for each mutant that runs: a "running (<=Ns)"
+    # heartbeat BEFORE (so a hang shows on a specific mutant, not a frozen terminal) and a verdict
+    # line AFTER — pinned exactly so a mutated separator, index base, budget, or verdict label is
+    # caught. Source has 3 mutants: >, and, <. Explicit timeout keeps the budget deterministic.
     src = "func f(a, b):\n\treturn a > b and a < b\n"
     path = _write(tmp_path, "f.gd", src)
     lines: list[str] = []
     runner = MarkerRunner(target=path, kill_marker=">=")
-    run(str(tmp_path), path, src, runner, progress=lines.append)
+    run(str(tmp_path), path, src, runner, timeout=10.0, progress=lines.append)
     assert lines == [
         "running the unmutated (baseline) suite ...",
+        f"[1/3] {path}:2:11  > -> >=  running (<=10s) ...",
         f"[1/3] {path}:2:11  > -> >=  ... killed",
+        f"[2/3] {path}:2:15  and -> or  running (<=10s) ...",
         f"[2/3] {path}:2:15  and -> or  ... survived",
+        f"[3/3] {path}:2:21  < -> <=  running (<=10s) ...",
         f"[3/3] {path}:2:21  < -> <=  ... survived",
     ]
 
@@ -211,15 +256,18 @@ def test_progress_reports_invalid_and_error_verdicts(tmp_path: Path) -> None:
     run(
         str(tmp_path), path, src, MarkerRunner(path, "ZZZ"), catalog=(bad,), progress=invalid.append
     )
+    # An invalid mutant never runs, so it gets NO heartbeat — only the verdict line.
     assert invalid == [
         "running the unmutated (baseline) suite ...",
         f"[1/1] {path}:2:11  > -> ))  ... invalid",
     ]
 
+    # An erroring mutant DID run, so it gets the heartbeat then the error verdict.
     errored: list[str] = []
-    run(str(tmp_path), path, src, RaiseAfterBaselineRunner(), progress=errored.append)
+    run(str(tmp_path), path, src, RaiseAfterBaselineRunner(), timeout=10.0, progress=errored.append)
     assert errored == [
         "running the unmutated (baseline) suite ...",
+        f"[1/1] {path}:2:11  > -> >=  running (<=10s) ...",
         f"[1/1] {path}:2:11  > -> >=  ... error",
     ]
 
