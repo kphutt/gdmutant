@@ -122,6 +122,7 @@ def run_mutation(
     project_dir: str,
     runner: Runner,
     *,
+    timeout: float | None = None,
     json_path: str | None = None,
     require_clean: bool = False,
 ) -> int:
@@ -169,6 +170,7 @@ def run_mutation(
             str(path),
             source,
             runner,
+            timeout=timeout,
             progress=lambda line: print(line, file=sys.stderr),
         )
     except BaselineFailed as error:
@@ -234,8 +236,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--timeout",
         type=float,
-        default=DEFAULT_TIMEOUT,
-        help=f"per-mutant test-run timeout, in seconds (default: {DEFAULT_TIMEOUT:g})",
+        default=None,
+        help="per-mutant test-run timeout, in seconds (default: derived from the baseline run — "
+        "10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",
     )
     run_parser.add_argument(
         "--json", dest="json_path", help="write the Stryker JSON report here (use - for stdout)"
@@ -267,7 +270,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--godot", args.godot, "godot"),
                     ("--tests", args.tests, "res://test"),
                     ("--report-path", args.report_path, DEFAULT_REPORT_PATH),
-                    ("--timeout", args.timeout, DEFAULT_TIMEOUT),
+                    ("--timeout", args.timeout, None),
                     ("--require-clean", args.require_clean, False),
                     ("--json", args.json_path, None),
                 )
@@ -281,6 +284,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             return list_mutants(args.source)
         project_dir = args.project or str(Path(args.source).resolve().parent)
+        # The runner's own timeout is the *baseline* budget (the loop derives per-mutant budgets
+        # from the baseline's wall-clock); without an explicit --timeout it falls back to the
+        # historical default so a legitimately slow baseline still completes.
+        baseline_timeout = DEFAULT_TIMEOUT if args.timeout is None else args.timeout
         runner: Runner
         if args.runner == "command":
             # shlex-split first, then require a non-empty result: this rejects a missing --command
@@ -295,7 +302,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not test_command:
                 print("error: --runner command requires a non-empty --command", file=sys.stderr)
                 return 2
-            runner = CommandRunner(command=test_command, timeout=args.timeout)
+            runner = CommandRunner(command=test_command, timeout=baseline_timeout)
         else:
             if args.test_command:
                 # --command only applies to --runner command; flag it rather than silently drop it.
@@ -304,12 +311,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 test_path=args.tests,
                 godot=args.godot,
                 report_path=args.report_path,
-                timeout=args.timeout,
+                timeout=baseline_timeout,
             )
         return run_mutation(
             args.source,
             project_dir,
             runner,
+            timeout=args.timeout,
             json_path=args.json_path,
             require_clean=args.require_clean,
         )

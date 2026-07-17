@@ -23,7 +23,7 @@ class FakeRunner:
     result: SuiteResult
     calls: list[str] = field(default_factory=list)
 
-    def run(self, project_dir: str) -> SuiteResult:
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         self.calls.append(project_dir)
         return self.result
 
