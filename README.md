@@ -113,7 +113,7 @@ uv run gdmutant run corpus/turn_order.gd --dry-run
   corpus/turn_order.gd:32:9  constant  true -> false
 ```
 
-**Run the real thing** — needs Godot 4.4+ and the [GdUnit4](https://github.com/MikeSchulze/gdUnit4)
+**Run the real thing** — needs Godot 4.4+ and the [GdUnit4](https://github.com/godot-gdunit-labs/gdUnit4)
 addon installed in the target project (under `res://addons/gdUnit4/`):
 ```sh
 uv run gdmutant run path/to/module.gd --project path/to/godot-project [--json report.json]

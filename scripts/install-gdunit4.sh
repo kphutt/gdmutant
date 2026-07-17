@@ -20,7 +20,7 @@ PIN_TREE_HASH="ff4eb405025477efad0f1aeabf5247f3cdb27515fa46de583cc750d146c64e69"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/corpus/addons/gdUnit4"
-URL="https://github.com/MikeSchulze/gdUnit4/archive/${PIN_SHA}.tar.gz"
+URL="https://github.com/godot-gdunit-labs/gdUnit4/archive/${PIN_SHA}.tar.gz"
 
 # Portable sha256 command NAME (Linux CI has sha256sum; macOS has shasum) — same output format on
 # both. It must be a command, not a shell function: xargs execs it and cannot see functions.
