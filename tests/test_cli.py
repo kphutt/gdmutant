@@ -289,6 +289,26 @@ def test_list_mutants_prints_every_mutant_and_returns_zero(
     assert "comparison  < -> <=" in out
 
 
+def test_list_mutants_marks_ignored_and_warns_on_unknown_operator(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --dry-run still LISTS a suppressed mutant (it's generated), flagged `(ignored: reason)`; and
+    # `ignore[<typo>]` naming no real operator warns on stderr (a silent no-op made visible).
+    path = tmp_path / "f.gd"
+    path.write_text(
+        "func f(a, b):\n"
+        "\treturn a > b  # gdmutant: ignore[comparison] equiv\n"
+        "\treturn a < b  # gdmutant: ignore[bogus]\n",
+        encoding="utf-8",
+    )
+    rc = list_mutants(str(path))
+    assert rc == 0
+    cap = capsys.readouterr()
+    assert "comparison  > -> >=  (ignored: equiv)" in cap.out  # suppressed mutant listed + reason
+    assert "comparison  < -> <=\n" in cap.out  # unknown-op line: NOT suppressed (no `(ignored)`)
+    assert "warning:" in cap.err and "bogus" in cap.err  # unknown operator surfaced as a no-op
+
+
 def test_list_mutants_unreadable_returns_two(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

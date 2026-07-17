@@ -11,6 +11,8 @@ operator. The Godot test runner is a separate concern (Slice 4).
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass, replace
 from itertools import pairwise
 
 from gdtoolkit.parser import parser as _gdparser
@@ -36,17 +38,60 @@ def _span_of(tok: Token) -> Span:
     return Span(line, col, end_line, end_col)
 
 
+# The canonical annotation prefix (the spelling used in docs); the regex below is the lenient parse.
 _IGNORE_MARKER = "# gdmutant: ignore"
 
+# ``# gdmutant: ignore`` [optional ``[op1, op2]``] [optional reason]. Bare (no brackets) suppresses
+# every operator on the line; ``[ops]`` suppresses only those; trailing text is the reason.
+_IGNORE_RE = re.compile(r"#\s*gdmutant:\s*ignore\s*(?:\[([^\]]*)\])?\s*(.*)$")
 
-def _ignored_lines(source: str) -> set[int]:
-    """1-based line numbers carrying a ``# gdmutant: ignore`` marker — a ``# noqa``-style opt-out
-    for lines whose mutants are equivalent (unkillable) or otherwise not worth reporting.
 
-    Comments aren't tokens, so this scans the raw source. Lines are split on ``\\n`` only, matching
-    the engine's line counting (spans.py), so the numbers line up with token positions.
+@dataclass(frozen=True)
+class _IgnoreDirective:
+    """A parsed ``# gdmutant: ignore`` annotation. `operators` is ``None`` for a bare marker (all
+    operators on the line) or the set of operator ids to suppress; `reason` is the trailing text."""
+
+    operators: frozenset[str] | None
+    reason: str
+
+
+def _ignore_directives(source: str) -> dict[int, _IgnoreDirective]:
+    """1-based line -> the ``# gdmutant: ignore`` directive on it (a ``# noqa``-style opt-out for
+    equivalent/unkillable mutants). Comments aren't tokens, so this scans raw source; lines split on
+    ``\\n`` only, matching the engine's line counting (spans.py), so numbers align with tokens.
+
+    ``# gdmutant: ignore`` → all operators on the line; ``ignore[comparison, numeric]`` → only them;
+    text after the marker/brackets is the human reason (surfaced as the report's ``statusReason``).
     """
-    return {i for i, line in enumerate(source.split("\n"), start=1) if _IGNORE_MARKER in line}
+    directives: dict[int, _IgnoreDirective] = {}
+    for i, line in enumerate(source.split("\n"), start=1):
+        match = _IGNORE_RE.search(line)
+        if match is None:
+            continue
+        ops_group, reason = match.group(1), match.group(2).strip()
+        operators = (
+            None
+            if ops_group is None
+            else frozenset(name.strip() for name in ops_group.split(",") if name.strip())
+        )
+        directives[i] = _IgnoreDirective(operators, reason)
+    return directives
+
+
+def unknown_ignore_operators(
+    source: str, catalog: tuple[Operator, ...] = CATALOG
+) -> list[tuple[int, str]]:
+    """``(line, name)`` for every bracketed operator name in an ignore directive that no operator in
+    `catalog` produces — a likely typo, since such a name silently suppresses nothing. The CLI warns
+    on these; the run is not failed (an unknown name is simply inert)."""
+    valid = {op.id for op in catalog}
+    return [
+        (line, name)
+        for line, directive in _ignore_directives(source).items()
+        if directive.operators is not None
+        for name in sorted(directive.operators)
+        if name not in valid
+    ]
 
 
 def _string_format_percents(tree: Tree[Token]) -> set[tuple[int | None, int | None]]:
@@ -89,27 +134,42 @@ def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[Mut
     Filtering by "does the catalog mutate this value" is sufficient: gdtoolkit never surfaces
     tokens from inside string literals or comments, so this never edits within one. `catalog` is
     threaded through so site selection matches generation (a custom catalog finds its own sites).
-    Tokens on a *physical* line marked ``# gdmutant: ignore`` are skipped — line-scoped, like
-    ``# noqa`` (a multi-line statement needs the marker on each line; see docs/decisions/0004).
-    A ``%`` used as the string-format operator is skipped too (see `_string_format_percents`).
+    A ``%`` used as the string-format operator is skipped (see `_string_format_percents`).
+
+    ``# gdmutant: ignore`` annotations are **not** filtered here: a suppressed mutant is still
+    *generated*, then marked ``ignore_reason`` in `generate_mutants` so it surfaces in the report as
+    ``Ignored`` (excluded from the score) rather than vanishing (see docs/decisions/0004, 0006).
     """
-    ignored = _ignored_lines(source)
     tree = _parse(source)
     format_percents = _string_format_percents(tree)
     return [
         MutationSite(tok.value, _span_of(tok))
         for tok in tree.scan_values(lambda v: isinstance(v, Token))
-        if all_replacements(tok.value, catalog)
-        and tok.line not in ignored
-        and (tok.line, tok.column) not in format_percents
+        if all_replacements(tok.value, catalog) and (tok.line, tok.column) not in format_percents
     ]
+
+
+def _mark_ignored(mutant: Mutant, directives: dict[int, _IgnoreDirective]) -> Mutant:
+    """Return `mutant` tagged with an `ignore_reason` if an ignore directive on its line applies to
+    its operator (a bare directive applies to every operator; ``[ops]`` only to the named ones)."""
+    directive = directives.get(mutant.span.line)
+    if directive is None:
+        return mutant
+    if directive.operators is not None and mutant.operator_id not in directive.operators:
+        return mutant
+    return replace(mutant, ignore_reason=directive.reason)
 
 
 def generate_mutants(
     path: str, source: str, catalog: tuple[Operator, ...] = CATALOG
 ) -> list[Mutant]:
-    """All mutants for `source`; `path` is recorded on each mutant for reporting."""
-    return generate(path, find_sites(source, catalog), catalog)
+    """All mutants for `source`, each tagged ``ignore_reason`` if a ``# gdmutant: ignore`` directive
+    on its line applies to it; `path` is recorded on each mutant for reporting."""
+    mutants = generate(path, find_sites(source, catalog), catalog)
+    directives = _ignore_directives(source)
+    if not directives:
+        return mutants
+    return [_mark_ignored(m, directives) for m in mutants]
 
 
 def is_valid_gdscript(source: str) -> bool:

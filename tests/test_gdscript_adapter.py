@@ -5,6 +5,7 @@ from gdmutant.adapters.gdscript import (
     find_sites,
     generate_mutants,
     is_valid_gdscript,
+    unknown_ignore_operators,
 )
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import TableOperator
@@ -39,25 +40,59 @@ def test_find_sites_pins_duplicate_tokens_in_document_order() -> None:
     assert [(s.token, s.span.column) for s in sites] == [(">", 11), ("and", 15), (">", 21)]
 
 
-def test_gdmutant_ignore_marker_suppresses_a_line() -> None:
-    # A line marked `# gdmutant: ignore` (optionally with a reason) contributes no sites/mutants —
-    # for equivalent/unkillable mutants; other lines are unaffected.
-    src = "func f(a, b):\n\treturn a > b  # gdmutant: ignore (equivalent)\n\treturn a < b\n"
-    assert {s.token for s in find_sites(src)} == {"<"}  # the '>' on the ignored line is gone
-    assert {(m.original, m.replacement) for m in generate_mutants("f.gd", src)} == {("<", "<=")}
-    # Without the marker, both operators are sites — proving the marker (not the layout) did it.
-    plain = "func f(a, b):\n\treturn a > b\n\treturn a < b\n"
-    assert {s.token for s in find_sites(plain)} == {">", "<"}
+def test_bare_ignore_marks_every_operator_on_the_line_with_its_reason() -> None:
+    # A bare `# gdmutant: ignore` marks EVERY mutant on the line as ignored — *generated* (not
+    # dropped), carrying the trailing text as the reason; other lines are untouched. find_sites no
+    # longer filters, so the mutant is still produced and then tagged in generate_mutants.
+    src = "func f(a, b):\n\treturn a > b  # gdmutant: ignore boundary equivalent\n\treturn a < b\n"
+    reason = {(m.span.line, m.original): m.ignore_reason for m in generate_mutants("f.gd", src)}
+    assert reason[(2, ">")] == "boundary equivalent"  # marked, reason captured
+    assert reason[(3, "<")] is None  # a different line is untouched
+    assert {s.token for s in find_sites(src)} == {">", "<"}  # both still located
 
 
-def test_gdmutant_ignore_is_line_scoped_not_statement_scoped() -> None:
-    # Documented behavior (docs/decisions/0004): the marker is scoped to its *physical* line, like
-    # # noqa. On a condition wrapped across lines, only the marked line's tokens are suppressed —
-    # the '>' on the earlier line still generates a mutant. Pin it so the caveat can't regress.
+def test_operator_scoped_ignore_marks_only_the_named_operator() -> None:
+    # The point of LOD-155: `ignore[comparison]` suppresses only the comparison mutant on the line;
+    # the numeric mutants on the SAME line (the `0`) stay active — line-level was too coarse.
+    src = "func f(value):\n\tif value < 0:  # gdmutant: ignore[comparison]\n\t\treturn 0\n"
+    marked = {
+        (m.operator_id, m.replacement): m.ignore_reason
+        for m in generate_mutants("f.gd", src)
+        if m.span.line == 2
+    }
+    assert marked[("comparison", "<=")] == ""  # ignored (no reason given)
+    assert marked[("numeric", "1")] is None and marked[("numeric", "-1")] is None  # still active
+
+
+def test_operator_scoped_ignore_accepts_a_comma_list_and_reason() -> None:
+    src = (
+        "func f(value):\n"
+        "\tif value < 0:  # gdmutant: ignore[comparison, numeric] both equivalent\n\t\treturn 0\n"
+    )
+    reason = {
+        (m.operator_id, m.replacement): m.ignore_reason
+        for m in generate_mutants("f.gd", src)
+        if m.span.line == 2
+    }
+    assert reason[("comparison", "<=")] == "both equivalent"
+    assert reason[("numeric", "1")] == "both equivalent"
+
+
+def test_bare_ignore_is_line_scoped_not_statement_scoped() -> None:
+    # Line-scoped, like # noqa (docs/decisions/0004, 0006): on a condition wrapped across lines, a
+    # bare marker on line 4 marks only line 4's mutants; line 3's '>' stays active.
     src = "func f(a, b):\n\tif (\n\t\ta > b\n\t\tand a < b  # gdmutant: ignore\n\t):\n\t\tpass\n"
-    tokens = {s.token for s in find_sites(src)}
-    assert ">" in tokens  # line 3, NOT suppressed (a different physical line)
-    assert "and" not in tokens and "<" not in tokens  # line 4 (marked) is suppressed
+    marks = {(m.span.line, m.original): m.ignore_reason for m in generate_mutants("f.gd", src)}
+    assert marks[(3, ">")] is None  # line 3 not marked
+    assert marks[(4, "and")] == "" and marks[(4, "<")] == ""  # line 4 (marked) suppressed
+
+
+def test_unknown_ignore_operator_is_a_no_op_and_reported() -> None:
+    # A typo'd operator name matches nothing (suppresses nothing) but is surfaced by
+    # unknown_ignore_operators so the CLI can warn instead of silently doing nothing.
+    src = "func f(a, b):\n\treturn a > b  # gdmutant: ignore[comparson]\n"  # typo
+    assert all(m.ignore_reason is None for m in generate_mutants("f.gd", src))  # nothing suppressed
+    assert unknown_ignore_operators(src) == [(2, "comparson")]
 
 
 def test_find_sites_and_generate_thread_a_custom_catalog_through() -> None:

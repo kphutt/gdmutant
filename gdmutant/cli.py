@@ -15,7 +15,11 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from gdmutant import __version__
-from gdmutant.adapters.gdscript import generate_mutants, is_valid_gdscript
+from gdmutant.adapters.gdscript import (
+    generate_mutants,
+    is_valid_gdscript,
+    unknown_ignore_operators,
+)
 from gdmutant.adapters.gdscript.runner import (
     DEFAULT_REPORT_PATH,
     DEFAULT_TIMEOUT,
@@ -103,17 +107,33 @@ def _missing_executable_hint(filename: str) -> str:
     return "\n".join(lines)
 
 
+def _warn_unknown_ignore_operators(source: str) -> None:
+    """Warn (stderr) for each ``# gdmutant: ignore[<name>]`` whose ``<name>`` is not a real operator
+    — a likely typo that silently suppresses nothing. Never fails the run."""
+    for line, name in unknown_ignore_operators(source):
+        print(
+            f"warning: '# gdmutant: ignore[{name}]' on line {line} names an unknown operator — "
+            "it suppresses nothing (check the spelling).",
+            file=sys.stderr,
+        )
+
+
 def list_mutants(source_path: str) -> int:
     """Print every mutant gdmutant would generate for `source_path` **without running any tests** —
     a Godot-free way to see the tool work. Returns 0, or 2 if the source can't be read/parsed."""
     source = _load_gdscript(source_path)
     if source is None:
         return 2
+    _warn_unknown_ignore_operators(source)
     mutants = generate_mutants(str(Path(source_path)), source)
     print(f"{len(mutants)} mutants for {source_path}:")
     for m in mutants:
         loc = f"{m.path}:{m.span.line}:{m.span.column}"
-        print(f"  {loc}  {m.operator_id}  {m.original} -> {m.replacement}")
+        # A suppressed mutant is still listed (it's generated), flagged so the annotation shows.
+        suppressed = ""
+        if m.ignore_reason is not None:
+            suppressed = f"  (ignored: {m.ignore_reason})" if m.ignore_reason else "  (ignored)"
+        print(f"  {loc}  {m.operator_id}  {m.original} -> {m.replacement}{suppressed}")
     return 0
 
 
@@ -136,6 +156,7 @@ def run_mutation(
     source = _load_gdscript(source_path)
     if source is None:
         return 2
+    _warn_unknown_ignore_operators(source)
     # Validate project_dir up front: the runner shells out with `cwd=project_dir`, so a missing dir
     # raises FileNotFoundError too — indistinguishable by type from a missing `godot`. Catching it
     # here keeps _missing_executable's FileNotFoundError unambiguously about the executable, and
