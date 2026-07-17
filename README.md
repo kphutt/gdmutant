@@ -137,8 +137,9 @@ See [`docs/decisions/0005`](docs/decisions/0005-exit-code-test-runner-convention
 convention (and its coarser killed/errored resolution vs GdUnit4's XML).
 
 Other flags: `--report-path` if your project writes GdUnit4's JUnit XML somewhere other than the
-default `reports/report_1/results.xml`, and `--timeout` (seconds, default 600) for the per-mutant
-test-run limit. `gdmutant run --help` lists them all.
+default `reports/report_1/results.xml`, and `--timeout` (seconds, per mutant — by default *derived
+from the baseline run*: 10× its wall-clock, floored at 10s and capped at 600s, so a hanging mutant is
+caught in seconds; pass an explicit value to override). `gdmutant run --help` lists them all.
 
 > **Your code is safe, but commit first.** gdmutant mutates the source file **in place**, restoring
 > it after each mutant and on a normal exit or Ctrl-C — but a hard kill (SIGKILL / power loss) could
