@@ -296,17 +296,18 @@ def test_list_mutants_marks_ignored_and_warns_on_unknown_operator(
     # `ignore[<typo>]` naming no real operator warns on stderr (a silent no-op made visible).
     path = tmp_path / "f.gd"
     path.write_text(
-        "func f(a, b):\n"
-        "\treturn a > b  # gdmutant: ignore[comparison] equiv\n"
-        "\treturn a < b  # gdmutant: ignore[bogus]\n",
+        "func f(a):\n"
+        "\tif a > 0:  # gdmutant: ignore[comparison] equiv\n"
+        "\t\ta = a  # gdmutant: ignore[bogus]\n"
+        "\treturn a > 1  # gdmutant: ignore[]\n",
         encoding="utf-8",
     )
     rc = list_mutants(str(path))
     assert rc == 0
     cap = capsys.readouterr()
     assert "comparison  > -> >=  (ignored: equiv)" in cap.out  # suppressed mutant listed + reason
-    assert "comparison  < -> <=\n" in cap.out  # unknown-op line: NOT suppressed (no `(ignored)`)
-    assert "warning:" in cap.err and "bogus" in cap.err  # unknown operator surfaced as a no-op
+    assert "bogus" in cap.err  # unknown operator name warned (a no-op)
+    assert "empty brackets" in cap.err  # `ignore[]` warned too
 
 
 def test_list_mutants_unreadable_returns_two(

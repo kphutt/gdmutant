@@ -81,17 +81,19 @@ def _ignore_directives(source: str) -> dict[int, _IgnoreDirective]:
 def unknown_ignore_operators(
     source: str, catalog: tuple[Operator, ...] = CATALOG
 ) -> list[tuple[int, str]]:
-    """``(line, name)`` for every bracketed operator name in an ignore directive that no operator in
-    `catalog` produces — a likely typo, since such a name silently suppresses nothing. The CLI warns
-    on these; the run is not failed (an unknown name is simply inert)."""
+    """``(line, name)`` for every malformed operator scope in an ignore directive — either a name no
+    operator in `catalog` produces (a likely typo) or **empty brackets** ``ignore[]`` (reported with
+    ``name == ""``). Both silently suppress nothing, so the CLI warns; the run is never failed."""
     valid = {op.id for op in catalog}
-    return [
-        (line, name)
-        for line, directive in _ignore_directives(source).items()
-        if directive.operators is not None
-        for name in sorted(directive.operators)
-        if name not in valid
-    ]
+    warnings: list[tuple[int, str]] = []
+    for line, directive in _ignore_directives(source).items():
+        if directive.operators is None:
+            continue  # a bare marker (no brackets) is well-formed — suppresses the whole line
+        if not directive.operators:
+            warnings.append((line, ""))  # `ignore[]`: empty brackets, matches no operator
+            continue
+        warnings.extend((line, name) for name in sorted(directive.operators) if name not in valid)
+    return warnings
 
 
 def _string_format_percents(tree: Tree[Token]) -> set[tuple[int | None, int | None]]:

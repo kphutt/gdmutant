@@ -95,6 +95,17 @@ def test_unknown_ignore_operator_is_a_no_op_and_reported() -> None:
     assert unknown_ignore_operators(src) == [(2, "comparson")]
 
 
+def test_empty_ignore_brackets_are_reported_but_a_bare_marker_is_not() -> None:
+    # `ignore[]` (empty brackets, malformed) is surfaced with an empty name so the CLI can warn; a
+    # bare `# gdmutant: ignore` (well-formed — suppresses the whole line) is NOT reported.
+    src = (
+        "func f(a, b):\n\treturn a > b  # gdmutant: ignore[]\n\treturn a < b  # gdmutant: ignore\n"
+    )
+    assert unknown_ignore_operators(src) == [(2, "")]  # only the empty brackets on line 2
+    marks = {m.span.line: m.ignore_reason for m in generate_mutants("f.gd", src)}
+    assert marks[2] is None and marks[3] == ""  # empty-brackets suppresses nothing; bare suppresses
+
+
 def test_find_sites_and_generate_thread_a_custom_catalog_through() -> None:
     # A custom operator that mutates a token the DEFAULT catalog ignores (the identifier `b`).
     # Both find_sites and generate_mutants must use THIS catalog — a mutant that falls back to the

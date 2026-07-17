@@ -108,12 +108,16 @@ def _missing_executable_hint(filename: str) -> str:
 
 
 def _warn_unknown_ignore_operators(source: str) -> None:
-    """Warn (stderr) for each ``# gdmutant: ignore[<name>]`` whose ``<name>`` is not a real operator
-    — a likely typo that silently suppresses nothing. Never fails the run."""
+    """Warn (stderr) for each malformed ``# gdmutant: ignore[...]`` scope — an unknown operator name
+    (a likely typo) or empty brackets — that silently suppresses nothing. Never fails the run."""
     for line, name in unknown_ignore_operators(source):
+        if name:
+            detail = f"'# gdmutant: ignore[{name}]' on line {line} names an unknown operator"
+        else:
+            detail = f"'# gdmutant: ignore[]' on line {line} has empty brackets"
         print(
-            f"warning: '# gdmutant: ignore[{name}]' on line {line} names an unknown operator — "
-            "it suppresses nothing (check the spelling).",
+            f"warning: {detail} — it suppresses nothing "
+            "(name a real operator, or drop the brackets to ignore the whole line).",
             file=sys.stderr,
         )
 
