@@ -7,16 +7,7 @@ fast-orientation guide for anyone (human or AI) working on the code; the product
 [`README.md`](README.md), and the authoritative design is in
 [`docs/design/DESIGN.md`](docs/design/DESIGN.md).
 
-> `gdmutant` is a provisional codename, not yet cleared for public use.
-
-## Status
-
-v0.1 built — the language-neutral engine (mutate → run → tally → score → report), the GDScript
-adapter, the GdUnit4 runner, the Stryker reporter, and the `gdmutant run` CLI are all in and tested
-(and the suite is mutation-tested against itself, see `docs/mutation-testing.md`). Two things remain
-before a public launch (see [`ROADMAP.md`](ROADMAP.md)): **live CI validation** of the
-`godot --headless` + GdUnit4 path, and the **statement-deletion operator** (the last DESIGN.md FG-2.1
-mutation). The package stays version `0.0.0` until both land, then tags `0.1.0`.
+> `gdmutant` is a provisional codename.
 
 ## Setup
 
@@ -51,9 +42,8 @@ uv run pip-audit               # dependency audit
 
 ## Conventions
 
-- **Every change lands via a reviewed PR;** `main` is protected. New behavior comes with tests —
-  this is a testing tool, so we hold ourselves to it.
-- **No AI co-author trailer** on commits/PRs.
+- **`main` is protected; new behavior comes with tests** — this is a testing tool, so we hold
+  ourselves to it.
 - **CI gate:** `ruff` + `mypy` + `pytest` + `pip-audit`, plus a gitleaks secret scan. GitHub Actions
   are SHA-pinned (Dependabot bumps them).
 - **Keep the engine language-neutral:** no GDScript-specific assumptions in `gdmutant/engine/`;
@@ -74,7 +64,8 @@ uv run pip-audit               # dependency audit
 
 - [`README.md`](README.md) — what it is and why.
 - [`docs/design/DESIGN.md`](docs/design/DESIGN.md) — authoritative design (goals, FG/NF requirements, architecture).
-- [`ROADMAP.md`](ROADMAP.md) — the backlog.
+- [`ROADMAP.md`](ROADMAP.md) — forward roadmap / non-goals.
+- `docs/mutation-testing.md` — the suite is mutation-tested against itself.
 - `docs/decisions/NNNN-*.md` — append-only ADRs (`ls` is the index).
 - [`CREDITS.md`](CREDITS.md) — third-party licenses.
 
