@@ -137,7 +137,7 @@ def list_mutants(source_path: str) -> int:
         suppressed = ""
         if m.ignore_reason is not None:
             suppressed = f"  (ignored: {m.ignore_reason})" if m.ignore_reason else "  (ignored)"
-        print(f"  {loc}  {m.operator_id}  {m.original} -> {m.replacement}{suppressed}")
+        print(f"  {loc}  {m.operator_id}  {m.describe_change()}{suppressed}")
     return 0
 
 

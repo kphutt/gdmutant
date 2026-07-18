@@ -13,6 +13,18 @@ def test_mutant_apply_edits_the_span() -> None:
     assert m.apply("a > b\n") == "a >= b\n"
 
 
+def test_describe_change_renders_a_normal_swap() -> None:
+    m = Mutant("x.gd", Span(1, 3, 1, 4), "comparison", ">", ">=")
+    assert m.describe_change() == "> -> >="
+
+
+def test_describe_change_renders_an_empty_replacement_as_deleted() -> None:
+    # A deletion operator (unary-`not` removal) has an empty replacement; it must not render as a
+    # dangling "not -> " with nothing after the arrow ([ticket]).
+    m = Mutant("x.gd", Span(1, 8, 1, 11), "logical-not", "not", "")
+    assert m.describe_change() == "not -> (deleted)"
+
+
 def test_apply_rejects_span_original_mismatch() -> None:
     # A Mutant whose recorded `original` doesn't match the text at its span must fail fast, never
     # silently clobber a different token (the NF-5 worst case). Here the span points at ">" but
