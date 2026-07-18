@@ -119,7 +119,7 @@ def _progress_start(index: int, total: int, mutant: Mutant, timeout: float) -> s
     the #1 first-run complaint. The verdict line follows once it resolves.
     """
     loc = f"{mutant.path}:{mutant.span.line}:{mutant.span.column}"
-    head = f"[{index}/{total}] {loc}  {mutant.original} -> {mutant.replacement}"
+    head = f"[{index}/{total}] {loc}  {mutant.describe_change()}"
     return f"{head}  running (<={timeout:g}s) ..."
 
 
@@ -132,7 +132,7 @@ def _progress_line(index: int, total: int, outcome: MutantOutcome) -> str:
     """
     m = outcome.mutant
     loc = f"{m.path}:{m.span.line}:{m.span.column}"
-    return f"[{index}/{total}] {loc}  {m.original} -> {m.replacement}  ... {outcome.verdict.value}"
+    return f"[{index}/{total}] {loc}  {m.describe_change()}  ... {outcome.verdict.value}"
 
 
 def run(
