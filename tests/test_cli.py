@@ -9,7 +9,14 @@ import pytest
 from conftest import MarkerRunner
 
 import gdmutant.cli as cli
-from gdmutant.cli import _has_uncommitted_changes, build_parser, list_mutants, main, run_mutation
+from gdmutant.cli import (
+    _has_uncommitted_changes,
+    _report_path_problem,
+    build_parser,
+    list_mutants,
+    main,
+    run_mutation,
+)
 from gdmutant.engine.runner import SuiteResult
 
 
@@ -262,8 +269,10 @@ def test_run_mutation_unparseable_gdscript_returns_two(
 def test_run_mutation_unwritable_json_path_returns_two(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The mutation run succeeds, but the --json target can't be written (its parent is a file, not
-    # a dir): exit 2 with a message instead of an uncaught OSError.
+    # The mutation run succeeds, but the --json target can't be written (its parent is a file, not a
+    # dir): exit 2 with a message instead of an uncaught OSError. This is the late-write backstop —
+    # the parent *exists and is writable as a file*, so the preflight (which checks existence +
+    # writability of the parent) lets it through, and the write itself fails.
     path = _gd(tmp_path)
     not_a_dir = tmp_path / "afile"
     not_a_dir.write_text("x", encoding="utf-8")
@@ -273,6 +282,82 @@ def test_run_mutation_unwritable_json_path_returns_two(
     )
     assert rc == 2
     assert "cannot write report" in capsys.readouterr().err
+
+
+def test_report_path_problem_accepts_stdout_none_and_a_writable_dir(tmp_path: Path) -> None:
+    assert _report_path_problem(None) is None
+    assert _report_path_problem("-") is None
+    assert _report_path_problem(str(tmp_path / "report.json")) is None  # tmp_path is a writable dir
+
+
+def test_report_path_problem_flags_a_missing_directory(tmp_path: Path) -> None:
+    problem = _report_path_problem(str(tmp_path / "nope" / "report.json"))
+    assert problem is not None and "does not exist" in problem
+
+
+def test_report_path_problem_flags_an_unwritable_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Simulate an existing-but-unwritable parent (chmod is unreliable under root, e.g. in CI).
+    monkeypatch.setattr(cli.os, "access", lambda *_a, **_k: False)
+    problem = _report_path_problem(str(tmp_path / "report.json"))
+    assert problem is not None and "not writable" in problem
+
+
+class RaiseIfRunRunner:
+    """A runner whose .run() fails the test if ever called — proves a preflight fired *before* any
+    run started."""
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        raise AssertionError("runner.run must not be called when the report path is bad")
+
+
+def test_run_mutation_preflights_a_bad_report_dir_before_running(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A --json target in a nonexistent directory must fail *before* booting Godot per mutant
+    # ([ticket]), not after a multi-minute run — so the runner is never invoked.
+    path = _gd(tmp_path)
+    bad_json = tmp_path / "missing" / "report.json"
+    rc = run_mutation(str(path), str(tmp_path), RaiseIfRunRunner(), json_path=str(bad_json))
+    assert rc == 2
+    assert "does not exist" in capsys.readouterr().err
+
+
+class NoReportRunner:
+    """Raises GdUnit4Runner's exact 'wrote no report' RuntimeError on the baseline — what an
+    uninstalled/broken GdUnit4 addon produces (as opposed to a missing godot binary)."""
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        raise RuntimeError(
+            "GdUnit4 wrote no report at res://reports — Godot may have failed to run"
+        )
+
+
+def test_run_mutation_missing_addon_returns_two_with_actionable_hint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A GdUnit4 baseline that wrote no report AND no addon installed is an addon-absent *setup*
+    # error (exit 2) — surface an actionable hint, not a raw stderr dump ([ticket]). No addon here.
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), NoReportRunner())
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "GdUnit4 addon was not found" in err and "--runner command" in err
+
+
+def test_run_mutation_no_report_with_addon_present_is_generic_baseline_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Same 'wrote no report' error, but the addon IS installed -> not a setup problem: fall through
+    # to the generic exit 1 with the raw error, never the misleading addon hint.
+    path = _gd(tmp_path)
+    (tmp_path / "addons" / "gdUnit4").mkdir(parents=True)
+    rc = run_mutation(str(path), str(tmp_path), NoReportRunner())
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "GdUnit4 addon was not found" not in err
+    assert "wrote no report" in err  # the raw runner error is still surfaced
 
 
 def test_list_mutants_prints_every_mutant_and_returns_zero(

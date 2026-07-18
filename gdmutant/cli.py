@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -107,6 +108,30 @@ def _missing_executable_hint(filename: str) -> str:
     return "\n".join(lines)
 
 
+#: The GdUnit4 addon's location inside a Godot project (relative to the project dir).
+_GDUNIT_ADDON_REL = Path("addons") / "gdUnit4"
+
+
+def _gdunit4_addon_hint(error: BaselineFailed, project_dir: str) -> str | None:
+    """An actionable message when the gdunit4 baseline failed *because the addon isn't installed*,
+    else None. This is the second most common first-run failure after a missing godot binary — but
+    unlike a missing binary it surfaces as an opaque ``RuntimeError`` ("GdUnit4 wrote no report"),
+    not ``FileNotFoundError``, so without this it fell through to a raw stderr dump with no next
+    step ([ticket]). Gated on both the GdUnit4-specific error signature *and* the addon being absent,
+    so it never fires for the `command` runner (whose projects have no addon by design)."""
+    cause = error.__cause__
+    if not (isinstance(cause, RuntimeError) and "wrote no report" in str(cause)):
+        return None
+    if (Path(project_dir) / _GDUNIT_ADDON_REL).is_dir():
+        return None  # addon is present — some other GdUnit4/Godot failure, not a setup problem
+    return (
+        f"error: the GdUnit4 addon was not found in the project — {_GDUNIT_ADDON_REL}/ is missing "
+        f"under {project_dir}.\n"
+        "  Install GdUnit4 (Godot Asset Library), or run without the addon via "
+        '--runner command --command "<your headless test command>".'
+    )
+
+
 def _warn_unknown_ignore_operators(source: str) -> None:
     """Warn (stderr) for each malformed ``# gdmutant: ignore[...]`` scope — an unknown operator name
     (a likely typo) or empty brackets — that silently suppresses nothing. Never fails the run."""
@@ -120,6 +145,21 @@ def _warn_unknown_ignore_operators(source: str) -> None:
             "(name a real operator, or drop the brackets to ignore the whole line).",
             file=sys.stderr,
         )
+
+
+def _report_path_problem(json_path: str | None) -> str | None:
+    """A human message if the ``--json`` report path can't be written, else None — checked *before*
+    the run so a long pass (minutes of booting Godot per mutant) never ends on an avoidable write
+    error ([ticket]). ``-`` (stdout) and ``None`` (no report) are always fine; only a real file path
+    is validated, and only its parent directory (the file itself needn't exist yet)."""
+    if json_path is None or json_path == "-":
+        return None
+    parent = Path(json_path).parent
+    if not parent.exists():
+        return f"--json directory does not exist: {parent}"
+    if not os.access(parent, os.W_OK):
+        return f"--json directory is not writable: {parent}"
+    return None
 
 
 def list_mutants(source_path: str) -> int:
@@ -168,6 +208,12 @@ def run_mutation(
     if not Path(project_dir).is_dir():
         print(f"error: project directory not found: {project_dir}", file=sys.stderr)
         return 2
+    # Preflight the report path up front ([ticket]): a run boots Godot per mutant for minutes, so an
+    # unwritable --json target must fail now, not after the whole pass completes.
+    report_problem = _report_path_problem(json_path)
+    if report_problem is not None:
+        print(f"error: {report_problem}", file=sys.stderr)
+        return 2
     # In-place-mutation safety ([ticket]): the run edits the source file per mutant. Warn (or, with
     # require_clean, refuse) on a dirty tree so a hard interrupt can't lose uncommitted work.
     # Ordered after the read/parse validation above so a genuine read error is reported first,
@@ -202,6 +248,10 @@ def run_mutation(
         missing = _missing_executable(error)
         if missing is not None:
             print(_missing_executable_hint(missing), file=sys.stderr)
+            return 2
+        addon_hint = _gdunit4_addon_hint(error, project_dir)
+        if addon_hint is not None:
+            print(addon_hint, file=sys.stderr)
             return 2
         print(f"error: {error}", file=sys.stderr)
         return 1
