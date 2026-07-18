@@ -314,8 +314,19 @@ def _load_config(path: Path | None = None) -> dict[str, object] | None:
             print(f"warning: {path}: unknown key '{key}' — ignoring", file=sys.stderr)
             continue
         settings[dest] = value
-    # Validate the non-string settings up front — set_defaults bypasses argparse's own type/choices
+    # Validate settings types up front — set_defaults bypasses argparse's own type/choices
     # checks, so a bad value would otherwise fail confusingly deep in the run.
+    for key in ("project", "godot", "tests", "report-path"):
+        dest = _CONFIG_KEY_TO_DEST[key]
+        val = settings.get(dest)
+        if val is not None and not isinstance(val, str):
+            print(f"error: {path}: '{key}' must be a string", file=sys.stderr)
+            return None
+    val = settings.get("test_command")
+    if val is not None and not isinstance(val, str):
+        print(f"error: {path}: 'command' must be a string", file=sys.stderr)
+        return None
+
     if not isinstance(settings.get("timeout", 0), (int, float)) or isinstance(
         settings.get("timeout"), bool
     ):
@@ -379,6 +390,12 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "--require-clean",
         action="store_true",
         help="refuse to run if the source file has uncommitted git changes (default: warn only)",
+    )
+    run_parser.add_argument(
+        "--no-require-clean",
+        dest="require_clean",
+        action="store_false",
+        help="allow running even if the source file has uncommitted git changes",
     )
     run_parser.add_argument(
         "--dry-run",

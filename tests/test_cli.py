@@ -638,6 +638,11 @@ def test_load_config_rejects_bad_typed_values(tmp_path: Path) -> None:
         ("t2", "timeout = true"),  # a bool is not a valid number here
         ("t3", 'runner = "nope"'),  # not a valid runner
         ("t4", 'require-clean = "yes"'),  # not a bool
+        ("t5", "project = 123"),  # string setting as int
+        ("t6", "command = true"),  # string setting as bool
+        ("t7", "godot = 456"),  # string setting as int
+        ("t8", "tests = false"),  # string setting as bool
+        ("t9", "report-path = 789"),  # string setting as int
     ):
         cfg = tmp_path / f"{name}.toml"
         cfg.write_text(body, encoding="utf-8")
@@ -1014,4 +1019,10 @@ def test_main_threads_require_clean_to_run_mutation(
     assert captured["require_clean"] is True
     captured.clear()
     main(["run", str(path), "--project", str(tmp_path)])
+    assert captured["require_clean"] is False
+    captured.clear()
+    # If the config defaults it to True, --no-require-clean must override it to False.
+    (tmp_path / ".gdmutant.toml").write_text("require-clean = true\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    main(["run", str(path), "--no-require-clean"])
     assert captured["require_clean"] is False
