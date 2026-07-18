@@ -11,6 +11,8 @@ from gdmutant.engine.loop import (
     MutantOutcome,
     Verdict,
     _derive_timeout,
+    _format_duration,
+    _progress_estimate,
     _progress_line,
     _progress_start,
     run,
@@ -265,8 +267,11 @@ def test_progress_fires_a_heartbeat_then_a_verdict_per_mutant_in_order(tmp_path:
     lines: list[str] = []
     runner = MarkerRunner(target=path, kill_marker=">=")
     run(str(tmp_path), path, src, runner, timeout=10.0, progress=lines.append)
-    assert lines == [
-        "running the unmutated (baseline) suite ...",
+    assert lines[0] == "running the unmutated (baseline) suite ..."
+    # The pre-run estimate (LOD-110) follows the baseline; its wall-clock timing is
+    # nondeterministic, so pin its shape, not the exact seconds.
+    assert lines[1].startswith("3 mutants;") and "estimated ≈" in lines[1]
+    assert lines[2:] == [
         f"[1/3] {path}:2:11  > -> >=  running (<=10s) ...",
         f"[1/3] {path}:2:11  > -> >=  ... killed",
         f"[2/3] {path}:2:15  and -> or  running (<=10s) ...",
@@ -286,17 +291,18 @@ def test_progress_reports_invalid_and_error_verdicts(tmp_path: Path) -> None:
     run(
         str(tmp_path), path, src, MarkerRunner(path, "ZZZ"), catalog=(bad,), progress=invalid.append
     )
-    # An invalid mutant never runs, so it gets NO heartbeat — only the verdict line.
-    assert invalid == [
-        "running the unmutated (baseline) suite ...",
-        f"[1/1] {path}:2:11  > -> ))  ... invalid",
-    ]
+    # An invalid mutant never runs, so it gets NO heartbeat — only the verdict line. (lines[1] is
+    # the LOD-110 estimate, timing-dependent, so asserted by shape.)
+    assert invalid[0] == "running the unmutated (baseline) suite ..."
+    assert invalid[1].startswith("1 mutant;") and "estimated ≈" in invalid[1]
+    assert invalid[2:] == [f"[1/1] {path}:2:11  > -> ))  ... invalid"]
 
     # An erroring mutant DID run, so it gets the heartbeat then the error verdict.
     errored: list[str] = []
     run(str(tmp_path), path, src, RaiseAfterBaselineRunner(), timeout=10.0, progress=errored.append)
-    assert errored == [
-        "running the unmutated (baseline) suite ...",
+    assert errored[0] == "running the unmutated (baseline) suite ..."
+    assert errored[1].startswith("1 mutant;") and "estimated ≈" in errored[1]
+    assert errored[2:] == [
         f"[1/1] {path}:2:11  > -> >=  running (<=10s) ...",
         f"[1/1] {path}:2:11  > -> >=  ... error",
     ]
@@ -310,6 +316,31 @@ def test_progress_lines_render_a_deletion_as_deleted() -> None:
     line = _progress_line(1, 1, MutantOutcome(deletion, Verdict.SURVIVED))
     assert start == "[1/1] f.gd:2:8  not -> (deleted)  running (<=10s) ..."
     assert line == "[1/1] f.gd:2:8  not -> (deleted)  ... survived"
+
+
+def test_format_duration_scales_seconds_minutes_hours() -> None:
+    assert _format_duration(0) == "0s"
+    assert _format_duration(9) == "9s"
+    assert _format_duration(59.4) == "59s"  # rounds to whole seconds
+    assert _format_duration(60) == "1m 0s"
+    assert _format_duration(135) == "2m 15s"  # the issue's own example
+    assert _format_duration(3780) == "1h 3m"
+
+
+def test_progress_estimate_reports_count_and_eta_from_baseline() -> None:
+    # 15 runnable mutants at ~9s baseline each ≈ 2m 15s — the LOD-110 example.
+    line = _progress_estimate(runnable=15, total=15, baseline_secs=9.0)
+    assert line == "15 mutants; baseline ~9.0s each → estimated ≈ 2m 15s"
+
+
+def test_progress_estimate_excludes_ignored_from_time_but_notes_them() -> None:
+    # Ignored mutants never run, so they drop out of the ETA but are still counted and flagged.
+    line = _progress_estimate(runnable=2, total=5, baseline_secs=10.0)
+    assert line == "5 mutants (3 ignored, not run); baseline ~10.0s each → estimated ≈ 20s"
+
+
+def test_progress_estimate_singular_for_one_mutant() -> None:
+    assert _progress_estimate(runnable=1, total=1, baseline_secs=3.0).startswith("1 mutant;")
 
 
 def test_progress_defaults_to_silent(tmp_path: Path) -> None:

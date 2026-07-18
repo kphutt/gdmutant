@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -122,6 +123,21 @@ def _warn_unknown_ignore_operators(source: str) -> None:
         )
 
 
+def _report_path_problem(json_path: str | None) -> str | None:
+    """A human message if the ``--json`` report path can't be written, else None — checked *before*
+    the run so a long pass (minutes of booting Godot per mutant) never ends on an avoidable write
+    error (LOD-110). ``-`` (stdout) and ``None`` (no report) are always fine; only a real file path
+    is validated, and only its parent directory (the file itself needn't exist yet)."""
+    if json_path is None or json_path == "-":
+        return None
+    parent = Path(json_path).parent
+    if not parent.exists():
+        return f"--json directory does not exist: {parent}"
+    if not os.access(parent, os.W_OK):
+        return f"--json directory is not writable: {parent}"
+    return None
+
+
 def list_mutants(source_path: str) -> int:
     """Print every mutant gdmutant would generate for `source_path` **without running any tests** —
     a Godot-free way to see the tool work. Returns 0, or 2 if the source can't be read/parsed."""
@@ -167,6 +183,12 @@ def run_mutation(
     # gives a bad --project its own clear message.
     if not Path(project_dir).is_dir():
         print(f"error: project directory not found: {project_dir}", file=sys.stderr)
+        return 2
+    # Preflight the report path up front (LOD-110): a run boots Godot per mutant for minutes, so an
+    # unwritable --json target must fail now, not after the whole pass completes.
+    report_problem = _report_path_problem(json_path)
+    if report_problem is not None:
+        print(f"error: {report_problem}", file=sys.stderr)
         return 2
     # In-place-mutation safety (LOD-88): the run edits the source file per mutant. Warn (or, with
     # require_clean, refuse) on a dirty tree so a hard interrupt can't lose uncommitted work.
