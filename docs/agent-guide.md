@@ -72,8 +72,10 @@ stash first, or pass `--require-clean`.
 ```
 
 - `status` is one of `Killed`, `Survived`, `Timeout` (the mutation hung the suite — a detection, so
-  it **counts as killed**), `CompileError` (the mutant didn't parse — **never** counted as killed),
-  or `RuntimeError` (the runner failed to execute it, e.g. a Godot crash).
+  it **counts as killed**), `Ignored` (a `# gdmutant: ignore` annotation suppressed it — **excluded
+  from the score**; its reason, if any, is in `statusReason`), `CompileError` (the mutant didn't
+  parse — **never** counted as killed), or `RuntimeError` (the runner failed to execute it, e.g. a
+  Godot crash).
 - Locations are **1-based**; the `end` `column` is **exclusive**.
 - **Actionable survivors** are the mutants with `"status": "Survived"`. Those are the gaps a test
   should close.
@@ -88,9 +90,18 @@ stash first, or pass `--require-clean`.
    assertion pinned to the boundary or value the mutation moves.
 3. Re-run and confirm that mutant is now `"Killed"`.
 4. If a survivor is a genuine **equivalent mutant** — one that *cannot* change observable behavior
-   (e.g. a clamp whose boundary can't be reached) — mark its line with `# gdmutant: ignore` so it
-   stops being reported and your fixer loop terminates. See
-   [`docs/decisions/0004`](decisions/0004-equivalent-mutant-ignore-annotation.md).
+   (e.g. a clamp whose boundary can't be reached) — annotate its line so it becomes `Ignored`
+   (excluded from the score) and your fixer loop terminates:
+   - `# gdmutant: ignore` — suppress **every** mutant on the line.
+   - `# gdmutant: ignore[comparison]` — suppress only that operator's mutant(s) on the line, when a
+     killed or timeout mutant shares the line (use the `mutatorName` from the report). Comma-list
+     several: `ignore[comparison, numeric]`.
+   - Trailing text is the **reason** (surfaced as `statusReason`): `# gdmutant: ignore[comparison]
+     equivalent at the boundary`.
+
+   Only suppress *proven* equivalents (or benign, brittle-to-kill mutants — with a reason). See
+   [`docs/decisions/0004`](decisions/0004-equivalent-mutant-ignore-annotation.md) and
+   [`0006`](decisions/0006-operator-scoped-ignore-and-ignored-status.md).
 
 A well-behaved fixer loop terminates because every survivor is either killed (step 3) or suppressed
 as equivalent (step 4) — never retried forever.
