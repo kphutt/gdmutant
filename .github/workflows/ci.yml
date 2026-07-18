@@ -155,17 +155,39 @@ jobs:
         run: uv sync --frozen
 
       - name: Run mutmut (report mode)
-        run: uv run mutmut run || true
+        # Surviving mutants make `mutmut run` exit non-zero — expected here (documented equivalents),
+        # so that alone must not fail the step. But a *baseline* failure (the suite doesn't run
+        # cleanly unmutated) ALSO aborts mutmut, and a bare `|| true` would mask it as a green
+        # advisory run ([ticket]). Keep the run non-fatal, but re-raise the baseline signature.
+        run: |
+          uv run mutmut run > mutmut-run.log 2>&1 || true
+          cat mutmut-run.log
+          # mutmut 3 prints "failed to collect stats" (two variants) and exits 1 when the baseline
+          # can't be established — the exact signature the `|| true` above would otherwise swallow.
+          if grep -qiF "failed to collect stats" mutmut-run.log; then
+            echo "::error::mutmut baseline failed — could not collect stats (the suite does not run cleanly unmutated); any advisory score would be meaningless."
+            exit 1
+          fi
 
       - name: Summarize the mutation score
         if: always()
         run: |
           uv run mutmut export-cicd-stats || true
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json, pathlib
+          import json, pathlib, sys
           stats = pathlib.Path("mutants/mutmut-cicd-stats.json")
           d = json.loads(stats.read_text()) if stats.exists() else {}
           killed, survived = d.get("killed", 0), d.get("survived", 0)
+          evaluated = killed + survived + d.get("timeout", 0) + d.get("suspicious", 0)
+          # A baseline failure (or a missing/empty stats file) means mutmut evaluated ZERO mutants —
+          # indistinguishable from "all killed" unless we check. Fail loudly instead of masking it
+          # as a green advisory run ([ticket]); a real run always evaluates >0 mutants.
+          if evaluated == 0:
+              print("## Mutation testing (mutmut) — BASELINE FAILED ⚠️")
+              print()
+              print("mutmut evaluated **0 mutants** — the suite does not run cleanly unmutated, so "
+                    "no score exists. This advisory job is red on purpose ([ticket]).")
+              sys.exit(1)
           scored = killed + survived
           score = f"{100 * killed / scored:.1f}%" if scored else "n/a"
           print("## Mutation testing (mutmut) — advisory")
