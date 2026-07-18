@@ -252,3 +252,25 @@ def test_typed_lambda_return_deletion_is_guarded_and_emitted_deletions_compile(
             f"emitted deletion at line {m.span.line} does not compile in Godot:\n"
             f"{result.stderr[-600:]}"
         )
+
+
+def test_command_harness_fails_fast_on_an_uncompilable_target(tmp_path: Path) -> None:
+    """LOD-179: a mutant that makes the target uncompilable must make the CommandRunner harness exit
+    NON-ZERO promptly — not exit 0 (a false PASS that would let a broken mutant survive) and not
+    hang. The reference harness gates on ``GDScript.can_instantiate()`` before calling the target.
+    The ``timeout=`` here doubles as the hang guard: a hang raises TimeoutExpired and fails."""
+    project = _corpus_copy(tmp_path)
+    harness = ["--headless", "--path", str(project), "--script", "res://harness/run_tests.gd"]
+
+    healthy = subprocess.run([str(_GODOT), *harness], capture_output=True, text=True, timeout=60)
+    assert healthy.returncode == 0, f"the healthy harness should pass:\n{healthy.stderr[-600:]}"
+
+    # Overwrite the target with a Godot compile error (a parse gdtoolkit accepts but Godot won't).
+    (project / TARGET).write_text(
+        "class_name TurnOrder\nextends RefCounted\nfunc broken( ->:\n", encoding="utf-8"
+    )
+    broken = subprocess.run([str(_GODOT), *harness], capture_output=True, text=True, timeout=60)
+    assert broken.returncode != 0, (
+        "the harness exited 0 on an uncompilable target — a false PASS (LOD-179):\n"
+        f"{(broken.stdout + broken.stderr)[-600:]}"
+    )

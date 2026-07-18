@@ -46,3 +46,34 @@ The CLI selects it with `--runner command --command "<the test command>"` (defau
 - Projects wanting the finer killed/invalid/errored distinction keep using `GdUnit4Runner` (JUnit
   XML). A future runner could read a richer convention (TAP, a stdout count) without changing the
   engine — the `Runner` protocol is the seam.
+
+### Harness-authoring caveat: the load-failure exit-0 trap (LOD-179)
+
+The exit-code convention has one sharp edge for a **`godot --headless --script <harness>`** harness:
+Godot exits **0 when the entry script itself fails to load** (a parse/compile error), not just on a
+clean pass. So a harness that `preload`s the file-under-test will, when a mutant makes that file
+uncompilable, fail to compile *itself* → Godot exits 0 → the CommandRunner reads a **false PASS** and
+the broken mutant wrongly **survives**. Verified against Godot 4.7.
+
+This is largely theoretical for gdmutant because generation-time guards (NF-5 gdtoolkit re-parse +
+the return-path guard, `docs/decisions/0007`) block most uncompilable mutants before they run, and
+the external per-mutant timeout (LOD-153) catches hangs. But a harness author must not rely on that.
+Guidance for a hand-rolled harness, in order of reliability:
+
+1. **Don't couple to the target at compile time.** `load()` the file-under-test at runtime and
+   **gate on `GDScript.can_instantiate()`** before calling into it, quitting non-zero if it's false.
+   `load()` returns a *non-null broken* `GDScript` on a compile error (so `if T == null` never
+   fires), and *directly calling* such a script **hangs** the process — `can_instantiate()` is a
+   gate that never hangs. **Caveat:** it isn't a pure "did it compile" test — a *cleanly-compiled*
+   `@abstract` class (Godot 4.5+) also reports `can_instantiate() == false`. So the gate is exact
+   for a **concrete** target (as `corpus/harness/run_tests.gd`, the reference example, has); a
+   harness whose file-under-test is `@abstract` should instead load and gate on a **concrete
+   subclass** it can instantiate, or verify the load some other way that doesn't call into the
+   possibly-broken script.
+2. **Never trust the exit code alone.** Additionally print a success **sentinel** (e.g.
+   `HARNESS_PASSED`) as the harness's last line and treat "sentinel absent" as failure — it survives
+   even the exit-0 load-failure class. (gdmutant's `CommandRunner` is exit-code-only today; a
+   sentinel-aware runner is possible future work behind the same `Runner` seam.)
+3. **An in-process watchdog does NOT help.** A one-shot timer / `_process` deadline cannot interrupt
+   a *synchronous* mutant (a compiling `while true`), because it starves the single main thread. The
+   real hang defense is the **external** per-mutant subprocess timeout, which gdmutant already has.
