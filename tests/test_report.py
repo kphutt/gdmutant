@@ -2,7 +2,7 @@
 
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
 from gdmutant.engine.mutants import Mutant
-from gdmutant.engine.report import console_summary, stryker_report
+from gdmutant.engine.report import _kill_hint, console_summary, stryker_report
 from gdmutant.engine.spans import Span
 
 _SRC = "func f(a, b):\n\treturn a > b and a < b\n\treturn a + b\n"
@@ -136,7 +136,8 @@ def test_console_summary_exact_layout() -> None:
         "  error:    1\n"
         "\n"
         "Survivors (1):\n"
-        "  f.gd:2:15  boolean  and -> or"
+        "  f.gd:2:15  boolean  and -> or\n"
+        "      → kill it: test operands that disagree (one true, one false) so and vs or matters"
     )
 
 
@@ -153,6 +154,28 @@ def test_console_summary_renders_a_deletion_survivor_as_deleted() -> None:
     out = console_summary(run)
     assert "f.gd:2:8  logical-not  not -> (deleted)" in out
     assert "not -> \n" not in out and not out.endswith("not -> ")
+
+
+def test_console_summary_appends_a_kill_hint_per_survivor() -> None:
+    # Each survivor gets a "→ kill it:" hint line so the list reads as actionable, not homework
+    # ([ticket]). One survivor here (the boolean and -> or) → one hint.
+    out = console_summary(_run())
+    assert out.count("→ kill it:") == 1
+    assert _kill_hint("boolean") in out
+
+
+def test_kill_hint_is_operator_specific_with_a_generic_fallback() -> None:
+    assert "boundary" in _kill_hint("comparison")  # operator-specific
+    assert _kill_hint("some-custom-operator") == "write a test that fails under this exact change"
+
+
+def test_reading_your_first_report_doc_sample_matches_the_real_hint() -> None:
+    # The human doc shows a sample survivor line with its hint; keep that sample honest so it can't
+    # drift from _KILL_HINTS ([ticket] review). If you reword the comparison hint, update the doc.
+    from pathlib import Path
+
+    doc = Path(__file__).resolve().parent.parent / "docs" / "reading-your-first-report.md"
+    assert _kill_hint("comparison") in doc.read_text(encoding="utf-8")
 
 
 def test_console_summary_score_na_when_no_killable_mutants() -> None:
