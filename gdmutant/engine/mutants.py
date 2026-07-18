@@ -39,6 +39,11 @@ class Mutant:
     operator_id: str
     original: str
     replacement: str
+    #: When not ``None``, this mutant is **suppressed** (a user ``# gdmutant: ignore`` annotation):
+    #: it is generated but never run, and classified ``Ignored`` (excluded from the score). The
+    #: string is the optional human reason (may be ``""``); ``None`` means "not ignored".
+    #: The adapter (which owns the source-comment syntax) sets it — see adapters/gdscript.
+    ignore_reason: str | None = None
 
     def apply(self, source: str) -> str:
         """Return `source` with this mutation applied (one span edit).

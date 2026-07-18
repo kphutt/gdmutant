@@ -212,6 +212,23 @@ def test_explicit_timeout_overrides_derivation_for_each_mutant(tmp_path: Path) -
     assert runner.seen[1:] == [25.0, 25.0, 25.0]  # explicit value, not derived
 
 
+def test_ignored_mutant_is_tallied_ignored_not_run_and_excluded_from_score(tmp_path: Path) -> None:
+    # A `# gdmutant: ignore` annotation → the mutant is generated but NEVER run (no suite call),
+    # tallied IGNORED, and excluded from the score. The '>' on line 2 is suppressed; the '<' on line
+    # 3 still runs (and survives under the all-pass recording runner).
+    src = "func f(a, b):\n\treturn a > b  # gdmutant: ignore equivalent\n\treturn a < b\n"
+    path = _write(tmp_path, "f.gd", src)
+    runner = ProjectDirRecordingRunner()  # records one entry per actual run() call
+    result = run(str(tmp_path), path, src, runner)
+
+    by_line = {o.mutant.span.line: o.verdict for o in result.outcomes}
+    assert by_line == {2: Verdict.IGNORED, 3: Verdict.SURVIVED}
+    assert (result.ignored, result.survived, result.killed) == (1, 1, 0)
+    assert result.mutation_score == 0.0  # ignored excluded: 0 detected / (0 + 1 survived)
+    assert len(runner.seen) == 2  # baseline + the '<' mutant only — the ignored '>' never ran
+    assert Path(path).read_text(encoding="utf-8") == src
+
+
 def test_runner_error_on_a_later_mutant_preserves_earlier_verdicts(tmp_path: Path) -> None:
     src = "func f(a, b):\n\treturn a > b and a < b\n"  # 3 mutants: >, and, <
     path = _write(tmp_path, "f.gd", src)
