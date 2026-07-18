@@ -7,6 +7,8 @@ suite via a `Runner`, and classifies the outcome:
 * **survived** — the suite passed (no test caught it),
 * **timeout** — the suite exceeded its time budget: a mutation-induced hang (infinite loop) *is* a
   detection, so it counts as killed (Stryker's ``Timeout`` status),
+* **ignored** — a ``# gdmutant: ignore`` annotation suppresses it (an equivalent/unkillable mutant);
+  generated for the report but never run, and excluded from the score (Stryker's ``Ignored``),
 * **invalid** — the mutant didn't parse (NF-5); never counted as killed, never run,
 * **error** — the runner failed to execute the mutant (e.g. a Godot crash); tallied so one bad run
   doesn't discard the whole pass, and excluded from the score.
@@ -48,6 +50,7 @@ class Verdict(Enum):
     KILLED = "killed"
     SURVIVED = "survived"
     TIMEOUT = "timeout"
+    IGNORED = "ignored"
     INVALID = "invalid"
     ERROR = "error"
 
@@ -78,6 +81,10 @@ class MutationRun:
     @property
     def timeouts(self) -> int:
         return self._count(Verdict.TIMEOUT)
+
+    @property
+    def ignored(self) -> int:
+        return self._count(Verdict.IGNORED)
 
     @property
     def invalid(self) -> int:
@@ -172,13 +179,18 @@ def run(
     mutants = generate_mutants(path, source, catalog)
     total = len(mutants)
     for index, mutant in enumerate(mutants, start=1):
-        mutated, valid = apply_mutant(mutant, source)
-        if valid:
-            if progress is not None:
-                progress(_progress_start(index, total, mutant, per_mutant_timeout))
-            verdict = _run_one(project_dir, path, source, mutated, runner, per_mutant_timeout)
+        if mutant.ignore_reason is not None:
+            # A `# gdmutant: ignore` annotation suppresses this mutant — generated for the report
+            # but never run (no validity check, no suite run): tallied IGNORED, excluded from score.
+            verdict = Verdict.IGNORED
         else:
-            verdict = Verdict.INVALID
+            mutated, valid = apply_mutant(mutant, source)
+            if valid:
+                if progress is not None:
+                    progress(_progress_start(index, total, mutant, per_mutant_timeout))
+                verdict = _run_one(project_dir, path, source, mutated, runner, per_mutant_timeout)
+            else:
+                verdict = Verdict.INVALID
         outcome = MutantOutcome(mutant, verdict)
         outcomes.append(outcome)
         if progress is not None:

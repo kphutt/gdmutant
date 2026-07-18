@@ -66,6 +66,33 @@ def test_timeout_maps_to_stryker_timeout_and_counts_as_detected() -> None:
     assert "timeout:  1  (counted as killed)" in console_summary(run)
 
 
+def test_ignored_maps_to_stryker_ignored_with_reason_and_excluded_from_score() -> None:
+    # An ignored mutant renders as Stryker "Ignored" and carries its reason as statusReason (omitted
+    # when the reason is empty); it's excluded from the score like invalid/error.
+    run = MutationRun(
+        (
+            MutantOutcome(
+                Mutant(
+                    "f.gd", Span(2, 9, 2, 10), "comparison", ">", ">=", ignore_reason="equivalent"
+                ),
+                Verdict.IGNORED,
+            ),
+            MutantOutcome(
+                Mutant("f.gd", Span(2, 13, 2, 14), "numeric", "0", "1", ignore_reason=""),
+                Verdict.IGNORED,
+            ),
+            MutantOutcome(
+                Mutant("f.gd", Span(2, 21, 2, 22), "boolean", "and", "or"), Verdict.SURVIVED
+            ),
+        )
+    )
+    mutants = stryker_report(run, "f.gd", _SRC, "gdscript")["files"]["f.gd"]["mutants"]
+    assert mutants[0]["status"] == "Ignored" and mutants[0]["statusReason"] == "equivalent"
+    assert mutants[1]["status"] == "Ignored" and "statusReason" not in mutants[1]  # empty → no key
+    assert run.mutation_score == 0.0  # 0 detected / (0 + 1 survived); the 2 ignored are excluded
+    assert "ignored:  2  (suppressed, excluded from score)" in console_summary(run)
+
+
 def test_stryker_report_mutant_fields_and_location() -> None:
     first = stryker_report(_run(), "f.gd", _SRC, "gdscript")["files"]["f.gd"]["mutants"][0]
     assert first["id"] == "0"
@@ -104,6 +131,7 @@ def test_console_summary_exact_layout() -> None:
         "  killed:   1\n"
         "  timeout:  0  (counted as killed)\n"
         "  survived: 1\n"
+        "  ignored:  0  (suppressed, excluded from score)\n"
         "  invalid:  1\n"
         "  error:    1\n"
         "\n"
