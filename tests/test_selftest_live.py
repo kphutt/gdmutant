@@ -193,3 +193,62 @@ def test_statement_deletion_mutants_all_compile_in_godot(tmp_path: Path) -> None
             f"statement-deletion at line {m.span.line} does not compile in Godot — the return-path "
             f"guard is unsound (ADR-0007):\n{result.stderr[-600:]}"
         )
+
+
+# An adversarial source the *corpus* doesn't contain: a typed lambda (whose sole return, if deleted,
+# is a Godot "not all code paths return a value" error), plus the cases the guard must still allow.
+# The corpus has no typed lambda, so without this the live oracle would never exercise that path.
+_TYPED_LAMBDA_SOURCE = """extends Node
+
+
+func with_typed_lambda() -> void:
+	var typed := func() -> int:
+		return 9
+	var untyped := func():
+		return 7
+	print(typed.call() + untyped.call())
+
+
+func typed_with_backstop(a: int) -> int:
+	if a < 0:
+		return 0
+	return a
+"""
+
+
+def test_typed_lambda_return_deletion_is_guarded_and_emitted_deletions_compile(
+    tmp_path: Path,
+) -> None:
+    """Closes the LOD-74 typed-lambda gap: a `lambda_header` carries the same `-> TYPE_HINT` as a
+    function, so a typed lambda's return is a return-value requirement Godot enforces. Assert the
+    guard never emits that sole return, and that every deletion it *does* emit for this adversarial
+    source loads clean in real Godot (the untyped lambda's return and the backstopped early one)."""
+    from gdmutant.adapters.gdscript import generate_mutants
+
+    script_path = tmp_path / "typed_lambda.gd"
+    deletions = [
+        m
+        for m in generate_mutants(str(script_path), _TYPED_LAMBDA_SOURCE)
+        if m.operator_id == "statement-deletion"
+    ]
+    # The typed lambda's sole `return 9` must never be a deletion target.
+    assert not any(m.original == "return 9" for m in deletions), (
+        "the typed lambda's sole return was emitted — the guard is unsound"
+    )
+    # The untyped lambda's return and the typed function's backstopped early return are allowed.
+    emitted = {m.original for m in deletions}
+    assert "return 7" in emitted and "return 0" in emitted
+    # Every emitted deletion must actually load in Godot.
+    for m in deletions:
+        script = tmp_path / f"typed_lambda_del_{m.span.line}.gd"
+        script.write_text(m.apply(_TYPED_LAMBDA_SOURCE), encoding="utf-8")
+        result = subprocess.run(
+            [str(_GODOT), "--headless", "--check-only", "--script", str(script)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert "Parse Error" not in result.stderr and "SCRIPT ERROR" not in result.stderr, (
+            f"emitted deletion at line {m.span.line} does not compile in Godot:\n"
+            f"{result.stderr[-600:]}"
+        )

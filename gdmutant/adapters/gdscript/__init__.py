@@ -174,13 +174,16 @@ _STATEMENT_REPLACEMENT = "pass"
 
 
 def _scope_requires_a_return_value(scope: Tree[Token]) -> bool:
-    """True if `scope` is a ``func_def`` with a **non-void** return type — so Godot requires every
-    path to return a value, and deleting a ``return`` may make it not compile. Lambdas carry no
-    return-type annotation, so they never require one."""
-    if scope.data != "func_def":
-        return False
+    """True if `scope` (a ``func_def`` or ``lambda``) declares a **non-void** return type — so Godot
+    requires every path to return a value, and deleting a ``return`` may make it not compile.
+
+    A ``lambda_header`` carries the same optional ``TYPE_HINT`` token as a ``func_header``, so a
+    *typed lambda* (``func() -> int: return 9``) is guarded exactly like a typed function: deleting
+    its return is the same "not all code paths return a value" Godot error (verified via
+    ``--check-only``). An untyped lambda or ``-> void`` scope has no such requirement.
+    """
     header = next(
-        (c for c in scope.children if isinstance(c, Tree) and c.data == "func_header"), None
+        (c for c in scope.children if isinstance(c, Tree) and c.data in _SCOPE_HEADER_NODES), None
     )
     return header is not None and any(
         isinstance(c, Token) and c.type == "TYPE_HINT" and c.value != "void"

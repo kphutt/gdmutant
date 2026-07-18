@@ -37,8 +37,11 @@ compilation:
 
 Otherwise (a typed function's sole/final return, or one whose last top-level statement isn't a
 return) the deletion is **skipped** — conservative, sound by construction. Function scopes are
-analysed independently, so a `return` inside a lambda is judged by the lambda's rules, not the
-enclosing function's. Declarations (`func_var_stmt`) are deferred (deleting one breaks a later
+analysed independently, so a `return` inside a lambda is judged by the lambda's own rules, not the
+enclosing function's — and because a `lambda_header` carries the same optional `-> TYPE_HINT` as a
+`func_header`, a **typed lambda** (`func() -> int: return 9`) is guarded exactly like a typed
+function (deleting its return is the same Godot "not all code paths return a value" error, verified
+via `--check-only`). Declarations (`func_var_stmt`) are deferred (deleting one breaks a later
 reference or is an equivalent — both noise). Multi-line statements are skipped (`spans.py` edits a
 single line). This mirrors the adapter's existing `_string_format_percents` precedent: tree-aware
 suppression of a known-broken mutant class, in the conservative direction.
@@ -48,9 +51,11 @@ suppression of a known-broken mutant class, in the conservative direction.
   the self-test invariants hold, extended with a `--check-only` oracle that boots every emitted
   deletion through Godot as a standing soundness check (the falsifiable guard for this rule).
 - The guard embeds a *partial* model of Godot's flow analysis. The failure mode to watch is
-  **unsoundness** — an emitted deletion Godot still rejects (candidates: typed lambdas, `match`
-  exhaustiveness, a future Godot tightening). The `--check-only` oracle in the self-test is exactly
-  the check that would catch it; if it ever fails, tighten the rule or narrow to expression-only.
+  **unsoundness** — an emitted deletion Godot still rejects. Typed lambdas are now covered (a
+  dedicated adversarial `--check-only` self-test exercises the path the corpus lacks); the remaining
+  candidates are `match` exhaustiveness and a future Godot tightening. The `--check-only` oracle in
+  the self-test is exactly the check that would catch it; if it ever fails, tighten the rule or
+  narrow to expression-only.
 - In fully-typed code, a function with a sole `return` gets no deletion mutant. Accepted for v0.1;
   richer flow analysis (or an opt-in "aggressive" mode) is future work.
 

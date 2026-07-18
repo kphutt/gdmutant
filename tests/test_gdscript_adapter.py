@@ -169,6 +169,31 @@ def test_statement_deletion_treats_a_lambda_as_its_own_scope() -> None:
     assert (3, "return g.call()") not in d  # the typed function's final return -> skipped
 
 
+def test_statement_deletion_skips_a_typed_lambdas_sole_return() -> None:
+    # A lambda_header carries the same `-> TYPE_HINT` as a function, so a TYPED lambda's return is
+    # a return-value requirement too: deleting `func() -> int: return 9` -> `pass` is the same Godot
+    # "not all code paths return a value" error (verified live via --check-only). The guard must
+    # treat the typed lambda exactly like a typed function and never emit its sole return.
+    d = _stmt_deletions("func outer() -> void:\n\tvar g := func() -> int:\n\t\treturn 9\n")
+    assert (3, "return 9") not in d  # typed lambda's sole return -> skipped
+    # The enclosing `-> void` function requires no return value, so its own body is unaffected here.
+
+
+def test_statement_deletion_skips_a_typed_lambda_return_with_no_backstop() -> None:
+    # A typed lambda whose body ends in an if/else (no guaranteed fall-through return) must skip
+    # both branch returns, mirroring the typed-function no-backstop case.
+    src = (
+        "func outer() -> void:\n"
+        "\tvar g := func(a) -> int:\n"
+        "\t\tif a > 0:\n"
+        "\t\t\treturn 1\n"
+        "\t\telse:\n"
+        "\t\t\treturn 2\n"
+    )
+    d = _stmt_deletions(src)
+    assert (4, "return 1") not in d and (6, "return 2") not in d
+
+
 def test_find_sites_and_generate_thread_a_custom_catalog_through() -> None:
     # A custom operator that mutates a token the DEFAULT catalog ignores (the identifier `b`).
     # Both find_sites and generate_mutants must use THIS catalog — a mutant that falls back to the
