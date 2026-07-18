@@ -163,6 +163,22 @@ default `reports/report_1/results.xml`, and `--timeout` (seconds, per mutant —
 from the baseline run*: 10× its wall-clock, floored at 10s and capped at 600s, so a hanging mutant is
 caught in seconds; pass an explicit value to override). `gdmutant run --help` lists them all.
 
+**Stop retyping flags — `.gdmutant.toml`.** Drop a `.gdmutant.toml` in the directory you run gdmutant
+from to persist the per-project defaults; an explicit CLI flag always overrides the file. Keys mirror
+the flag names:
+```toml
+project = "."
+runner = "command"
+command = "godot --headless --script res://tests/run_tests.gd"
+# godot = "/Applications/Godot.app/Contents/MacOS/Godot"   # (GdUnit4 runner)
+# tests = "res://test"
+# report-path = "reports/report_1/results.xml"
+# timeout = 60
+# require-clean = true
+```
+Then `gdmutant run path/to/module.gd` picks them up. (`source`, `--json`, and `--dry-run` stay on the
+command line — they're per-invocation, not project settings.)
+
 > **Your code is safe, but commit first.** gdmutant mutates the source file **in place**, restoring
 > it after each mutant and on a normal exit or Ctrl-C — but a hard kill (SIGKILL / power loss) could
 > leave one swap on disk, and an open Godot editor may hot-reload mid-run. So commit or stash before
