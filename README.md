@@ -104,12 +104,13 @@ uv sync --frozen   # installs the exact locked dependencies
 uv run gdmutant run corpus/turn_order.gd --dry-run
 ```
 ```
-16 mutants for corpus/turn_order.gd:
+18 mutants for corpus/turn_order.gd:
   corpus/turn_order.gd:8:17  comparison  > -> >=
   corpus/turn_order.gd:13:11  comparison  < -> <=
   corpus/turn_order.gd:13:13  numeric  0 -> 1
   ...
   corpus/turn_order.gd:27:15  boolean  and -> or
+  corpus/turn_order.gd:27:19  logical-not  not -> (deleted)
   corpus/turn_order.gd:32:9  constant  true -> false
 ```
 
@@ -124,9 +125,11 @@ JSON report (`--json report.json`, or `--json -` to stream it to stdout). (Once 
 gdmutant`.) New to the output? [`docs/reading-your-first-report.md`](docs/reading-your-first-report.md)
 walks through survivors, the kill hints, and equivalent mutants.
 
-> **macOS:** Godot ships as an app bundle and is never on your PATH, so point `--godot` at the binary
-> inside it: `--godot /Applications/Godot.app/Contents/MacOS/Godot`. (gdmutant tells you this if it
-> can't find Godot.)
+> **macOS:** the `--godot` flag applies to the **GdUnit4 runner**, which launches Godot itself. Godot
+> ships as an app bundle and is never on your PATH, so point `--godot` at the binary inside it:
+> `--godot /Applications/Godot.app/Contents/MacOS/Godot` (gdmutant tells you this if it can't find
+> Godot). With `--runner command` gdmutant does **not** launch Godot — your `--command` does — so you
+> only need `godot` to resolve inside that command (on PATH, or an absolute path in the command).
 
 **No GdUnit4?** For a project with a hand-rolled headless test harness (like `project-rampart`'s),
 use the exit-code runner instead — any command that exits non-zero on failure works, no JUnit XML
@@ -176,6 +179,36 @@ mutation-score **badge** — all from the JSON gdmutant already emits.
 invocation, the JSON schema, the `0`/`1`/`2` exit-code contract, the "never leaves your tree mutated"
 guarantee, and the survivor→killing-test loop, in one read.
 
+## Install into your project (local, no clone)
+The Quickstart above is for hacking on gdmutant itself. To run it against **your own** Godot project,
+install it as a dev-tool dependency — no clone needed. It's not on PyPI yet, so install from git at a
+**pinned commit** (not a moving branch):
+```sh
+uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
+uv run gdmutant run path/to/module.gd --project . \
+  --runner command --command "godot --headless --script res://tests/run_tests.gd"
+```
+
+**A Godot project with no Python?** gdmutant is a dev tool, not a runtime dependency — keep it in a
+tiny **non-package** uv project beside your game so it never touches your shipped code. Add a
+`pyproject.toml` (e.g. under a `devtools/` dir):
+```toml
+[project]
+name = "yourgame-devtools"
+version = "0"
+requires-python = ">=3.12"   # gdmutant's floor — see below
+dependencies = []
+
+[tool.uv]
+package = false              # a workspace of tools, not an installable package
+```
+then `uv add "git+https://github.com/kphutt/gdmutant@<sha>"` there.
+
+**Pin your Python.** gdmutant supports **Python 3.12+**. uv resolves to whatever interpreter it finds
+otherwise — e.g. a system CPython 3.14 rather than your project's pinned 3.12 — so set a
+`.python-version` (or an equivalent `mise`/`asdf` pin) next to that `pyproject.toml` to choose it
+deliberately, and keep `requires-python` in sync.
+
 ## Next steps
 1. ✅ **Repo hardened + stack chosen.** Security baseline + Python CI (ruff / mypy / pytest+coverage /
    pip-audit, plus a gitleaks secret-scan). The engine is **Python + uv + gdtoolkit** (see
@@ -187,7 +220,7 @@ guarantee, and the survivor→killing-test loop, in one read.
    Jury" architecture, and the build plan (`docs/design/DESIGN.md`).
 4. ✅ **v0.1 built against the bundled `corpus/` fixture** — engine loop, operator catalog, GDScript
    adapter (NF-5 guard), GdUnit4 runner, Stryker reporter, and the `gdmutant run` CLI. Mutates
-   `corpus/turn_order.gd` (16 mutants) and prints survivors end-to-end.
+   `corpus/turn_order.gd` (18 mutants) and prints survivors end-to-end.
 5. ✅ **Live CI Godot validation** — both runner paths run against **real Godot** in CI, pinned to
    exact per-mutant outcomes (`tests/test_selftest_live.py`, `scripts/install-gdunit4.sh`). This
    caught two real runner bugs (headless-mode flag, relative project path).
