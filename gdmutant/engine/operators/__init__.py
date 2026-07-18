@@ -16,8 +16,9 @@ Two shapes implement the `Operator` protocol:
   a single table type (Slice 3's adapter binds against this shape).
 
 Structural statement-deletion (also FG-2.1) removes an AST statement, not a token — it needs
-statement-node handling rather than a token swap, so it lands in its own later slice (tracked
-separately), not this token catalog. See docs/decisions/0002.
+statement-node handling rather than a token swap, so it lives in the GDScript adapter
+(`_statement_deletions`), not this token catalog, with a generation-time guard against
+Godot-uncompilable deletions. See docs/decisions/0002 and 0007.
 """
 
 from __future__ import annotations
