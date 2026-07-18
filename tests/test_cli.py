@@ -324,6 +324,42 @@ def test_run_mutation_preflights_a_bad_report_dir_before_running(
     assert "does not exist" in capsys.readouterr().err
 
 
+class NoReportRunner:
+    """Raises GdUnit4Runner's exact 'wrote no report' RuntimeError on the baseline — what an
+    uninstalled/broken GdUnit4 addon produces (as opposed to a missing godot binary)."""
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        raise RuntimeError(
+            "GdUnit4 wrote no report at res://reports — Godot may have failed to run"
+        )
+
+
+def test_run_mutation_missing_addon_returns_two_with_actionable_hint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A GdUnit4 baseline that wrote no report AND no addon installed is an addon-absent *setup*
+    # error (exit 2) — surface an actionable hint, not a raw stderr dump (LOD-110). No addon here.
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), NoReportRunner())
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "GdUnit4 addon was not found" in err and "--runner command" in err
+
+
+def test_run_mutation_no_report_with_addon_present_is_generic_baseline_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Same 'wrote no report' error, but the addon IS installed -> not a setup problem: fall through
+    # to the generic exit 1 with the raw error, never the misleading addon hint.
+    path = _gd(tmp_path)
+    (tmp_path / "addons" / "gdUnit4").mkdir(parents=True)
+    rc = run_mutation(str(path), str(tmp_path), NoReportRunner())
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "GdUnit4 addon was not found" not in err
+    assert "wrote no report" in err  # the raw runner error is still surfaced
+
+
 def test_list_mutants_prints_every_mutant_and_returns_zero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -108,6 +108,30 @@ def _missing_executable_hint(filename: str) -> str:
     return "\n".join(lines)
 
 
+#: The GdUnit4 addon's location inside a Godot project (relative to the project dir).
+_GDUNIT_ADDON_REL = Path("addons") / "gdUnit4"
+
+
+def _gdunit4_addon_hint(error: BaselineFailed, project_dir: str) -> str | None:
+    """An actionable message when the gdunit4 baseline failed *because the addon isn't installed*,
+    else None. This is the second most common first-run failure after a missing godot binary — but
+    unlike a missing binary it surfaces as an opaque ``RuntimeError`` ("GdUnit4 wrote no report"),
+    not ``FileNotFoundError``, so without this it fell through to a raw stderr dump with no next
+    step (LOD-110). Gated on both the GdUnit4-specific error signature *and* the addon being absent,
+    so it never fires for the `command` runner (whose projects have no addon by design)."""
+    cause = error.__cause__
+    if not (isinstance(cause, RuntimeError) and "wrote no report" in str(cause)):
+        return None
+    if (Path(project_dir) / _GDUNIT_ADDON_REL).is_dir():
+        return None  # addon is present — some other GdUnit4/Godot failure, not a setup problem
+    return (
+        f"error: the GdUnit4 addon was not found in the project — {_GDUNIT_ADDON_REL}/ is missing "
+        f"under {project_dir}.\n"
+        "  Install GdUnit4 (Godot Asset Library), or run without the addon via "
+        '--runner command --command "<your headless test command>".'
+    )
+
+
 def _warn_unknown_ignore_operators(source: str) -> None:
     """Warn (stderr) for each malformed ``# gdmutant: ignore[...]`` scope — an unknown operator name
     (a likely typo) or empty brackets — that silently suppresses nothing. Never fails the run."""
@@ -224,6 +248,10 @@ def run_mutation(
         missing = _missing_executable(error)
         if missing is not None:
             print(_missing_executable_hint(missing), file=sys.stderr)
+            return 2
+        addon_hint = _gdunit4_addon_hint(error, project_dir)
+        if addon_hint is not None:
+            print(addon_hint, file=sys.stderr)
             return 2
         print(f"error: {error}", file=sys.stderr)
         return 1
