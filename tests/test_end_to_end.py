@@ -19,11 +19,11 @@ CORPUS = Path(__file__).resolve().parent.parent / "corpus" / "turn_order.gd"
 def test_corpus_generates_the_exact_deterministic_mutant_set() -> None:
     # The corpus is fixed, so its mutant set is fully deterministic — pin it exactly. A loose `>=`
     # would hide an under-generating adapter (e.g. one that dropped duplicate `>`/`0`/`-` tokens).
-    # Six operators are exercised through the real parser here (the corpus has no `%` or compound
+    # Seven operators are exercised through the real parser here (the corpus has no `%` or compound
     # assignment, so `modulo`/`compound-assign` aren't represented — that's expected).
     source = CORPUS.read_text(encoding="utf-8")
     mutants = generate_mutants(str(CORPUS), source)
-    assert len(mutants) == 16
+    assert len(mutants) == 18
     assert Counter(m.operator_id for m in mutants) == {
         "comparison": 4,
         "numeric": 6,
@@ -31,6 +31,9 @@ def test_corpus_generates_the_exact_deterministic_mutant_set() -> None:
         "boolean": 1,
         "constant": 1,
         "logical-not": 1,  # `alive and not stunned` in can_act
+        # only clamp_initiative's two early returns (14, 16) survive the return-guard; the 5 typed
+        # sole-returns are skipped so no compile-broken mutant is generated (docs/decisions/0007)
+        "statement-deletion": 2,
     }
 
 

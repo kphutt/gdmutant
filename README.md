@@ -84,7 +84,7 @@ error) for *hardening*, kept out of the gate because it's nondeterministic.
 ## Status
 **v0.1 works — gdmutant mutates real GDScript and reports survivors end-to-end.** From a `.gd` file it
 generates AST-based mutants (comparison / boolean / arithmetic / constant / numeric-literal, plus
-compound-assignment / modulo / unary-not), runs the
+compound-assignment / modulo / unary-not / statement-deletion), runs the
 project's GdUnit4 suite per mutant, classifies killed / survived / timeout / invalid / error, computes a
 mutation score, and emits a console summary + a Stryker `mutation-testing-elements` JSON report — via the
 standalone `gdmutant run` CLI (no AI required). Proven end-to-end on the bundled `corpus/` module; the

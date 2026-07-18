@@ -78,7 +78,7 @@ def _write(tmp_path: Path, name: str, text: str) -> str:
 
 
 def test_killed_survived_and_score(tmp_path: Path) -> None:
-    src = "func f(a, b):\n\treturn a > b and a < b\n"
+    src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"
     path = _write(tmp_path, "f.gd", src)
     # The "test" only catches the mutation that yields ">=", i.e. the '>' -> '>=' comparison mutant.
     result = run(str(tmp_path), path, src, MarkerRunner(target=path, kill_marker=">="))
@@ -95,7 +95,7 @@ def test_killed_survived_and_score(tmp_path: Path) -> None:
 
 
 def test_invalid_mutant_is_nf5_classified(tmp_path: Path) -> None:
-    src = "func f(a, b):\n\treturn a > b\n"
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
     bad = TableOperator("bad", {">": ("))",)})  # produces unparseable GDScript
     result = run(str(tmp_path), path, src, MarkerRunner(path, "ZZZ"), catalog=(bad,))
@@ -111,7 +111,7 @@ def test_invalid_mutant_is_nf5_classified(tmp_path: Path) -> None:
 def test_invalid_mutant_does_not_stop_later_mutants(tmp_path: Path) -> None:
     # An invalid mutant must `continue` to the next mutant, not `break` the whole pass: the '>'
     # mutates to unparseable "))" (invalid), but the later '5' -> '6' mutant must still be run.
-    src = "func f(a):\n\treturn a > 5\n"
+    src = "func f(a) -> bool:\n\treturn a > 5\n"
     path = _write(tmp_path, "f.gd", src)
     catalog = (TableOperator("x", {">": ("))",), "5": ("6",)}),)
     result = run(str(tmp_path), path, src, MarkerRunner(path, "ZZZ"), catalog=catalog)
@@ -125,7 +125,7 @@ def test_invalid_mutant_does_not_stop_later_mutants(tmp_path: Path) -> None:
 def test_runner_receives_the_real_project_dir_for_every_call(tmp_path: Path) -> None:
     # Both the baseline and each mutant run must be handed the real project_dir — never a
     # placeholder — so a mutant that passes None through is caught.
-    src = "func f(a, b):\n\treturn a > b\n"
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
     runner = ProjectDirRecordingRunner()
     run(str(tmp_path), path, src, runner)
@@ -134,7 +134,7 @@ def test_runner_receives_the_real_project_dir_for_every_call(tmp_path: Path) -> 
 
 
 def test_baseline_failure_raises(tmp_path: Path) -> None:
-    src = "func f(a, b):\n\treturn a > b\n"
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
     # The marker is present in the ORIGINAL source, so the unmutated baseline "fails". `$`-anchored
     # on the project-dir repr: with no runner detail the message ends cleanly at the quote (catches
@@ -147,7 +147,7 @@ def test_baseline_failure_raises(tmp_path: Path) -> None:
 def test_baseline_failure_message_includes_suite_detail(tmp_path: Path) -> None:
     # When the baseline fails, any runner-supplied `detail` (e.g. a failing command's output) is
     # surfaced in the BaselineFailed message so a first run that can't go green is debuggable.
-    src = "func f(a, b):\n\treturn a > b\n"
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
 
     @dataclass
@@ -162,14 +162,14 @@ def test_baseline_failure_message_includes_suite_detail(tmp_path: Path) -> None:
 def test_baseline_runner_exception_becomes_baseline_failed(tmp_path: Path) -> None:
     # A runner that can't even run the unmutated suite (e.g. a missing godot binary) surfaces as
     # BaselineFailed, not a raw traceback.
-    src = "func f(a, b):\n\treturn a > b\n"
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
     with pytest.raises(BaselineFailed, match=r"could not run the unmutated suite"):
         run(str(tmp_path), path, src, ScriptedRunner([RuntimeError("godot missing")]))
 
 
 def test_runner_exception_is_tallied_as_error_and_file_restored(tmp_path: Path) -> None:
-    src = "func f(a, b):\n\treturn a > b\n"  # one mutant: '>'
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"  # one mutant: '>'
     path = _write(tmp_path, "f.gd", src)
     result = run(str(tmp_path), path, src, RaiseAfterBaselineRunner())
     assert [o.verdict for o in result.outcomes] == [Verdict.ERROR]
@@ -180,7 +180,7 @@ def test_runner_exception_is_tallied_as_error_and_file_restored(tmp_path: Path) 
 def test_suite_timeout_is_tallied_as_timeout_and_counts_as_detected(tmp_path: Path) -> None:
     # A mutation that hangs the suite (runner raises SuiteTimeout) is a DETECTION, not an error:
     # tallied TIMEOUT, distinct from ERROR, and counted toward the score like a kill.
-    src = "func f(a, b):\n\treturn a > b\n"  # one mutant: '>'
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"  # one mutant: '>'
     path = _write(tmp_path, "f.gd", src)
     ok = SuiteResult(tests=1, failures=0, errors=0)
     runner = ScriptedRunner([ok, SuiteTimeout("hung")])  # baseline ok; mutant hangs
@@ -205,7 +205,7 @@ def test_derive_timeout_formula() -> None:
 def test_derived_timeout_is_handed_to_each_mutant_when_unset(tmp_path: Path) -> None:
     # No explicit timeout -> the loop derives one from the (instant) baseline and passes it to each
     # mutant run; the baseline itself is called with the runner's own budget (timeout=None).
-    src = "func f(a, b):\n\treturn a > b and a < b\n"  # 3 mutants
+    src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"  # 3 mutants
     path = _write(tmp_path, "f.gd", src)
     runner = TimeoutRecordingRunner()
     run(str(tmp_path), path, src, runner)
@@ -214,7 +214,7 @@ def test_derived_timeout_is_handed_to_each_mutant_when_unset(tmp_path: Path) -> 
 
 
 def test_explicit_timeout_overrides_derivation_for_each_mutant(tmp_path: Path) -> None:
-    src = "func f(a, b):\n\treturn a > b and a < b\n"  # 3 mutants
+    src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"  # 3 mutants
     path = _write(tmp_path, "f.gd", src)
     runner = TimeoutRecordingRunner()
     run(str(tmp_path), path, src, runner, timeout=25.0)
@@ -223,24 +223,27 @@ def test_explicit_timeout_overrides_derivation_for_each_mutant(tmp_path: Path) -
 
 
 def test_ignored_mutant_is_tallied_ignored_not_run_and_excluded_from_score(tmp_path: Path) -> None:
-    # A `# gdmutant: ignore` annotation → the mutant is generated but NEVER run (no suite call),
-    # tallied IGNORED, and excluded from the score. The '>' on line 2 is suppressed; the '<' on line
-    # 3 still runs (and survives under the all-pass recording runner).
-    src = "func f(a, b):\n\treturn a > b  # gdmutant: ignore equivalent\n\treturn a < b\n"
+    # `ignore[comparison]` suppresses the two comparison mutants (`>`, `<`) — generated, NEVER run
+    # (no suite call), tallied IGNORED, excluded from the score. The `and` mutant still runs and
+    # survives (all-pass runner). Typed sole return, so no statement-deletion mutant is generated.
+    src = "func f(a, b) -> bool:\n\treturn a > b and a < b  # gdmutant: ignore[comparison]\n"
     path = _write(tmp_path, "f.gd", src)
     runner = ProjectDirRecordingRunner()  # records one entry per actual run() call
     result = run(str(tmp_path), path, src, runner)
 
-    by_line = {o.mutant.span.line: o.verdict for o in result.outcomes}
-    assert by_line == {2: Verdict.IGNORED, 3: Verdict.SURVIVED}
-    assert (result.ignored, result.survived, result.killed) == (1, 1, 0)
+    assert {o.mutant.original: o.verdict for o in result.outcomes} == {
+        ">": Verdict.IGNORED,
+        "and": Verdict.SURVIVED,
+        "<": Verdict.IGNORED,
+    }
+    assert (result.ignored, result.survived, result.killed) == (2, 1, 0)
     assert result.mutation_score == 0.0  # ignored excluded: 0 detected / (0 + 1 survived)
-    assert len(runner.seen) == 2  # baseline + the '<' mutant only — the ignored '>' never ran
+    assert len(runner.seen) == 2  # baseline + the `and` mutant only — the 2 ignored never ran
     assert Path(path).read_text(encoding="utf-8") == src
 
 
 def test_runner_error_on_a_later_mutant_preserves_earlier_verdicts(tmp_path: Path) -> None:
-    src = "func f(a, b):\n\treturn a > b and a < b\n"  # 3 mutants: >, and, <
+    src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"  # 3 mutants: >, and, <
     path = _write(tmp_path, "f.gd", src)
     ok = SuiteResult(tests=1, failures=0, errors=0)
     kill = SuiteResult(tests=1, failures=1, errors=0)
@@ -257,7 +260,7 @@ def test_progress_fires_a_heartbeat_then_a_verdict_per_mutant_in_order(tmp_path:
     # heartbeat BEFORE (so a hang shows on a specific mutant, not a frozen terminal) and a verdict
     # line AFTER — pinned exactly so a mutated separator, index base, budget, or verdict label is
     # caught. Source has 3 mutants: >, and, <. Explicit timeout keeps the budget deterministic.
-    src = "func f(a, b):\n\treturn a > b and a < b\n"
+    src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"
     path = _write(tmp_path, "f.gd", src)
     lines: list[str] = []
     runner = MarkerRunner(target=path, kill_marker=">=")
@@ -276,7 +279,7 @@ def test_progress_fires_a_heartbeat_then_a_verdict_per_mutant_in_order(tmp_path:
 def test_progress_reports_invalid_and_error_verdicts(tmp_path: Path) -> None:
     # Every mutant is reported regardless of verdict — an invalid (unparseable) mutant labelled
     # "invalid", and a mutant whose runner raises labelled "error" (not only the ones that pass).
-    src = "func f(a, b):\n\treturn a > b\n"
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
     invalid: list[str] = []
     bad = TableOperator("bad", {">": ("))",)})
@@ -311,14 +314,14 @@ def test_progress_lines_render_a_deletion_as_deleted() -> None:
 
 def test_progress_defaults_to_silent(tmp_path: Path) -> None:
     # Omitting progress must run without error and produce the same outcomes — it is opt-in.
-    src = "func f(a, b):\n\treturn a > b\n"
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
     result = run(str(tmp_path), path, src, MarkerRunner(path, ">="))
     assert [o.verdict for o in result.outcomes] == [Verdict.KILLED]
 
 
 def test_run_is_deterministic(tmp_path: Path) -> None:
-    src = "func f(a, b):\n\treturn a > b and a < b\n"
+    src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"
     path = _write(tmp_path, "f.gd", src)
     r1 = run(str(tmp_path), path, src, MarkerRunner(target=path, kill_marker=">="))
     r2 = run(str(tmp_path), path, src, MarkerRunner(target=path, kill_marker=">="))
