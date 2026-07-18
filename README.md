@@ -119,9 +119,11 @@ addon installed in the target project (under `res://addons/gdUnit4/`):
 ```sh
 uv run gdmutant run path/to/module.gd --project path/to/godot-project [--json report.json]
 ```
-For each mutant it reruns the project's GdUnit4 suite, prints the survivors (`file:line:col` + the swap)
-with a mutation score, and optionally writes a `mutation-testing-elements` JSON report (`--json report.json`,
-or `--json -` to stream it to stdout). (Once published: `pipx install gdmutant`.)
+For each mutant it reruns the project's GdUnit4 suite, prints the survivors (`file:line:col` + the swap,
+each with a `→ kill it` hint) with a mutation score, and optionally writes a `mutation-testing-elements`
+JSON report (`--json report.json`, or `--json -` to stream it to stdout). (Once published: `pipx install
+gdmutant`.) New to the output? [`docs/reading-your-first-report.md`](docs/reading-your-first-report.md)
+walks through survivors, the kill hints, and equivalent mutants.
 
 > **macOS:** the `--godot` flag applies to the **GdUnit4 runner**, which launches Godot itself. Godot
 > ships as an app bundle and is never on your PATH, so point `--godot` at the binary inside it:
