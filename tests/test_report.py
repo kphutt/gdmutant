@@ -169,6 +169,15 @@ def test_kill_hint_is_operator_specific_with_a_generic_fallback() -> None:
     assert _kill_hint("some-custom-operator") == "write a test that fails under this exact change"
 
 
+def test_reading_your_first_report_doc_sample_matches_the_real_hint() -> None:
+    # The human doc shows a sample survivor line with its hint; keep that sample honest so it can't
+    # drift from _KILL_HINTS (LOD-114 review). If you reword the comparison hint, update the doc.
+    from pathlib import Path
+
+    doc = Path(__file__).resolve().parent.parent / "docs" / "reading-your-first-report.md"
+    assert _kill_hint("comparison") in doc.read_text(encoding="utf-8")
+
+
 def test_console_summary_score_na_when_no_killable_mutants() -> None:
     run = MutationRun(
         (MutantOutcome(Mutant("f.gd", Span(1, 1, 1, 2), "x", "a", "b"), Verdict.INVALID),)

@@ -33,11 +33,12 @@ Mutation score: 60.0%
 
 Survivors (4):
   turn_order.gd:13:11  comparison  < -> <=
-      → kill it: add a test at the boundary value where the two operators differ (e.g. equal inputs)
+      → kill it: test the boundary value where the two operators differ (equal inputs)
 ```
 
-- **Mutation score** = killed ÷ (killed + survived). Timeouts count as kills (a mutation that hung the
-  suite was caught); *ignored*, *invalid*, and *error* mutants are excluded from the score.
+- **Mutation score** = detected ÷ (detected + survived), where **detected = killed + timeouts** (a
+  mutation that hung the suite was caught, so a timeout counts as a kill); *ignored*, *invalid*, and
+  *error* mutants are excluded from the score entirely.
 - Each survivor line is `path:line:column  operator  original -> replacement`, followed by a
   **`→ kill it:`** hint tailored to that operator — a concrete nudge toward the test that would catch it.
 
