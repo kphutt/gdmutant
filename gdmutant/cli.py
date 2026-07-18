@@ -12,6 +12,7 @@ import os
 import shlex
 import subprocess
 import sys
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -273,7 +274,63 @@ def run_mutation(
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
+#: Config-file (`.gdmutant.toml`) key -> argparse dest. Keys mirror the CLI flag names (so a project
+#: writes `runner = "command"`, `report-path = "..."`), except `command` maps to the `test_command`
+#: dest. `source`, `--json`, and `--dry-run` are deliberately absent — they're per-invocation, not
+#: persistent project settings.
+_CONFIG_KEY_TO_DEST = {
+    "project": "project",
+    "runner": "runner",
+    "command": "test_command",
+    "godot": "godot",
+    "tests": "tests",
+    "report-path": "report_path",
+    "timeout": "timeout",
+    "require-clean": "require_clean",
+}
+_CONFIG_FILENAME = ".gdmutant.toml"
+
+
+def _load_config(path: Path | None = None) -> dict[str, object] | None:
+    """Load per-project defaults from `.gdmutant.toml` (a flat table of flag-named keys) in the
+    current directory. Returns a dict keyed by argparse *dest* (so it can seed `set_defaults`), or
+    ``{}`` if the file is absent, or ``None`` if it can't be parsed/validated (the caller exits 2).
+    CLI flags still win — these become argparse defaults, which an explicit flag overrides. Unknown
+    keys warn
+    and are skipped (a likely typo shouldn't silently do nothing)."""
+    path = path or Path(_CONFIG_FILENAME)
+    if not path.is_file():
+        return {}
+    try:
+        with path.open("rb") as handle:
+            raw = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        print(f"error: cannot read {path}: {error}", file=sys.stderr)
+        return None
+    settings: dict[str, object] = {}
+    for key, value in raw.items():
+        dest = _CONFIG_KEY_TO_DEST.get(key)
+        if dest is None:
+            print(f"warning: {path}: unknown key '{key}' — ignoring", file=sys.stderr)
+            continue
+        settings[dest] = value
+    # Validate the non-string settings up front — set_defaults bypasses argparse's own type/choices
+    # checks, so a bad value would otherwise fail confusingly deep in the run.
+    if not isinstance(settings.get("timeout", 0), (int, float)) or isinstance(
+        settings.get("timeout"), bool
+    ):
+        print(f"error: {path}: 'timeout' must be a number", file=sys.stderr)
+        return None
+    if not isinstance(settings.get("require_clean", False), bool):
+        print(f"error: {path}: 'require-clean' must be true or false", file=sys.stderr)
+        return None
+    if settings.get("runner") not in (None, "gdunit4", "command"):
+        print(f"error: {path}: 'runner' must be 'gdunit4' or 'command'", file=sys.stderr)
+        return None
+    return settings
+
+
+def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gdmutant",
         description="Mutation testing for GDScript (and, in time, other languages).",
@@ -328,11 +385,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="list the mutants without running any tests (no Godot needed)",
     )
+    # Config values seed the run subparser's defaults, so an explicit CLI flag still overrides them
+    # (argparse precedence: passed value > set_defaults > add_argument default). LOD-107.
+    if config:
+        run_parser.set_defaults(**config)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
+    config = _load_config()
+    if config is None:
+        return 2  # a malformed/invalid .gdmutant.toml is a setup error
+    parser = build_parser(config)
     args = parser.parse_args(argv)
     if args.command == "run":
         if args.dry_run:
