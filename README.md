@@ -114,6 +114,18 @@ uv run gdmutant run corpus/turn_order.gd --dry-run
   corpus/turn_order.gd:32:9  constant  true -> false
 ```
 
+**...then run it for real on the bundled corpus — no addon needed.** The corpus ships a tiny
+exit-code test harness, so you can go straight from the dry-run to a real mutation score with only
+**Godot** on your machine (no GdUnit4 install, nothing to vendor):
+```sh
+uv run gdmutant run corpus/turn_order.gd --project corpus \
+  --runner command --command "godot --headless --path . --script res://harness/run_tests.gd"
+```
+It reruns the corpus suite against all 18 mutants and reports **~61% killed, 7 survivors** — the
+fixture is deliberately under-tested (with a couple of equivalent mutants), so a real run surfaces
+live survivors, exactly as mutation testing does on real code. (macOS: put the app-bundle path to
+`godot` inside `--command`.) This is the whole pipeline end-to-end in one command.
+
 **Run the real thing** — needs Godot 4.4+ and the [GdUnit4](https://github.com/godot-gdunit-labs/gdUnit4)
 addon installed in the target project (under `res://addons/gdUnit4/`):
 ```sh
@@ -124,6 +136,11 @@ each with a `→ kill it` hint) with a mutation score, and optionally writes a `
 JSON report (`--json report.json`, or `--json -` to stream it to stdout). (Once published: `pipx install
 gdmutant`.) New to the output? [`docs/reading-your-first-report.md`](docs/reading-your-first-report.md)
 walks through survivors, the kill hints, and equivalent mutants.
+
+> **Trying the GdUnit4 runner on the *bundled corpus*?** The corpus doesn't vendor the addon, so
+> fetch it first — `scripts/install-gdunit4.sh` (the same pinned install CI uses) drops it into
+> `corpus/addons/gdUnit4/` — then run with `--project corpus --runner gdunit4 --godot <godot>`. Or
+> skip the addon entirely and use the exit-code demo above.
 
 > **macOS:** the `--godot` flag applies to the **GdUnit4 runner**, which launches Godot itself. Godot
 > ships as an app bundle and is never on your PATH, so point `--godot` at the binary inside it:
