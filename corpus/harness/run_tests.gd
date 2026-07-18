@@ -16,9 +16,12 @@ extends SceneTree
 ## and `godot --script` then exits 0 on that load failure — a silent false PASS (a broken mutant
 ## would wrongly survive). `load()` sidesteps that, but it returns a NON-null *broken* GDScript on a
 ## compile error (so `if T == null` never fires), and directly *calling* such a script hangs the
-## process. `GDScript.can_instantiate()` is the one safe discriminator: false ⇒ the target didn't
-## compile ⇒ quit(1) before calling into it. gdmutant's generation-time guards (NF-5 re-parse +
-## the return-path guard) already block most uncompilable mutants; this is defense-in-depth for the
+## process. `GDScript.can_instantiate()` is a safe discriminator that never hangs: for THIS target —
+## a concrete class — false ⇒ it didn't compile ⇒ quit(1) before calling into it. (Caveat: a
+## cleanly-compiled `@abstract` class also reports can_instantiate() == false since Godot 4.5, so a
+## harness whose target is `@abstract` must gate on a concrete subclass instead; turn_order.gd is
+## concrete, so it's an exact proxy here.) gdmutant's generation-time guards (NF-5 re-parse + the
+## return-path guard) already block most uncompilable mutants; this is defense-in-depth for the
 ## residual (a parse gdtoolkit accepts but Godot rejects), backed by the external timeout.
 
 const TARGET_PATH := "res://turn_order.gd"

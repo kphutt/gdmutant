@@ -63,9 +63,13 @@ Guidance for a hand-rolled harness, in order of reliability:
 1. **Don't couple to the target at compile time.** `load()` the file-under-test at runtime and
    **gate on `GDScript.can_instantiate()`** before calling into it, quitting non-zero if it's false.
    `load()` returns a *non-null broken* `GDScript` on a compile error (so `if T == null` never
-   fires), and *directly calling* such a script **hangs** the process — `can_instantiate()` is the
-   only discriminator that neither hangs nor lies. The bundled `corpus/harness/run_tests.gd` does
-   exactly this and is the reference example.
+   fires), and *directly calling* such a script **hangs** the process — `can_instantiate()` is a
+   gate that never hangs. **Caveat:** it isn't a pure "did it compile" test — a *cleanly-compiled*
+   `@abstract` class (Godot 4.5+) also reports `can_instantiate() == false`. So the gate is exact
+   for a **concrete** target (as `corpus/harness/run_tests.gd`, the reference example, has); a
+   harness whose file-under-test is `@abstract` should instead load and gate on a **concrete
+   subclass** it can instantiate, or verify the load some other way that doesn't call into the
+   possibly-broken script.
 2. **Never trust the exit code alone.** Additionally print a success **sentinel** (e.g.
    `HARNESS_PASSED`) as the harness's last line and treat "sentinel absent" as failure — it survives
    even the exit-0 load-failure class. (gdmutant's `CommandRunner` is exit-code-only today; a
