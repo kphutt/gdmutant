@@ -27,10 +27,17 @@ suppressed as a genuine equivalent.
    - *Equivalent* (no input can make the `replacement` observable) → suppress it (step 5).
 4. **Re-run and confirm the kill.** Run gdmutant again; the mutant's status should now be `Killed`.
    If it still survives, the test doesn't actually exercise that line — strengthen it.
-5. **Suppress genuine equivalents** by marking the line with `# gdmutant: ignore` so it stops being
-   reported (see [`docs/decisions/0004`](decisions/0004-equivalent-mutant-ignore-annotation.md)).
-   Reserve this for mutants you've *proven* can't change behavior — not for ones that are merely
-   hard to kill.
+5. **Suppress genuine equivalents** by annotating the line, so the mutant becomes `Ignored`
+   (excluded from the score) instead of a permanent survivor:
+   - `# gdmutant: ignore` — suppress **every** mutant on the line.
+   - `# gdmutant: ignore[comparison]` — suppress only that operator's mutant(s), when a *killed* or
+     *timeout* mutant shares the line (use the `mutatorName` from the report). Comma-list several.
+   - Trailing text is the **reason** (shown in the report as `statusReason`) — record *why*.
+
+   Reserve this for mutants you've *proven* can't change behavior (or benign, brittle-to-kill ones —
+   with a reason), not for ones merely hard to kill. See
+   [`docs/decisions/0004`](decisions/0004-equivalent-mutant-ignore-annotation.md) +
+   [`0006`](decisions/0006-operator-scoped-ignore-and-ignored-status.md).
 6. **Open a PR** with the new killing tests (and any `# gdmutant: ignore` annotations). Because the
    deterministic operator core is reproducible, a CI re-run reproduces the same verdicts, so the PR
    is safe to gate a human review on.
