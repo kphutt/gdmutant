@@ -123,6 +123,32 @@ def _progress_start(index: int, total: int, mutant: Mutant, timeout: float) -> s
     return f"{head}  running (<={timeout:g}s) ..."
 
 
+def _format_duration(secs: float) -> str:
+    """A compact human duration: ``9s``, ``2m 15s``, ``1h 3m``. Rounds to whole seconds."""
+    whole = int(round(secs))
+    if whole < 60:
+        return f"{whole}s"
+    minutes, s = divmod(whole, 60)
+    if minutes < 60:
+        return f"{minutes}m {s}s"
+    hours, m = divmod(minutes, 60)
+    return f"{hours}h {m}m"
+
+
+def _progress_estimate(runnable: int, total: int, baseline_secs: float) -> str:
+    """The pre-run estimate line: how many mutants will run and roughly how long, derived from the
+    baseline's own wall-clock. "Looks hung" is the #1 documented reason people abandon mutation
+    testing (LOD-110); a stated ETA makes a long run read as *expected*. Rough by construction —
+    each mutant is budgeted at ~the baseline time, and killed mutants often finish sooner — so it's
+    an upper-ish "about" figure, not a promise. Ignored mutants never run, so they're excluded from
+    the time but noted in the count."""
+    est = _format_duration(runnable * baseline_secs)
+    ignored = total - runnable
+    ignored_note = f" ({ignored} ignored, not run)" if ignored else ""
+    unit = "mutant" if total == 1 else "mutants"
+    return f"{total} {unit}{ignored_note}; baseline ~{baseline_secs:.1f}s each → estimated ≈ {est}"
+
+
 def _progress_line(index: int, total: int, outcome: MutantOutcome) -> str:
     """One human-readable progress line for a finished mutant.
 
@@ -178,6 +204,9 @@ def run(
     outcomes: list[MutantOutcome] = []
     mutants = generate_mutants(path, source, catalog)
     total = len(mutants)
+    if progress is not None:
+        runnable = sum(1 for m in mutants if m.ignore_reason is None)
+        progress(_progress_estimate(runnable, total, baseline_secs))
     for index, mutant in enumerate(mutants, start=1):
         if mutant.ignore_reason is not None:
             # A `# gdmutant: ignore` annotation suppresses this mutant — generated for the report
