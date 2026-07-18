@@ -162,8 +162,10 @@ jobs:
         run: |
           uv run mutmut run > mutmut-run.log 2>&1 || true
           cat mutmut-run.log
-          if grep -qiF "Tests don't run cleanly without mutations" mutmut-run.log; then
-            echo "::error::mutmut baseline failed — the suite does not run cleanly unmutated; any advisory score would be meaningless."
+          # mutmut 3 prints "failed to collect stats" (two variants) and exits 1 when the baseline
+          # can't be established — the exact signature the `|| true` above would otherwise swallow.
+          if grep -qiF "failed to collect stats" mutmut-run.log; then
+            echo "::error::mutmut baseline failed — could not collect stats (the suite does not run cleanly unmutated); any advisory score would be meaningless."
             exit 1
           fi
 
