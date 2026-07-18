@@ -6,8 +6,7 @@
 - ~~Bootstrap: repo hardening + Python CI + package skeleton + docs spine~~ ✅
 - ~~`DESIGN.md` — the reviewed design gate~~ ✅
 - ~~Engine loop: select → mutate → run → tally → mutation score~~ ✅
-- ~~Operator catalog: boolean, comparison, arithmetic, constant, numeric-literal~~ ✅
-  *(statement deletion is the one remaining FG-2.1 operator — see below)*
+- ~~Operator catalog: boolean, comparison, arithmetic, constant, numeric-literal, statement-deletion~~ ✅
 - ~~GDScript adapter: gdtoolkit AST → mutate → NF-5 re-parse guard → GdUnit4 runner~~ ✅
 - ~~Bundled `corpus/` fixture + end-to-end~~ ✅ · ~~Stryker `mutation-testing-elements` JSON report~~ ✅
 - ~~`gdmutant run` CLI (standalone, no AI required)~~ ✅
@@ -18,8 +17,9 @@
   `scripts/install-gdunit4.sh` + the `selftest-godot` CI job drive the shipped CLI against **real
   Godot**, pinned to exact per-mutant outcomes. Caught two real runner bugs (`--ignoreHeadlessMode`,
   relative-project path). *Follow-up: flip the job to a required status check after a short soak.*
-- **Statement-deletion operator** — the last FG-2.1 mutation; structural (replace a statement with
-  `pass`), so it needs AST statement-node handling rather than a token swap.
+- ~~**Statement-deletion operator** — the last FG-2.1 mutation; structural (replace a statement with
+  `pass`)~~ ✅ — in the GDScript adapter with a generation-time return-path guard so a deletion Godot
+  can't compile is never emitted (`docs/decisions/0007`). The FG-2.1 catalog is now complete.
 - Then flip the repo **public** (private now; never launch empty).
 
 ## Known debt (pre-public cleanup)

@@ -45,6 +45,18 @@ class Mutant:
     #: The adapter (which owns the source-comment syntax) sets it — see adapters/gdscript.
     ignore_reason: str | None = None
 
+    def describe_change(self) -> str:
+        """A one-line human rendering of the change, ``original -> replacement``.
+
+        A *deletion* operator (unary-``not`` removal) has an empty ``replacement``; rendered
+        verbatim that is a dangling ``not -> `` with nothing after the arrow, which reads as a
+        formatting bug rather than "the token is removed". Show ``(deleted)`` instead so the intent
+        is explicit. (Statement-deletion replaces with the literal ``pass``, so it renders as
+        ``return x -> pass`` — accurate, and left as-is.)
+        """
+        replacement = self.replacement if self.replacement != "" else "(deleted)"
+        return f"{self.original} -> {replacement}"
+
     def apply(self, source: str) -> str:
         """Return `source` with this mutation applied (one span edit).
 

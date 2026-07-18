@@ -140,6 +140,21 @@ def test_console_summary_exact_layout() -> None:
     )
 
 
+def test_console_summary_renders_a_deletion_survivor_as_deleted() -> None:
+    # A deletion operator (unary-`not` removal) has an empty replacement. It must not render as a
+    # dangling "not -> " (LOD-131) — the survivors list should say "(deleted)".
+    run = MutationRun(
+        (
+            MutantOutcome(
+                Mutant("f.gd", Span(2, 8, 2, 11), "logical-not", "not", ""), Verdict.SURVIVED
+            ),
+        )
+    )
+    out = console_summary(run)
+    assert "f.gd:2:8  logical-not  not -> (deleted)" in out
+    assert "not -> \n" not in out and not out.endswith("not -> ")
+
+
 def test_console_summary_score_na_when_no_killable_mutants() -> None:
     run = MutationRun(
         (MutantOutcome(Mutant("f.gd", Span(1, 1, 1, 2), "x", "a", "b"), Verdict.INVALID),)
