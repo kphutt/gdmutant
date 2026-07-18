@@ -6,9 +6,19 @@ from pathlib import Path
 import pytest
 from conftest import MarkerRunner
 
-from gdmutant.engine.loop import BaselineFailed, Verdict, _derive_timeout, run
+from gdmutant.engine.loop import (
+    BaselineFailed,
+    MutantOutcome,
+    Verdict,
+    _derive_timeout,
+    _progress_line,
+    _progress_start,
+    run,
+)
+from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import TableOperator
 from gdmutant.engine.runner import SuiteResult, SuiteTimeout
+from gdmutant.engine.spans import Span
 
 
 @dataclass
@@ -290,6 +300,16 @@ def test_progress_reports_invalid_and_error_verdicts(tmp_path: Path) -> None:
         f"[1/1] {path}:2:11  > -> >=  running (<=10s) ...",
         f"[1/1] {path}:2:11  > -> >=  ... error",
     ]
+
+
+def test_progress_lines_render_a_deletion_as_deleted() -> None:
+    # The stderr progress heartbeat + verdict line are the most-seen render surface, so a deletion
+    # (empty replacement) must show `not -> (deleted)` there too, not a dangling arrow (LOD-131).
+    deletion = Mutant("f.gd", Span(2, 8, 2, 11), "logical-not", "not", "")
+    start = _progress_start(1, 1, deletion, 10.0)
+    line = _progress_line(1, 1, MutantOutcome(deletion, Verdict.SURVIVED))
+    assert start == "[1/1] f.gd:2:8  not -> (deleted)  running (<=10s) ..."
+    assert line == "[1/1] f.gd:2:8  not -> (deleted)  ... survived"
 
 
 def test_progress_defaults_to_silent(tmp_path: Path) -> None:

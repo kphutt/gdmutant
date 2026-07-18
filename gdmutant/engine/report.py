@@ -81,5 +81,5 @@ def console_summary(run: MutationRun) -> str:
         lines += ["", f"Survivors ({len(run.survivors)}):"]
         for m in run.survivors:
             loc = f"{m.path}:{m.span.line}:{m.span.column}"
-            lines.append(f"  {loc}  {m.operator_id}  {m.original} -> {m.replacement}")
+            lines.append(f"  {loc}  {m.operator_id}  {m.describe_change()}")
     return "\n".join(lines)
