@@ -10,6 +10,19 @@ A one-read guide for an AI agent (e.g. one working in `project-rampart`) to run 
 the results correctly. This is a *how-to-use-the-tool* guide for consumers — distinct from
 [`AGENTS.md`](../AGENTS.md), which is for contributors *to* gdmutant.
 
+## Install
+
+gdmutant is a Python CLI (**Python 3.12+**), not on PyPI yet — install from git at a pinned commit
+with uv:
+
+```sh
+uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
+```
+
+For a Godot project with no Python of its own, put that in a tiny **non-package** uv project beside
+the game and pin the interpreter (a `.python-version`) so uv doesn't resolve to a newer system
+Python — full recipe in the README's "Install into your project" section. Then `uv run gdmutant …`.
+
 ## Invoke
 
 ```sh
