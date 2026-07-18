@@ -11,6 +11,7 @@ from conftest import MarkerRunner
 import gdmutant.cli as cli
 from gdmutant.cli import (
     _has_uncommitted_changes,
+    _load_config,
     _report_path_problem,
     build_parser,
     list_mutants,
@@ -590,6 +591,101 @@ def test_main_default_project_uses_the_source_dir(
     assert runner.seen[0] == str(path.resolve().parent)  # defaulted to the source's directory
 
 
+# --- .gdmutant.toml config file ([ticket]) ---------------------------------------------------------
+
+
+def test_load_config_absent_returns_empty(tmp_path: Path) -> None:
+    assert _load_config(tmp_path / ".gdmutant.toml") == {}
+
+
+def test_load_config_maps_flag_named_keys_to_dests(tmp_path: Path) -> None:
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text(
+        'project = "p"\ncommand = "c"\nreport-path = "r"\ntimeout = 30\nrequire-clean = true\n',
+        encoding="utf-8",
+    )
+    assert _load_config(cfg) == {
+        "project": "p",
+        "test_command": "c",  # `command` maps to the test_command dest
+        "report_path": "r",
+        "timeout": 30,
+        "require_clean": True,
+    }
+
+
+def test_load_config_warns_and_skips_unknown_keys(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text('godot = "g"\nnope = 1\n', encoding="utf-8")
+    assert _load_config(cfg) == {"godot": "g"}
+    assert "unknown key 'nope'" in capsys.readouterr().err
+
+
+def test_load_config_rejects_malformed_toml(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text("x = = broken", encoding="utf-8")
+    assert _load_config(cfg) is None
+    assert "cannot read" in capsys.readouterr().err
+
+
+def test_load_config_rejects_bad_typed_values(tmp_path: Path) -> None:
+    # set_defaults bypasses argparse's type/choices checks, so these must be caught at load.
+    for name, body in (
+        ("t1", 'timeout = "slow"'),  # not a number
+        ("t2", "timeout = true"),  # a bool is not a valid number here
+        ("t3", 'runner = "nope"'),  # not a valid runner
+        ("t4", 'require-clean = "yes"'),  # not a bool
+        ("t5", "project = 123"),  # string setting as int
+        ("t6", "command = true"),  # string setting as bool
+        ("t7", "godot = 456"),  # string setting as int
+        ("t8", "tests = false"),  # string setting as bool
+        ("t9", "report-path = 789"),  # string setting as int
+    ):
+        cfg = tmp_path / f"{name}.toml"
+        cfg.write_text(body, encoding="utf-8")
+        assert _load_config(cfg) is None, body
+
+
+def test_main_uses_config_defaults_when_cli_flags_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A `.gdmutant.toml` in the cwd supplies --project; with no CLI --project, the runner gets it.
+    path = _gd(tmp_path)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (tmp_path / ".gdmutant.toml").write_text(f"project = {str(proj)!r}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    runner = RecordingRunner()
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
+    assert main(["run", str(path)]) == 0
+    assert runner.seen[0] == str(proj)  # from config, not the source's own directory
+
+
+def test_main_cli_flag_overrides_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = _gd(tmp_path)
+    cfg_proj, cli_proj = tmp_path / "cfg", tmp_path / "cli"
+    cfg_proj.mkdir()
+    cli_proj.mkdir()
+    (tmp_path / ".gdmutant.toml").write_text(f"project = {str(cfg_proj)!r}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    runner = RecordingRunner()
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
+    assert main(["run", str(path), "--project", str(cli_proj)]) == 0
+    assert runner.seen[0] == str(cli_proj)  # an explicit CLI flag wins over the config default
+
+
+def test_main_malformed_config_exits_two(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / ".gdmutant.toml").write_text("x = = broken", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert main(["run", "f.gd"]) == 2  # setup error, before anything runs
+    assert "cannot read" in capsys.readouterr().err
+
+
 def test_main_constructs_runner_with_test_path_and_godot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -923,4 +1019,10 @@ def test_main_threads_require_clean_to_run_mutation(
     assert captured["require_clean"] is True
     captured.clear()
     main(["run", str(path), "--project", str(tmp_path)])
+    assert captured["require_clean"] is False
+    captured.clear()
+    # If the config defaults it to True, --no-require-clean must override it to False.
+    (tmp_path / ".gdmutant.toml").write_text("require-clean = true\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    main(["run", str(path), "--no-require-clean"])
     assert captured["require_clean"] is False
