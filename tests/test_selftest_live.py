@@ -48,8 +48,12 @@ TARGET = "turn_order.gd"
 # The exact per-mutant outcome of running gdmutant against corpus/turn_order.gd on real Godot.
 # Survivors pinned as (line, column, replacement) so a regression that flips one verdict, shifts a
 # location, or drops a mutant is caught — a bare "score > 0" self-test would be worthless.
-EXPECTED_TOTAL = 16
-EXPECTED_KILLED = 9
+# 18 = 16 token mutants + 2 statement-deletions (the early `return 0`/`return max_value` inside
+# clamp_initiative's ifs, both killed). The other 5 returns are typed sole-returns whose deletion
+# Godot rejects, so the generation-time guard never emits them (docs/decisions/0007) — which is why
+# there are 0 timeout/error outcomes and both runner paths still agree exactly.
+EXPECTED_TOTAL = 18
+EXPECTED_KILLED = 11
 EXPECTED_SURVIVORS: set[tuple[int, int, str]] = {
     (13, 11, "<="),  # equivalent: value < 0  ->  value <= 0  (same clamp result)
     (13, 13, "1"),  # coverage gap: boundary at value 0 never probed
@@ -159,3 +163,33 @@ def test_gdunit4_against_real_godot(tmp_path: Path) -> None:
         tmp_path / "gdunit_report.json",
     )
     _assert_pinned_outcomes(report)
+
+
+def test_statement_deletion_mutants_all_compile_in_godot(tmp_path: Path) -> None:
+    """ADR-0007's falsifiable check: every statement-deletion mutant gdmutant emits for the corpus
+    must actually *load* in Godot. gdtoolkit has no return-path analysis, so if the generation-time
+    return-guard is ever unsound, a deletion would fail to compile here — the exact failure the
+    guard exists to prevent (a mutant that hangs one runner / errors the other). `--check-only`
+    exits 0 even on a parse error, so the assertion scrapes stderr."""
+    from gdmutant.adapters.gdscript import generate_mutants
+
+    source = (CORPUS / TARGET).read_text(encoding="utf-8")
+    deletions = [
+        m
+        for m in generate_mutants(str(CORPUS / TARGET), source)
+        if m.operator_id == "statement-deletion"
+    ]
+    assert deletions, "the corpus should exercise the statement-deletion operator"
+    for m in deletions:
+        script = tmp_path / f"del_{m.span.line}.gd"
+        script.write_text(m.apply(source), encoding="utf-8")
+        result = subprocess.run(
+            [str(_GODOT), "--headless", "--check-only", "--script", str(script)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert "Parse Error" not in result.stderr and "SCRIPT ERROR" not in result.stderr, (
+            f"statement-deletion at line {m.span.line} does not compile in Godot — the return-path "
+            f"guard is unsound (ADR-0007):\n{result.stderr[-600:]}"
+        )

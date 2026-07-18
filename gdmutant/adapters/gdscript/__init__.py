@@ -21,7 +21,7 @@ from lark.exceptions import LarkError
 
 from gdmutant.engine.mutants import Mutant, MutationSite, generate
 from gdmutant.engine.operators import CATALOG, Operator, all_replacements
-from gdmutant.engine.spans import Span
+from gdmutant.engine.spans import Span, text_at
 
 
 def _parse(source: str) -> Tree[Token]:
@@ -162,12 +162,96 @@ def _mark_ignored(mutant: Mutant, directives: dict[int, _IgnoreDirective]) -> Mu
     return replace(mutant, ignore_reason=directive.reason)
 
 
+# Statement-deletion (FG-2.1) — replace a statement with ``pass``. Structural, not a token swap, so
+# it's a separate path from the token catalog (docs/decisions/0007). Deletes expression statements
+# (calls, assignments, ``+=``) and ``return``s. Declarations (``func_var_stmt``) are deferred:
+# deleting one either breaks a later reference or is equivalent (unused) — both noise.
+_DELETABLE_STMT_NODES = frozenset({"expr_stmt", "return_stmt"})
+_FUNCTION_SCOPE_NODES = frozenset({"func_def", "lambda"})
+_SCOPE_HEADER_NODES = frozenset({"func_header", "lambda_header"})
+STATEMENT_DELETION_ID = "statement-deletion"
+_STATEMENT_REPLACEMENT = "pass"
+
+
+def _scope_requires_a_return_value(scope: Tree[Token]) -> bool:
+    """True if `scope` is a ``func_def`` with a **non-void** return type — so Godot requires every
+    path to return a value, and deleting a ``return`` may make it not compile. Lambdas carry no
+    return-type annotation, so they never require one."""
+    if scope.data != "func_def":
+        return False
+    header = next(
+        (c for c in scope.children if isinstance(c, Tree) and c.data == "func_header"), None
+    )
+    return header is not None and any(
+        isinstance(c, Token) and c.type == "TYPE_HINT" and c.value != "void"
+        for c in header.children
+    )
+
+
+def _scope_deletable_statements(scope: Tree[Token]) -> list[Tree[Token]]:
+    """Deletable statement nodes inside `scope`, descending through control-flow blocks but NOT into
+    nested function scopes (a lambda's statements belong to the lambda, its own scope)."""
+    found: list[Tree[Token]] = []
+
+    def walk(node: Tree[Token]) -> None:
+        for child in node.children:
+            if not isinstance(child, Tree) or child.data in _FUNCTION_SCOPE_NODES:
+                continue
+            if child.data in _DELETABLE_STMT_NODES:
+                found.append(child)
+            else:
+                walk(child)
+
+    walk(scope)
+    return found
+
+
+def _statement_deletions(path: str, source: str) -> list[Mutant]:
+    """One ``pass``-replacement mutant per deletable single-line statement (FG-2.1).
+
+    A ``return`` is emitted only when deleting it can't break compilation (docs/decisions/0007): the
+    enclosing function is untyped/``void``, **or** the function body's last top-level statement is a
+    *different* ``return`` (a guaranteed final return backstops the deletion, so every path still
+    returns a value). gdtoolkit has no return-path analysis, so this generation-time guard — not
+    NF-5's re-parse — is what keeps deletion mutants loadable in Godot (same pattern as
+    `_string_format_percents`). Multi-line statements are skipped (`spans.py` single-line). Mutants
+    are returned in document order.
+    """
+    mutants: list[Mutant] = []
+    for scope in _parse(source).iter_subtrees():
+        if scope.data not in _FUNCTION_SCOPE_NODES:
+            continue
+        typed = _scope_requires_a_return_value(scope)
+        body = [
+            c for c in scope.children if isinstance(c, Tree) and c.data not in _SCOPE_HEADER_NODES
+        ]
+        last = body[-1] if body else None
+        last_is_return = last is not None and last.data == "return_stmt"
+        for stmt in _scope_deletable_statements(scope):
+            if stmt.data == "return_stmt" and typed and not (last_is_return and stmt is not last):
+                continue  # deleting it would leave a typed function with no guaranteed return value
+            meta = stmt.meta
+            if meta.empty or meta.line != meta.end_line:
+                continue  # no span, or a multi-line statement (spans.py edits a single line only)
+            span = Span(meta.line, meta.column, meta.end_line, meta.end_column)
+            original = text_at(source, span)
+            mutants.append(
+                Mutant(path, span, STATEMENT_DELETION_ID, original, _STATEMENT_REPLACEMENT)
+            )
+    return sorted(mutants, key=lambda m: (m.span.line, m.span.column))
+
+
 def generate_mutants(
     path: str, source: str, catalog: tuple[Operator, ...] = CATALOG
 ) -> list[Mutant]:
     """All mutants for `source`, each tagged ``ignore_reason`` if a ``# gdmutant: ignore`` directive
-    on its line applies to it; `path` is recorded on each mutant for reporting."""
-    mutants = generate(path, find_sites(source, catalog), catalog)
+    on its line applies to it; `path` is recorded on each mutant for reporting.
+
+    Token-swap mutants (catalog) come first, then statement-deletion mutants (appended so existing
+    mutant ids/order are unchanged — NF-1)."""
+    mutants = generate(path, find_sites(source, catalog), catalog) + _statement_deletions(
+        path, source
+    )
     directives = _ignore_directives(source)
     if not directives:
         return mutants

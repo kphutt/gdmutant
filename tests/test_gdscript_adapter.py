@@ -106,12 +106,75 @@ def test_empty_ignore_brackets_are_reported_but_a_bare_marker_is_not() -> None:
     assert marks[2] is None and marks[3] == ""  # empty-brackets suppresses nothing; bare suppresses
 
 
+def _stmt_deletions(src: str) -> dict[tuple[int, str], object]:
+    return {
+        (m.span.line, m.original): m
+        for m in generate_mutants("f.gd", src)
+        if m.operator_id == "statement-deletion"
+    }
+
+
+def test_statement_deletion_replaces_an_expr_statement_with_pass() -> None:
+    # A call/assignment statement is deleted (replaced with `pass`) — always safe (still compiles).
+    # Applying it keeps valid GDScript with indentation preserved.
+    src = "func f(x):\n\tx.foo()\n\treturn x\n"
+    d = _stmt_deletions(src)
+    assert (2, "x.foo()") in d
+    mutated, valid = apply_mutant(d[(2, "x.foo()")], src)  # type: ignore[arg-type]
+    assert valid and mutated.split("\n")[1] == "\tpass"
+
+
+def test_statement_deletion_skips_a_typed_functions_sole_return() -> None:
+    # Deleting the only return of a typed function -> `func f() -> bool: pass` -> Godot "not all
+    # paths return a value", which gdtoolkit misses. The generation-time guard must never emit it.
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    assert not _stmt_deletions(src)
+
+
+def test_statement_deletion_emits_returns_in_untyped_and_void_functions() -> None:
+    # Untyped and `-> void` functions never require a return value, so their returns are deletable.
+    assert (2, "return a") in _stmt_deletions("func f(a):\n\treturn a\n")
+    assert (2, "return") in _stmt_deletions("func f() -> void:\n\treturn\n")
+
+
+def test_statement_deletion_emits_an_early_return_backstopped_by_a_final_return() -> None:
+    # A typed function ending in a top-level `return` still returns a value if an EARLIER return is
+    # deleted, so the early one is emitted; the guaranteed final one is not.
+    d = _stmt_deletions("func f(a) -> int:\n\tif a < 0:\n\t\treturn 0\n\treturn a\n")
+    assert (3, "return 0") in d  # early return, backstopped -> emitted
+    assert (4, "return a") not in d  # final return -> skipped
+
+
+def test_statement_deletion_skips_all_returns_when_no_final_return_backstops() -> None:
+    # A typed function whose last top-level statement is an if/else (not a return) has no guaranteed
+    # fall-through return, so deleting either branch's return would break compilation -> skip both.
+    src = "func f(a) -> int:\n\tif a > 0:\n\t\treturn 1\n\telse:\n\t\treturn 2\n"
+    assert not _stmt_deletions(src)
+
+
+def test_statement_deletion_skips_a_multi_line_statement() -> None:
+    # spans.py edits a single line, so a statement wrapped across lines is skipped (single-line
+    # neighbours still covered). The multi-line print(...) is skipped; the untyped return isn't.
+    src = "func f(a, b):\n\tprint(\n\t\ta,\n\t\tb,\n\t)\n\treturn a\n"
+    d = _stmt_deletions(src)
+    assert not any(orig.startswith("print") for _line, orig in d)  # multi-line call skipped
+    assert (6, "return a") in d  # the single-line return IS emitted
+
+
+def test_statement_deletion_treats_a_lambda_as_its_own_scope() -> None:
+    # A lambda's return belongs to the lambda (untyped -> safe to delete), not the enclosing typed
+    # function; the enclosing function's own final return stays skipped.
+    d = _stmt_deletions("func f() -> int:\n\tvar g := func(): return 9\n\treturn g.call()\n")
+    assert (2, "return 9") in d  # the lambda's return -> emitted
+    assert (3, "return g.call()") not in d  # the typed function's final return -> skipped
+
+
 def test_find_sites_and_generate_thread_a_custom_catalog_through() -> None:
     # A custom operator that mutates a token the DEFAULT catalog ignores (the identifier `b`).
     # Both find_sites and generate_mutants must use THIS catalog — a mutant that falls back to the
     # default would never surface `b`, so it finds nothing here.
     custom = (TableOperator("ident", {"b": ("c",)}),)
-    src = "func f(a, b):\n\treturn b > a\n"
+    src = "func f(a, b) -> bool:\n\treturn b > a\n"
     assert {s.token for s in find_sites(src, catalog=custom)} == {"b"}
     mutants = generate_mutants("f.gd", src, catalog=custom)
     assert mutants and {(m.original, m.replacement) for m in mutants} == {("b", "c")}
