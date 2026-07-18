@@ -1,7 +1,9 @@
 # Suppress equivalent mutants with an inline `# gdmutant: ignore` annotation
 
 ## Status
-Accepted
+Accepted — **refined by [0006](0006-operator-scoped-ignore-and-ignored-status.md)**, which adds
+operator scope (`ignore[comparison]`) and surfaces suppressed mutants as `Ignored` (with a reason)
+rather than dropping them.
 
 ## Context
 Some mutants are **equivalent** — they change the source but not its observable behavior, so no test
