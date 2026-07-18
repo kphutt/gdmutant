@@ -31,7 +31,7 @@ def _committed_repo(tmp_path: Path) -> Path:
 
 def _gd(tmp_path: Path) -> Path:
     path = tmp_path / "f.gd"
-    path.write_text("func f(a, b):\n\treturn a > b and a < b\n", encoding="utf-8")
+    path.write_text("func f(a, b) -> bool:\n\treturn a > b and a < b\n", encoding="utf-8")
     return path
 
 
@@ -278,7 +278,7 @@ def test_run_mutation_unwritable_json_path_returns_two(
 def test_list_mutants_prints_every_mutant_and_returns_zero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # _gd is "func f(a, b):\n\treturn a > b and a < b\n" -> 3 mutants: >, and, <.
+    # _gd is "func f(a, b) -> bool:\n\treturn a > b and a < b\n" -> 3 mutants: >, and, <.
     path = _gd(tmp_path)
     rc = list_mutants(str(path))
     assert rc == 0
@@ -704,7 +704,9 @@ def _require_clean_error(source: str) -> str:
 
 def test_has_uncommitted_changes_true_when_modified(tmp_path: Path) -> None:
     repo = _committed_repo(tmp_path)
-    (repo / "f.gd").write_text("func f(a, b):\n\treturn a >= b\n", encoding="utf-8")  # now modified
+    (repo / "f.gd").write_text(
+        "func f(a, b) -> bool:\n\treturn a >= b\n", encoding="utf-8"
+    )  # now modified
     assert _has_uncommitted_changes(str(repo / "f.gd")) is True
 
 
@@ -725,7 +727,7 @@ def test_has_uncommitted_changes_handles_dash_prefixed_filename(tmp_path: Path) 
     # `--` so dropping/mangling it is caught.
     _git(tmp_path, "init")
     weird = tmp_path / "-weird.gd"
-    weird.write_text("func f():\n\treturn 1\n", encoding="utf-8")
+    weird.write_text("func f() -> int:\n\treturn 1\n", encoding="utf-8")
     assert _has_uncommitted_changes(str(weird)) is True
 
 
@@ -764,7 +766,7 @@ def test_run_mutation_warns_on_dirty_tree_but_proceeds(
     # gdmutant is driven by headless agents, so it must never wait on an interactive prompt.
     repo = _committed_repo(tmp_path)
     path = repo / "f.gd"
-    path.write_text("func f(a, b):\n\treturn a >= b and a < b\n", encoding="utf-8")  # dirty
+    path.write_text("func f(a, b) -> bool:\n\treturn a >= b and a < b\n", encoding="utf-8")  # dirty
     rc = run_mutation(str(path), str(repo), MarkerRunner(str(path), "ZZZ"))
     assert rc == 0  # warned, then ran
     assert _dirty_warning(str(path)) in capsys.readouterr().err
@@ -787,7 +789,7 @@ def test_run_mutation_require_clean_refuses_dirty_tree(
     # RunBoomRunner would raise if reached) — so it's enforceable with no Godot present.
     repo = _committed_repo(tmp_path)
     path = repo / "f.gd"
-    path.write_text("func f(a, b):\n\treturn a >= b\n", encoding="utf-8")  # dirty
+    path.write_text("func f(a, b) -> bool:\n\treturn a >= b\n", encoding="utf-8")  # dirty
     rc = run_mutation(str(path), str(repo), RunBoomRunner(), require_clean=True)
     assert rc == 2
     assert capsys.readouterr().err == _require_clean_error(str(path)) + "\n"
