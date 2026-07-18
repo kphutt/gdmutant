@@ -89,9 +89,9 @@ source = ["gdmutant"]
 [tool.coverage.report]
 # The suite is written to 100% line+branch coverage; enforce that floor so a drop fails the run
 # (pytest-cov reads this) instead of silently sliding. `--cov-report=term-missing` (in addopts)
-# still prints the uncovered lines. Test-only files aren't measured (source = gdmutant above).
+# already prints the uncovered lines, so no `show_missing` here. Test-only files aren't measured
+# (source = gdmutant above).
 fail_under = 100
-show_missing = true
 
 [tool.mutmut]
 # Mutation-test gdmutant's own library with mutmut (dogfood).
