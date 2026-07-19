@@ -41,7 +41,9 @@
   runs the baseline once, and emits a per-file breakdown, one aggregate score, and one merged
   JSON/HTML report (`engine.run_paths`, `report.stryker_report_multi`, `cli.run_mutation_paths`). This
   was the last "real-project adoption" gap — point it at your source directory now, not one file at a
-  time. (Test files under the target are mutated too; a `--exclude` glob is a possible follow-up.)
+  time. GdUnit4 / GUT test suites under the target are skipped by default (by `test/` dir, name
+  affix, or `extends GdUnitTestSuite`/`GutTest`), matching StrykerJS/cargo-mutants; a user-facing
+  `--exclude` glob for non-test files is a possible follow-up (LOD-204).
 ## Later (deferred — do not build now)
 - Method-body mutation coverage in the dogfood — mutmut 3 mutates only module-level functions, not
   class methods (see `docs/mutation-testing.md`); evaluate cosmic-ray (or a config/upstream fix) to
