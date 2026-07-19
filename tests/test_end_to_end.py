@@ -9,7 +9,7 @@ from pathlib import Path
 
 from conftest import MarkerRunner
 
-from gdmutant.adapters.gdscript import generate_mutants
+from gdmutant.adapters.gdscript import ADAPTER, generate_mutants
 from gdmutant.engine.loop import run
 from gdmutant.engine.report import console_summary, stryker_report
 
@@ -43,7 +43,7 @@ def test_end_to_end_mutate_run_and_report(tmp_path: Path) -> None:
     target.write_text(source, encoding="utf-8")
 
     # The "test" catches any '>' -> '>=' mutation (the marker); everything else survives.
-    result = run(str(tmp_path), str(target), source, MarkerRunner(str(target), ">="))
+    result = run(str(tmp_path), str(target), source, MarkerRunner(str(target), ">="), ADAPTER)
 
     assert result.killed >= 1 and result.survived >= 1
     assert result.mutation_score is not None
