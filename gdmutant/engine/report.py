@@ -16,31 +16,11 @@ Locations are 1-based line + column with an exclusive end column, which is exact
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
+from gdmutant.engine.explain import render_survivor
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
-
-#: One actionable "how to kill it" hint per operator id — a survivor list otherwise reads as
-#: homework (LOD-114). Keyed by ``operator_id``; ``_kill_hint`` falls back to a generic line for any
-#: operator not listed (custom catalog). The doc `docs/reading-your-first-report.md` goes deeper.
-_KILL_HINTS: dict[str, str] = {
-    "comparison": "test the boundary value where the two operators differ (equal inputs)",
-    "boolean": "test operands that disagree (one true, one false) so and vs or matters",
-    "arithmetic": "assert the exact result, not just its sign or 'nonzero'",
-    "constant": "test an outcome that depends on this boolean's actual value",
-    "numeric": "pin the exact value/boundary this literal controls",
-    "compound-assign": "assert the accumulated value after this update",
-    "modulo": "test a non-multiple input where % differs from * and /",
-    "logical-not": "exercise the guarded branch with the condition both ways",
-    "statement-deletion": "assert an effect that fails when this statement is removed",
-}
-_GENERIC_KILL_HINT = "write a test that fails under this exact change"
-
-
-def _kill_hint(operator_id: str) -> str:
-    """A one-line, human-actionable suggestion for killing a survivor of `operator_id`."""
-    return _KILL_HINTS.get(operator_id, _GENERIC_KILL_HINT)
-
 
 SCHEMA_VERSION = "2"
 
@@ -151,9 +131,23 @@ def console_summary(run: MutationRun) -> str:
         f"  error:    {run.errors}",
     ]
     if run.survivors:
-        lines += ["", f"Survivors ({len(run.survivors)}):"]
+        lines += ["", f"Survivors ({len(run.survivors)}):", ""]
+        source_cache: dict[str, list[str] | None] = {}
         for m in run.survivors:
-            loc = f"{m.path}:{m.span.line}:{m.span.column}"
-            lines.append(f"  {loc}  {m.operator_id}  {m.describe_change()}")
-            lines.append(f"      → kill it: {_kill_hint(m.operator_id)}")
+            if m.path not in source_cache:
+                source_cache[m.path] = _read_source_lines(m.path)
+            lines += render_survivor(m, source_cache[m.path])
+            lines.append("")
     return "\n".join(lines)
+
+
+def _read_source_lines(path: str) -> list[str] | None:
+    """The source file's lines for the survivor's code/caret context, or ``None`` if unreadable.
+
+    Files are restored to their original source by the time the summary is rendered, so this reads
+    the real line the mutant sat on. A survivor whose file has since moved still gets its
+    narrative — only the code + caret + enclosing-function slots are dropped."""
+    try:
+        return Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
