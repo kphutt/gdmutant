@@ -196,7 +196,9 @@ def _expand_sources(paths: list[str]) -> list[str] | None:
 
 def _default_project_dir(raw_paths: list[str], files: list[str]) -> str:
     """The Godot project dir to run tests from when ``--project`` isn't given: a lone directory
-    target *is* the project; otherwise the (first) source file's own directory."""
+    target *is* the project; otherwise the (first) source file's own directory. That last case is a
+    **best-effort** guess for multiple/nested targets — there's no single project root for disparate
+    paths, so pass ``--project`` when the guess is wrong."""
     if len(raw_paths) == 1 and Path(raw_paths[0]).is_dir():
         return str(Path(raw_paths[0]))
     return str(Path(files[0]).resolve().parent)

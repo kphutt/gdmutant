@@ -266,10 +266,9 @@ def run_paths(
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, MutationRun]:
     """Mutate several files against one project — the baseline runs **once**, then each file's
-    mutants run in turn (LOD-79). `sources` maps each file path to its current contents; each must
-    hold
-    that content and is restored after its own mutants. Returns ``{path: MutationRun}`` in `sources`
-    order. Raises `BaselineFailed` (like `run`) if the unmutated suite can't run or is red."""
+    mutants run in turn (LOD-79). `sources` maps each file path to its contents (each held on entry,
+    restored after its own mutants). Returns ``{path: MutationRun}`` in `sources` order. Raises
+    `BaselineFailed` (like `run`) if the unmutated suite can't run or is red."""
     per_mutant_timeout, baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
     runs: dict[str, MutationRun] = {}
     for path, source in sources.items():
