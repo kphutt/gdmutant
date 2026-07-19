@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from conftest import MarkerRunner
 
+from gdmutant.adapters.gdscript import ADAPTER
+from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.loop import (
     BaselineFailed,
     MutantOutcome,
@@ -15,13 +17,23 @@ from gdmutant.engine.loop import (
     _progress_estimate,
     _progress_line,
     _progress_start,
-    run,
-    run_paths,
 )
+from gdmutant.engine.loop import run as _run
+from gdmutant.engine.loop import run_paths as _run_paths
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import TableOperator
 from gdmutant.engine.runner import SuiteResult, SuiteTimeout
 from gdmutant.engine.spans import Span
+
+
+# These tests drive the engine with fake runners against real GDScript, so they inject the real
+# GDScript adapter once here (NF-3) rather than threading it through every call.
+def run(*args, **kwargs):  # type: ignore[no-untyped-def]
+    return _run(*args, adapter=ADAPTER, **kwargs)
+
+
+def run_paths(*args, **kwargs):  # type: ignore[no-untyped-def]
+    return _run_paths(*args, adapter=ADAPTER, **kwargs)
 
 
 @dataclass
@@ -399,3 +411,53 @@ def test_run_paths_runs_silently_without_progress(tmp_path: Path) -> None:
     a = _write(tmp_path, "a.gd", src)
     runs = run_paths(str(tmp_path), {a: src}, ProjectDirRecordingRunner())
     assert set(runs) == {a} and runs[a].outcomes
+
+
+# --- NF-3: the engine is language-neutral (the adapter is injected, never imported) ---------------
+
+
+def test_no_engine_module_imports_a_language_adapter() -> None:
+    # The whole point of the Adapter seam: importing the engine must never drag in a language
+    # adapter. Statically assert that no `gdmutant/engine/*.py` imports `gdmutant.adapters`.
+    import ast
+
+    from gdmutant.engine import loop as _engine_loop
+
+    engine_dir = Path(_engine_loop.__file__).parent
+    offenders: list[str] = []
+    for module_file in engine_dir.rglob("*.py"):
+        tree = ast.parse(module_file.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                "gdmutant.adapters"
+            ):
+                offenders.append(f"{module_file.name}: from {node.module}")
+            if isinstance(node, ast.Import):
+                offenders += [
+                    f"{module_file.name}: import {n.name}"
+                    for n in node.names
+                    if n.name.startswith("gdmutant.adapters")
+                ]
+    assert not offenders, f"engine must not import an adapter (NF-3): {offenders}"
+
+
+def test_run_drives_a_custom_non_gdscript_adapter(tmp_path: Path) -> None:
+    # Behavioral proof of injection: the engine runs against a *fake* adapter (not gdscript). It
+    # must call the injected `generate_mutants`, so the loop is genuinely adapter-agnostic.
+    src = "func f(x) -> bool:\n\treturn x > 0\n"
+    path = _write(tmp_path, "f.gd", src)
+    seen: list[tuple[str, str]] = []
+
+    def fake_generate(p: str, s: str, catalog: object) -> list[Mutant]:
+        seen.append((p, s))
+        return []  # no mutants → only the baseline runs; proves generate was reached
+
+    def fake_apply(mutant: Mutant, s: str) -> tuple[str, bool]:
+        raise AssertionError("apply_mutant must not run when there are no mutants")
+
+    fake = Adapter(generate_mutants=fake_generate, apply_mutant=fake_apply)
+    result = _run(
+        str(tmp_path), path, src, MarkerRunner(target=path, kill_marker="ZZZ"), adapter=fake
+    )
+    assert seen == [(path, src)]  # the engine used the injected adapter, not gdscript
+    assert result.outcomes == ()

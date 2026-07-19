@@ -19,6 +19,7 @@ from gdtoolkit.parser import parser as _gdparser
 from lark import Token, Tree
 from lark.exceptions import LarkError
 
+from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.mutants import Mutant, MutationSite, generate
 from gdmutant.engine.operators import CATALOG, Operator, all_replacements
 from gdmutant.engine.spans import Span, text_at
@@ -278,3 +279,7 @@ def apply_mutant(mutant: Mutant, source: str) -> tuple[str, bool]:
     """
     mutated = mutant.apply(source)
     return mutated, is_valid_gdscript(mutated)
+
+
+#: The GDScript `Adapter` the engine injects (NF-3) — the two callables above, bundled.
+ADAPTER = Adapter(generate_mutants=generate_mutants, apply_mutant=apply_mutant)

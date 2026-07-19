@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from gdmutant.adapters.gdscript import apply_mutant, generate_mutants
+from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import CATALOG, Operator
 from gdmutant.engine.runner import Runner, SuiteTimeout
@@ -166,12 +166,16 @@ def run(
     path: str,
     source: str,
     runner: Runner,
+    adapter: Adapter,
     catalog: tuple[Operator, ...] = CATALOG,
     *,
     timeout: float | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> MutationRun:
     """Run the full mutation pass over `source` (the contents of `path`) using `runner`.
+
+    `adapter` supplies the two language-specific operations (generation + application), so the
+    engine stays language-neutral (NF-3) — the caller injects it, e.g. `adapters.gdscript.ADAPTER`.
 
     Raises `BaselineFailed` if the unmutated suite doesn't pass first (FG-3.3). The file at `path`
     must hold `source` when this is called; it is restored to `source` before returning.
@@ -188,7 +192,15 @@ def run(
     """
     per_mutant_timeout, baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
     return _mutate_file(
-        project_dir, path, source, runner, per_mutant_timeout, baseline_secs, catalog, progress
+        project_dir,
+        path,
+        source,
+        runner,
+        adapter,
+        per_mutant_timeout,
+        baseline_secs,
+        catalog,
+        progress,
     )
 
 
@@ -223,6 +235,7 @@ def _mutate_file(
     path: str,
     source: str,
     runner: Runner,
+    adapter: Adapter,
     per_mutant_timeout: float,
     baseline_secs: float,
     catalog: tuple[Operator, ...],
@@ -231,7 +244,7 @@ def _mutate_file(
     """Generate and run every mutant for a single file (the baseline is assumed already green). The
     file at `path` must hold `source`; it is restored before returning."""
     outcomes: list[MutantOutcome] = []
-    mutants = generate_mutants(path, source, catalog)
+    mutants = adapter.generate_mutants(path, source, catalog)
     total = len(mutants)
     if progress is not None:
         runnable = sum(1 for m in mutants if m.ignore_reason is None)
@@ -242,7 +255,7 @@ def _mutate_file(
             # but never run (no validity check, no suite run): tallied IGNORED, excluded from score.
             verdict = Verdict.IGNORED
         else:
-            mutated, valid = apply_mutant(mutant, source)
+            mutated, valid = adapter.apply_mutant(mutant, source)
             if valid:
                 if progress is not None:
                     progress(_progress_start(index, total, mutant, per_mutant_timeout))
@@ -260,6 +273,7 @@ def run_paths(
     project_dir: str,
     sources: dict[str, str],
     runner: Runner,
+    adapter: Adapter,
     catalog: tuple[Operator, ...] = CATALOG,
     *,
     timeout: float | None = None,
@@ -267,15 +281,24 @@ def run_paths(
 ) -> dict[str, MutationRun]:
     """Mutate several files against one project — the baseline runs **once**, then each file's
     mutants run in turn ([ticket]). `sources` maps each file path to its contents (each held on entry,
-    restored after its own mutants). Returns ``{path: MutationRun}`` in `sources` order. Raises
-    `BaselineFailed` (like `run`) if the unmutated suite can't run or is red."""
+    restored after its own mutants). `adapter` is the injected language adapter (NF-3, like `run`).
+    Returns ``{path: MutationRun}`` in `sources` order. Raises `BaselineFailed` (like `run`) if the
+    unmutated suite can't run or is red."""
     per_mutant_timeout, baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
     runs: dict[str, MutationRun] = {}
     for path, source in sources.items():
         if progress is not None:
             progress(f"mutating {path} ...")
         runs[path] = _mutate_file(
-            project_dir, path, source, runner, per_mutant_timeout, baseline_secs, catalog, progress
+            project_dir,
+            path,
+            source,
+            runner,
+            adapter,
+            per_mutant_timeout,
+            baseline_secs,
+            catalog,
+            progress,
         )
     return runs
 
