@@ -66,9 +66,10 @@ packages = ["gdmutant"]
 # An explicit allowlist of what ships in the sdist — the package (incl. its `py.typed` marker), the
 # test suite, docs, the corpus, and the contributor/meta docs. An allowlist (not a deny-list) is the
 # robust fix for hatchling otherwise bundling local, untracked, or dot-prefixed state into the
-# distribution: only these paths ship, so nothing unexpected leaks in and no local tooling directory
-# has to be named. Contributor docs stay because `docs/agent-guide.md` links to AGENTS.md and the
-# in-repo link-resolution test asserts it exists.
+# distribution: only these paths ship (plus hatchling's own force-included `.gitignore`, a tracked,
+# harmless file), so no local agent/editor state leaks in and no tooling directory has to be named.
+# Contributor docs stay because `docs/agent-guide.md` links to AGENTS.md and the in-repo
+# link-resolution test asserts it exists.
 include = [
   "/gdmutant",
   "/tests",
