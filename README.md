@@ -167,6 +167,11 @@ set — gdmutant skips anything under a `test/`/`tests/` folder, named `test_*.g
 Naming a file explicitly on the command line always mutates it; the skip and `--exclude` only narrow
 a directory expansion. `--dry-run` shows exactly what survives the filter.
 
+**One odd file won't stop the run.** If a file in a directory target can't be parsed (a real
+codebase occasionally has one — say a construct the GDScript parser doesn't handle yet), gdmutant
+skips it with a warning and mutates the rest, rather than aborting the whole run. (A single file
+named explicitly still errors, so a direct request that fails is never silent.)
+
 ## Reports
 
 `--html report.html` writes a self-contained page — the standard mutation-testing-elements viewer

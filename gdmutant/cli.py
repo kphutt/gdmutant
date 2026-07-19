@@ -353,6 +353,23 @@ def _diff_scoped(base: Adapter, changed: dict[str, set[int]]) -> Adapter:
     return Adapter(generate_mutants=generate, apply_mutant=base.apply_mutant)
 
 
+def _drop_unparseable(files: list[str]) -> tuple[list[str], list[str]]:
+    """Partition `files` into (parseable, unparseable). A file that can't be read or that gdtoolkit
+    can't parse — e.g. a grammar gap on real-world GDScript (a comment inside a line-continuation, a
+    newer Godot annotation) — is dropped so one odd file in a directory doesn't abort the whole run
+    (LOD-211). Silent; the caller warns with a summary."""
+    good: list[str] = []
+    bad: list[str] = []
+    for candidate in files:
+        try:
+            source = Path(candidate).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            bad.append(candidate)
+            continue
+        (good if is_valid_gdscript(source) else bad).append(candidate)
+    return good, bad
+
+
 def _default_project_dir(raw_paths: list[str], files: list[str]) -> str:
     """The Godot project dir to run tests from when ``--project`` isn't given: a lone directory
     target *is* the project; otherwise the (first) source file's own directory. That last case is a
@@ -783,6 +800,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         files = _expand_sources(args.source, exclude)
         if files is None:
             return 2
+        # Resilience (LOD-211): on a multi-file target, drop an unparseable/unreadable file with a
+        # warning and mutate the rest — one odd file (a gdtoolkit grammar gap on real GDScript)
+        # shouldn't zero out a whole directory run. A single explicitly-named file stays strict: its
+        # parse error exits 2 downstream, because it's a direct request that failed.
+        if len(files) > 1:
+            files, unparseable = _drop_unparseable(files)
+            if unparseable:
+                print(
+                    f"note: skipped {len(unparseable)} file(s) gdtoolkit couldn't parse — mutating "
+                    f"the other {len(files)}:",
+                    file=sys.stderr,
+                )
+                for path in unparseable:
+                    print(f"  {path}", file=sys.stderr)
+            if not files:
+                print("error: no parseable .gd files in the given path(s)", file=sys.stderr)
+                return 2
         # Diff-scoped mode (LOD-105): restrict mutation to lines changed since a base ref. A bad ref
         # is a setup error; no changed lines at all is a clean no-op (exit 0), not a failed run.
         changed: dict[str, set[int]] | None = None
