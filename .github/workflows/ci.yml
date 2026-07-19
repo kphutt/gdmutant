@@ -163,3 +163,5 @@ jobs:
           name: corpus-mutation-report
           path: report.json
           if-no-files-found: warn
+
+# (path-scope skip test — throwaway, will not be merged)
