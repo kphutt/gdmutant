@@ -43,7 +43,8 @@ against real Godot in CI (both runners, pinned to exact per-mutant outcomes).
   detail.
 
 **Reports**
-- Console summary with each survivor as `file:line:col` + the swap and a `→ kill it` hint.
+- Console summary that *explains* each survivor: the code line with a caret on the exact token, what
+  the untested gap is, why it matters, and where to start a test — not just a location.
 - Stryker [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements)
   JSON (`--json`) and a ready-to-open HTML report (`--html`).
 
@@ -131,9 +132,9 @@ gdmutant's default runner reads its JUnit XML for per-test detail instead (needs
   corpus/turn_order.gd:32:9   constant     true -> false
 ```
 
-A real run adds a killed/survived verdict per mutant, a mutation score, and each survivor with a
-`→ kill it` hint. New to the output?
-See [reading your first report](docs/reading-your-first-report.md).
+A real run adds a killed/survived verdict per mutant, a mutation score, and a plain-language
+explanation of each survivor — what's untested, why it matters, and where to start. New to the
+output? See [reading your first report](docs/reading-your-first-report.md).
 
 ## Configuration
 

@@ -32,21 +32,43 @@ Mutation score: 60.0%
   error:    0
 
 Survivors (4):
-  turn_order.gd:13:11  comparison  < -> <=
-      → kill it: test the boundary value where the two operators differ (equal inputs)
+
+──── survived ──────────────────────────────────────────── comparison ────
+
+  turn_order.gd:13   func clamp_initiative
+
+     13 |     if value < 0:
+        |              ^  changed  <  to  <= — every test still passed
+
+  gap    Your tests pass whether this says `<` or `<=`. They run this
+         line, but never the one input where the two disagree — equal
+         operands. That case is untested.
+
+  risk   Passing here is false confidence, not proof. A later refactor or
+         merge that changes the equal case slips through green. If the
+         equal case has a right answer, no test guards it.
+
+  start  Add a test that reaches this line with two equal operands (a
+         value compared to itself) and assert the result you expect. Only
+         you know that result — gdmutant reports the gap, not it.
+
+  more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/comparison.md
+──────────────────────────────────────────────────────────────────────────
 ```
 
 - **Mutation score** = detected ÷ (detected + survived), where **detected = killed + timeouts** (a
   mutation that hung the suite was caught, so a timeout counts as a kill); *ignored*, *invalid*, and
   *error* mutants are excluded from the score entirely.
-- Each survivor line is `path:line:column  operator  original -> replacement`, followed by a
-  **`→ kill it:`** hint tailored to that operator — a concrete nudge toward the test that would catch it.
+- Each survivor is a block: the **code line** with a caret on the changed token, then **`gap`** (what
+  your tests don't check), **`risk`** (why that matters), **`start`** (the input to add — gdmutant
+  names the gap, never the expected answer), and **`more`** (a per-operator explainer page). One
+  block per survivor; the four here are shown as one for brevity.
 
 ## Killing a survivor
 
 Write (or strengthen) a test that **fails** under the survivor's change, then re-run — it should flip
-to `killed`. The hint tells you the shape of that test; the general rule is *pin the exact behaviour
-the edit moves*:
+to `killed`. The `start` line tells you the shape of that test; the general rule is *pin the exact
+behaviour the edit moves*:
 
 - **comparison** (`< -> <=`): test the **boundary** — the equal-inputs case where `<` and `<=` differ.
 - **boolean** (`and -> or`): test a case where the operands **disagree** (one true, one false).
