@@ -28,7 +28,7 @@ from gdmutant.adapters.gdscript.runner import (
     GdUnit4Runner,
 )
 from gdmutant.engine.loop import BaselineFailed, run
-from gdmutant.engine.report import console_summary, stryker_report
+from gdmutant.engine.report import console_summary, html_report, stryker_report
 from gdmutant.engine.runner import CommandRunner, Runner
 
 _MISSING_GODOT_MACOS_HINT = (
@@ -148,18 +148,22 @@ def _warn_unknown_ignore_operators(source: str) -> None:
         )
 
 
-def _report_path_problem(json_path: str | None) -> str | None:
-    """A human message if the ``--json`` report path can't be written, else None — checked *before*
-    the run so a long pass (minutes of booting Godot per mutant) never ends on an avoidable write
-    error (LOD-110). ``-`` (stdout) and ``None`` (no report) are always fine; only a real file path
-    is validated, and only its parent directory (the file itself needn't exist yet)."""
-    if json_path is None or json_path == "-":
+def _report_path_problem(path: str | None, flag: str, *, stdout_ok: bool) -> str | None:
+    """A human message (naming `flag`) if a report `path` can't be written, else None — checked
+    *before* the run so a long pass (minutes of booting Godot per mutant) never ends on an avoidable
+    write error (LOD-110). ``None`` (no report) is always fine; only a real file path is validated,
+    and only its parent directory (the file itself needn't exist yet). ``-`` means stdout, valid
+    only where `stdout_ok` (``--json``); for a file-only flag (``--html``) it's rejected rather than
+    written as a file literally named ``-``."""
+    if path is None:
         return None
-    parent = Path(json_path).parent
+    if path == "-":
+        return None if stdout_ok else f"{flag} needs a file path — stdout ('-') isn't supported"
+    parent = Path(path).parent
     if not parent.exists():
-        return f"--json directory does not exist: {parent}"
+        return f"{flag} directory does not exist: {parent}"
     if not os.access(parent, os.W_OK):
-        return f"--json directory is not writable: {parent}"
+        return f"{flag} directory is not writable: {parent}"
     return None
 
 
@@ -189,14 +193,15 @@ def run_mutation(
     *,
     timeout: float | None = None,
     json_path: str | None = None,
+    html_path: str | None = None,
     require_clean: bool = False,
 ) -> int:
-    """Mutate `source_path`, run the suite via `runner`, print the summary, optionally write JSON.
+    """Mutate `source_path`, run via `runner`, print the summary, optionally write a report file.
 
     Returns 0 on a completed pass — **survivors are report output, not a failure** (FG-6.2) — 1 if
     the unmutated baseline suite fails, and 2 if the source can't be read, isn't valid GDScript, the
     project directory doesn't exist, `require_clean` is set and the source has uncommitted changes,
-    the test-runner executable isn't found, or the JSON report can't be written.
+    the test-runner executable isn't found, or a report (JSON/HTML) can't be written.
     """
     source = _load_gdscript(source_path)
     if source is None:
@@ -209,12 +214,15 @@ def run_mutation(
     if not Path(project_dir).is_dir():
         print(f"error: project directory not found: {project_dir}", file=sys.stderr)
         return 2
-    # Preflight the report path up front (LOD-110): a run boots Godot per mutant for minutes, so an
-    # unwritable --json target must fail now, not after the whole pass completes.
-    report_problem = _report_path_problem(json_path)
-    if report_problem is not None:
-        print(f"error: {report_problem}", file=sys.stderr)
-        return 2
+    # Preflight the report paths up front (LOD-110): a run boots Godot per mutant for minutes, so an
+    # unwritable --json/--html target must fail now, not after the whole pass completes.
+    for problem in (
+        _report_path_problem(json_path, "--json", stdout_ok=True),
+        _report_path_problem(html_path, "--html", stdout_ok=False),
+    ):
+        if problem is not None:
+            print(f"error: {problem}", file=sys.stderr)
+            return 2
     # In-place-mutation safety (LOD-88): the run edits the source file per mutant. Warn (or, with
     # require_clean, refuse) on a dirty tree so a hard interrupt can't lose uncommitted work.
     # Ordered after the read/parse validation above so a genuine read error is reported first,
@@ -260,8 +268,10 @@ def run_mutation(
     # capturing stdout then gets pure JSON.
     report_to_stdout = json_path == "-"
     print(console_summary(result), file=sys.stderr if report_to_stdout else sys.stdout)
+    # Build the Stryker report once; both --json and --html render from it.
+    stryker = stryker_report(result, str(path), source, "gdscript")
     if json_path is not None:
-        report = json.dumps(stryker_report(result, str(path), source, "gdscript"), indent=2)
+        report = json.dumps(stryker, indent=2)
         if report_to_stdout:
             print(report)
         else:
@@ -271,6 +281,13 @@ def run_mutation(
                 print(f"error: cannot write report to {json_path}: {error}", file=sys.stderr)
                 return 2
             print(f"\nWrote report to {json_path}")
+    if html_path is not None:
+        try:
+            Path(html_path).write_text(html_report(stryker), encoding="utf-8")
+        except OSError as error:
+            print(f"error: cannot write HTML report to {html_path}: {error}", file=sys.stderr)
+            return 2
+        print(f"\nWrote HTML report to {html_path} — open it in a browser.")
     return 0
 
 
@@ -387,6 +404,12 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "--json", dest="json_path", help="write the Stryker JSON report here (use - for stdout)"
     )
     run_parser.add_argument(
+        "--html",
+        dest="html_path",
+        help="write a ready-to-open HTML report here (the mutation-testing-elements viewer, "
+        "report inlined; the viewer loads from a pinned CDN)",
+    )
+    run_parser.add_argument(
         "--require-clean",
         action="store_true",
         help="refuse to run if the source file has uncommitted git changes (default: warn only)",
@@ -429,6 +452,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--timeout", args.timeout, None),
                     ("--require-clean", args.require_clean, False),
                     ("--json", args.json_path, None),
+                    ("--html", args.html_path, None),
                 )
                 if value != default
             ]
@@ -475,6 +499,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             runner,
             timeout=args.timeout,
             json_path=args.json_path,
+            html_path=args.html_path,
             require_clean=args.require_clean,
         )
     parser.print_help()
