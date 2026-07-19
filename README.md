@@ -24,8 +24,7 @@ actually bites.
 
 It is a standalone CLI — no AI required — built on a language-neutral engine with a
 [gdtoolkit](https://github.com/Scony/godot-gdscript-toolkit) AST adapter, and validated end-to-end
-against real Godot in CI (both runners, pinned to exact per-mutant outcomes). No usable mutation
-tester existed for GDScript before it (see [prior art](docs/prior-art.md)).
+against real Godot in CI (both runners, pinned to exact per-mutant outcomes).
 
 ## Features
 
@@ -231,7 +230,6 @@ adapter. The full design is in [`docs/design/DESIGN.md`](docs/design/DESIGN.md).
 
 - [Reading your first report](docs/reading-your-first-report.md) — verdicts, kill hints, equivalent mutants.
 - [Design & architecture](docs/design/DESIGN.md) — the engine, requirements, and the "Saboteur & the Jury" design.
-- [Prior art](docs/prior-art.md) — the GDScript gap, why build rather than extend, patterns borrowed from mature tools.
 - [Roadmap](ROADMAP.md) — what's done and what's next.
 - [Driving gdmutant from an AI agent](docs/agent-guide.md) — the invocation, JSON schema, exit-code contract, and survivor→killing-test loop.
 
