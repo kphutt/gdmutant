@@ -137,6 +137,15 @@ JSON report (`--json report.json`, or `--json -` to stream it to stdout). (Once 
 gdmutant`.) New to the output? [`docs/reading-your-first-report.md`](docs/reading-your-first-report.md)
 walks through survivors, the kill hints, and equivalent mutants.
 
+**A whole directory, not one file at a time.** Pass a directory (or several files/dirs) and gdmutant
+mutates every `.gd` under it — recursively, skipping `addons/` and dot-dirs — running the baseline
+**once** and reporting a per-file breakdown, one aggregate score, and one merged report:
+```sh
+uv run gdmutant run src/systems --project . --json report.json --html report.html
+```
+Point it at your *source* directory: a whole-project target mutates your test files too (a `--exclude`
+glob is future work).
+
 > **Trying the GdUnit4 runner on the *bundled corpus*?** The corpus doesn't vendor the addon, so
 > fetch it first — `scripts/install-gdunit4.sh` (the same pinned install CI uses) drops it into
 > `corpus/addons/gdUnit4/` — then run with `--project corpus --runner gdunit4 --godot <godot>`. Or
