@@ -36,9 +36,11 @@ against real Godot in CI (both runners, pinned to exact per-mutant outcomes).
   and one aggregate mutation score.
 
 **Running your tests**
-- **GdUnit4 runner** — reads GdUnit4's JUnit XML.
-- **Exit-code runner** (`--runner command`) — any headless harness that exits non-zero on failure;
-  no GdUnit4 addon needed.
+- **Exit-code runner** (`--runner command`) — point it at any headless test command that exits
+  non-zero on failure. Works with GUT, GdUnit4's CLI, or a hand-rolled `SceneTree` harness — no addon
+  required. The universal path.
+- **GdUnit4 runner** — already on GdUnit4? Its dedicated runner reads the JUnit XML for per-test
+  detail.
 
 **Reports**
 - Console summary with each survivor as `file:line:col` + the swap and a `→ kill it` hint.
@@ -103,12 +105,18 @@ deliberately under-tested (with a couple of equivalent mutants), so a real run s
 survivors, exactly as mutation testing does on real code. (On macOS, use the app-bundle path to
 `godot` inside `--command`.)
 
-**Run it on your own project** — with the [GdUnit4](https://github.com/godot-gdunit-labs/gdUnit4)
-addon under `res://addons/gdUnit4/`, the default runner reads its JUnit XML:
+**Run it on your own project** — point gdmutant at the same headless test command your CI already
+runs; it just has to exit non-zero on failure (GUT, GdUnit4's CLI, and hand-rolled `SceneTree`
+harnesses all do):
 
 ```sh
-uv run gdmutant run path/to/module.gd --project path/to/godot-project --json report.json
+uv run gdmutant run path/to/module.gd --project path/to/godot-project \
+  --runner command --command "godot --headless --script res://tests/run_tests.gd" --json report.json
 ```
+
+Already on **[GdUnit4](https://github.com/godot-gdunit-labs/gdUnit4)**? Drop `--runner command` and
+gdmutant's default runner reads its JUnit XML for per-test detail instead (needs the addon under
+`res://addons/gdUnit4/`).
 
 ## Example output
 
