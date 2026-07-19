@@ -1,0 +1,35 @@
+# Changelog
+
+All notable changes to gdmutant are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it tags its first release.
+
+## [Unreleased]
+
+Pre-release. gdmutant mutates real GDScript and reports survivors end-to-end via the standalone
+`gdmutant run` CLI; the version stays `0.0.0` until the first tagged release.
+
+### Added
+
+- AST-based mutation of GDScript via [gdtoolkit](https://github.com/Scony/godot-gdscript-toolkit),
+  with a re-parse validity guard so invalid mutants are never run.
+- Operators: comparison, boolean, arithmetic, constant, numeric-literal, compound assignment,
+  modulo, unary-not, and statement-deletion.
+- Two test runners: the GdUnit4 runner (JUnit XML) and an exit-code runner (`--runner command`) for
+  any headless harness — no GdUnit4 addon required.
+- Multi-file and directory targets: mutate several files or a whole directory in one pass with a
+  per-file breakdown and one aggregate mutation score.
+- Test suites are skipped by default on directory targets (by `test/`/`tests/` folder, `test_*.gd` /
+  `*_test.gd` / `*Test.gd` name, or `extends GdUnitTestSuite` / `GutTest`), with an `--exclude` glob
+  (and a `.gdmutant.toml` `exclude` list) to skip anything else.
+- Reports: a console survivor summary with kill hints, the Stryker
+  [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) JSON
+  schema (`--json`), and a self-contained HTML report (`--html`).
+- `.gdmutant.toml` for persisted per-project flags; `--dry-run` to list mutants without running
+  Godot.
+- Live self-test against real Godot in CI, pinning both runner paths to exact per-mutant outcomes.
+
+### Safety
+
+- Mutations are applied in place and restored after each mutant and on exit; gdmutant warns on
+  uncommitted changes and `--require-clean` makes that a hard stop.

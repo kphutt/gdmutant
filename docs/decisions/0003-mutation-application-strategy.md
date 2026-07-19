@@ -23,8 +23,8 @@ for v0.1's full-suite-per-mutant model.
 
 ## Consequences
 - One file write + one full suite run per mutant. Booting Godot per mutant is slow — the perf path
-  is coverage-gated selection and, later, **schemata (b)**, both deferred to Tier B and noted in the
-  ROADMAP. This decision does not preclude adopting (b) later; it's the simple correct baseline.
+  is coverage-gated selection and, later, **schemata (b)**, both deferred to Tier B (`DESIGN.md`
+  §5). This decision does not preclude adopting (b) later; it's the simple correct baseline.
 - A crash or a runner exception mid-run still restores the file (`finally`), so a failed run never
   corrupts the project.
 - One `run()` call mutates a single file (the one whose `source` it was given).

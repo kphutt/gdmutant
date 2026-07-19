@@ -64,7 +64,7 @@ uv run pip-audit               # dependency audit
 
 - [`README.md`](README.md) — what it is and why.
 - [`docs/design/DESIGN.md`](docs/design/DESIGN.md) — authoritative design (goals, FG/NF requirements, architecture).
-- [`ROADMAP.md`](ROADMAP.md) — forward roadmap / non-goals.
+- [`CHANGELOG.md`](CHANGELOG.md) — what's landed and in progress (scope / non-goals live in `DESIGN.md`).
 - `docs/mutation-testing.md` — the suite is mutation-tested against itself.
 - `docs/decisions/NNNN-*.md` — append-only ADRs (`ls` is the index).
 - [`CREDITS.md`](CREDITS.md) — third-party licenses.

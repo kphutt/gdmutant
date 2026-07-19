@@ -4,9 +4,9 @@
 
 [project]
 name = "gdmutant"
-version = "0.0.0"                       # engine + CLI are built; bump to 0.1.0 after the two
-                                        # remaining v0.1 items land (ROADMAP.md): live Godot/GdUnit4
-                                        # CI validation + the statement-deletion operator.
+version = "0.0.0"                       # engine + CLI are built and validated against real Godot in
+                                        # CI; stays 0.0.0 until the first tagged release (see
+                                        # CHANGELOG.md).
 description = "An AST-based, language-agnostic mutation-testing tool for GDScript/Godot."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -63,19 +63,28 @@ build-backend = "hatchling.build"
 packages = ["gdmutant"]
 
 [tool.hatch.build.targets.sdist]
-# Ship what a consumer needs to build, test, and understand the release — the package (incl. its
-# `py.typed` marker), the test suite, docs, and the corpus — but trim dev/CI/machine cruft that has
-# no place in a distribution: local agent state (`.claude/`, which hatchling would otherwise bundle
-# even though it's gitignored), CI workflows, the repo-hardening / addon-install scripts, and local
-# tooling config. Contributor docs (AGENTS.md, CONTRIBUTING.md, …) stay: `docs/agent-guide.md` links
-# to AGENTS.md and the in-repo link-resolution test asserts it exists.
-exclude = [
-  "/.claude",
-  "/.github",
-  "/scripts",
-  "/mise.toml",
-  "/.gitleaks.toml",
-  "/.gitattributes",
+# An explicit allowlist of what ships in the sdist — the package (incl. its `py.typed` marker), the
+# test suite, docs, the corpus, and the contributor/meta docs. An allowlist (not a deny-list) is the
+# robust fix for hatchling otherwise bundling local, untracked, or dot-prefixed state into the
+# distribution: only these paths ship (plus hatchling's own force-included `.gitignore`, a tracked,
+# harmless file), so no local agent/editor state leaks in and no tooling directory has to be named.
+# Contributor docs stay because `docs/agent-guide.md` links to AGENTS.md and the in-repo
+# link-resolution test asserts it exists.
+include = [
+  "/gdmutant",
+  "/tests",
+  "/corpus",
+  "/docs",
+  "/README.md",
+  "/CHANGELOG.md",
+  "/CONTRIBUTING.md",
+  "/CODE_OF_CONDUCT.md",
+  "/SECURITY.md",
+  "/CREDITS.md",
+  "/AGENTS.md",
+  "/LICENSE",
+  "/pyproject.toml",
+  "/uv.lock",
 ]
 
 [tool.ruff]

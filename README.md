@@ -231,7 +231,7 @@ adapter. The full design is in [`docs/design/DESIGN.md`](docs/design/DESIGN.md).
 - [Reading your first report](docs/reading-your-first-report.md) — verdicts, kill hints, equivalent mutants.
 - [Exit-code runner convention](docs/decisions/0005-exit-code-test-runner-convention.md) — the stdout/exit-code contract and its coarser killed/errored resolution vs GdUnit4's XML.
 - [Design & architecture](docs/design/DESIGN.md) — the engine, requirements, and the "Saboteur & the Jury" design.
-- [Roadmap](ROADMAP.md) — what's done and what's next.
+- [Changelog](CHANGELOG.md) — what's landed and what's in progress.
 - [Driving gdmutant from an AI agent](docs/agent-guide.md) — the invocation, JSON schema, exit-code contract, and survivor→killing-test loop.
 
 ## Contributing
