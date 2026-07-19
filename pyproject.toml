@@ -15,10 +15,14 @@ license-files = ["LICENSE"]
 authors = [{ name = "Karsten Huttelmaier" }]
 keywords = ["mutation-testing", "gdscript", "godot", "testing", "test-quality"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
+  "Environment :: Console",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
   "Topic :: Software Development :: Testing",
+  "Typing :: Typed",
 ]
 
 # Runtime dependencies (both MIT — recorded in CREDITS.md):
@@ -31,7 +35,10 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/kphutt/gdmutant"
 Repository = "https://github.com/kphutt/gdmutant"
+Issues = "https://github.com/kphutt/gdmutant/issues"
+Changelog = "https://github.com/kphutt/gdmutant/releases"
 
 [project.scripts]
 # The standalone CLI a developer runs — usable without any AI.
@@ -54,6 +61,22 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["gdmutant"]
+
+[tool.hatch.build.targets.sdist]
+# Ship what a consumer needs to build, test, and understand the release — the package (incl. its
+# `py.typed` marker), the test suite, docs, and the corpus — but trim dev/CI/machine cruft that has
+# no place in a distribution: local agent state (`.claude/`, which hatchling would otherwise bundle
+# even though it's gitignored), CI workflows, the repo-hardening / addon-install scripts, and local
+# tooling config. Contributor docs (AGENTS.md, CONTRIBUTING.md, …) stay: `docs/agent-guide.md` links
+# to AGENTS.md and the in-repo link-resolution test asserts it exists.
+exclude = [
+  "/.claude",
+  "/.github",
+  "/scripts",
+  "/mise.toml",
+  "/.gitleaks.toml",
+  "/.gitattributes",
+]
 
 [tool.ruff]
 target-version = "py312"
