@@ -30,7 +30,10 @@ from gdmutant.adapters.gdscript.runner import (
     DEFAULT_TIMEOUT,
     GdUnit4Runner,
 )
+from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.loop import BaselineFailed, MutationRun, run, run_paths
+from gdmutant.engine.mutants import Mutant
+from gdmutant.engine.operators import Operator
 from gdmutant.engine.report import (
     console_summary,
     html_report,
@@ -289,6 +292,54 @@ def _expand_sources(paths: list[str], exclude: list[str] | None = None) -> list[
     return sorted(unique)
 
 
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
+
+
+def _changed_lines(ref: str, files: list[str]) -> dict[str, set[int]] | None:
+    """Map each of `files` (by resolved path) to the line numbers added/modified since git `ref`
+    (LOD-105) — the ``+`` side of ``git diff --unified=0``, i.e. the current-tree lines a change
+    touched. A file with no changes maps to an empty set. Returns None (after printing an error) if
+    `ref` is unknown or a file isn't in a git repo — a bad base ref is a setup error, not a silently
+    empty run."""
+    changed: dict[str, set[int]] = {}
+    for raw in files:
+        path = Path(raw).resolve()
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--unified=0", ref, "--", str(path)],
+                cwd=str(path.parent),
+                capture_output=True,
+                text=True,
+            )
+        except OSError as error:
+            print(f"error: could not run git for --since {ref}: {error}", file=sys.stderr)
+            return None
+        if result.returncode != 0:
+            lines_err = result.stderr.strip().splitlines()
+            detail = f": {lines_err[-1]}" if lines_err else ""
+            print(f"error: git diff for --since {ref} failed{detail}", file=sys.stderr)
+            return None
+        touched: set[int] = set()
+        for match in _HUNK_RE.finditer(result.stdout):
+            start = int(match.group(1))
+            count = int(match.group(2)) if match.group(2) is not None else 1
+            touched.update(range(start, start + count))  # count 0 (pure deletion) adds nothing
+        changed[str(path)] = touched
+    return changed
+
+
+def _diff_scoped(base: Adapter, changed: dict[str, set[int]]) -> Adapter:
+    """Wrap `base` so it emits only mutants on lines changed since the base ref (LOD-105) — a filter
+    on the generated set, keyed by resolved path; a file with no changed lines yields no mutants.
+    Application is unchanged, so this rides the engine's adapter seam (NF-3) with no engine edit."""
+
+    def generate(path: str, source: str, catalog: tuple[Operator, ...]) -> list[Mutant]:
+        lines = changed.get(str(Path(path).resolve()), set())
+        return [m for m in base.generate_mutants(path, source, catalog) if m.span.line in lines]
+
+    return Adapter(generate_mutants=generate, apply_mutant=base.apply_mutant)
+
+
 def _default_project_dir(raw_paths: list[str], files: list[str]) -> str:
     """The Godot project dir to run tests from when ``--project`` isn't given: a lone directory
     target *is* the project; otherwise the (first) source file's own directory. That last case is a
@@ -333,14 +384,17 @@ def _report_path_problem(path: str | None, flag: str, *, stdout_ok: bool) -> str
     return None
 
 
-def list_mutants(source_path: str) -> int:
+def list_mutants(source_path: str, only_lines: set[int] | None = None) -> int:
     """Print every mutant gdmutant would generate for `source_path` **without running any tests** —
-    a Godot-free way to see the tool work. Returns 0, or 2 if the source can't be read/parsed."""
+    a Godot-free way to see the tool work. With `only_lines` (diff-scoped, LOD-105) only mutants on
+    those lines are listed. Returns 0, or 2 if the source can't be read/parsed."""
     source = _load_gdscript(source_path)
     if source is None:
         return 2
     _warn_unknown_ignore_operators(source)
     mutants = generate_mutants(str(Path(source_path)), source)
+    if only_lines is not None:
+        mutants = [m for m in mutants if m.span.line in only_lines]
     print(f"{len(mutants)} mutants for {source_path}:")
     for m in mutants:
         loc = f"{m.path}:{m.span.line}:{m.span.column}"
@@ -361,6 +415,7 @@ def run_mutation(
     json_path: str | None = None,
     html_path: str | None = None,
     require_clean: bool = False,
+    changed: dict[str, set[int]] | None = None,
 ) -> int:
     """Mutate `source_path`, run via `runner`, print the summary, optionally write a report file.
 
@@ -410,13 +465,14 @@ def run_mutation(
     path = Path(source_path)
     # Progress goes to stderr unconditionally: a real run boots Godot per mutant, so without it the
     # tool looks hung. stderr keeps stdout clean for --json - (pure JSON) and the human summary.
+    adapter = ADAPTER if changed is None else _diff_scoped(ADAPTER, changed)
     try:
         result = run(
             project_dir,
             str(path),
             source,
             runner,
-            ADAPTER,
+            adapter,
             timeout=timeout,
             progress=lambda line: print(line, file=sys.stderr),
         )
@@ -462,6 +518,7 @@ def run_mutation_paths(
     json_path: str | None = None,
     html_path: str | None = None,
     require_clean: bool = False,
+    changed: dict[str, set[int]] | None = None,
 ) -> int:
     """Mutate several `.gd` files against one project in a single pass — the baseline runs **once**
     and the score is aggregated across every file, with one merged report (LOD-79). Same return
@@ -498,12 +555,13 @@ def run_mutation_paths(
                 "(restoring it when done). Commit or stash first to be safe. Continuing ...",
                 file=sys.stderr,
             )
+    adapter = ADAPTER if changed is None else _diff_scoped(ADAPTER, changed)
     try:
         runs = run_paths(
             project_dir,
             sources,
             runner,
-            ADAPTER,
+            adapter,
             timeout=timeout,
             progress=lambda line: print(line, file=sys.stderr),
         )
@@ -677,6 +735,12 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "'exclude' list in .gdmutant.toml.",
     )
     run_parser.add_argument(
+        "--since",
+        metavar="ref",
+        help="only mutate lines changed since this git ref (e.g. main, HEAD~1) — the per-PR "
+        "diff-scoped mode; a much faster, gate-able signal than a whole-file run",
+    )
+    run_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="list the mutants without running any tests (no Godot needed)",
@@ -706,6 +770,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         files = _expand_sources(args.source, exclude)
         if files is None:
             return 2
+        # Diff-scoped mode (LOD-105): restrict mutation to lines changed since a base ref. A bad ref
+        # is a setup error; no changed lines at all is a clean no-op (exit 0), not a failed run.
+        changed: dict[str, set[int]] | None = None
+        if args.since:
+            changed = _changed_lines(args.since, files)
+            if changed is None:
+                return 2
+            if not any(changed.values()):
+                print(
+                    f"no lines changed since {args.since} in the given path(s) — nothing to mutate",
+                    file=sys.stderr,
+                )
+                return 0
         if args.dry_run:
             ignored = [
                 flag
@@ -732,7 +809,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             for index, gd_file in enumerate(files):
                 if index:
                     print()  # blank line between files
-                rc = list_mutants(gd_file)
+                only = changed.get(str(Path(gd_file).resolve())) if changed is not None else None
+                rc = list_mutants(gd_file, only_lines=only)
                 if rc != 0:
                     return rc
             return 0
@@ -771,6 +849,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "json_path": args.json_path,
             "html_path": args.html_path,
             "require_clean": args.require_clean,
+            "changed": changed,
         }
         if len(files) == 1:
             return run_mutation(files[0], project_dir, runner, **common)
