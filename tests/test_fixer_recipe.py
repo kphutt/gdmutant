@@ -41,5 +41,6 @@ def test_recipe_local_links_resolve() -> None:
 
 
 def test_recipe_is_agent_agnostic() -> None:
-    # No tool-specific references (the project uses AGENTS.md, never CLAUDE.md).
+    # The recipe points at AGENTS.md, the agent-agnostic source. A root `CLAUDE.md` -> `@AGENTS.md`
+    # bridge file may exist, but this doc must not route through a tool-specific file.
     assert "CLAUDE.md" not in _text()
