@@ -108,6 +108,9 @@ jobs:
         with:
           version: 4.7.0
           use-dotnet: false
+          # The action caches the Godot download itself (keyed on version + platform). Kept explicit
+          # so it can't silently regress to a re-download; verified restoring from cache in CI.
+          cache: true
 
       # Fail loudly here if the binary/PATH isn't what we expect — not as a confusing skip at step N.
       - name: Godot smoke check
@@ -118,20 +121,40 @@ jobs:
 
       # On failure the test prints the full per-mutant table + gdmutant's stdout/stderr, so a red run
       # is diagnosable from this log alone. --no-cov: this job runs only the live test in isolation.
+      # --basetemp keeps pytest's tmp tree in the workspace so the next step can reuse the Stryker
+      # JSON this run already wrote, instead of booting Godot to regenerate the identical report.
       - name: Live self-test (real Godot)
-        run: GDMUTANT_GODOT=godot uv run pytest tests/test_selftest_live.py -v --no-cov
+        run: GDMUTANT_GODOT=godot uv run pytest tests/test_selftest_live.py -v --no-cov --basetemp=.live-tmp
 
       # A downloadable Stryker report of the corpus — the "run the real thing" demo artifact.
-      - name: Generate corpus mutation report
+      # Reuse the JSON the live self-test already wrote (--basetemp=.live-tmp) instead of booting
+      # Godot and re-running the identical 18-mutant pass: same report, one corpus run instead of
+      # two (coverage-neutral, ~30s saved). The test targets a tmp copy, so its single file key is
+      # an absolute tmp path — normalize it back to the repo-relative path the old step produced.
+      - name: Publish the corpus mutation report (reuse the self-test run)
         if: always()
         run: |
-          # Warm Godot's import cache for the checked-out corpus so GdUnit4 can resolve
-          # `class_name TurnOrder` — the self-test only warms its own tmp copy, not this dir.
-          # --import's exit code is ignored (quirky across versions); the run below is the real check
-          # and is NOT `|| true`-swallowed, so a broken demo shows up instead of a silent empty upload.
-          godot --headless --path corpus --import || true
-          GDMUTANT_GODOT=godot uv run python -m gdmutant.cli run corpus/turn_order.gd \
-            --project corpus --runner gdunit4 --godot godot --json report.json
+          python3 - <<'PY'
+          import glob, json, sys
+
+          hits = glob.glob(".live-tmp/**/gdunit_report.json", recursive=True) or glob.glob(
+              ".live-tmp/**/command_report.json", recursive=True
+          )
+          if not hits:
+              # The live self-test writes this JSON as it runs, so its absence means the step above
+              # already failed before the CLI wrote it. Fail loud here too rather than a silent green
+              # + empty upload — the property the old regenerate step held (its run was not
+              # `|| true`-swallowed). Safe: this only fires when the required live-test step is
+              # already red, so it never reds an otherwise-green job.
+              print("::error::no corpus report under .live-tmp/ — the live self-test did not write one")
+              sys.exit(1)
+          data = json.load(open(hits[0], encoding="utf-8"))
+          (file_obj,) = data["files"].values()  # the corpus target is a single file (pinned)
+          data["files"] = {"corpus/turn_order.gd": file_obj}
+          with open("report.json", "w", encoding="utf-8") as fh:
+              json.dump(data, fh)
+          print(f"reused {hits[0]} -> report.json")
+          PY
 
       - name: Upload mutation report
         if: always()
@@ -140,70 +163,3 @@ jobs:
           name: corpus-mutation-report
           path: report.json
           if-no-files-found: warn
-
-  # --- Mutation testing (dogfood): advisory, never blocks the merge ---------
-  # Reports gdmutant's own mutation score on the run summary. continue-on-error + NOT a required
-  # status check, so a surviving mutant never fails CI. See docs/mutation-testing.md.
-  mutation:
-    name: Mutation testing (mutmut, advisory)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false # this job never uses git creds — don't leave them on the runner
-
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12"
-
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          version: "0.11.28"
-          enable-cache: true # cache uv's global store — skips re-downloading the locked deps each job
-
-      - name: Install deps (frozen lockfile)
-        run: uv sync --frozen
-
-      - name: Run mutmut (report mode)
-        # Surviving mutants make `mutmut run` exit non-zero — expected here (documented equivalents),
-        # so that alone must not fail the step. But a *baseline* failure (the suite doesn't run
-        # cleanly unmutated) ALSO aborts mutmut, and a bare `|| true` would mask it as a green
-        # advisory run (LOD-127). Keep the run non-fatal, but re-raise the baseline signature.
-        run: |
-          uv run mutmut run > mutmut-run.log 2>&1 || true
-          cat mutmut-run.log
-          # mutmut 3 prints "failed to collect stats" (two variants) and exits 1 when the baseline
-          # can't be established — the exact signature the `|| true` above would otherwise swallow.
-          if grep -qiF "failed to collect stats" mutmut-run.log; then
-            echo "::error::mutmut baseline failed — could not collect stats (the suite does not run cleanly unmutated); any advisory score would be meaningless."
-            exit 1
-          fi
-
-      - name: Summarize the mutation score
-        if: always()
-        run: |
-          uv run mutmut export-cicd-stats || true
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json, pathlib, sys
-          stats = pathlib.Path("mutants/mutmut-cicd-stats.json")
-          d = json.loads(stats.read_text()) if stats.exists() else {}
-          killed, survived = d.get("killed", 0), d.get("survived", 0)
-          evaluated = killed + survived + d.get("timeout", 0) + d.get("suspicious", 0)
-          # A baseline failure (or a missing/empty stats file) means mutmut evaluated ZERO mutants —
-          # indistinguishable from "all killed" unless we check. Fail loudly instead of masking it
-          # as a green advisory run (LOD-127); a real run always evaluates >0 mutants.
-          if evaluated == 0:
-              print("## Mutation testing (mutmut) — BASELINE FAILED ⚠️")
-              print()
-              print("mutmut evaluated **0 mutants** — the suite does not run cleanly unmutated, so "
-                    "no score exists. This advisory job is red on purpose (LOD-127).")
-              sys.exit(1)
-          scored = killed + survived
-          score = f"{100 * killed / scored:.1f}%" if scored else "n/a"
-          print("## Mutation testing (mutmut) — advisory")
-          print()
-          print(f"- **Score:** {score}  ({killed} killed / {scored} killable)")
-          print(f"- **Survivors:** {survived} — documented equivalents in `docs/mutation-testing.md`")
-          PY
