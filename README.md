@@ -149,6 +149,16 @@ named `test_*.gd` / `*_test.gd` / `*Test.gd`, or extending `GdUnitTestSuite` / `
 how many it skipped, and naming a test file explicitly on the command line mutates it anyway (the
 skip applies only to directory expansion).
 
+**Skip more with `--exclude`.** Pass `--exclude '<glob>'` (repeatable) to drop generated code,
+vendored scripts, or anything else you don't want mutated — matched against each path and its bare
+filename, so `--exclude '*_generated.gd'` skips those anywhere and `--exclude '*/vendor/*'` skips a
+whole tree:
+```sh
+uv run gdmutant run src --exclude '*_generated.gd' --exclude '*/vendor/*'
+```
+Same override rule as the test-skip: `--exclude` only narrows a *directory* expansion — an
+explicitly named file is always mutated. `--dry-run` shows exactly what survives the filter.
+
 > **Trying the GdUnit4 runner on the *bundled corpus*?** The corpus doesn't vendor the addon, so
 > fetch it first — `scripts/install-gdunit4.sh` (the same pinned install CI uses) drops it into
 > `corpus/addons/gdUnit4/` — then run with `--project corpus --runner gdunit4 --godot <godot>`. Or
@@ -187,9 +197,12 @@ command = "godot --headless --script res://tests/run_tests.gd"
 # report-path = "reports/report_1/results.xml"
 # timeout = 60
 # require-clean = true
+# exclude = ["*_generated.gd", "*/vendor/*"]   # combines with any --exclude on the CLI
 ```
 Then `gdmutant run path/to/module.gd` picks them up. (`source`, `--json`, and `--dry-run` stay on the
-command line — they're per-invocation, not project settings.)
+command line — they're per-invocation, not project settings.) `exclude` is the one additive key: the
+file's list and any `--exclude` flags both apply, since narrowing what gets mutated is naturally
+cumulative.
 
 > **Your code is safe, but commit first.** gdmutant mutates the source file **in place**, restoring
 > it after each mutant and on a normal exit or Ctrl-C — but a hard kill (SIGKILL / power loss) could
