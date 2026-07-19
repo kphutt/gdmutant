@@ -72,7 +72,9 @@ def test_run_invokes_subprocess_with_the_constructed_command(
     runner = GdUnit4Runner(test_path="res://t", godot="godot4", timeout=42.0)
     runner.run(str(tmp_path))
 
-    (args, kwargs) = calls[0]
+    # run() also issues a one-time --import warm-up; assert against the *suite* call specifically.
+    suite_calls = [(a, k) for (a, k) in calls if "--import" not in a[0]]
+    (args, kwargs) = suite_calls[0]
     assert args[0] == runner.command(str(tmp_path))
     assert kwargs["cwd"] == str(tmp_path)
     assert kwargs["timeout"] == 42.0
@@ -95,6 +97,11 @@ def test_run_reflects_latest_report_on_repeated_calls(
     )
 
     def fake_run(*args: object, **kwargs: object) -> None:
+        # The one-time --import warm-up writes no report; only suite runs advance the outcomes.
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" in command:
+            return
         report.write_text(next(outcomes), encoding="utf-8")
 
     monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
@@ -154,6 +161,56 @@ def test_run_raises_suite_timeout_on_subprocess_timeout(
     monkeypatch.setattr(runner_mod.subprocess, "run", boom)
     with pytest.raises(SuiteTimeout):
         GdUnit4Runner(timeout=1.0).run(str(tmp_path))
+
+
+def test_run_warms_the_import_cache_once_before_the_first_suite_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On a cold checkout GdUnit4's class_name types don't resolve until Godot's --import scan writes
+    # the global class cache, so the runner must warm it — once — before the very first suite run,
+    # or the baseline fails to even load the tool (LOD-213). Assert the --import fires first, and
+    # exactly once across repeated runs (the cache persists across mutants).
+    report = _report(tmp_path)
+    commands: list[list[str]] = []
+
+    def capture(*args: object, **kwargs: object) -> None:
+        command = args[0]
+        assert isinstance(command, list)
+        commands.append(command)
+        if "--import" not in command:
+            report.write_text('<testsuite tests="1" failures="0"/>', encoding="utf-8")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", capture)
+    runner = GdUnit4Runner(godot="godot4")
+    runner.run(str(tmp_path))
+    runner.run(str(tmp_path))  # second mutant: must NOT re-import
+
+    import_cmds = [c for c in commands if "--import" in c]
+    assert len(import_cmds) == 1, f"expected exactly one --import warm-up, got {len(import_cmds)}"
+    # It runs before the first suite command, and targets the resolved project path.
+    assert commands[0] == ["godot4", "--headless", "--path", str(tmp_path.resolve()), "--import"]
+    assert "--import" not in commands[1]  # the suite run follows the warm-up
+
+
+def test_run_survives_a_slow_import_warm_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A pathologically slow --import must not itself abort the run: the warm-up timeout is swallowed
+    # and the real suite run (with its own timeout) decides. Here the import "times out" but the
+    # suite writes a healthy report, so run() still returns a result.
+    report = _report(tmp_path)
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" in command:
+            raise subprocess.TimeoutExpired(cmd="godot", timeout=1.0)
+        report.write_text('<testsuite tests="2" failures="0"/>', encoding="utf-8")
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    result = GdUnit4Runner().run(str(tmp_path))
+    assert (result.tests, result.failed) == (2, False)
 
 
 def test_gdunit4_runner_satisfies_the_protocol() -> None:
