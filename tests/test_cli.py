@@ -74,6 +74,21 @@ def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFi
     assert "Wrote report to" in capsys.readouterr().out  # the confirmation line is printed
 
 
+def test_run_mutation_writes_html_report(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --html writes a ready-to-open page with the mutation-testing-elements viewer (LOD-103).
+    path = _gd(tmp_path)
+    html_file = tmp_path / "report.html"
+    rc = run_mutation(
+        str(path), str(tmp_path), MarkerRunner(str(path), ">="), html_path=str(html_file)
+    )
+    assert rc == 0
+    html = html_file.read_text(encoding="utf-8")
+    assert "<mutation-test-report-app>" in html and "mutation-testing-elements@" in html
+    assert "Wrote HTML report to" in capsys.readouterr().out
+
+
 def test_run_mutation_emits_per_mutant_progress_to_stderr(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -285,6 +300,22 @@ def test_run_mutation_unwritable_json_path_returns_two(
     assert "cannot write report" in capsys.readouterr().err
 
 
+def test_run_mutation_unwritable_html_path_returns_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Same late-write backstop for --html: parent is a regular file (passes the preflight), so the
+    # write itself fails -> exit 2 with a clear message, not an uncaught OSError.
+    path = _gd(tmp_path)
+    not_a_dir = tmp_path / "afile"
+    not_a_dir.write_text("x", encoding="utf-8")
+    bad_html = not_a_dir / "report.html"  # parent is a regular file -> write fails
+    rc = run_mutation(
+        str(path), str(tmp_path), MarkerRunner(str(path), ">="), html_path=str(bad_html)
+    )
+    assert rc == 2
+    assert "cannot write HTML report" in capsys.readouterr().err
+
+
 def test_report_path_problem_accepts_stdout_none_and_a_writable_dir(tmp_path: Path) -> None:
     assert _report_path_problem(None) is None
     assert _report_path_problem("-") is None
@@ -321,6 +352,17 @@ def test_run_mutation_preflights_a_bad_report_dir_before_running(
     path = _gd(tmp_path)
     bad_json = tmp_path / "missing" / "report.json"
     rc = run_mutation(str(path), str(tmp_path), RaiseIfRunRunner(), json_path=str(bad_json))
+    assert rc == 2
+    assert "does not exist" in capsys.readouterr().err
+
+
+def test_run_mutation_preflights_a_bad_html_dir_before_running(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The --html target is preflighted the same way as --json — a bad dir fails before any run.
+    path = _gd(tmp_path)
+    bad_html = tmp_path / "missing" / "report.html"
+    rc = run_mutation(str(path), str(tmp_path), RaiseIfRunRunner(), html_path=str(bad_html))
     assert rc == 2
     assert "does not exist" in capsys.readouterr().err
 
