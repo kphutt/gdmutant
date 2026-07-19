@@ -221,5 +221,37 @@ def test_run_survives_a_slow_import_warm_up(
     assert (result.tests, result.failed) == (2, False)
 
 
+def test_prepare_retries_after_a_non_timeout_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A non-timeout warm-up failure (a transient OSError, a permission error, …) must NOT poison the
+    # warm-up on a reused runner instance: the retryable state is only marked done once the scan
+    # actually completes, so a later run() (after the transient cause clears) re-attempts the
+    # import rather than silently skipping it forever (LOD-213 Litmus P3). A swallowed timeout, by
+    # contrast, IS deliberately marked done (don't re-attempt a slow import every mutant — see the
+    # slow-import test above).
+    report = _report(tmp_path)
+    calls: list[list[str]] = []
+
+    def flaky(*args: object, **kwargs: object) -> None:
+        command = args[0]
+        assert isinstance(command, list)
+        calls.append(command)
+        if "--import" in command:
+            if len([c for c in calls if "--import" in c]) == 1:
+                raise OSError("transient failure warming up")
+            return
+        report.write_text('<testsuite tests="1" failures="0"/>', encoding="utf-8")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", flaky)
+    runner = GdUnit4Runner(godot="godot4")
+    with pytest.raises(OSError, match="transient"):
+        runner.run(str(tmp_path))
+    runner.run(str(tmp_path))  # same instance, retried after the transient cause clears
+
+    import_calls = [c for c in calls if "--import" in c]
+    assert len(import_calls) == 2  # re-attempted, not poisoned by the first failure
+
+
 def test_gdunit4_runner_satisfies_the_protocol() -> None:
     assert isinstance(GdUnit4Runner(), Runner)

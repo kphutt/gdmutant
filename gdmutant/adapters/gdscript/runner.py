@@ -65,7 +65,6 @@ class GdUnit4Runner:
         """
         if self._imported:
             return
-        self._imported = True
         # A pathologically slow import shouldn't itself abort the run; suppress its timeout and let
         # the real suite run (with its own timeout) surface a genuine problem as "wrote no report".
         with contextlib.suppress(subprocess.TimeoutExpired):
@@ -77,6 +76,13 @@ class GdUnit4Runner:
                 capture_output=True,
                 text=True,
             )
+        # Mark done only once the scan has completed — or a slow import was deliberately given up
+        # on (a suppressed timeout falls through to here). A *non-timeout* failure (a transient
+        # OSError, a permission error, Godot crashing) propagates out before this, leaving the
+        # warm-up retryable on a reused runner instance rather than silently skipped forever after
+        # (LOD-213 Litmus P3). The shipped CLI builds a fresh runner per run, but a library/daemon
+        # reuse would otherwise poison retry.
+        self._imported = True
 
     def command(self, project_dir: str) -> list[str]:
         """The ``godot --headless`` command that runs the GdUnit4 suite for `project_dir`.
