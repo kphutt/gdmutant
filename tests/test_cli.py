@@ -1417,7 +1417,8 @@ def test_main_dry_run_skips_an_unparseable_file_in_a_directory(
     assert main(["run", str(tmp_path), "--dry-run"]) == 0
     out = capsys.readouterr()
     assert "ok.gd:" in out.out  # the good file is still listed
-    assert "skipped 1 file(s) gdtoolkit couldn't parse" in out.err and "bad.gd" in out.err
+    assert "skipped 1 directory file(s) gdtoolkit couldn't parse" in out.err
+    assert "bad.gd" in out.err
 
 
 def test_main_real_run_skips_unparseable_and_mutates_the_rest(
@@ -1431,7 +1432,7 @@ def test_main_real_run_skips_unparseable_and_mutates_the_rest(
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
     assert main(["run", str(tmp_path), "--project", str(tmp_path)]) == 0
     out = capsys.readouterr()
-    assert "skipped 1 file(s)" in out.err
+    assert "skipped 1 directory file(s)" in out.err
     assert "2 files:" in out.out  # the two parseable files were mutated as a multi-file run
 
 
@@ -1450,12 +1451,27 @@ def test_main_all_unparseable_directory_exits_two(
 def test_main_single_explicit_unparseable_file_still_exits_two(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Resilience is for multi-file targets only — a lone explicitly-named bad file is a direct
-    # request that failed, so it stays a hard exit-2.
+    # Resilience is for directory-discovered files only — a lone explicitly-named bad file is a
+    # direct request that failed, so it stays a hard exit-2.
     bad = tmp_path / "bad.gd"
     bad.write_text("func f(:\n", encoding="utf-8")
     assert main(["run", str(bad), "--dry-run"]) == 2
     assert "not valid GDScript" in capsys.readouterr().err
+
+
+def test_main_two_explicit_files_one_unparseable_still_exits_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The resilience gate keys on directory-discovered vs explicitly-named, NOT on file count:
+    # naming two files where one can't parse must stay a hard exit-2, exactly as naming one does.
+    # (A count-only gate silently dropped the 2nd explicit file and exited 0 — LOD-211 Litmus P1.)
+    good = tmp_path / "good.gd"
+    good.write_text("func f():\n\treturn 1\n", encoding="utf-8")
+    bad = tmp_path / "bad_explicit.gd"
+    bad.write_text("func f(:\n", encoding="utf-8")
+    assert main(["run", str(good), str(bad), "--dry-run"]) == 2
+    # No skip-note: an explicit file is never silently dropped.
+    assert "skipped" not in capsys.readouterr().err
 
 
 # --- diff-scoped / incremental mode (--since, LOD-105) --------------------------------------------

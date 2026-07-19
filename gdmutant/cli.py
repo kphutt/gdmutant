@@ -800,23 +800,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         files = _expand_sources(args.source, exclude)
         if files is None:
             return 2
-        # Resilience (LOD-211): on a multi-file target, drop an unparseable/unreadable file with a
-        # warning and mutate the rest — one odd file (a gdtoolkit grammar gap on real GDScript)
-        # shouldn't zero out a whole directory run. A single explicitly-named file stays strict: its
-        # parse error exits 2 downstream, because it's a direct request that failed.
-        if len(files) > 1:
-            files, unparseable = _drop_unparseable(files)
-            if unparseable:
-                print(
-                    f"note: skipped {len(unparseable)} file(s) gdtoolkit couldn't parse — mutating "
-                    f"the other {len(files)}:",
-                    file=sys.stderr,
-                )
-                for path in unparseable:
-                    print(f"  {path}", file=sys.stderr)
-            if not files:
-                print("error: no parseable .gd files in the given path(s)", file=sys.stderr)
-                return 2
+        # Resilience (LOD-211): a file discovered by expanding a *directory* that gdtoolkit can't
+        # parse is skipped with a warning and the rest are mutated — one odd file (a grammar gap on
+        # real GDScript) shouldn't zero out a whole directory run. A file named *explicitly* stays
+        # strict, at any count: it's never dropped here, so its parse error exits 2 downstream —
+        # a direct request that fails must never be silent (count alone can't tell the two apart).
+        explicit = {str(Path(raw).resolve()) for raw in args.source if not Path(raw).is_dir()}
+        discovered = [f for f in files if str(Path(f).resolve()) not in explicit]
+        _, unparseable = _drop_unparseable(discovered)
+        if unparseable:
+            dropped = set(unparseable)
+            files = [f for f in files if f not in dropped]
+            print(
+                f"note: skipped {len(unparseable)} directory file(s) gdtoolkit couldn't parse — "
+                f"mutating the other {len(files)}:",
+                file=sys.stderr,
+            )
+            for path in unparseable:
+                print(f"  {path}", file=sys.stderr)
+        if not files:
+            print("error: no parseable .gd files in the given path(s)", file=sys.stderr)
+            return 2
         # Diff-scoped mode (LOD-105): restrict mutation to lines changed since a base ref. A bad ref
         # is a setup error; no changed lines at all is a clean no-op (exit 0), not a failed run.
         changed: dict[str, set[int]] | None = None
