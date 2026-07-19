@@ -28,7 +28,7 @@ from pathlib import Path
 from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import CATALOG, Operator
-from gdmutant.engine.runner import Runner, SuiteTimeout
+from gdmutant.engine.runner import Preparable, Runner, SuiteTimeout
 
 # Per-mutant timeout derived from the baseline's wall-clock, so a hanging mutant is cut off in
 # seconds rather than blocking for a flat default (the #1 first-run "looks frozen" complaint).
@@ -213,6 +213,16 @@ def _run_baseline(
     """Run the unmutated suite once. Returns ``(per_mutant_timeout, baseline_secs)`` — the
     per-mutant budget (derived from the baseline's wall-clock unless `timeout` overrides) and it.
     Raises `BaselineFailed` if the suite can't run or is red (FG-3.3)."""
+    # One-time setup (e.g. a Godot import scan) runs BEFORE the clock starts, so its cost never
+    # inflates the baseline wall-clock that derives per-mutant timeouts and the ETA (LOD-213). A
+    # runner with nothing to prepare simply isn't Preparable — the engine stays language-neutral.
+    if isinstance(runner, Preparable):
+        if progress is not None:
+            progress("preparing the project (one-time) ...")
+        try:
+            runner.prepare(project_dir)
+        except Exception as error:  # a runner that can't even prepare is a setup error
+            raise BaselineFailed(f"could not prepare {project_dir!r}: {error}") from error
     if progress is not None:
         progress("running the unmutated (baseline) suite ...")
     started = time.monotonic()
