@@ -73,18 +73,37 @@ def _mutant_json(index: int, outcome: MutantOutcome) -> dict[str, Any]:
     return mutant
 
 
-def stryker_report(run: MutationRun, path: str, source: str, language: str) -> dict[str, Any]:
-    """Build the mutation-testing-elements report dict for a single-file `run`.
+def _file_entry(run: MutationRun, source: str, language: str) -> dict[str, Any]:
+    """One file's entry in the report's `files` map."""
+    return {
+        "language": language,
+        "source": source,
+        "mutants": [_mutant_json(index, outcome) for index, outcome in enumerate(run.outcomes)],
+    }
+
+
+def stryker_report_multi(
+    files: dict[str, tuple[MutationRun, str]], language: str
+) -> dict[str, Any]:
+    """Build a merged mutation-testing-elements report for one or more files ([ticket]). `files` maps
+    each file path to its ``(run, source)``. The schema keys `files` by path, so a whole-directory
+    run renders as one report with per-file drill-down and one overall score in the viewer.
 
     `language` is supplied by the caller (the adapter/CLI knows it) — the reporter stays
     language-neutral and carries no default.
     """
-    mutants = [_mutant_json(index, outcome) for index, outcome in enumerate(run.outcomes)]
     return {
         "schemaVersion": SCHEMA_VERSION,
         "thresholds": {"high": 80, "low": 60},
-        "files": {path: {"language": language, "source": source, "mutants": mutants}},
+        "files": {
+            path: _file_entry(run, source, language) for path, (run, source) in files.items()
+        },
     }
+
+
+def stryker_report(run: MutationRun, path: str, source: str, language: str) -> dict[str, Any]:
+    """Build the mutation-testing-elements report dict for a single-file `run`."""
+    return stryker_report_multi({path: (run, source)}, language)
 
 
 #: The pinned mutation-testing-elements viewer version (kept in sync with the README recipe).

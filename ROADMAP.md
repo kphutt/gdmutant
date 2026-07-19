@@ -35,10 +35,13 @@
   this) that runs a project's *own* headless test script and reads a simple stdout/exit-code
   convention, so gdmutant works against projects that don't use the GdUnit4 addon. Needs an ADR for
   the convention. This is the main thing gating adoption by projects with a hand-rolled test harness.
-- **Multi-file / directory targets** — mutate a set of files (or a directory) in one run with an
-  aggregate mutation score (today: one `.gd` file per invocation), plus a helper to merge the
-  per-file Stryker reports. Running the CLI once per file already works (mutation is in-place in the
-  real project tree, so cross-file class references resolve), but there's no aggregate score.
+- ~~**Multi-file / directory targets** — mutate a set of files (or a directory) in one run with an
+  aggregate mutation score, plus one merged Stryker report~~ ✅ — `gdmutant run <dir>` (or several
+  files/dirs) expands to every `.gd` under the target (recursively, skipping `addons/` and dot-dirs),
+  runs the baseline once, and emits a per-file breakdown, one aggregate score, and one merged
+  JSON/HTML report (`engine.run_paths`, `report.stryker_report_multi`, `cli.run_mutation_paths`). This
+  was the last "real-project adoption" gap — point it at your source directory now, not one file at a
+  time. (Test files under the target are mutated too; a `--exclude` glob is a possible follow-up.)
 ## Later (deferred — do not build now)
 - Method-body mutation coverage in the dogfood — mutmut 3 mutates only module-level functions, not
   class methods (see `docs/mutation-testing.md`); evaluate cosmic-ray (or a config/upstream fix) to

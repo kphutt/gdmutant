@@ -16,6 +16,7 @@ from gdmutant.engine.loop import (
     _progress_line,
     _progress_start,
     run,
+    run_paths,
 )
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import TableOperator
@@ -357,3 +358,44 @@ def test_run_is_deterministic(tmp_path: Path) -> None:
     r1 = run(str(tmp_path), path, src, MarkerRunner(target=path, kill_marker=">="))
     r2 = run(str(tmp_path), path, src, MarkerRunner(target=path, kill_marker=">="))
     assert r1.outcomes == r2.outcomes
+
+
+def test_run_paths_runs_baseline_once_then_mutates_each_file(tmp_path: Path) -> None:
+    # Multi-file ([ticket]): the baseline suite runs ONCE, then each file's mutants run in turn. A
+    # "mutating <path> ..." line marks each file; each file is restored after its own mutants.
+    src_a = "func f(x) -> bool:\n\treturn x > 0\n"
+    src_b = "func g(x) -> bool:\n\treturn x < 0\n"
+    a = _write(tmp_path, "a.gd", src_a)
+    b = _write(tmp_path, "b.gd", src_b)
+    lines: list[str] = []
+    runs = run_paths(
+        str(tmp_path), {a: src_a, b: src_b}, ProjectDirRecordingRunner(), progress=lines.append
+    )
+    assert (
+        lines.count("running the unmutated (baseline) suite ...") == 1
+    )  # baseline once, not per file
+    assert f"mutating {a} ..." in lines and f"mutating {b} ..." in lines
+    assert set(runs) == {a, b}  # one MutationRun per file, keyed by path
+    assert runs[a].outcomes and all(
+        o.verdict is Verdict.SURVIVED for o in runs[a].outcomes
+    )  # all-pass
+    assert Path(a).read_text(encoding="utf-8") == src_a  # restored
+    assert Path(b).read_text(encoding="utf-8") == src_b
+
+
+def test_run_paths_raises_baseline_failed_before_mutating_any_file(tmp_path: Path) -> None:
+    # A red baseline aborts the whole multi-file pass (mutation-testing a red suite is meaningless),
+    # and no file is left mutated. The marker is in the ORIGINAL source, so the baseline "fails".
+    src = "func f(x) -> bool:\n\treturn x > 0\n"
+    a = _write(tmp_path, "a.gd", src)
+    with pytest.raises(BaselineFailed):
+        run_paths(str(tmp_path), {a: src}, MarkerRunner(target=a, kill_marker=">"))
+    assert Path(a).read_text(encoding="utf-8") == src
+
+
+def test_run_paths_runs_silently_without_progress(tmp_path: Path) -> None:
+    # `progress=None` (the default) must run without error — the "mutating <path>" line is opt-in.
+    src = "func f(x) -> bool:\n\treturn x > 0\n"
+    a = _write(tmp_path, "a.gd", src)
+    runs = run_paths(str(tmp_path), {a: src}, ProjectDirRecordingRunner())
+    assert set(runs) == {a} and runs[a].outcomes
