@@ -13,7 +13,7 @@ requirements), and the *shape* of the code that delivers it. Product rationale i
 
 Scope note: this document covers **v0.1 — the deterministic operator core + the GDScript adapter, run
 against a bundled fixture**. Deferred work (coverage-gating, HTML report, incremental mode, the
-LLM-semantic mode, further language adapters) is named in §5 and `ROADMAP.md`, not designed here.
+LLM-semantic mode, further language adapters) is named in §5, not designed here.
 
 ---
 
@@ -174,6 +174,6 @@ either choice safe. This is the only piece deliberately left for the spike; ever
    tests; prove the tool mutates it and prints real survivors.
 5. `mutation-testing-elements` JSON + console reporter (FG-5).
 
-**Tier B — deferred (see `ROADMAP.md`), designed for but not built in v0.1:**
+**Tier B — deferred, designed for but not built in v0.1:**
 Coverage-gated mutant selection (NF-6 seam), the HTML report, incremental/diff-scoped mode, the optional
 LLM-semantic mutant mode, and additional language adapters.
