@@ -22,7 +22,8 @@ Pre-release. gdmutant mutates real GDScript and reports survivors end-to-end via
 - Test suites are skipped by default on directory targets (by `test/`/`tests/` folder, `test_*.gd` /
   `*_test.gd` / `*Test.gd` name, or `extends GdUnitTestSuite` / `GutTest`), with an `--exclude` glob
   (and a `.gdmutant.toml` `exclude` list) to skip anything else.
-- Reports: a console survivor summary with kill hints, the Stryker
+- Reports: a console survivor summary that explains each gap (what's untested, why it matters, where
+  to start a test), the Stryker
   [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) JSON
   schema (`--json`), and a self-contained HTML report (`--html`).
 - `.gdmutant.toml` for persisted per-project flags; `--dry-run` to list mutants without running
