@@ -533,7 +533,7 @@ def test_parser_run_subcommand() -> None:
         ["run", "f.gd", "--godot", "godot4", "--tests", "res://t", "--json", "r.json"]
     )
     assert args.command == "run"
-    assert args.source == "f.gd"
+    assert args.source == ["f.gd"]  # nargs="+" -> a list, even for one path (LOD-79)
     assert args.godot == "godot4"
     assert args.tests == "res://t"
     assert args.json_path == "r.json"
@@ -590,12 +590,12 @@ def test_parser_help_text(
     # mutant that wraps the string ("XX...XX") — a bare substring check would still match the
     # wrapped form, since the original is a substring of it. (The description is pinned exactly by
     # test_parser_prog_and_description.)
-    assert "mutate a GDScript file and report survivors\n" in top  # the run subcommand's help
+    assert "mutate GDScript files and report survivors\n" in top  # the run subcommand's help
     with pytest.raises(SystemExit):
         parser.parse_args(["run", "--help"])
     run_help = capsys.readouterr().out
     for expected in (
-        "the .gd file to mutate",
+        "one or more .gd files or directories to mutate (a directory mutates every .gd under it, recursively, excluding addons/ and dot-dirs)",  # noqa: E501
         "the Godot project dir (default: the source's dir)",
         "test runner: gdunit4 (JUnit XML) or command (any harness, by exit code) (default: gdunit4)",  # noqa: E501
         "test command for --runner command (exit 0 = pass), e.g. 'godot --headless --script res://tests/run_tests.gd'",  # noqa: E501
@@ -1096,3 +1096,150 @@ def test_main_threads_require_clean_to_run_mutation(
     monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     main(["run", str(path), "--no-require-clean"])
     assert captured["require_clean"] is False
+
+
+# --- multi-file / directory targets (LOD-79) ------------------------------------------------------
+
+
+def _multi_project(tmp_path: Path) -> tuple[str, str]:
+    """A tmp project: two .gd sources (one nested) + an addons/ file and a .godot/ file that a
+    directory target must SKIP. Returns the two real source paths (sorted)."""
+    (tmp_path / "a.gd").write_text("func f(x) -> bool:\n\treturn x > 0\n", encoding="utf-8")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "b.gd").write_text("func g(x) -> bool:\n\treturn x < 0\n", encoding="utf-8")
+    addon = tmp_path / "addons" / "gdUnit4"
+    addon.mkdir(parents=True)
+    (addon / "ignored.gd").write_text("func h():\n\tpass\n", encoding="utf-8")
+    dot = tmp_path / ".godot"
+    dot.mkdir()
+    (dot / "cache.gd").write_text("func c():\n\tpass\n", encoding="utf-8")
+    return str(tmp_path / "a.gd"), str(sub / "b.gd")
+
+
+def test_expand_sources_directory_recurses_skipping_addons_and_dotdirs(tmp_path: Path) -> None:
+    a, b = _multi_project(tmp_path)
+    assert cli._expand_sources([str(tmp_path)]) == sorted([a, b])  # addons/ + .godot/ skipped
+
+
+def test_expand_sources_dedupes_and_sorts_explicit_paths(tmp_path: Path) -> None:
+    a, b = _multi_project(tmp_path)
+    assert cli._expand_sources([b, a, a]) == sorted([a, b])  # duplicate a collapsed, sorted
+
+
+def test_expand_sources_no_gd_files_returns_none(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert cli._expand_sources([str(empty)]) is None
+    assert "no .gd files" in capsys.readouterr().err
+
+
+def test_default_project_dir_dir_target_vs_file_target(tmp_path: Path) -> None:
+    a, b = _multi_project(tmp_path)
+    assert cli._default_project_dir([str(tmp_path)], [a, b]) == str(
+        tmp_path
+    )  # a dir IS the project
+    assert cli._default_project_dir([a], [a]) == str(Path(a).resolve().parent)  # a file -> its dir
+
+
+def test_run_mutation_paths_aggregates_and_writes_merged_report(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    a, b = _multi_project(tmp_path)
+    report = tmp_path / "r.json"
+    rc = cli.run_mutation_paths([a, b], str(tmp_path), RecordingRunner(), json_path=str(report))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "2 files:" in out and "Mutation score:" in out  # per-file breakdown + one aggregate
+    data = json.loads(report.read_text(encoding="utf-8"))
+    assert set(data["files"]) == {a, b}  # one merged report keyed by path
+
+
+def test_run_mutation_paths_baseline_failure_returns_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    a, b = _multi_project(tmp_path)
+    # marker present in a's ORIGINAL source -> the unmutated baseline "fails" for the whole pass.
+    rc = cli.run_mutation_paths([a, b], str(tmp_path), MarkerRunner(a, ">"))
+    assert rc == 1
+    assert "unmutated test suite failed" in capsys.readouterr().err
+
+
+def test_run_mutation_paths_bad_file_exits_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    a, _b = _multi_project(tmp_path)
+    rc = cli.run_mutation_paths([a, str(tmp_path / "nope.gd")], str(tmp_path), RecordingRunner())
+    assert rc == 2  # a missing source fails before anything runs
+    assert "cannot read" in capsys.readouterr().err
+
+
+def test_run_mutation_paths_bad_project_dir_and_bad_report_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    a, b = _multi_project(tmp_path)
+    assert cli.run_mutation_paths([a, b], str(tmp_path / "nope"), RecordingRunner()) == 2
+    assert "project directory not found" in capsys.readouterr().err
+    bad_json = tmp_path / "missing" / "r.json"
+    assert (
+        cli.run_mutation_paths([a, b], str(tmp_path), RecordingRunner(), json_path=str(bad_json))
+        == 2
+    )
+
+
+def test_main_routes_a_directory_to_the_multi_file_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _multi_project(tmp_path)
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
+    rc = main(["run", str(tmp_path), "--project", str(tmp_path)])
+    assert rc == 0
+    assert "2 files:" in capsys.readouterr().out  # routed to run_mutation_paths
+
+
+def test_main_no_gd_files_exits_two(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert main(["run", str(empty)]) == 2
+    assert "no .gd files" in capsys.readouterr().err
+
+
+def test_main_dry_run_lists_each_file_under_a_directory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    a, b = _multi_project(tmp_path)
+    assert main(["run", str(tmp_path), "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert a in out and b in out  # every .gd under the dir is listed
+
+
+def test_run_mutation_paths_dirty_tree_warns_or_refuses(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A dirty source in a multi-file run warns by default, or refuses (exit 2) with --require-clean,
+    # exactly like the single-file path.
+    repo = _committed_repo(tmp_path)  # commits f.gd
+    (repo / "g.gd").write_text("func g(x) -> bool:\n\treturn x < 0\n", encoding="utf-8")
+    _git(repo, "add", "g.gd")
+    _git(repo, "commit", "-m", "add g")
+    (repo / "f.gd").write_text(
+        "func f(a, b) -> bool:\n\treturn a >= b\n", encoding="utf-8"
+    )  # dirty
+    f, g = str(repo / "f.gd"), str(repo / "g.gd")
+    assert cli.run_mutation_paths([f, g], str(repo), RecordingRunner(), require_clean=True) == 2
+    assert "uncommitted changes and --require-clean" in capsys.readouterr().err
+    assert (
+        cli.run_mutation_paths([f, g], str(repo), RecordingRunner()) == 0
+    )  # default: warn + proceed
+    assert "uncommitted changes" in capsys.readouterr().err
+
+
+def test_main_dry_run_returns_two_on_an_invalid_file_in_the_directory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "ok.gd").write_text("func f():\n\treturn 1\n", encoding="utf-8")
+    (tmp_path / "bad.gd").write_text("func f(:\n", encoding="utf-8")  # not valid GDScript
+    assert main(["run", str(tmp_path), "--dry-run"]) == 2  # a bad file stops the dry-run at exit 2
+    assert "not valid GDScript" in capsys.readouterr().err
