@@ -79,3 +79,23 @@ and [`decisions/0006`](decisions/0006-operator-scoped-ignore-and-ignored-status.
 Work down the survivor list: each one is either **killed** (you wrote the missing test) or **ignored**
 (you proved it equivalent, with a reason). Both raise your confidence in the suite; neither leaves you
 chasing a mutant forever. A perfect score isn't the goal — *understanding each survivor* is.
+
+## Wiring a viewer yourself
+
+`--html report.html` gives you a self-contained page, and `--json` renders in the Stryker Dashboard.
+If you'd rather keep the report and the page separate, the `--json` output is the standard
+[`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema,
+so any host of that viewer works. Save this next to your `report.json` as `view.html`:
+
+```html
+<mutation-test-report-app></mutation-test-report-app>
+<script src="https://www.unpkg.com/mutation-testing-elements@3.8.4"></script>
+<script>
+  fetch("report.json")
+    .then((r) => r.json())
+    .then((report) => (document.querySelector("mutation-test-report-app").report = report));
+</script>
+```
+
+then serve the folder and open it (`python3 -m http.server` → visit `view.html`) for a
+source-highlighted, survivor-by-survivor view.
