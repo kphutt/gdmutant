@@ -226,6 +226,12 @@ def _unique_by_resolved(candidates: list[str]) -> list[str]:
     return unique
 
 
+def _resolved_set(candidates: list[str]) -> set[str]:
+    """The resolved absolute paths of `candidates`, de-duplicated — for set arithmetic against the
+    final mutated set (e.g. was a skipped/excluded file mutated anyway via an explicit arg?)."""
+    return {str(Path(candidate).resolve()) for candidate in candidates}
+
+
 def _matches_glob(path: str, patterns: list[str]) -> bool:
     """True if `path` matches any of `patterns` (`fnmatch` — ``*`` spans ``/``, so ``*.gd`` matches
     everything and ``*/vendor/*`` any file under a ``vendor`` dir). Each pattern is tried against
@@ -257,12 +263,16 @@ def _expand_sources(paths: list[str], exclude: list[str] | None = None) -> list[
         else:
             collected.append(raw)
     unique = _unique_by_resolved(collected)
-    n_excluded = len(_unique_by_resolved(excluded))
+    # A file matched by a skip/exclude rule during a directory scan but *also* named explicitly (or
+    # reached via another dir arg) is mutated regardless — subtract the final set so the note never
+    # tells the user to "name one explicitly to mutate it" for a file they already did.
+    included = _resolved_set(unique)
+    n_excluded = len(_resolved_set(excluded) - included)
     if not unique:
         detail = " (every .gd file matched --exclude)" if n_excluded else ""
         print(f"error: no .gd files found in the given path(s){detail}", file=sys.stderr)
         return None
-    tests_skipped = len(_unique_by_resolved(skipped))
+    tests_skipped = len(_resolved_set(skipped) - included)
     if tests_skipped:
         print(
             f"note: skipped {tests_skipped} test file(s) (test/ dirs, *_test.gd, or "

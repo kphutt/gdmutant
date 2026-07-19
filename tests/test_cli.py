@@ -1211,6 +1211,31 @@ def test_expand_sources_exclude_does_not_touch_explicitly_named_files(
     assert "excluded" not in capsys.readouterr().err
 
 
+def test_expand_sources_exclude_note_silent_when_file_also_named_explicitly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The escape hatch in practice: exclude a glob for the dir scan, then name one file back in.
+    # That file IS mutated, so the "excluded ... name one explicitly" note must not fire for it
+    # (would tell the user to do what they just did). Litmus P2 on #55.
+    a, b = _multi_project(tmp_path)
+    result = cli._expand_sources([str(tmp_path), b], exclude=["b.gd"])
+    assert result == sorted([a, b])  # b.gd excluded from the scan but mutated via the explicit arg
+    assert "excluded" not in capsys.readouterr().err
+
+
+def test_expand_sources_skip_note_silent_when_test_file_also_named_explicitly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Same rule for the test-skip note (the pre-existing analog Litmus flagged): a test file both
+    # under the dir scan and named explicitly is mutated, so it must not be counted as skipped.
+    a, _b = _multi_project(tmp_path)
+    suite = tmp_path / "player_test.gd"
+    suite.write_text("extends GdUnitTestSuite\nfunc test_it():\n\tpass\n", encoding="utf-8")
+    result = cli._expand_sources([str(tmp_path), str(suite)])
+    assert str(suite) in result  # mutated via the explicit arg despite matching the test convention
+    assert "skipped" not in capsys.readouterr().err
+
+
 def test_expand_sources_exclude_matching_everything_errors_with_a_hint(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
