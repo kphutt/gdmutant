@@ -1390,13 +1390,88 @@ def test_run_mutation_paths_dirty_tree_warns_or_refuses(
     assert "uncommitted changes" in capsys.readouterr().err
 
 
-def test_main_dry_run_returns_two_on_an_invalid_file_in_the_directory(
+# --- resilience: one unparseable file must not abort a multi-file run (LOD-211, GdUnit4) ---
+
+
+def test_drop_unparseable_partitions_by_readability_and_parse(tmp_path: Path) -> None:
+    good = tmp_path / "good.gd"
+    good.write_text("func f():\n\treturn 1\n", encoding="utf-8")
+    bad_parse = tmp_path / "bad.gd"
+    bad_parse.write_text("func f(:\n", encoding="utf-8")  # doesn't parse
+    bad_read = tmp_path / "binary.gd"
+    bad_read.write_bytes(b"\xff\xfe not utf-8")  # can't be decoded
+    # bad_read FIRST, then a good file — so a bug that stops at the first bad file (rather than
+    # skipping it and continuing) would drop `good` and be caught.
+    ok, dropped = cli._drop_unparseable([str(bad_read), str(good), str(bad_parse)])
+    assert ok == [str(good)]
+    assert set(dropped) == {str(bad_parse), str(bad_read)}
+
+
+def test_main_dry_run_skips_an_unparseable_file_in_a_directory(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # One unparseable file is skipped with a warning and the rest are mutated — not an abort. This
+    # was the old "abort at exit 2" behavior; the GdUnit4 dogfood surfaced it as an adoption bug.
     (tmp_path / "ok.gd").write_text("func f():\n\treturn 1\n", encoding="utf-8")
     (tmp_path / "bad.gd").write_text("func f(:\n", encoding="utf-8")  # not valid GDScript
-    assert main(["run", str(tmp_path), "--dry-run"]) == 2  # a bad file stops the dry-run at exit 2
+    assert main(["run", str(tmp_path), "--dry-run"]) == 0
+    out = capsys.readouterr()
+    assert "ok.gd:" in out.out  # the good file is still listed
+    assert "skipped 1 directory file(s) gdtoolkit couldn't parse" in out.err
+    assert "bad.gd" in out.err
+
+
+def test_main_real_run_skips_unparseable_and_mutates_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The real (non-dry) path is resilient too: the filter runs before dispatch, so the mutation run
+    # only ever sees the parseable files.
+    (tmp_path / "a.gd").write_text("func f(x) -> bool:\n\treturn x > 0\n", encoding="utf-8")
+    (tmp_path / "b.gd").write_text("func g(x) -> bool:\n\treturn x < 0\n", encoding="utf-8")
+    (tmp_path / "bad.gd").write_text("func h(:\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
+    assert main(["run", str(tmp_path), "--project", str(tmp_path)]) == 0
+    out = capsys.readouterr()
+    assert "skipped 1 directory file(s)" in out.err
+    assert "2 files:" in out.out  # the two parseable files were mutated as a multi-file run
+
+
+def test_main_all_unparseable_directory_exits_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "a.gd").write_text("func f(:\n", encoding="utf-8")
+    (tmp_path / "b.gd").write_text("func g(:\n", encoding="utf-8")  # both invalid
+    assert main(["run", str(tmp_path), "--dry-run"]) == 2
+    # line-exact, so a mutation to the error text is caught (a substring check wouldn't be).
+    assert (
+        "error: no parseable .gd files in the given path(s)" in capsys.readouterr().err.splitlines()
+    )
+
+
+def test_main_single_explicit_unparseable_file_still_exits_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Resilience is for directory-discovered files only — a lone explicitly-named bad file is a
+    # direct request that failed, so it stays a hard exit-2.
+    bad = tmp_path / "bad.gd"
+    bad.write_text("func f(:\n", encoding="utf-8")
+    assert main(["run", str(bad), "--dry-run"]) == 2
     assert "not valid GDScript" in capsys.readouterr().err
+
+
+def test_main_two_explicit_files_one_unparseable_still_exits_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The resilience gate keys on directory-discovered vs explicitly-named, NOT on file count:
+    # naming two files where one can't parse must stay a hard exit-2, exactly as naming one does.
+    # (A count-only gate silently dropped the 2nd explicit file and exited 0 — LOD-211 Litmus P1.)
+    good = tmp_path / "good.gd"
+    good.write_text("func f():\n\treturn 1\n", encoding="utf-8")
+    bad = tmp_path / "bad_explicit.gd"
+    bad.write_text("func f(:\n", encoding="utf-8")
+    assert main(["run", str(good), str(bad), "--dry-run"]) == 2
+    # No skip-note: an explicit file is never silently dropped.
+    assert "skipped" not in capsys.readouterr().err
 
 
 # --- diff-scoped / incremental mode (--since, LOD-105) --------------------------------------------
