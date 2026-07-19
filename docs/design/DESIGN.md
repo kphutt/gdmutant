@@ -54,8 +54,11 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
 ### FG-3 — Test execution per mutant
 - **FG-3.1** For each mutant, the system shall run the target project's test suite against a tree in which
   only that mutant is applied, and capture the pass/fail outcome.
-- **FG-3.2** For the GDScript adapter, execution is `godot --headless` + **GdUnit4**, with the result
-  parsed from GdUnit4's machine-readable (JUnit-XML) output.
+- **FG-3.2** For the GDScript adapter, execution runs the project's tests headless via the pluggable
+  **Runner** seam. Two ship: the general **exit-code command runner** (any `godot --headless` command
+  that exits non-zero on failure — GUT, GdUnit4's CLI, or a hand-rolled `SceneTree` harness; ADR-0005)
+  is the universal path; a dedicated **GdUnit4 runner** parses GdUnit4's machine-readable (JUnit-XML)
+  output for finer per-test detail.
 - **FG-3.3** The original (unmutated) suite must pass first; if it doesn't, the run aborts with a clear
   error (mutation testing a red suite is meaningless).
 
@@ -129,7 +132,7 @@ graph TD
     subgraph Service
         OPS["Operators — the saboteurs<br/>(engine/operators/): neutral catalog"]
         ADAPT["GDScript adapter — the field agent<br/>(adapters/gdscript/): gdtoolkit AST + runner"]
-        RUN["Runner — the executioner<br/>godot --headless + GdUnit4"]
+        RUN["Runner — the executioner<br/>godot --headless (exit-code command / GdUnit4-XML)"]
     end
     subgraph Data
         SCHEMA["Report — the court record<br/>mutation-testing-elements JSON + console"]
