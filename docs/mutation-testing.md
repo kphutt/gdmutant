@@ -41,8 +41,23 @@ bodies: `GdUnit4Runner.run`/`command`, `CommandRunner.run`, the two `replacement
 `MutationRun`'s properties, `Mutant.apply`, `Span.__post_init__`, and `SuiteResult.failed`/`passed`.
 Those are covered by unit tests but are not *mutation-measured* here — so read the score as "every
 behavioral
-mutant mutmut generates is killed," over the module-level surface. Closing that gap with a
-method-mutating tool (e.g. cosmic-ray) is tracked as follow-up.
+mutant mutmut generates is killed," over the module-level surface. The method bodies are
+spot-checkable on demand with cosmic-ray (below).
+
+### Spot-checking the method bodies (cosmic-ray, manual)
+
+cosmic-ray *does* mutate class-method bodies — where mutmut can't — but it is ~30× slower per mutant,
+uses a multi-step SQLite session flow, and generates its own crop of equivalent mutants to curate, so
+it is a **manual, on-demand spot-check, not a second CI job** ([ADR-0008](decisions/0008-method-body-mutation-manual-spotcheck.md)).
+It isn't a dev dependency — run it throwaway with `uv run --with cosmic-ray`, after committing (like mutmut, it mutates in
+place). The committed `cosmic-ray.toml` targets `Mutant.apply`'s module; repoint `module-path` at
+another method-heavy file for a different check.
+
+```sh
+uv run --with cosmic-ray cosmic-ray init cosmic-ray.toml cr-session.sqlite
+uv run --with cosmic-ray cosmic-ray exec cosmic-ray.toml cr-session.sqlite
+uv run --with cosmic-ray cr-report cr-session.sqlite     # survivors + kill rate
+```
 
 ### The 18 equivalent mutants
 
