@@ -141,8 +141,13 @@ jobs:
               ".live-tmp/**/command_report.json", recursive=True
           )
           if not hits:
-              print("no self-test report found — nothing to upload")
-              sys.exit(0)
+              # The live self-test writes this JSON as it runs, so its absence means the step above
+              # already failed before the CLI wrote it. Fail loud here too rather than a silent green
+              # + empty upload — the property the old regenerate step held (its run was not
+              # `|| true`-swallowed). Safe: this only fires when the required live-test step is
+              # already red, so it never reds an otherwise-green job.
+              print("::error::no corpus report under .live-tmp/ — the live self-test did not write one")
+              sys.exit(1)
           data = json.load(open(hits[0], encoding="utf-8"))
           (file_obj,) = data["files"].values()  # the corpus target is a single file (pinned)
           data["files"] = {"corpus/turn_order.gd": file_obj}
