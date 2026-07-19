@@ -324,6 +324,19 @@ def _changed_lines(ref: str, files: list[str]) -> dict[str, set[int]] | None:
             start = int(match.group(1))
             count = int(match.group(2)) if match.group(2) is not None else 1
             touched.update(range(start, start + count))  # count 0 (pure deletion) adds nothing
+        if not touched and path.is_file():
+            # `git diff` is silent on a brand-new file that was never `git add`-ed, so an untracked
+            # file maps to an empty diff. Treat it as *fully* changed (every line is new), not
+            # "nothing to mutate" — silently skipping a new file is exactly the wrong-report failure
+            # mode a mutation tool must avoid. (A committed-new file already diffs as fully added.)
+            tracked = subprocess.run(
+                ["git", "ls-files", "--error-unmatch", str(path)],
+                cwd=str(path.parent),
+                capture_output=True,
+                text=True,
+            )
+            if tracked.returncode != 0:  # untracked
+                touched = set(range(1, len(path.read_text(encoding="utf-8").splitlines()) + 1))
         changed[str(path)] = touched
     return changed
 

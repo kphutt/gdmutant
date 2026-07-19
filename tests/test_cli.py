@@ -1433,6 +1433,28 @@ def test_changed_lines_bad_ref_returns_none(
     assert "git diff for --since no-such-ref failed" in capsys.readouterr().err
 
 
+def test_changed_lines_treats_an_untracked_new_file_as_fully_changed(tmp_path: Path) -> None:
+    # git diff is silent on a never-`git add`-ed file, so a brand-new .gd must be treated as fully
+    # changed (every line new), not silently skipped as "no changes". Litmus P2 on #61.
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "committed.gd").write_text("func a():\n\tpass\n", encoding="utf-8")
+    _git(tmp_path, "add", "committed.gd")
+    _git(tmp_path, "commit", "-m", "base")
+    new = tmp_path / "new.gd"
+    new.write_text(_TWO_LINE_SRC, encoding="utf-8")  # on disk but never staged
+    assert cli._changed_lines("HEAD", [str(new)]) == {str(new.resolve()): {1, 2, 3, 4}}
+
+
+def test_changed_lines_nonexistent_file_maps_to_empty(tmp_path: Path) -> None:
+    # A path that doesn't exist on disk contributes no changed lines (its real error surfaces later
+    # when the source can't be read) — the untracked "fully changed" path is guarded on `is_file`.
+    _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    missing = str(tmp_path / "gone.gd")
+    assert cli._changed_lines("HEAD", [missing]) == {str(Path(missing).resolve()): set()}
+
+
 def test_changed_lines_git_unavailable_returns_none(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
