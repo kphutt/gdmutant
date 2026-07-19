@@ -1190,6 +1190,59 @@ def test_expand_sources_explicit_test_file_is_mutated(
     assert "skipped" not in capsys.readouterr().err  # ...and prints no skip note
 
 
+def test_expand_sources_exclude_glob_drops_matching_files_and_notes_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    a, b = _multi_project(tmp_path)  # a.gd + sub/b.gd
+    # A filename glob drops b.gd anywhere; a path glob (`*/sub/*`) would too — assert the filename
+    # form, the ergonomic case (no leading dirs needed).
+    result = cli._expand_sources([str(tmp_path)], exclude=["b.gd"])
+    assert result == [a]  # b.gd excluded, a.gd kept
+    assert "excluded 1 file(s) matching --exclude" in capsys.readouterr().err
+
+
+def test_expand_sources_exclude_does_not_touch_explicitly_named_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    a, b = _multi_project(tmp_path)
+    # Same override rule as the test-skip: an exclude glob only narrows a *directory* expansion, so
+    # naming the file directly still mutates it.
+    assert cli._expand_sources([b], exclude=["b.gd"]) == [b]
+    assert "excluded" not in capsys.readouterr().err
+
+
+def test_expand_sources_exclude_matching_everything_errors_with_a_hint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _multi_project(tmp_path)
+    assert cli._expand_sources([str(tmp_path)], exclude=["*.gd"]) is None  # nothing survives
+    assert "every .gd file matched --exclude" in capsys.readouterr().err
+
+
+def test_main_exclude_flag_combines_with_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # config `exclude` and a CLI --exclude are additive (both narrow the directory target).
+    a, b = _multi_project(tmp_path)
+    (tmp_path / "c.gd").write_text("func k(x) -> bool:\n\treturn x == 0\n", encoding="utf-8")
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text('exclude = ["a.gd"]\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
+    # config drops a.gd; CLI drops c.gd → only b.gd is listed.
+    assert main(["run", str(tmp_path), "--dry-run", "--exclude", "c.gd"]) == 0
+    out = capsys.readouterr().out
+    assert b in out and a not in out and str(tmp_path / "c.gd") not in out
+
+
+def test_load_config_rejects_non_list_exclude(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text('exclude = "notalist"\n', encoding="utf-8")
+    assert cli._load_config(cfg) is None
+    assert "'exclude' must be a list of glob strings" in capsys.readouterr().err
+
+
 def test_is_test_file_treats_undecodable_content_as_not_a_test(tmp_path: Path) -> None:
     # A .gd whose bytes aren't valid UTF-8 can't be content-checked; it isn't a test suite (the
     # content read swallows the error), so it stays in the mutation set rather than being dropped.
