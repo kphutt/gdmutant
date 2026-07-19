@@ -60,7 +60,7 @@ read -r -d '' PROTECTION <<'JSON'
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["Verify", "Secret scan (gitleaks)"]
+    "contexts": ["Verify", "Secret scan (gitleaks)", "Self-test (real Godot)"]
   },
   "enforce_admins": true,
   "required_pull_request_reviews": {

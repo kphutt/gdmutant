@@ -9,7 +9,7 @@ It is **env-gated** on ``GDMUTANT_GDUNIT4_CLONE`` (the path to a GdUnit4 checkou
 ``uv run pytest`` — local dev and the ``verify`` CI job — auto-skips it with zero config. Run it
 with, e.g.::
 
-    git clone https://github.com/MikeSchulze/gdUnit4 [dev-path]
+    git clone https://github.com/godot-gdunit-labs/gdUnit4 [dev-path]
     GDMUTANT_GDUNIT4_CLONE=[dev-path] uv run pytest tests/test_dogfood_gdunit4.py
 
 Both checks are **Godot-free** (gdtoolkit parse + the ``--dry-run`` mutant-generation path), so they
@@ -44,7 +44,7 @@ def _src_dir() -> Path:
     return src
 
 
-# Observed 2026-07-19 on MikeSchulze/gdUnit4: 232/233 .gd parse (99.57%); one file
+# Observed 2026-07-19 on godot-gdunit-labs/gdUnit4: 232/233 .gd parse (99.57%); one file
 # (doubler/GdUnitClassDoubler.gd) hits a real gdtoolkit grammar gap. The floor is set well below
 # that so gdtoolkit *improving*, or one more odd file appearing, won't flake — but a real parser
 # regression that silently drops a swathe of files trips it.
