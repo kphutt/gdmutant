@@ -1,8 +1,10 @@
 """Tests for the reporter (console summary + Stryker JSON)."""
 
+import json
+
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
 from gdmutant.engine.mutants import Mutant
-from gdmutant.engine.report import _kill_hint, console_summary, stryker_report
+from gdmutant.engine.report import _kill_hint, console_summary, html_report, stryker_report
 from gdmutant.engine.spans import Span
 
 _SRC = "func f(a, b):\n\treturn a > b and a < b\n\treturn a + b\n"
@@ -185,3 +187,29 @@ def test_console_summary_score_na_when_no_killable_mutants() -> None:
     out = console_summary(run)
     assert "Mutation score: n/a" in out
     assert "Survivors" not in out  # none to list
+
+
+def test_html_report_embeds_the_report_and_the_pinned_viewer() -> None:
+    # --html writes a ready-to-open page: the mutation-testing-elements viewer (pinned CDN) with the
+    # Stryker report inlined in a non-executable <script type="application/json"> block ([ticket]).
+    report = stryker_report(_run(), "f.gd", _SRC, "gdscript")
+    html = html_report(report)
+    assert "<mutation-test-report-app>" in html
+    assert "mutation-testing-elements@3.8.4" in html  # pinned version
+    block = html.split('id="mutation-test-report">', 1)[1].split("</script>", 1)[0]
+    assert json.loads(block) == report  # the inlined JSON parses back to the exact report
+
+
+def test_html_report_escapes_script_close_in_source_so_it_cannot_break_out() -> None:
+    # GDScript source containing `</script>` must not close the data block early. It's escaped to
+    # `<\/script>` (valid JSON), so it never appears raw in the data yet round-trips on parse.
+    report = {
+        "schemaVersion": "2",
+        "files": {
+            "x.gd": {"language": "gdscript", "source": 'var s := "</script>"', "mutants": []}
+        },
+    }
+    html = html_report(report)
+    block = html.split('id="mutation-test-report">', 1)[1].split("</script>", 1)[0]
+    assert "</script>" not in block  # never raw inside the data block
+    assert json.loads(block)["files"]["x.gd"]["source"] == 'var s := "</script>"'  # restored
