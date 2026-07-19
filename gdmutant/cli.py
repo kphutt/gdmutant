@@ -7,6 +7,7 @@ core (inject any `Runner`); `main` wires the real `GdUnit4Runner`.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -225,32 +226,63 @@ def _unique_by_resolved(candidates: list[str]) -> list[str]:
     return unique
 
 
-def _expand_sources(paths: list[str]) -> list[str] | None:
+def _resolved_set(candidates: list[str]) -> set[str]:
+    """The resolved absolute paths of `candidates`, de-duplicated — for set arithmetic against the
+    final mutated set (e.g. was a skipped/excluded file mutated anyway via an explicit arg?)."""
+    return {str(Path(candidate).resolve()) for candidate in candidates}
+
+
+def _matches_glob(path: str, patterns: list[str]) -> bool:
+    """True if `path` matches any of `patterns` (`fnmatch` — ``*`` spans ``/``, so ``*.gd`` matches
+    everything and ``*/vendor/*`` any file under a ``vendor`` dir). Each pattern is tried against
+    both the full path and the bare filename, so ``foo.gd`` skips that file anywhere without needing
+    the leading directories."""
+    name = Path(path).name
+    return any(fnmatch.fnmatch(path, pat) or fnmatch.fnmatch(name, pat) for pat in patterns)
+
+
+def _expand_sources(paths: list[str], exclude: list[str] | None = None) -> list[str] | None:
     """Expand each given path (a ``.gd`` file or a directory) into a de-duplicated, sorted list of
-    `.gd` files. A directory skips GdUnit4 test files (`_gd_files_under`), noting how many (counted
-    per *unique* file, so duplicate dir args don't inflate the note); an explicit file path is
-    always included (name a test file to mutate it). Returns None (after printing an error) when
-    nothing resolves to a `.gd` file — the "point it at a directory" adoption case ([ticket]).
-    Existence/validity of each file is checked later by `_load_gdscript`."""
+    `.gd` files. A directory skips GdUnit4 test files (`_gd_files_under`) and any file matching an
+    `exclude` glob ([ticket]), noting how many of each (counted per *unique* file, so duplicate dir
+    args don't inflate the note); an **explicit** file path is always included (name a test/excluded
+    file to mutate it). Returns None (after printing an error) when nothing resolves to a `.gd` file
+    — the "point it at a directory" adoption case ([ticket]). Existence/validity of each file is
+    checked later by `_load_gdscript`."""
+    exclude = exclude or []
     collected: list[str] = []
     skipped: list[str] = []
+    excluded: list[str] = []
     for raw in paths:
         path = Path(raw)
         if path.is_dir():
             found, dir_skipped = _gd_files_under(path)
-            collected.extend(found)
             skipped.extend(dir_skipped)
+            for gd_file in found:
+                (excluded if _matches_glob(gd_file, exclude) else collected).append(gd_file)
         else:
             collected.append(raw)
     unique = _unique_by_resolved(collected)
+    # A file matched by a skip/exclude rule during a directory scan but *also* named explicitly (or
+    # reached via another dir arg) is mutated regardless — subtract the final set so the note never
+    # tells the user to "name one explicitly to mutate it" for a file they already did.
+    included = _resolved_set(unique)
+    n_excluded = len(_resolved_set(excluded) - included)
     if not unique:
-        print("error: no .gd files found in the given path(s)", file=sys.stderr)
+        detail = " (every .gd file matched --exclude)" if n_excluded else ""
+        print(f"error: no .gd files found in the given path(s){detail}", file=sys.stderr)
         return None
-    tests_skipped = len(_unique_by_resolved(skipped))
+    tests_skipped = len(_resolved_set(skipped) - included)
     if tests_skipped:
         print(
             f"note: skipped {tests_skipped} test file(s) (test/ dirs, *_test.gd, or "
             "extends GdUnitTestSuite/GutTest) — name one explicitly to mutate it",
+            file=sys.stderr,
+        )
+    if n_excluded:
+        print(
+            f"note: excluded {n_excluded} file(s) matching --exclude — name one explicitly "
+            "to mutate it",
             file=sys.stderr,
         )
     return sorted(unique)
@@ -504,6 +536,7 @@ _CONFIG_KEY_TO_DEST = {
     "report-path": "report_path",
     "timeout": "timeout",
     "require-clean": "require_clean",
+    "exclude": "exclude",
 }
 _CONFIG_FILENAME = ".gdmutant.toml"
 
@@ -554,6 +587,12 @@ def _load_config(path: Path | None = None) -> dict[str, object] | None:
         return None
     if settings.get("runner") not in (None, "gdunit4", "command"):
         print(f"error: {path}: 'runner' must be 'gdunit4' or 'command'", file=sys.stderr)
+        return None
+    exclude = settings.get("exclude")
+    if exclude is not None and (
+        not isinstance(exclude, list) or not all(isinstance(item, str) for item in exclude)
+    ):
+        print(f"error: {path}: 'exclude' must be a list of glob strings", file=sys.stderr)
         return None
     return settings
 
@@ -627,14 +666,24 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         help="allow running even if the source file has uncommitted git changes",
     )
     run_parser.add_argument(
+        "--exclude",
+        action="append",
+        metavar="glob",
+        help="glob of files to skip when expanding a directory (repeatable; matched against each "
+        "path and its filename). An explicitly named file is never excluded. Combines with any "
+        "'exclude' list in .gdmutant.toml.",
+    )
+    run_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="list the mutants without running any tests (no Godot needed)",
     )
     # Config values seed the run subparser's defaults, so an explicit CLI flag still overrides them
-    # (argparse precedence: passed value > set_defaults > add_argument default). [ticket].
+    # (argparse precedence: passed value > set_defaults > add_argument default). [ticket]. `exclude`
+    # is the exception: it's resolved in main() as config + CLI (additive, like every mutation
+    # tool's exclude list), so it must NOT seed the append-action default here.
     if config:
-        run_parser.set_defaults(**config)
+        run_parser.set_defaults(**{k: v for k, v in config.items() if k != "exclude"})
     return parser
 
 
@@ -645,7 +694,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser(config)
     args = parser.parse_args(argv)
     if args.command == "run":
-        files = _expand_sources(args.source)
+        # Excludes are additive: any .gdmutant.toml `exclude` list plus every --exclude on the CLI
+        # (both narrow a directory target; neither can drop an explicitly named file). [ticket].
+        config_exclude = config.get("exclude")
+        exclude = list(config_exclude) if isinstance(config_exclude, list) else []
+        if args.exclude:
+            exclude += args.exclude
+        files = _expand_sources(args.source, exclude)
         if files is None:
             return 2
         if args.dry_run:
