@@ -90,7 +90,17 @@ def test_gdunit4_whole_src_dry_run_completes_over_the_unparseable_file() -> None
     assert "gdtoolkit couldn't parse" in completed.stderr, (
         f"expected a skip note for the odd file{detail}"
     )
-    # And the run must have actually produced mutants for the surviving files — not a no-op exit 0.
-    assert "mutants for" in completed.stdout or "mutant" in completed.stdout, (
-        f"dry-run exited 0 but generated no mutants{detail}"
+    # And the run must have actually produced mutants — not a no-op exit 0. Every mutated file
+    # prints a "<N> mutants for <path>:" header, so sum the real counts. A bare "mutants for"
+    # substring check would be a no-op: list_mutants prints that header even at N=0, so it couldn't
+    # catch a regression that silently zeroes generation across the tree — the very failure class
+    # this guards (Litmus P2). Observed 2026-07-19: 10,440 mutants over 227 files; the floor leaves
+    # wide headroom (new operators only ever add) while still catching a near-total collapse.
+    total_mutants = sum(
+        int(line.split(" ", 1)[0])
+        for line in completed.stdout.splitlines()
+        if " mutants for " in line
+    )
+    assert total_mutants > 1000, (
+        f"whole-src dry-run generated only {total_mutants} mutants — near-total collapse{detail}"
     )
