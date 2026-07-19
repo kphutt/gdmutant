@@ -86,10 +86,82 @@ class TimeoutRecordingRunner:
         return SuiteResult(tests=1, failures=0, errors=0)
 
 
+@dataclass
+class PreparingRunner:
+    """A `Preparable` runner over a fake clock: `prepare` and `run` each advance `clock` by a fixed
+    cost, and every handed-in timeout is recorded — so a test can prove prepare's cost is excluded
+    from the baseline wall-clock that derives per-mutant timeouts."""
+
+    clock: list[float]
+    prepare_cost: float
+    suite_cost: float
+    log: list[str] = field(default_factory=list)
+    prepared_with: list[str] = field(default_factory=list)
+    seen_timeouts: list[float | None] = field(default_factory=list)
+
+    def prepare(self, project_dir: str) -> None:
+        self.log.append("prepare")
+        self.prepared_with.append(project_dir)
+        self.clock[0] += self.prepare_cost
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        self.log.append("run")
+        self.seen_timeouts.append(timeout)
+        self.clock[0] += self.suite_cost
+        return SuiteResult(tests=1, failures=0, errors=0)
+
+
 def _write(tmp_path: Path, name: str, text: str) -> str:
     path = tmp_path / name
     path.write_text(text, encoding="utf-8")
     return str(path)
+
+
+def test_prepare_runs_before_baseline_and_its_cost_is_excluded_from_the_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A Preparable runner's one-time setup (e.g. a Godot import scan) must run BEFORE the baseline
+    # clock starts, so its cost never inflates the derived per-mutant timeout or the ETA ([ticket]).
+    # A slow prepare (5s) + a fast suite (0.05s): every mutant's timeout must be derived from the
+    # 0.05s suite alone (→ the 10s floor), NOT 5.05s (→ 50.5s).
+    from gdmutant.engine import loop as loop_mod
+
+    clock = [0.0]
+    monkeypatch.setattr(loop_mod.time, "monotonic", lambda: clock[0])
+    runner = PreparingRunner(clock=clock, prepare_cost=5.0, suite_cost=0.05)
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path = _write(tmp_path, "f.gd", src)
+    messages: list[str] = []
+
+    run(str(tmp_path), path, src, runner, progress=messages.append)
+
+    assert runner.log[0] == "prepare"  # prepare precedes the first (baseline) run
+    assert runner.log.count("prepare") == 1  # once, not per mutant
+    assert runner.prepared_with == [str(tmp_path)]  # handed the real project dir, not None
+    assert "preparing the project (one-time) ..." in messages
+    # baseline_secs = suite_cost only (prepare excluded); mutant timeouts derive from it.
+    mutant_timeouts = runner.seen_timeouts[1:]
+    assert mutant_timeouts, "the source should produce at least one runnable mutant"
+    assert all(t == _derive_timeout(0.05) for t in mutant_timeouts)
+    assert all(t != _derive_timeout(5.05) for t in mutant_timeouts)  # prepare NOT folded in
+
+
+def test_prepare_failure_becomes_baseline_failed(tmp_path: Path) -> None:
+    # A runner that can't even prepare (e.g. Godot missing during the import scan) is a setup error,
+    # surfaced as BaselineFailed — not a raw exception. Called with no progress callback, so this
+    # also covers the prepare path when progress is None.
+    @dataclass
+    class FailPrepareRunner:
+        def prepare(self, project_dir: str) -> None:
+            raise RuntimeError("import boom")
+
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            return SuiteResult(tests=1, failures=0, errors=0)  # never reached
+
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path = _write(tmp_path, "f.gd", src)
+    with pytest.raises(BaselineFailed, match="could not prepare"):
+        run(str(tmp_path), path, src, FailPrepareRunner())
 
 
 def test_killed_survived_and_score(tmp_path: Path) -> None:
