@@ -143,8 +143,11 @@ mutates every `.gd` under it — recursively, skipping `addons/` and dot-dirs �
 ```sh
 uv run gdmutant run src/systems --project . --json report.json --html report.html
 ```
-Point it at your *source* directory: a whole-project target mutates your test files too (a `--exclude`
-glob is future work).
+**Your test suites are skipped by default.** Like StrykerJS and cargo-mutants, a directory target
+leaves your tests out of the mutation set — gdmutant skips anything under a `test/`/`tests/` folder,
+named `test_*.gd` / `*_test.gd` / `*Test.gd`, or extending `GdUnitTestSuite` / `GutTest`. It prints
+how many it skipped, and naming a test file explicitly on the command line mutates it anyway (the
+skip applies only to directory expansion).
 
 > **Trying the GdUnit4 runner on the *bundled corpus*?** The corpus doesn't vendor the addon, so
 > fetch it first — `scripts/install-gdunit4.sh` (the same pinned install CI uses) drops it into
