@@ -4,9 +4,9 @@
 
 [project]
 name = "gdmutant"
-version = "0.0.0"                       # engine + CLI are built; bump to 0.1.0 after the two
-                                        # remaining v0.1 items land (ROADMAP.md): live Godot/GdUnit4
-                                        # CI validation + the statement-deletion operator.
+version = "0.0.0"                       # engine + CLI are built and validated against real Godot in
+                                        # CI; stays 0.0.0 until the first tagged release (see
+                                        # CHANGELOG.md).
 description = "An AST-based, language-agnostic mutation-testing tool for GDScript/Godot."
 readme = "README.md"
 requires-python = ">=3.12"
