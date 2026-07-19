@@ -63,19 +63,27 @@ build-backend = "hatchling.build"
 packages = ["gdmutant"]
 
 [tool.hatch.build.targets.sdist]
-# Ship what a consumer needs to build, test, and understand the release — the package (incl. its
-# `py.typed` marker), the test suite, docs, and the corpus — but trim dev/CI/machine cruft that has
-# no place in a distribution: local agent state (`.claude/`, which hatchling would otherwise bundle
-# even though it's gitignored), CI workflows, the repo-hardening / addon-install scripts, and local
-# tooling config. Contributor docs (AGENTS.md, CONTRIBUTING.md, …) stay: `docs/agent-guide.md` links
-# to AGENTS.md and the in-repo link-resolution test asserts it exists.
-exclude = [
-  "/.claude",
-  "/.github",
-  "/scripts",
-  "/mise.toml",
-  "/.gitleaks.toml",
-  "/.gitattributes",
+# An explicit allowlist of what ships in the sdist — the package (incl. its `py.typed` marker), the
+# test suite, docs, the corpus, and the contributor/meta docs. An allowlist (not a deny-list) is the
+# robust fix for hatchling otherwise bundling local, untracked, or dot-prefixed state into the
+# distribution: only these paths ship, so nothing unexpected leaks in and no local tooling directory
+# has to be named. Contributor docs stay because `docs/agent-guide.md` links to AGENTS.md and the
+# in-repo link-resolution test asserts it exists.
+include = [
+  "/gdmutant",
+  "/tests",
+  "/corpus",
+  "/docs",
+  "/README.md",
+  "/CHANGELOG.md",
+  "/CONTRIBUTING.md",
+  "/CODE_OF_CONDUCT.md",
+  "/SECURITY.md",
+  "/CREDITS.md",
+  "/AGENTS.md",
+  "/LICENSE",
+  "/pyproject.toml",
+  "/uv.lock",
 ]
 
 [tool.ruff]
