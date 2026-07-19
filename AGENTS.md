@@ -30,6 +30,17 @@ uv run pytest                  # tests + coverage
 uv run pip-audit               # dependency audit
 ```
 
+Two suites are **env-gated** and auto-skip in a plain `uv run pytest` (so `verify` stays
+Godot-free); run them when touching the adapter, runners, or CLI file-handling:
+
+```sh
+# Live self-test: drive the shipped CLI against a real Godot on the corpus ([ticket]).
+GDMUTANT_GODOT=godot uv run pytest tests/test_selftest_live.py
+# Dogfood harness: run gdmutant against a real GdUnit4 checkout — parse coverage + the
+# [ticket] whole-directory regression (Godot-free, ~5s). Point it at any GdUnit4 clone:
+GDMUTANT_GDUNIT4_CLONE=[dev-path] uv run pytest tests/test_dogfood_gdunit4.py
+```
+
 ## Tech stack (decided)
 
 - **Language:** Python 3.12, managed with **uv** (hash-pinned `uv.lock`); toolchain pinned in
