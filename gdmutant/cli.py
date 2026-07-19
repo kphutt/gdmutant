@@ -20,6 +20,7 @@ from pathlib import Path
 
 from gdmutant import __version__
 from gdmutant.adapters.gdscript import (
+    ADAPTER,
     generate_mutants,
     is_valid_gdscript,
     unknown_ignore_operators,
@@ -415,6 +416,7 @@ def run_mutation(
             str(path),
             source,
             runner,
+            ADAPTER,
             timeout=timeout,
             progress=lambda line: print(line, file=sys.stderr),
         )
@@ -501,6 +503,7 @@ def run_mutation_paths(
             project_dir,
             sources,
             runner,
+            ADAPTER,
             timeout=timeout,
             progress=lambda line: print(line, file=sys.stderr),
         )
