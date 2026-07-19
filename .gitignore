@@ -27,6 +27,8 @@ mutmut-results.db
 corpus/addons/
 corpus/reports/
 *.uid
+# Live self-test with --basetemp=.live-tmp (CI reuses the Stryker JSON it writes there)
+.live-tmp/
 # OS/editor
 .DS_Store
 Thumbs.db
