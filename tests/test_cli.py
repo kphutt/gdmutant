@@ -317,14 +317,23 @@ def test_run_mutation_unwritable_html_path_returns_two(
 
 
 def test_report_path_problem_accepts_stdout_none_and_a_writable_dir(tmp_path: Path) -> None:
-    assert _report_path_problem(None) is None
-    assert _report_path_problem("-") is None
-    assert _report_path_problem(str(tmp_path / "report.json")) is None  # tmp_path is a writable dir
+    assert _report_path_problem(None, "--json", stdout_ok=True) is None
+    assert _report_path_problem("-", "--json", stdout_ok=True) is None  # stdout, allowed for --json
+    ok = _report_path_problem(str(tmp_path / "report.json"), "--json", stdout_ok=True)
+    assert ok is None  # tmp_path is a writable dir
 
 
-def test_report_path_problem_flags_a_missing_directory(tmp_path: Path) -> None:
-    problem = _report_path_problem(str(tmp_path / "nope" / "report.json"))
-    assert problem is not None and "does not exist" in problem
+def test_report_path_problem_rejects_stdout_when_not_supported() -> None:
+    # --html has no stdout target; '-' must be rejected (named for --html), not written as file '-'.
+    problem = _report_path_problem("-", "--html", stdout_ok=False)
+    assert problem is not None and "--html" in problem and "stdout" in problem
+
+
+def test_report_path_problem_flags_a_missing_directory_naming_the_flag(tmp_path: Path) -> None:
+    problem = _report_path_problem(
+        str(tmp_path / "nope" / "report.html"), "--html", stdout_ok=False
+    )
+    assert problem is not None and "does not exist" in problem and "--html" in problem  # right flag
 
 
 def test_report_path_problem_flags_an_unwritable_directory(
@@ -332,7 +341,7 @@ def test_report_path_problem_flags_an_unwritable_directory(
 ) -> None:
     # Simulate an existing-but-unwritable parent (chmod is unreliable under root, e.g. in CI).
     monkeypatch.setattr(cli.os, "access", lambda *_a, **_k: False)
-    problem = _report_path_problem(str(tmp_path / "report.json"))
+    problem = _report_path_problem(str(tmp_path / "report.json"), "--json", stdout_ok=True)
     assert problem is not None and "not writable" in problem
 
 

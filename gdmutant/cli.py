@@ -148,18 +148,22 @@ def _warn_unknown_ignore_operators(source: str) -> None:
         )
 
 
-def _report_path_problem(json_path: str | None) -> str | None:
-    """A human message if the ``--json`` report path can't be written, else None — checked *before*
-    the run so a long pass (minutes of booting Godot per mutant) never ends on an avoidable write
-    error (LOD-110). ``-`` (stdout) and ``None`` (no report) are always fine; only a real file path
-    is validated, and only its parent directory (the file itself needn't exist yet)."""
-    if json_path is None or json_path == "-":
+def _report_path_problem(path: str | None, flag: str, *, stdout_ok: bool) -> str | None:
+    """A human message (naming `flag`) if a report `path` can't be written, else None — checked
+    *before* the run so a long pass (minutes of booting Godot per mutant) never ends on an avoidable
+    write error (LOD-110). ``None`` (no report) is always fine; only a real file path is validated,
+    and only its parent directory (the file itself needn't exist yet). ``-`` means stdout, valid
+    only where `stdout_ok` (``--json``); for a file-only flag (``--html``) it's rejected rather than
+    written as a file literally named ``-``."""
+    if path is None:
         return None
-    parent = Path(json_path).parent
+    if path == "-":
+        return None if stdout_ok else f"{flag} needs a file path — stdout ('-') isn't supported"
+    parent = Path(path).parent
     if not parent.exists():
-        return f"--json directory does not exist: {parent}"
+        return f"{flag} directory does not exist: {parent}"
     if not os.access(parent, os.W_OK):
-        return f"--json directory is not writable: {parent}"
+        return f"{flag} directory is not writable: {parent}"
     return None
 
 
@@ -212,7 +216,10 @@ def run_mutation(
         return 2
     # Preflight the report paths up front (LOD-110): a run boots Godot per mutant for minutes, so an
     # unwritable --json/--html target must fail now, not after the whole pass completes.
-    for problem in (_report_path_problem(json_path), _report_path_problem(html_path)):
+    for problem in (
+        _report_path_problem(json_path, "--json", stdout_ok=True),
+        _report_path_problem(html_path, "--html", stdout_ok=False),
+    ):
         if problem is not None:
             print(f"error: {problem}", file=sys.stderr)
             return 2
