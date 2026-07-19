@@ -189,8 +189,15 @@ command line — they're per-invocation, not project settings.)
 > GdUnit4 and exit-code runners, pinned to exact per-mutant outcomes (`tests/test_selftest_live.py`).
 > `--dry-run` still needs no Godot.
 
-**Turn the JSON into a rich, clickable HTML report — no extra tooling from us.** The `--json` output
-is the standard Stryker
+**Want a page you can just open? `--html report.html`.** gdmutant writes a ready-to-open HTML report
+— the standard mutation-testing-elements viewer with the report inlined (the viewer itself loads from
+a pinned CDN, so rendering needs network; saving doesn't). One file, double-click it:
+```sh
+uv run gdmutant run path/to/module.gd --project . --html report.html
+```
+
+**Prefer to wire it yourself (or keep the report and page separate)?** The `--json` output is the
+standard Stryker
 [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema,
 so it renders in that ecosystem's interactive viewer. Save this next to your `report.json` as
 `view.html`:

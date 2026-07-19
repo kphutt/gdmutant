@@ -15,6 +15,7 @@ Locations are 1-based line + column with an exclusive end column, which is exact
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
@@ -84,6 +85,37 @@ def stryker_report(run: MutationRun, path: str, source: str, language: str) -> d
         "thresholds": {"high": 80, "low": 60},
         "files": {path: {"language": language, "source": source, "mutants": mutants}},
     }
+
+
+#: The pinned mutation-testing-elements viewer version (kept in sync with the README recipe).
+_HTML_VIEWER_VERSION = "3.8.4"
+
+
+def html_report(report: dict[str, Any]) -> str:
+    """A ready-to-open HTML report ([ticket]): the standard mutation-testing-elements viewer with the
+    Stryker `report` dict inlined, so ``gdmutant run --html out.html`` yields **one file you
+    double-click** — no manual viewer wiring. This automates the ``view.html`` recipe the README
+    documents; the interactive viewer itself loads from a pinned CDN (needs network to *render*, not
+    to save). The JSON rides in a non-executable ``<script type="application/json">`` block with
+    ``</`` escaped to ``<\\/`` — valid JSON (``\\/`` escapes ``/``) that a ``</script>`` inside
+    GDScript source can't use to break out of the tag; the viewer reads it back at load."""
+    data = json.dumps(report).replace("</", "<\\/")
+    return (
+        "<!doctype html>\n"
+        '<html lang="en">\n'
+        '<head><meta charset="utf-8"><title>gdmutant mutation report</title></head>\n'
+        "<body>\n"
+        "<mutation-test-report-app></mutation-test-report-app>\n"
+        f'<script src="https://www.unpkg.com/mutation-testing-elements@{_HTML_VIEWER_VERSION}">'
+        "</script>\n"
+        f'<script type="application/json" id="mutation-test-report">{data}</script>\n'
+        "<script>\n"
+        '  document.querySelector("mutation-test-report-app").report =\n'
+        '    JSON.parse(document.getElementById("mutation-test-report").textContent);\n'
+        "</script>\n"
+        "</body>\n"
+        "</html>\n"
+    )
 
 
 def console_summary(run: MutationRun) -> str:
