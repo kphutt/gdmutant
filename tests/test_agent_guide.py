@@ -67,8 +67,10 @@ def test_guide_local_links_resolve() -> None:
 
 
 def test_guide_references_agents_md_not_claude_md() -> None:
-    # The project is agent-agnostic: the contributor guide is AGENTS.md, and no `CLAUDE.md`
-    # reference should creep back in (this file was renamed from CLAUDE.md -> AGENTS.md).
+    # AGENTS.md is the single, agent-agnostic source of conventions, and the guide points there.
+    # A bare `CLAUDE.md` -> `@AGENTS.md` bridge file is allowed (it just lets Claude Code, which
+    # reads CLAUDE.md, load AGENTS.md) — but the guide itself must not duplicate or route through
+    # a tool-specific file, so no `CLAUDE.md` reference belongs in the guide's own text.
     text = _text()
     assert "AGENTS.md" in text
     assert "CLAUDE.md" not in text
