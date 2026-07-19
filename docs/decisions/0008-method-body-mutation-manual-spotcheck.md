@@ -9,15 +9,18 @@ gdmutant dogfoods its own Python suite with **mutmut 3.6** (`[tool.mutmut]`, the
 it generates no mutants inside class-method bodies (`docs/mutation-testing.md`). So ~24 methods
 (`GdUnit4Runner.run`/`command`, `CommandRunner.run`, `Mutant.apply`, the `MutationRun` properties,
 `Span.__post_init__`, `SuiteResult.failed`/`passed`, the `replacements` impls) are unit-tested but
-not *mutation-measured*. This is upstream and unresolved: mutmut issue #387 has been open since
-May 2025, and mutmut's own docs say "if you want to mutate code outside of functions, you can try
-using mutmut 2." (LOD-80.)
+not *mutation-measured*. This is a known mutmut 3.x limitation — its own docs say "if you want to
+mutate code outside of functions, you can try using mutmut 2" — and is reproduced below (0 mutants
+in any class method). (LOD-80.)
 
-The candidate fix is **cosmic-ray**, evaluated hands-on against a copy of `engine/runner.py`:
-- **It closes the gap.** On the module mutmut covered with 64 mutants (all in the one module-level
-  function), cosmic-ray produced 95 — including 71 *inside* the three class methods mutmut skipped,
-  and it surfaced real actionable survivors there (`capture_output=True`→`False`,
-  `returncode == 0`→`<= 0`).
+The candidate fix is **cosmic-ray**, evaluated hands-on:
+- **It closes the gap.** On `engine/runner.py` (the evaluation vehicle — a copy, with a trivial
+  suite), mutmut generated 64 mutants (all in the one module-level function) while cosmic-ray produced
+  95, including 71 *inside* the three class methods mutmut skipped (`CommandRunner.run`=55,
+  `SuiteResult.failed`=15, `.passed`=1), surfacing real survivors there (`capture_output=True`→`False`,
+  `returncode == 0`→`<= 0`). And on the shipped config's target `engine/mutants.py`, cosmic-ray finds
+  20 mutation points, **16 inside `Mutant.apply`/`describe_change`** (mutmut: 0), 5 surviving (25%)
+  against the real suite — the same gap, on the module this ADR ships a config for.
 - **It is far heavier.** ~30× slower per mutant (a fresh `pytest` subprocess per mutant vs mutmut's
   in-process caching); a multi-step SQLite session workflow (`init` → `exec` → `cr-report`) with its
   own TOML config; and it mutates things gdmutant deliberately treats as equivalent (type
