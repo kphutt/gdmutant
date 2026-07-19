@@ -1,10 +1,12 @@
 """Tests for the reporter (console summary + Stryker JSON)."""
 
 import json
+from pathlib import Path
 
+from gdmutant.engine.explain import render_survivor
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
 from gdmutant.engine.mutants import Mutant
-from gdmutant.engine.report import _kill_hint, console_summary, html_report, stryker_report
+from gdmutant.engine.report import console_summary, html_report, stryker_report
 from gdmutant.engine.spans import Span
 
 _SRC = "func f(a, b):\n\treturn a > b and a < b\n\treturn a + b\n"
@@ -122,62 +124,74 @@ def test_console_summary_score_counts_and_survivors() -> None:
     assert "killed:   1" in out and "survived: 1" in out
     assert "invalid:  1" in out and "error:    1" in out
     assert "Survivors (1):" in out
-    assert "f.gd:2:15  boolean  and -> or" in out
+    # New per-survivor explanation block (LOD-215): header with category, then gap/risk/start/more.
+    assert "survived" in out and "boolean ─" in out
+    assert "f.gd:2" in out
+    assert "gap    Your tests pass whether this needs both sides" in out
 
 
-def test_console_summary_exact_layout() -> None:
-    # Pin the whole rendered block: the blank separator line before "Survivors" and the "\n" join
-    # (mutants that turn "" into junk or join on a different separator are caught).
-    assert console_summary(_run()) == (
-        "Mutation score: 50.0%\n"
-        "  killed:   1\n"
-        "  timeout:  0  (counted as killed)\n"
-        "  survived: 1\n"
-        "  ignored:  0  (suppressed, excluded from score)\n"
-        "  invalid:  1\n"
-        "  error:    1\n"
-        "\n"
-        "Survivors (1):\n"
-        "  f.gd:2:15  boolean  and -> or\n"
-        "      → kill it: test operands that disagree (one true, one false) so and vs or matters"
+def test_console_summary_survivor_block_has_all_slots_and_the_doc_link() -> None:
+    # Each survivor renders the locked 7-slot block. With no readable source file (f.gd is not on
+    # disk), the code/caret/enclosing-func slots drop out gracefully and the narrative still stands.
+    out = console_summary(_run())
+    for label in ("  gap    ", "  risk   ", "  start  ", "  more   "):
+        assert label in out, f"missing slot {label!r}"
+    # the `more` link is the stable per-operator docs URL (ShellCheck model)
+    assert "docs/survivors/boolean.md" in out
+    # f.gd is not readable here, so there is no code line or caret
+    assert "2 | " not in out and "^" not in out
+
+
+def test_console_summary_wraps_each_survivor_block_exactly() -> None:
+    # Pin console_summary's own wrapper (the blank separators around "Survivors" and the newline
+    # join) around the render_survivor block. f.gd is not on disk, so the block renders source-less.
+    m = Mutant("no_such_dir/f.gd", Span(2, 15, 2, 18), "boolean", "and", "or")
+    run = MutationRun((MutantOutcome(m, Verdict.SURVIVED),))
+    block = "\n".join(render_survivor(m, None))
+    assert console_summary(run).endswith("\n\nSurvivors (1):\n\n" + block + "\n")
+
+
+def test_console_summary_reads_the_real_source_for_the_code_and_caret(tmp_path: Path) -> None:
+    # When the file is readable, the block shows the real source line + enclosing func — proving the
+    # summary actually reads the source (not a hard-coded None).
+    path = tmp_path / "m.gd"
+    path.write_text("func f():\n\treturn a and b\n", encoding="utf-8")
+    m = Mutant(str(path), Span(2, 11, 2, 14), "boolean", "and", "or")
+    out = console_summary(MutationRun((MutantOutcome(m, Verdict.SURVIVED),)))
+    assert "return a and b" in out  # the real source line (source was read, not None)
+    assert "func f" in out  # enclosing function pulled from the real file
+
+
+def test_console_summary_start_never_suggests_an_assertion_value() -> None:
+    # The safety invariant: `start` names the missing INPUT, never the expected/oracle value —
+    # suggesting one could codify a bug. It must say the answer is the developer's.
+    out = console_summary(
+        MutationRun(
+            (
+                MutantOutcome(
+                    Mutant("f.gd", Span(2, 8, 2, 9), "comparison", ">", ">="), Verdict.SURVIVED
+                ),
+            )
+        )
     )
+    assert "reports the gap, not it" in out  # explicitly declines to assert the answer
 
 
-def test_console_summary_renders_a_deletion_survivor_as_deleted() -> None:
-    # A deletion operator (unary-`not` removal) has an empty replacement. It must not render as a
-    # dangling "not -> " (LOD-131) — the survivors list should say "(deleted)".
+def test_console_summary_renders_a_deletion_survivor_without_a_dangling_arrow() -> None:
+    # A deletion operator (unary-`not` removal) has an empty replacement — it must not render as a
+    # dangling "-> " (LOD-131). The statement-deletion narrative covers the whole-line removal.
     run = MutationRun(
         (
             MutantOutcome(
-                Mutant("f.gd", Span(2, 8, 2, 11), "logical-not", "not", ""), Verdict.SURVIVED
+                Mutant("f.gd", Span(2, 8, 2, 11), "statement-deletion", "print(x)", ""),
+                Verdict.SURVIVED,
             ),
         )
     )
     out = console_summary(run)
-    assert "f.gd:2:8  logical-not  not -> (deleted)" in out
-    assert "not -> \n" not in out and not out.endswith("not -> ")
-
-
-def test_console_summary_appends_a_kill_hint_per_survivor() -> None:
-    # Each survivor gets a "→ kill it:" hint line so the list reads as actionable, not homework
-    # (LOD-114). One survivor here (the boolean and -> or) → one hint.
-    out = console_summary(_run())
-    assert out.count("→ kill it:") == 1
-    assert _kill_hint("boolean") in out
-
-
-def test_kill_hint_is_operator_specific_with_a_generic_fallback() -> None:
-    assert "boundary" in _kill_hint("comparison")  # operator-specific
-    assert _kill_hint("some-custom-operator") == "write a test that fails under this exact change"
-
-
-def test_reading_your_first_report_doc_sample_matches_the_real_hint() -> None:
-    # The human doc shows a sample survivor line with its hint; keep that sample honest so it can't
-    # drift from _KILL_HINTS (LOD-114 review). If you reword the comparison hint, update the doc.
-    from pathlib import Path
-
-    doc = Path(__file__).resolve().parent.parent / "docs" / "reading-your-first-report.md"
-    assert _kill_hint("comparison") in doc.read_text(encoding="utf-8")
+    assert "statement-deletion ─" in out
+    assert "gap    Your tests pass with this line removed entirely" in out
+    assert "-> \n" not in out and "-> (deleted)" not in out
 
 
 def test_console_summary_score_na_when_no_killable_mutants() -> None:
