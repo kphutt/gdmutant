@@ -1123,9 +1123,10 @@ def test_expand_sources_directory_recurses_skipping_addons_and_dotdirs(tmp_path:
 
 
 def _write_test_suites(tmp_path: Path) -> list[str]:
-    """Drop the four GdUnit4/GUT test-file shapes into `tmp_path` (a `test/` dir, ``*_test.gd``,
-    ``test_*.gd``, and an unconventionally-named file that ``extends GdUnitTestSuite``). Returns the
-    paths that a directory target must skip."""
+    """Drop every GdUnit4/GUT test-file shape into `tmp_path` — a `test/` dir, the three name
+    affixes (``*_test.gd`` / ``test_*.gd`` / ``*Test.gd``), and two unconventionally-named files the
+    only-robust content signal must catch: a bare ``extends GdUnitTestSuite`` and the single-line
+    ``class_name Foo extends GutTest`` form. Returns the paths a directory target must skip."""
     suite = "extends GdUnitTestSuite\nfunc test_it() -> void:\n\tpass\n"
     (tmp_path / "player_test.gd").write_text(suite, encoding="utf-8")  # GdUnit4 snake_case
     (tmp_path / "test_player.gd").write_text(suite, encoding="utf-8")  # GUT / getting-started
@@ -1133,15 +1134,23 @@ def _write_test_suites(tmp_path: Path) -> list[str]:
     tdir = tmp_path / "test"
     tdir.mkdir()
     (tdir / "in_test_dir.gd").write_text(suite, encoding="utf-8")  # under a test/ directory
-    # Oddly named (no affix, not under test/) but its base class gives it away — the robust signal.
-    weird = tmp_path / "checks.gd"
-    weird.write_text("extends GutTest\nfunc test_x() -> void:\n\tpass\n", encoding="utf-8")
+    # Oddly named (no affix, not under test/) but the base class gives it away — the robust signal.
+    (tmp_path / "checks.gd").write_text(
+        "extends GutTest\nfunc test_x() -> void:\n\tpass\n", encoding="utf-8"
+    )
+    # ...including Godot's legal single-line `class_name Foo extends Base`, where `extends` is
+    # mid-line (a bare `^extends` anchor would miss this — the exact noise this feature prevents).
+    (tmp_path / "oddity.gd").write_text(
+        "class_name Oddity extends GdUnitTestSuite\nfunc test_y() -> void:\n\tpass\n",
+        encoding="utf-8",
+    )
     return [
         str(tmp_path / "player_test.gd"),
         str(tmp_path / "test_player.gd"),
         str(tmp_path / "PlayerTest.gd"),
         str(tdir / "in_test_dir.gd"),
-        str(weird),
+        str(tmp_path / "checks.gd"),
+        str(tmp_path / "oddity.gd"),
     ]
 
 
@@ -1155,8 +1164,20 @@ def test_expand_sources_directory_skips_test_suites_and_notes_the_count(
     for path in skipped:
         assert path not in result
     err = capsys.readouterr().err
-    assert "skipped 5 test file(s)" in err  # the count is surfaced, not silent
+    assert "skipped 6 test file(s)" in err  # the count is surfaced, not silent
     assert "name one explicitly to mutate it" in err  # ...with the override escape hatch
+
+
+def test_expand_sources_duplicate_dir_args_do_not_inflate_skip_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Passing the same directory twice must not double-count skipped test files — the note is meant
+    # to be a trustworthy signal, and the file set is already de-duped (P3, Litmus review of #53).
+    a, b = _multi_project(tmp_path)
+    _write_test_suites(tmp_path)
+    result = cli._expand_sources([str(tmp_path), str(tmp_path)])
+    assert result == sorted([a, b])  # file set de-duped despite the repeated arg
+    assert "skipped 6 test file(s)" in capsys.readouterr().err  # count de-duped too, not 12
 
 
 def test_expand_sources_explicit_test_file_is_mutated(

@@ -163,8 +163,11 @@ _SKIP_DIRS = frozenset({"addons"})
 _TEST_DIRS = frozenset({"test", "tests"})
 #: Base classes a GDScript test suite extends — GdUnit4 (``GdUnitTestSuite``) and GUT (``GutTest``).
 #: This is the *robust* signal: the two frameworks disagree on filename affixes, but a real test
-#: suite always extends one of these, so a content check catches unconventionally-named tests.
-_TEST_BASE_RE = re.compile(r"^\s*extends\b.*\b(GdUnitTestSuite|GutTest)\b", re.MULTILINE)
+#: suite always extends one of these, so a content check catches unconventionally-named tests. Not
+#: anchored to the start of a line — Godot 4.x allows the single-line ``class_name Foo extends
+#: GdUnitTestSuite`` form, where ``extends`` is mid-line; ``.`` never spans a newline, so the class
+#: and its base still have to sit on one line to match.
+_TEST_BASE_RE = re.compile(r"\bextends\b.*\b(GdUnitTestSuite|GutTest)\b")
 
 
 def _has_test_name(name: str) -> bool:
@@ -190,51 +193,60 @@ def _is_test_file(full_path: Path, relative: Path) -> bool:
         return False
 
 
-def _gd_files_under(directory: Path) -> tuple[list[str], int]:
-    """Every mutable ``.gd`` file under `directory` (recursive), sorted, plus the count of test
-    files skipped. Skips ``addons/`` (third-party), any dot-directory (``.godot``, ``.git``, …),
-    and — so a directory target reports mutants on *your source*, not your test machinery
-    (LOD-200) — GdUnit4 / GUT test suites (`_is_test_file`). Name a test file explicitly to mutate
-    it anyway; only directory expansion applies the test skip."""
+def _gd_files_under(directory: Path) -> tuple[list[str], list[str]]:
+    """Every mutable ``.gd`` file under `directory` (recursive), sorted, plus the test-file paths
+    skipped. Skips ``addons/`` (third-party), any dot-directory (``.godot``, ``.git``, …), and — so
+    a directory target reports mutants on *your source*, not your test machinery (LOD-200) —
+    GdUnit4 / GUT test suites (`_is_test_file`). Name a test file explicitly to mutate it anyway;
+    only directory expansion applies the test skip."""
     files: list[str] = []
-    tests_skipped = 0
+    skipped: list[str] = []
     for path in directory.rglob("*.gd"):
         relative = path.relative_to(directory)
         if any(part in _SKIP_DIRS or part.startswith(".") for part in relative.parts[:-1]):
             continue
         if _is_test_file(path, relative):
-            tests_skipped += 1
+            skipped.append(str(path))
             continue
         files.append(str(path))
-    return sorted(files), tests_skipped
+    return sorted(files), skipped
 
 
-def _expand_sources(paths: list[str]) -> list[str] | None:
-    """Expand each given path (a ``.gd`` file or a directory) into a de-duplicated, sorted list of
-    `.gd` files. A directory skips GdUnit4 test files (`_gd_files_under`), noting how many; an
-    explicit file path is always included (name a test file to mutate it). Returns None (after
-    printing an error) when nothing resolves to a `.gd` file — the "point it at a directory"
-    adoption case (LOD-79). Existence/validity of each file is checked later by `_load_gdscript`."""
-    collected: list[str] = []
-    tests_skipped = 0
-    for raw in paths:
-        path = Path(raw)
-        if path.is_dir():
-            found, skipped = _gd_files_under(path)
-            collected.extend(found)
-            tests_skipped += skipped
-        else:
-            collected.append(raw)
+def _unique_by_resolved(candidates: list[str]) -> list[str]:
+    """`candidates` in order, dropping any whose resolved path was already seen — so overlapping or
+    repeated directory args don't double-count the same file."""
     seen: set[str] = set()
     unique: list[str] = []
-    for candidate in collected:
+    for candidate in candidates:
         resolved = str(Path(candidate).resolve())
         if resolved not in seen:
             seen.add(resolved)
             unique.append(candidate)
+    return unique
+
+
+def _expand_sources(paths: list[str]) -> list[str] | None:
+    """Expand each given path (a ``.gd`` file or a directory) into a de-duplicated, sorted list of
+    `.gd` files. A directory skips GdUnit4 test files (`_gd_files_under`), noting how many (counted
+    per *unique* file, so duplicate dir args don't inflate the note); an explicit file path is
+    always included (name a test file to mutate it). Returns None (after printing an error) when
+    nothing resolves to a `.gd` file — the "point it at a directory" adoption case (LOD-79).
+    Existence/validity of each file is checked later by `_load_gdscript`."""
+    collected: list[str] = []
+    skipped: list[str] = []
+    for raw in paths:
+        path = Path(raw)
+        if path.is_dir():
+            found, dir_skipped = _gd_files_under(path)
+            collected.extend(found)
+            skipped.extend(dir_skipped)
+        else:
+            collected.append(raw)
+    unique = _unique_by_resolved(collected)
     if not unique:
         print("error: no .gd files found in the given path(s)", file=sys.stderr)
         return None
+    tests_skipped = len(_unique_by_resolved(skipped))
     if tests_skipped:
         print(
             f"note: skipped {tests_skipped} test file(s) (test/ dirs, *_test.gd, or "
