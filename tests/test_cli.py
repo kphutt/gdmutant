@@ -1400,7 +1400,9 @@ def test_drop_unparseable_partitions_by_readability_and_parse(tmp_path: Path) ->
     bad_parse.write_text("func f(:\n", encoding="utf-8")  # doesn't parse
     bad_read = tmp_path / "binary.gd"
     bad_read.write_bytes(b"\xff\xfe not utf-8")  # can't be decoded
-    ok, dropped = cli._drop_unparseable([str(good), str(bad_parse), str(bad_read)])
+    # bad_read FIRST, then a good file — so a bug that stops at the first bad file (rather than
+    # skipping it and continuing) would drop `good` and be caught.
+    ok, dropped = cli._drop_unparseable([str(bad_read), str(good), str(bad_parse)])
     assert ok == [str(good)]
     assert set(dropped) == {str(bad_parse), str(bad_read)}
 
@@ -1439,7 +1441,10 @@ def test_main_all_unparseable_directory_exits_two(
     (tmp_path / "a.gd").write_text("func f(:\n", encoding="utf-8")
     (tmp_path / "b.gd").write_text("func g(:\n", encoding="utf-8")  # both invalid
     assert main(["run", str(tmp_path), "--dry-run"]) == 2
-    assert "no parseable .gd files" in capsys.readouterr().err
+    # line-exact, so a mutation to the error text is caught (a substring check wouldn't be).
+    assert (
+        "error: no parseable .gd files in the given path(s)" in capsys.readouterr().err.splitlines()
+    )
 
 
 def test_main_single_explicit_unparseable_file_still_exits_two(
