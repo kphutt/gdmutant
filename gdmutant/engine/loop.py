@@ -186,6 +186,21 @@ def run(
     it to stderr so a long or hanging run shows steady output instead of looking frozen; `None`
     runs silently.
     """
+    per_mutant_timeout, baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
+    return _mutate_file(
+        project_dir, path, source, runner, per_mutant_timeout, baseline_secs, catalog, progress
+    )
+
+
+def _run_baseline(
+    project_dir: str,
+    runner: Runner,
+    timeout: float | None,
+    progress: Callable[[str], None] | None,
+) -> tuple[float, float]:
+    """Run the unmutated suite once. Returns ``(per_mutant_timeout, baseline_secs)`` — the
+    per-mutant budget (derived from the baseline's wall-clock unless `timeout` overrides) and it.
+    Raises `BaselineFailed` if the suite can't run or is red (FG-3.3)."""
     if progress is not None:
         progress("running the unmutated (baseline) suite ...")
     started = time.monotonic()
@@ -199,8 +214,22 @@ def run(
     if baseline.failed:
         detail = f":\n{baseline.detail}" if baseline.detail else ""
         raise BaselineFailed(f"the unmutated test suite failed for {project_dir!r}{detail}")
-
     per_mutant_timeout = timeout if timeout is not None else _derive_timeout(baseline_secs)
+    return per_mutant_timeout, baseline_secs
+
+
+def _mutate_file(
+    project_dir: str,
+    path: str,
+    source: str,
+    runner: Runner,
+    per_mutant_timeout: float,
+    baseline_secs: float,
+    catalog: tuple[Operator, ...],
+    progress: Callable[[str], None] | None,
+) -> MutationRun:
+    """Generate and run every mutant for a single file (the baseline is assumed already green). The
+    file at `path` must hold `source`; it is restored before returning."""
     outcomes: list[MutantOutcome] = []
     mutants = generate_mutants(path, source, catalog)
     total = len(mutants)
@@ -225,6 +254,30 @@ def run(
         if progress is not None:
             progress(_progress_line(index, total, outcome))
     return MutationRun(tuple(outcomes))
+
+
+def run_paths(
+    project_dir: str,
+    sources: dict[str, str],
+    runner: Runner,
+    catalog: tuple[Operator, ...] = CATALOG,
+    *,
+    timeout: float | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, MutationRun]:
+    """Mutate several files against one project — the baseline runs **once**, then each file's
+    mutants run in turn (LOD-79). `sources` maps each file path to its contents (each held on entry,
+    restored after its own mutants). Returns ``{path: MutationRun}`` in `sources` order. Raises
+    `BaselineFailed` (like `run`) if the unmutated suite can't run or is red."""
+    per_mutant_timeout, baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
+    runs: dict[str, MutationRun] = {}
+    for path, source in sources.items():
+        if progress is not None:
+            progress(f"mutating {path} ...")
+        runs[path] = _mutate_file(
+            project_dir, path, source, runner, per_mutant_timeout, baseline_secs, catalog, progress
+        )
+    return runs
 
 
 def _run_one(
