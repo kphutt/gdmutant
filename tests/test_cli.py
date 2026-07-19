@@ -652,12 +652,15 @@ def test_load_config_rejects_bad_typed_values(tmp_path: Path) -> None:
 def test_main_uses_config_defaults_when_cli_flags_omitted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A `.gdmutant.toml` in the cwd supplies --project; with no CLI --project, the runner gets it.
+    # A `.gdmutant.toml` supplies --project; with no CLI --project, the runner gets it. Point
+    # _CONFIG_FILENAME at the tmp file rather than chdir()-ing into it — a global cwd change breaks
+    # mutmut's mutated-module resolution (`import gdmutant` → <cwd>/gdmutant), failing the dogfood.
     path = _gd(tmp_path)
     proj = tmp_path / "proj"
     proj.mkdir()
-    (tmp_path / ".gdmutant.toml").write_text(f"project = {str(proj)!r}\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text(f"project = {str(proj)!r}\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     runner = RecordingRunner()
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
     assert main(["run", str(path)]) == 0
@@ -669,8 +672,9 @@ def test_main_cli_flag_overrides_config(tmp_path: Path, monkeypatch: pytest.Monk
     cfg_proj, cli_proj = tmp_path / "cfg", tmp_path / "cli"
     cfg_proj.mkdir()
     cli_proj.mkdir()
-    (tmp_path / ".gdmutant.toml").write_text(f"project = {str(cfg_proj)!r}\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text(f"project = {str(cfg_proj)!r}\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     runner = RecordingRunner()
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
     assert main(["run", str(path), "--project", str(cli_proj)]) == 0
@@ -680,10 +684,22 @@ def test_main_cli_flag_overrides_config(tmp_path: Path, monkeypatch: pytest.Monk
 def test_main_malformed_config_exits_two(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    (tmp_path / ".gdmutant.toml").write_text("x = = broken", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text("x = = broken", encoding="utf-8")
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     assert main(["run", "f.gd"]) == 2  # setup error, before anything runs
     assert "cannot read" in capsys.readouterr().err
+
+
+def test_config_require_clean_can_be_overridden_off_by_cli(tmp_path: Path) -> None:
+    # LOD-107 follow-up: a config `require-clean = true` must be overridable back OFF for a single
+    # run via --no-require-clean — the old store_true action had no such escape hatch.
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text("require-clean = true\n", encoding="utf-8")
+    parser = build_parser(_load_config(cfg))
+    assert parser.parse_args(["run", "f.gd"]).require_clean is True  # config default applies
+    assert parser.parse_args(["run", "f.gd", "--no-require-clean"]).require_clean is False  # off
+    assert parser.parse_args(["run", "f.gd", "--require-clean"]).require_clean is True  # on
 
 
 def test_main_constructs_runner_with_test_path_and_godot(
@@ -1021,8 +1037,11 @@ def test_main_threads_require_clean_to_run_mutation(
     main(["run", str(path), "--project", str(tmp_path)])
     assert captured["require_clean"] is False
     captured.clear()
-    # If the config defaults it to True, --no-require-clean must override it to False.
-    (tmp_path / ".gdmutant.toml").write_text("require-clean = true\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
+    # If the config defaults it to True, --no-require-clean must override it to False. Point
+    # _CONFIG_FILENAME at the file rather than chdir()-ing — a cwd change breaks mutmut's stats
+    # collection (it resolves source_paths=["gdmutant"] relative to cwd).
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text("require-clean = true\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     main(["run", str(path), "--no-require-clean"])
     assert captured["require_clean"] is False
