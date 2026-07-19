@@ -1397,3 +1397,128 @@ def test_main_dry_run_returns_two_on_an_invalid_file_in_the_directory(
     (tmp_path / "bad.gd").write_text("func f(:\n", encoding="utf-8")  # not valid GDScript
     assert main(["run", str(tmp_path), "--dry-run"]) == 2  # a bad file stops the dry-run at exit 2
     assert "not valid GDScript" in capsys.readouterr().err
+
+
+# --- diff-scoped / incremental mode (--since, [ticket]) --------------------------------------------
+
+# Two mutable lines (2 and 4) so a change to one is distinguishable from the other under --since.
+_TWO_LINE_SRC = "func f(x) -> bool:\n\treturn x > 0\nfunc g(x) -> bool:\n\treturn x < 0\n"
+
+
+def _repo_with_committed(tmp_path: Path, name: str, text: str) -> str:
+    """A git repo with `name` committed at HEAD; returns the file path."""
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    _git(tmp_path, "add", name)
+    _git(tmp_path, "commit", "-m", "base")
+    return str(path)
+
+
+def test_changed_lines_maps_the_modified_line(tmp_path: Path) -> None:
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    # change line 2 only (the `> 0` return) — leave line 4 untouched
+    Path(path).write_text(_TWO_LINE_SRC.replace("x > 0", "x > 1"), encoding="utf-8")
+    changed = cli._changed_lines("HEAD", [path])
+    assert changed == {str(Path(path).resolve()): {2}}  # the +side of the diff, line 2 only
+
+
+def test_changed_lines_bad_ref_returns_none(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    assert cli._changed_lines("no-such-ref", [path]) is None
+    assert "git diff for --since no-such-ref failed" in capsys.readouterr().err
+
+
+def test_changed_lines_treats_an_untracked_new_file_as_fully_changed(tmp_path: Path) -> None:
+    # git diff is silent on a never-`git add`-ed file, so a brand-new .gd must be treated as fully
+    # changed (every line new), not silently skipped as "no changes". [internal-tool] P2 on #61.
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "committed.gd").write_text("func a():\n\tpass\n", encoding="utf-8")
+    _git(tmp_path, "add", "committed.gd")
+    _git(tmp_path, "commit", "-m", "base")
+    new = tmp_path / "new.gd"
+    new.write_text(_TWO_LINE_SRC, encoding="utf-8")  # on disk but never staged
+    assert cli._changed_lines("HEAD", [str(new)]) == {str(new.resolve()): {1, 2, 3, 4}}
+
+
+def test_changed_lines_nonexistent_file_maps_to_empty(tmp_path: Path) -> None:
+    # A path that doesn't exist on disk contributes no changed lines (its real error surfaces later
+    # when the source can't be read) — the untracked "fully changed" path is guarded on `is_file`.
+    _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    missing = str(tmp_path / "gone.gd")
+    assert cli._changed_lines("HEAD", [missing]) == {str(Path(missing).resolve()): set()}
+
+
+def test_changed_lines_git_unavailable_returns_none(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # If git can't even be launched (missing binary), --since is a setup error, not a silent no-op.
+    def boom(*args: object, **kwargs: object) -> None:
+        raise OSError("git not found")
+
+    monkeypatch.setattr(cli.subprocess, "run", boom)
+    assert cli._changed_lines("HEAD", [str(tmp_path / "f.gd")]) is None
+    assert "could not run git for --since HEAD" in capsys.readouterr().err
+
+
+def test_diff_scoped_adapter_keeps_only_changed_line_mutants(tmp_path: Path) -> None:
+    from gdmutant.adapters.gdscript import ADAPTER
+
+    path = str(tmp_path / "f.gd")
+    Path(path).write_text(_TWO_LINE_SRC, encoding="utf-8")
+    scoped = cli._diff_scoped(ADAPTER, {str(Path(path).resolve()): {2}})
+    from gdmutant.engine.operators import CATALOG
+
+    mutants = scoped.generate_mutants(path, _TWO_LINE_SRC, CATALOG)
+    assert mutants  # line 2 has `>` and `0` mutants
+    assert {m.span.line for m in mutants} == {2}  # nothing from line 4's `< 0`
+
+
+def test_main_since_dry_run_lists_only_changed_line_mutants(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    Path(path).write_text(_TWO_LINE_SRC.replace("x > 0", "x > 1"), encoding="utf-8")
+    assert main(["run", path, "--dry-run", "--since", "HEAD"]) == 0
+    out = capsys.readouterr().out
+    assert "f.gd:2:" in out  # the changed line's mutants are listed
+    assert "f.gd:4:" not in out  # the untouched line's are not
+
+
+def test_main_since_no_changes_is_a_clean_noop(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Nothing changed since HEAD → nothing to mutate: exit 0 with a note, no Godot invoked.
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    assert main(["run", path, "--since", "HEAD"]) == 0
+    assert "no lines changed since HEAD" in capsys.readouterr().err
+
+
+def test_main_since_bad_ref_exits_two(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    assert main(["run", path, "--since", "no-such-ref"]) == 2
+    assert "git diff for --since no-such-ref failed" in capsys.readouterr().err
+
+
+def test_run_mutation_with_changed_scopes_the_real_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The real (non-dry) path threads `changed` through to the engine via the diff-scoped adapter:
+    # only line-2 mutants run, so the report's mutant set is line-2 only.
+    path = tmp_path / "f.gd"
+    path.write_text(_TWO_LINE_SRC, encoding="utf-8")
+    report = tmp_path / "r.json"
+    changed = {str(path.resolve()): {2}}
+    rc = cli.run_mutation(
+        str(path), str(tmp_path), RecordingRunner(), json_path=str(report), changed=changed
+    )
+    assert rc == 0
+    data = json.loads(report.read_text(encoding="utf-8"))
+    lines = {m["location"]["start"]["line"] for m in data["files"][str(path)]["mutants"]}
+    assert lines == {2}  # only the changed line was mutated
