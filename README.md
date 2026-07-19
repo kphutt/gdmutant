@@ -1,305 +1,186 @@
-# gdmutant
+<h1 align="center">gdmutant</h1>
+<h3 align="center">Mutation testing for GDScript and Godot</h3>
 
-[![CI](https://github.com/kphutt/gdmutant/actions/workflows/ci.yml/badge.svg)](https://github.com/kphutt/gdmutant/actions/workflows/ci.yml)
+<p align="center">
+  <a href="https://github.com/kphutt/gdmutant/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kphutt/gdmutant/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Godot 4.4+" src="https://img.shields.io/badge/Godot-4.4%2B-478cbf?logo=godot-engine&logoColor=white">
+  <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-blue?logo=python&logoColor=white">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green">
+</p>
 
-> **`gdmutant` is a provisional codename**, not yet cleared for public use. It lives in one
-> place: this README + the repo name.
+<p align="center"><em>gdmutant is a provisional codename, not yet cleared for public use — it lives only in this README and the repo name.</em></p>
 
-**A mutation-testing tool — the first *usable* one for GDScript/Godot, built to be language-agnostic.** Point it at a
-GDScript module with a test suite; it mutates the source (flip `>`↔`>=`, `and`↔`or`, bump a number, …), reruns
-the tests per mutant, and reports **survivors** — lines a bug could live on and no test would catch. Coverage
-says a line *ran*; mutation says a bug there would be *caught*. That gap is the product.
+## What is gdmutant?
 
-## Why this exists (the opening)
-- **No *usable* mutation tester exists for GDScript.** [Stryker](https://stryker-mutator.io/) does JS/TS,
-  C#, Scala; mutmut does Python; PIT does Java. GDScript has only a **dormant, unlicensed proof-of-concept**
-  ([hanse7962/GodotMutationTesting](https://github.com/hanse7962/GodotMutationTesting) — a few weeks of work
-  in Apr–May 2026, no README, no license), so the space for a documented, adopted tool is open. And the AST
-  work is nearly free now that
-  [`gdtoolkit`](https://github.com/Scony/godot-gdscript-toolkit) ships a real GDScript parser.
-- **AI just opened the demand.** When an AI writes the tests, coverage is *especially* a lie (models write
-  tests that pin the code they just wrote). Mutation is one of the few **executable, model-independent**
-  signals that a test actually bites. So under-tested ecosystems like game-dev suddenly need this.
-- **Extracted from real use, not built speculatively.** The driver is `project-rampart` (a Godot roguelike)
-  needing to trust its two hardest systems (turn scheduler + procgen connectivity). This tool gets *extracted
-  from that need* and dogfooded on it.
+gdmutant is a mutation-testing tool for GDScript. Point it at a module with a test suite and it
+mutates the source — flip `>` ↔ `>=`, `and` ↔ `or`, bump a number, delete a statement — reruns the
+tests once per mutant, and reports the **survivors**: lines a bug could live on that no test would
+catch.
 
-## Prior art, licenses & why build (not extend)
-- **Can't build on the GDScript POC.** `hanse7962/GodotMutationTesting` is **unlicensed** (all rights
-  reserved) — legally untouchable, and a dormant undocumented experiment anyway. Study for ideas only.
-- **No pluggable engine to "just add GDScript to."** Stryker is a *family of separate per-language tools*
-  (StrykerJS/.NET/Scala), not one core with a language-plugin API — adding GDScript ≈ writing a whole new
-  Stryker. The one deliberately language-extensible tool, `universalmutator`, is **regex-based** (text-rule
-  mutation → mostly-invalid mutants; worse than AST) and academic. So there's no good host to extend —
-  a thin engine + a gdtoolkit AST adapter is genuinely the best path, not reinvention-for-its-own-sake.
-- **The mature tools are permissive → learn freely.** Stryker/PIT/Mull **Apache-2.0**; mutmut/infection
-  **BSD-3**; cosmic-ray/cargo-mutants **MIT**. Patterns aren't copyrightable and these even allow adapting
-  code with attribution — so steal the architecture (coverage-guided selection, schemata, incremental, the
-  report schema) openly.
+Coverage says a line *ran*; mutation says a bug there would be *caught*. That gap is what gdmutant
+finds — and it is exactly the gap that widens when an AI writes the tests, since a model tends to pin
+the code it just wrote. Mutation is one of the few executable, model-independent signals that a test
+actually bites.
 
+It is a standalone CLI — no AI required — built on a language-neutral engine with a
+[gdtoolkit](https://github.com/Scony/godot-gdscript-toolkit) AST adapter, and validated end-to-end
+against real Godot in CI (both runners, pinned to exact per-mutant outcomes).
 
-- **This tool → MIT** (matches the norm; maximally adoptable).
+## Features
 
-## Patterns to steal (cross-language prior art)
-- **Split mutator (AST) / runner (tests) / reporter** — the generic-engine + adapters design; every good
-  tool does this (mutmut, Stryker, mutant).
-- **Coverage-guided mutant selection** — only run tests that cover the mutated line. The #1 speedup (PIT, Stryker).
-- **Mutant schemata / "switching"** — bake all mutants into one instrumented copy, toggle via a switch,
-  avoid re-parsing/re-running per mutant (PIT).
-- **Incremental / diff-scoped** — mutate only changed lines (the per-PR mode).
-- **Adopt Stryker's [mutation-testing-elements](https://github.com/stryker-mutator/mutation-testing-elements)
-  report schema** — then output renders in the existing HTML viewer for free.
-- Study: [awesome-mutation-testing](https://github.com/theofidry/awesome-mutation-testing),
-  [mutation-testing-in-patterns](https://github.com/atodorov/mutation-testing-in-patterns). Closest engine to
-  copy the shape of: **mutmut** (Python + AST, like ours).
+**Mutation**
+- AST-based operators: comparison, boolean, arithmetic, constant, numeric-literal, compound
+  assignment, modulo, unary-not, and statement-deletion — each re-parse-guarded so invalid mutants
+  are never run.
+- One file, several files, or a whole directory (recursive) in one pass, with a per-file breakdown
+  and one aggregate mutation score.
 
-## Design goals
-- **Ship fast.** A working v0.1 that mutates one real module and prints survivors beats a perfect framework.
-- **Standalone. Usable by anyone — no AI required.** A normal CLI a developer installs and runs,
-  exactly like Stryker is in its domain. AI is *optional upside* (see modes), never a dependency. This is the
-  #1 design constraint: **a non-AI developer must be able to pick it up and use it from the README alone.**
-- **Generic engine, per-language adapters.** The loop (mutate → run tests → killed/survived → report) is
-  identical in every language; only two bits are language-specific — mutating the AST, and running that
-  language's tests. Build the loop once; a new language = one small adapter.
-  - **GDScript adapter first** (the gap; via gdtoolkit's parser).
-  - **TypeScript:** don't compete with Stryker — *delegate* to it, or skip. Adapters are independent.
+**Running your tests**
+- **GdUnit4 runner** — reads GdUnit4's JUnit XML.
+- **Exit-code runner** (`--runner command`) — any headless harness that exits non-zero on failure;
+  no GdUnit4 addon needed.
 
-## Architecture (as built)
-```
-gdmutant/
-  engine/          language-neutral loop: select → mutate → run → tally → mutation score
-    operators/     operator catalog (comparison/boolean/arithmetic/constant/numeric + compound-assignment/modulo/not)
-    spans.py       AST-guided source-span editing (docs/decisions/0002)
-    runner.py      the Runner interface + JUnit-XML parsing
-    report.py      Stryker mutation-testing-elements JSON + a console summary
-  adapters/
-    gdscript/      gdtoolkit AST → locate token → mutate → NF-5 re-parse guard; the GdUnit4 runner
-  cli.py           the standalone `gdmutant run` entry point (no AI required)
-corpus/            a real GDScript fixture module + GdUnit4 suite (intentionally under-tested — and with a few equivalent mutants — so a real run surfaces live survivors, as real mutation testing does)
-```
-Two modes, one engine: a **deterministic operator core** (reproducible — the mode a CI check can trust) and,
-later, an optional **LLM-semantic mode** (plausible-bug mutants: off-by-one, dropped-last-element, swallowed
-error) for *hardening*, kept out of the gate because it's nondeterministic.
+**Reports**
+- Console summary with each survivor as `file:line:col` + the swap and a `→ kill it` hint.
+- Stryker [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements)
+  JSON (`--json`) and a ready-to-open HTML report (`--html`).
 
-## Status
-**v0.1 works — gdmutant mutates real GDScript and reports survivors end-to-end.** From a `.gd` file it
-generates AST-based mutants (comparison / boolean / arithmetic / constant / numeric-literal, plus
-compound-assignment / modulo / unary-not / statement-deletion), runs the
-project's GdUnit4 suite per mutant, classifies killed / survived / timeout / invalid / error, computes a
-mutation score, and emits a console summary + a Stryker `mutation-testing-elements` JSON report — via the
-standalone `gdmutant run` CLI (no AI required). Proven end-to-end on the bundled `corpus/` module; the
-**live `godot --headless` + GdUnit4** invocation is pending CI validation (see `ROADMAP.md`), so the
-package stays version `0.0.0` until that lands, then tags `0.1.0`. Spun off from `project-rampart` (a
-Godot roguelike) so it has its own home.
+**Fitting your project**
+- Test suites are skipped by default; `--exclude` globs drop anything else.
+- `.gdmutant.toml` persists per-project flags.
+- `--dry-run` lists mutants without running Godot at all.
+- Mutates in place and restores after every mutant and on exit.
 
-## Quickstart
-Clone the repo, then install the pinned toolchain + locked deps:
-```sh
-mise install       # installs the pinned Python + uv  (or install uv yourself, then skip this)
-uv sync --frozen   # installs the exact locked dependencies
-```
+## Requirements
 
-**See it work without Godot** — list the mutants gdmutant generates for the bundled fixture:
-```sh
-uv run gdmutant run corpus/turn_order.gd --dry-run
-```
-```
-18 mutants for corpus/turn_order.gd:
-  corpus/turn_order.gd:8:17  comparison  > -> >=
-  corpus/turn_order.gd:13:11  comparison  < -> <=
-  corpus/turn_order.gd:13:13  numeric  0 -> 1
-  ...
-  corpus/turn_order.gd:27:15  boolean  and -> or
-  corpus/turn_order.gd:27:19  logical-not  not -> (deleted)
-  corpus/turn_order.gd:32:9  constant  true -> false
-```
+| | |
+|---|---|
+| **Godot** | 4.4+ (only for real runs; `--dry-run` needs no Godot) |
+| **Python** | 3.12+ |
+| **GdUnit4** | optional — only for the GdUnit4 runner; the exit-code runner needs no addon |
 
-**...then run it for real on the bundled corpus — no addon needed.** The corpus ships a tiny
-exit-code test harness, so you can go straight from the dry-run to a real mutation score with only
-**Godot** on your machine (no GdUnit4 install, nothing to vendor):
-```sh
-uv run gdmutant run corpus/turn_order.gd --project corpus \
-  --runner command --command "godot --headless --path . --script res://harness/run_tests.gd"
-```
-It reruns the corpus suite against all 18 mutants and reports **~61% killed, 7 survivors** — the
-fixture is deliberately under-tested (with a couple of equivalent mutants), so a real run surfaces
-live survivors, exactly as mutation testing does on real code. (macOS: put the app-bundle path to
-`godot` inside `--command`.) This is the whole pipeline end-to-end in one command.
+## Install
 
-**Run the real thing** — needs Godot 4.4+ and the [GdUnit4](https://github.com/godot-gdunit-labs/gdUnit4)
-addon installed in the target project (under `res://addons/gdUnit4/`):
-```sh
-uv run gdmutant run path/to/module.gd --project path/to/godot-project [--json report.json]
-```
-For each mutant it reruns the project's GdUnit4 suite, prints the survivors (`file:line:col` + the swap,
-each with a `→ kill it` hint) with a mutation score, and optionally writes a `mutation-testing-elements`
-JSON report (`--json report.json`, or `--json -` to stream it to stdout). (Once published: `pipx install
-gdmutant`.) New to the output? [`docs/reading-your-first-report.md`](docs/reading-your-first-report.md)
-walks through survivors, the kill hints, and equivalent mutants.
+gdmutant is a dev tool, not a runtime dependency. Install it into your project from git at a
+**pinned commit** (it is not on PyPI yet):
 
-**A whole directory, not one file at a time.** Pass a directory (or several files/dirs) and gdmutant
-mutates every `.gd` under it — recursively, skipping `addons/` and dot-dirs — running the baseline
-**once** and reporting a per-file breakdown, one aggregate score, and one merged report:
-```sh
-uv run gdmutant run src/systems --project . --json report.json --html report.html
-```
-**Your test suites are skipped by default.** Like StrykerJS and cargo-mutants, a directory target
-leaves your tests out of the mutation set — gdmutant skips anything under a `test/`/`tests/` folder,
-named `test_*.gd` / `*_test.gd` / `*Test.gd`, or extending `GdUnitTestSuite` / `GutTest`. It prints
-how many it skipped, and naming a test file explicitly on the command line mutates it anyway (the
-skip applies only to directory expansion).
-
-**Skip more with `--exclude`.** Pass `--exclude '<glob>'` (repeatable) to drop generated code,
-vendored scripts, or anything else you don't want mutated — matched against each path and its bare
-filename, so `--exclude '*_generated.gd'` skips those anywhere and `--exclude '*/vendor/*'` skips a
-whole tree:
-```sh
-uv run gdmutant run src --exclude '*_generated.gd' --exclude '*/vendor/*'
-```
-Same override rule as the test-skip: `--exclude` only narrows a *directory* expansion — an
-explicitly named file is always mutated. `--dry-run` shows exactly what survives the filter.
-
-> **Trying the GdUnit4 runner on the *bundled corpus*?** The corpus doesn't vendor the addon, so
-> fetch it first — `scripts/install-gdunit4.sh` (the same pinned install CI uses) drops it into
-> `corpus/addons/gdUnit4/` — then run with `--project corpus --runner gdunit4 --godot <godot>`. Or
-> skip the addon entirely and use the exit-code demo above.
-
-> **macOS:** the `--godot` flag applies to the **GdUnit4 runner**, which launches Godot itself. Godot
-> ships as an app bundle and is never on your PATH, so point `--godot` at the binary inside it:
-> `--godot /Applications/Godot.app/Contents/MacOS/Godot` (gdmutant tells you this if it can't find
-> Godot). With `--runner command` gdmutant does **not** launch Godot — your `--command` does — so you
-> only need `godot` to resolve inside that command (on PATH, or an absolute path in the command).
-
-**No GdUnit4?** For a project with a hand-rolled headless test harness (like `project-rampart`'s),
-use the exit-code runner instead — any command that exits non-zero on failure works, no JUnit XML
-needed:
-```sh
-uv run gdmutant run path/to/module.gd --project path/to/godot-project \
-  --runner command --command "godot --headless --script res://tests/run_tests.gd"
-```
-See [`docs/decisions/0005`](docs/decisions/0005-exit-code-test-runner-convention.md) for the
-convention (and its coarser killed/errored resolution vs GdUnit4's XML).
-
-Other flags: `--report-path` if your project writes GdUnit4's JUnit XML somewhere other than the
-default `reports/report_1/results.xml`, and `--timeout` (seconds, per mutant — by default *derived
-from the baseline run*: 10× its wall-clock, floored at 10s and capped at 600s, so a hanging mutant is
-caught in seconds; pass an explicit value to override). `gdmutant run --help` lists them all.
-
-**Stop retyping flags — `.gdmutant.toml`.** Drop a `.gdmutant.toml` in the directory you run gdmutant
-from to persist the per-project defaults; an explicit CLI flag always overrides the file. Keys mirror
-the flag names:
-```toml
-project = "."
-runner = "command"
-command = "godot --headless --script res://tests/run_tests.gd"
-# godot = "/Applications/Godot.app/Contents/MacOS/Godot"   # (GdUnit4 runner)
-# tests = "res://test"
-# report-path = "reports/report_1/results.xml"
-# timeout = 60
-# require-clean = true
-# exclude = ["*_generated.gd", "*/vendor/*"]   # combines with any --exclude on the CLI
-```
-Then `gdmutant run path/to/module.gd` picks them up. (`source`, `--json`, and `--dry-run` stay on the
-command line — they're per-invocation, not project settings.) `exclude` is the one additive key: the
-file's list and any `--exclude` flags both apply, since narrowing what gets mutated is naturally
-cumulative.
-
-> **Your code is safe, but commit first.** gdmutant mutates the source file **in place**, restoring
-> it after each mutant and on a normal exit or Ctrl-C — but a hard kill (SIGKILL / power loss) could
-> leave one swap on disk, and an open Godot editor may hot-reload mid-run. So commit or stash before
-> a run. gdmutant **warns** if the target has uncommitted git changes; pass `--require-clean` to make
-> that a hard stop instead.
-
-> The live `godot --headless` path is validated end-to-end in CI against **real Godot** — both the
-> GdUnit4 and exit-code runners, pinned to exact per-mutant outcomes (`tests/test_selftest_live.py`).
-> `--dry-run` still needs no Godot.
-
-**Want a page you can just open? `--html report.html`.** gdmutant writes a ready-to-open HTML report
-— the standard mutation-testing-elements viewer with the report inlined (the viewer itself loads from
-a pinned CDN, so rendering needs network; saving doesn't). One file, double-click it:
-```sh
-uv run gdmutant run path/to/module.gd --project . --html report.html
-```
-
-**Prefer to wire it yourself (or keep the report and page separate)?** The `--json` output is the
-standard Stryker
-[`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema,
-so it renders in that ecosystem's interactive viewer. Save this next to your `report.json` as
-`view.html`:
-```html
-<mutation-test-report-app></mutation-test-report-app>
-<script src="https://www.unpkg.com/mutation-testing-elements@3.8.4"></script>
-<script>
-  fetch("report.json")
-    .then((r) => r.json())
-    .then((report) => (document.querySelector("mutation-test-report-app").report = report));
-</script>
-```
-then serve the folder and open it (`python3 -m http.server` → visit `view.html`) for a
-source-highlighted, survivor-by-survivor view. Once the repo is public, the free
-[Stryker Dashboard](https://dashboard.stryker-mutator.io) can also host the report and produce a
-mutation-score **badge** — all from the JSON gdmutant already emits.
-
-**Driving gdmutant from an AI agent?** See [`docs/agent-guide.md`](docs/agent-guide.md) — the exact
-invocation, the JSON schema, the `0`/`1`/`2` exit-code contract, the "never leaves your tree mutated"
-guarantee, and the survivor→killing-test loop, in one read.
-
-## Install into your project (local, no clone)
-The Quickstart above is for hacking on gdmutant itself. To run it against **your own** Godot project,
-install it as a dev-tool dependency — no clone needed. It's not on PyPI yet, so install from git at a
-**pinned commit** (not a moving branch):
 ```sh
 uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
 uv run gdmutant run path/to/module.gd --project . \
   --runner command --command "godot --headless --script res://tests/run_tests.gd"
 ```
 
-**A Godot project with no Python?** gdmutant is a dev tool, not a runtime dependency — keep it in a
-tiny **non-package** uv project beside your game so it never touches your shipped code. Add a
-`pyproject.toml` (e.g. under a `devtools/` dir):
-```toml
-[project]
-name = "yourgame-devtools"
-version = "0"
-requires-python = ">=3.12"   # gdmutant's floor — see below
-dependencies = []
+If your Godot project has no Python, keep gdmutant in a tiny **non-package** uv project beside your
+game (e.g. under `devtools/`) so it never touches shipped code — a `pyproject.toml` with
+`[tool.uv] package = false` and a `.python-version` pinning 3.12+, then `uv add` there. Once
+published, `pipx install gdmutant` will be the one-liner.
 
-[tool.uv]
-package = false              # a workspace of tools, not an installable package
+## Quickstart
+
+Clone the repo and install the pinned toolchain to hack on gdmutant itself:
+
+```sh
+mise install       # the pinned Python + uv  (or install uv yourself and skip this)
+uv sync --frozen   # the exact locked dependencies
 ```
-then `uv add "git+https://github.com/kphutt/gdmutant@<sha>"` there.
 
-**Pin your Python.** gdmutant supports **Python 3.12+**. uv resolves to whatever interpreter it finds
-otherwise — e.g. a system CPython 3.14 rather than your project's pinned 3.12 — so set a
-`.python-version` (or an equivalent `mise`/`asdf` pin) next to that `pyproject.toml` to choose it
-deliberately, and keep `requires-python` in sync.
+**See it work without Godot** — list the mutants for the bundled fixture:
 
-## Next steps
-1. ✅ **Repo hardened + stack chosen.** Security baseline + Python CI (ruff / mypy / pytest+coverage /
-   pip-audit, plus a gitleaks secret-scan). The engine is **Python + uv + gdtoolkit** (see
-   `docs/decisions/0001`), with **GdUnit4** as the first test-runner adapter.
-2. **Name — availability checked, clearance pending.** `gdmutant` is free on PyPI, npm, and GitHub as of
-   this writing; the final name + a trademark sense-check are settled before public launch (see the
-   provisional-codename note up top).
-3. ✅ **`DESIGN.md` design gate written + reviewed** — goals, FG/NF requirements, the "Saboteur & the
-   Jury" architecture, and the build plan (`docs/design/DESIGN.md`).
-4. ✅ **v0.1 built against the bundled `corpus/` fixture** — engine loop, operator catalog, GDScript
-   adapter (NF-5 guard), GdUnit4 runner, Stryker reporter, and the `gdmutant run` CLI. Mutates
-   `corpus/turn_order.gd` (18 mutants) and prints survivors end-to-end.
-5. ✅ **Live CI Godot validation** — both runner paths run against **real Godot** in CI, pinned to
-   exact per-mutant outcomes (`tests/test_selftest_live.py`, `scripts/install-gdunit4.sh`). This
-   caught two real runner bugs (headless-mode flag, relative project path).
-6. **Remaining before a public launch** (see `ROADMAP.md`): the statement-deletion operator and the
-   pre-public checklist, then flip the repo public — never launch empty.
+```sh
+uv run gdmutant run corpus/turn_order.gd --dry-run
+```
 
-## Where it fits in your CI
-This tool answers one question a green CI build can't: *"do the tests actually bite?"* It's an **advisory**
-signal — report-mode, never a hard gate — complementary to coverage, run alongside whatever review and
-CI a project already has. It shares no code with any reviewer tool; it's a standalone CLI on purpose.
+**Run it for real on the bundled corpus** — the corpus ships a tiny exit-code harness, so you get a
+real mutation score with only **Godot** on your machine (no addon, nothing to vendor):
 
-**Use in your CI.** A minimal advisory workflow — installs Godot, runs gdmutant against one module
-via your headless harness, and uploads the report. (This is the same invocation gdmutant's own
-self-test pins against real Godot, so it's known to work.)
+```sh
+uv run gdmutant run corpus/turn_order.gd --project corpus \
+  --runner command --command "godot --headless --path . --script res://harness/run_tests.gd"
+```
+
+It reruns the suite against all 18 mutants and reports **~61% killed, 7 survivors** — the fixture is
+deliberately under-tested (with a couple of equivalent mutants), so a real run surfaces live
+survivors, exactly as mutation testing does on real code. (On macOS, use the app-bundle path to
+`godot` inside `--command`.)
+
+**Run it on your own project** — with the [GdUnit4](https://github.com/godot-gdunit-labs/gdUnit4)
+addon under `res://addons/gdUnit4/`, the default runner reads its JUnit XML:
+
+```sh
+uv run gdmutant run path/to/module.gd --project path/to/godot-project --json report.json
+```
+
+## Example output
+
+```
+18 mutants for corpus/turn_order.gd:
+  corpus/turn_order.gd:8:17   comparison   > -> >=
+  corpus/turn_order.gd:13:11  comparison   < -> <=
+  corpus/turn_order.gd:13:13  numeric      0 -> 1
+  ...
+  corpus/turn_order.gd:27:15  boolean      and -> or
+  corpus/turn_order.gd:27:19  logical-not  not -> (deleted)
+  corpus/turn_order.gd:32:9   constant     true -> false
+```
+
+A real run adds a killed/survived verdict per mutant, a mutation score, and each survivor with a
+`→ kill it` hint. New to the output?
+See [reading your first report](docs/reading-your-first-report.md).
+
+## Configuration
+
+Drop a `.gdmutant.toml` in the directory you run gdmutant from to persist per-project defaults; an
+explicit CLI flag always overrides the file.
+
+```toml
+project = "."
+runner = "command"
+command = "godot --headless --script res://tests/run_tests.gd"
+# godot = "/Applications/Godot.app/Contents/MacOS/Godot"   # (GdUnit4 runner; macOS app-bundle path)
+# tests = "res://test"
+# report-path = "reports/report_1/results.xml"
+# timeout = 60
+# require-clean = true
+# exclude = ["*_generated.gd", "*/vendor/*"]
+```
+
+| Flag | Purpose |
+|---|---|
+| `--runner gdunit4\|command` | read GdUnit4's JUnit XML, or judge by exit code |
+| `--exclude '<glob>'` | skip files on a directory target (repeatable; adds to the config list) |
+| `--timeout <s>` | per-mutant timeout (default: 10× the baseline run, floored 10s, capped 600s) |
+| `--report-path` | where the project writes GdUnit4's JUnit XML |
+| `--require-clean` | refuse to run with uncommitted changes (default: warn only) |
+
+**Test suites are skipped automatically.** A directory target leaves your tests out of the mutation
+set — gdmutant skips anything under a `test/`/`tests/` folder, named `test_*.gd` / `*_test.gd` /
+`*Test.gd`, or extending `GdUnitTestSuite` / `GutTest`, the same way StrykerJS and cargo-mutants do.
+Naming a file explicitly on the command line always mutates it; the skip and `--exclude` only narrow
+a directory expansion. `--dry-run` shows exactly what survives the filter.
+
+## Reports
+
+`--html report.html` writes a self-contained page — the standard mutation-testing-elements viewer
+with the report inlined (the viewer loads from a pinned CDN, so rendering needs network; saving
+does not):
+
+```sh
+uv run gdmutant run path/to/module.gd --project . --html report.html
+```
+
+The `--json` output is the standard Stryker
+[`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema,
+so it renders in that ecosystem's interactive viewer and, once the repo is public, can be hosted on
+the free [Stryker Dashboard](https://dashboard.stryker-mutator.io) for a mutation-score badge.
+See [reading your first report](docs/reading-your-first-report.md) to wire up a viewer yourself.
+
+## Continuous integration
+
+gdmutant answers one question a green build can't: *do the tests actually bite?* It is an
+**advisory** signal — report-mode, never a hard gate — complementary to coverage. A minimal
+workflow installs Godot, runs gdmutant against one module through your headless harness, and uploads
+the report (the same invocation gdmutant's own self-test pins against real Godot):
+
 ```yaml
 # .github/workflows/mutation.yml
 name: Mutation testing (advisory)
@@ -327,8 +208,38 @@ jobs:
           name: mutation-report
           path: report.json
 ```
-Swap `--runner command --command "…"` for the default GdUnit4 runner (`--godot godot`) if your suite
-uses GdUnit4. Keep it advisory (no `needs:` gate) until you've triaged the first survivors.
+
+Swap the `--runner command` line for the default GdUnit4 runner if your suite uses GdUnit4. Keep it
+advisory (no `needs:` gate) until you've triaged the first survivors.
+
+## Safety
+
+gdmutant mutates the source file **in place**, restoring it after each mutant and on a normal exit
+or Ctrl-C. A hard kill (SIGKILL, power loss) could still leave one swap on disk, and an open Godot
+editor may hot-reload mid-run — so commit or stash before a run. gdmutant **warns** on uncommitted
+changes; `--require-clean` makes that a hard stop.
+
+## How it works
+
+The engine is a language-neutral loop — select → mutate → run tests → tally killed/survived →
+mutation score — with two language-specific pieces behind an adapter: mutating the AST (via
+gdtoolkit) and running the tests (the GdUnit4 or exit-code runner). A new language is one small
+adapter. The full design is in [`docs/design/DESIGN.md`](docs/design/DESIGN.md).
+
+## Documentation
+
+- [Reading your first report](docs/reading-your-first-report.md) — verdicts, kill hints, equivalent mutants.
+- [Exit-code runner convention](docs/decisions/0005-exit-code-test-runner-convention.md) — the stdout/exit-code contract and its coarser killed/errored resolution vs GdUnit4's XML.
+- [Design & architecture](docs/design/DESIGN.md) — the engine, requirements, and the "Saboteur & the Jury" design.
+- [Roadmap](ROADMAP.md) — what's done and what's next.
+- [Driving gdmutant from an AI agent](docs/agent-guide.md) — the invocation, JSON schema, exit-code contract, and survivor→killing-test loop.
+
+## Contributing
+
+Contributions are welcome — see [AGENTS.md](AGENTS.md) for the toolchain, conventions, and local
+checks (`ruff` / `mypy` / `pytest` at 100% coverage).
 
 ## License
-[MIT](LICENSE) — © 2026 Karsten Huttelmaier. Third-party licenses are logged in [CREDITS.md](CREDITS.md).
+
+[MIT](LICENSE) — © 2026 Karsten Huttelmaier. Third-party licenses are logged in
+[CREDITS.md](CREDITS.md).
