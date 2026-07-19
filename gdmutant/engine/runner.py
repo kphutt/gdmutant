@@ -60,6 +60,20 @@ class Runner(Protocol):
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult: ...
 
 
+@runtime_checkable
+class Preparable(Protocol):
+    """A runner that needs a one-time, potentially slow setup step before the baseline run.
+
+    The engine calls `prepare` once, *before* it starts timing the baseline — so the setup cost
+    never leaks into the baseline wall-clock that derives per-mutant timeouts and the progress ETA.
+    Optional: a runner that needs no setup simply doesn't implement it (the engine skips it via an
+    ``isinstance`` check), so this stays language-neutral (NF-3) — the engine never names what the
+    setup *is*. `prepare` must be idempotent: it may also be called defensively from ``run``.
+    """
+
+    def prepare(self, project_dir: str) -> None: ...
+
+
 @dataclass(frozen=True)
 class CommandRunner:
     """Runs an arbitrary test command and maps its **exit code** to a `SuiteResult`: exit 0 means
