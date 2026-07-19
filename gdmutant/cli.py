@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -157,30 +158,73 @@ def _report_baseline_failure(error: BaselineFailed, project_dir: str) -> int:
 #: Directories skipped when expanding a directory target to `.gd` files: third-party addons and the
 #: engine/VCS dirs. A dot-prefixed dir (``.godot``, ``.git``) is skipped too (`_gd_files_under`).
 _SKIP_DIRS = frozenset({"addons"})
+#: Directory segments conventionally holding tests (GdUnit4's default lookup folder is ``test``;
+#: GUT projects use ``test``/``tests``). A ``.gd`` under one of these is skipped on dir expansion.
+_TEST_DIRS = frozenset({"test", "tests"})
+#: Base classes a GDScript test suite extends — GdUnit4 (``GdUnitTestSuite``) and GUT (``GutTest``).
+#: This is the *robust* signal: the two frameworks disagree on filename affixes, but a real test
+#: suite always extends one of these, so a content check catches unconventionally-named tests.
+_TEST_BASE_RE = re.compile(r"^\s*extends\b.*\b(GdUnitTestSuite|GutTest)\b", re.MULTILINE)
 
 
-def _gd_files_under(directory: Path) -> list[str]:
-    """Every ``.gd`` file under `directory` (recursive), sorted, skipping ``addons/`` (third-party)
-    and any dot-directory (``.godot``, ``.git``, …). Point gdmutant at your *source* directory — it
-    mutates every `.gd` there, including test files, so a whole-project target adds noise."""
+def _has_test_name(name: str) -> bool:
+    """True if `name` matches a GdUnit4/GUT test-file naming convention — ``test_*.gd`` (GUT / the
+    GdUnit4 getting-started form), ``*_test.gd`` (GdUnit4 snake_case auto-detect), or ``*Test.gd``
+    (GdUnit4 PascalCase auto-detect)."""
+    return name.startswith("test_") or name.endswith("_test.gd") or name.endswith("Test.gd")
+
+
+def _is_test_file(full_path: Path, relative: Path) -> bool:
+    """True if the ``.gd`` at `full_path` (with path `relative` to the scanned directory) is a test
+    suite — it lives under a ``test``/``tests`` directory, its name matches a test convention
+    (`_has_test_name`), or its script ``extends GdUnitTestSuite``/``GutTest`` (`_TEST_BASE_RE`, the
+    signal that survives the frameworks' conflicting naming). Mirrors how StrykerJS/cargo-mutants
+    keep test code out of the mutation set by default."""
+    if any(part in _TEST_DIRS for part in relative.parts[:-1]):
+        return True
+    if _has_test_name(relative.name):
+        return True
+    try:
+        return _TEST_BASE_RE.search(full_path.read_text(encoding="utf-8")) is not None
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def _gd_files_under(directory: Path) -> tuple[list[str], int]:
+    """Every mutable ``.gd`` file under `directory` (recursive), sorted, plus the count of test
+    files skipped. Skips ``addons/`` (third-party), any dot-directory (``.godot``, ``.git``, …),
+    and — so a directory target reports mutants on *your source*, not your test machinery
+    (LOD-200) — GdUnit4 / GUT test suites (`_is_test_file`). Name a test file explicitly to mutate
+    it anyway; only directory expansion applies the test skip."""
     files: list[str] = []
+    tests_skipped = 0
     for path in directory.rglob("*.gd"):
-        parents = path.relative_to(directory).parts[:-1]
-        if any(part in _SKIP_DIRS or part.startswith(".") for part in parents):
+        relative = path.relative_to(directory)
+        if any(part in _SKIP_DIRS or part.startswith(".") for part in relative.parts[:-1]):
+            continue
+        if _is_test_file(path, relative):
+            tests_skipped += 1
             continue
         files.append(str(path))
-    return sorted(files)
+    return sorted(files), tests_skipped
 
 
 def _expand_sources(paths: list[str]) -> list[str] | None:
     """Expand each given path (a ``.gd`` file or a directory) into a de-duplicated, sorted list of
-    `.gd` files. Returns None (after printing an error) when nothing resolves to a `.gd` file — the
-    "point it at a directory" adoption case (LOD-79). Existence/validity of each file is checked
-    later by `_load_gdscript`."""
+    `.gd` files. A directory skips GdUnit4 test files (`_gd_files_under`), noting how many; an
+    explicit file path is always included (name a test file to mutate it). Returns None (after
+    printing an error) when nothing resolves to a `.gd` file — the "point it at a directory"
+    adoption case (LOD-79). Existence/validity of each file is checked later by `_load_gdscript`."""
     collected: list[str] = []
+    tests_skipped = 0
     for raw in paths:
         path = Path(raw)
-        collected.extend(_gd_files_under(path) if path.is_dir() else [raw])
+        if path.is_dir():
+            found, skipped = _gd_files_under(path)
+            collected.extend(found)
+            tests_skipped += skipped
+        else:
+            collected.append(raw)
     seen: set[str] = set()
     unique: list[str] = []
     for candidate in collected:
@@ -191,6 +235,12 @@ def _expand_sources(paths: list[str]) -> list[str] | None:
     if not unique:
         print("error: no .gd files found in the given path(s)", file=sys.stderr)
         return None
+    if tests_skipped:
+        print(
+            f"note: skipped {tests_skipped} test file(s) (test/ dirs, *_test.gd, or "
+            "extends GdUnitTestSuite/GutTest) — name one explicitly to mutate it",
+            file=sys.stderr,
+        )
     return sorted(unique)
 
 
