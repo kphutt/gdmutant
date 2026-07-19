@@ -56,8 +56,9 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
   only that mutant is applied, and capture the pass/fail outcome.
 - **FG-3.2** For the GDScript adapter, execution runs the project's tests headless via the pluggable
   **Runner** seam. Two ship: the general **exit-code command runner** (any `godot --headless` command
-  that exits non-zero on failure — GUT, GdUnit4's CLI, or a hand-rolled `SceneTree` harness; ADR-0005)
-  is the universal path; a dedicated **GdUnit4 runner** parses GdUnit4's machine-readable (JUnit-XML)
+  that exits non-zero on failure — GUT, GdUnit4's CLI, or a hand-rolled `SceneTree` harness;
+  [ADR-0005](../decisions/0005-exit-code-test-runner-convention.md)) is the universal path; a
+  dedicated **GdUnit4 runner** parses GdUnit4's machine-readable (JUnit-XML)
   output for finer per-test detail.
 - **FG-3.3** The original (unmutated) suite must pass first; if it doesn't, the run aborts with a clear
   error (mutation testing a red suite is meaningless).
