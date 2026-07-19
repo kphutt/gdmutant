@@ -171,12 +171,12 @@ def test_run_warms_the_import_cache_once_before_the_first_suite_run(
     # or the baseline fails to even load the tool (LOD-213). Assert the --import fires first, and
     # exactly once across repeated runs (the cache persists across mutants).
     report = _report(tmp_path)
-    commands: list[list[str]] = []
+    calls: list[tuple[list[str], dict[str, object]]] = []
 
     def capture(*args: object, **kwargs: object) -> None:
         command = args[0]
         assert isinstance(command, list)
-        commands.append(command)
+        calls.append((command, kwargs))
         if "--import" not in command:
             report.write_text('<testsuite tests="1" failures="0"/>', encoding="utf-8")
 
@@ -185,11 +185,19 @@ def test_run_warms_the_import_cache_once_before_the_first_suite_run(
     runner.run(str(tmp_path))
     runner.run(str(tmp_path))  # second mutant: must NOT re-import
 
-    import_cmds = [c for c in commands if "--import" in c]
-    assert len(import_cmds) == 1, f"expected exactly one --import warm-up, got {len(import_cmds)}"
+    commands = [c for (c, _) in calls]
+    import_calls = [(c, k) for (c, k) in calls if "--import" in c]
+    assert len(import_calls) == 1, f"expected exactly one --import warm-up, got {len(import_calls)}"
     # It runs before the first suite command, and targets the resolved project path.
     assert commands[0] == ["godot4", "--headless", "--path", str(tmp_path.resolve()), "--import"]
     assert "--import" not in commands[1]  # the suite run follows the warm-up
+    # The warm-up must not check the exit code (--import routinely exits non-zero on benign import
+    # chatter, and only TimeoutExpired is suppressed — check=True would raise and abort the run),
+    # and must capture output so that chatter stays off the console.
+    (_, import_kwargs) = import_calls[0]
+    assert import_kwargs["check"] is False
+    assert import_kwargs["capture_output"] is True
+    assert import_kwargs["text"] is True
 
 
 def test_run_survives_a_slow_import_warm_up(
