@@ -27,8 +27,13 @@ from gdmutant.adapters.gdscript.runner import (
     DEFAULT_TIMEOUT,
     GdUnit4Runner,
 )
-from gdmutant.engine.loop import BaselineFailed, run
-from gdmutant.engine.report import console_summary, html_report, stryker_report
+from gdmutant.engine.loop import BaselineFailed, MutationRun, run, run_paths
+from gdmutant.engine.report import (
+    console_summary,
+    html_report,
+    stryker_report,
+    stryker_report_multi,
+)
 from gdmutant.engine.runner import CommandRunner, Runner
 
 _MISSING_GODOT_MACOS_HINT = (
@@ -131,6 +136,72 @@ def _gdunit4_addon_hint(error: BaselineFailed, project_dir: str) -> str | None:
         "  Install GdUnit4 (Godot Asset Library), or run without the addon via "
         '--runner command --command "<your headless test command>".'
     )
+
+
+def _report_baseline_failure(error: BaselineFailed, project_dir: str) -> int:
+    """Print the most actionable message for a `BaselineFailed` and return the exit code: 2 for a
+    *setup* error (missing runner binary, or a GdUnit4 project with no addon), else 1 for a
+    genuinely red baseline. Shared by the single- and multi-file run paths."""
+    missing = _missing_executable(error)
+    if missing is not None:
+        print(_missing_executable_hint(missing), file=sys.stderr)
+        return 2
+    addon_hint = _gdunit4_addon_hint(error, project_dir)
+    if addon_hint is not None:
+        print(addon_hint, file=sys.stderr)
+        return 2
+    print(f"error: {error}", file=sys.stderr)
+    return 1
+
+
+#: Directories skipped when expanding a directory target to `.gd` files: third-party addons and the
+#: engine/VCS dirs. A dot-prefixed dir (``.godot``, ``.git``) is skipped too (`_gd_files_under`).
+_SKIP_DIRS = frozenset({"addons"})
+
+
+def _gd_files_under(directory: Path) -> list[str]:
+    """Every ``.gd`` file under `directory` (recursive), sorted, skipping ``addons/`` (third-party)
+    and any dot-directory (``.godot``, ``.git``, …). Point gdmutant at your *source* directory — it
+    mutates every `.gd` there, including test files, so a whole-project target adds noise."""
+    files: list[str] = []
+    for path in directory.rglob("*.gd"):
+        parents = path.relative_to(directory).parts[:-1]
+        if any(part in _SKIP_DIRS or part.startswith(".") for part in parents):
+            continue
+        files.append(str(path))
+    return sorted(files)
+
+
+def _expand_sources(paths: list[str]) -> list[str] | None:
+    """Expand each given path (a ``.gd`` file or a directory) into a de-duplicated, sorted list of
+    `.gd` files. Returns None (after printing an error) when nothing resolves to a `.gd` file — the
+    "point it at a directory" adoption case ([ticket]). Existence/validity of each file is checked
+    later by `_load_gdscript`."""
+    collected: list[str] = []
+    for raw in paths:
+        path = Path(raw)
+        collected.extend(_gd_files_under(path) if path.is_dir() else [raw])
+    seen: set[str] = set()
+    unique: list[str] = []
+    for candidate in collected:
+        resolved = str(Path(candidate).resolve())
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(candidate)
+    if not unique:
+        print("error: no .gd files found in the given path(s)", file=sys.stderr)
+        return None
+    return sorted(unique)
+
+
+def _default_project_dir(raw_paths: list[str], files: list[str]) -> str:
+    """The Godot project dir to run tests from when ``--project`` isn't given: a lone directory
+    target *is* the project; otherwise the (first) source file's own directory. That last case is a
+    **best-effort** guess for multiple/nested targets — there's no single project root for disparate
+    paths, so pass ``--project`` when the guess is wrong."""
+    if len(raw_paths) == 1 and Path(raw_paths[0]).is_dir():
+        return str(Path(raw_paths[0]))
+    return str(Path(files[0]).resolve().parent)
 
 
 def _warn_unknown_ignore_operators(source: str) -> None:
@@ -254,33 +325,28 @@ def run_mutation(
             progress=lambda line: print(line, file=sys.stderr),
         )
     except BaselineFailed as error:
-        missing = _missing_executable(error)
-        if missing is not None:
-            print(_missing_executable_hint(missing), file=sys.stderr)
-            return 2
-        addon_hint = _gdunit4_addon_hint(error, project_dir)
-        if addon_hint is not None:
-            print(addon_hint, file=sys.stderr)
-            return 2
-        print(f"error: {error}", file=sys.stderr)
-        return 1
+        return _report_baseline_failure(error, project_dir)
     # With --json - the report goes to stdout, so keep the human summary on stderr — an agent
     # capturing stdout then gets pure JSON.
     report_to_stdout = json_path == "-"
     print(console_summary(result), file=sys.stderr if report_to_stdout else sys.stdout)
-    # Build the Stryker report once; both --json and --html render from it.
     stryker = stryker_report(result, str(path), source, "gdscript")
-    if json_path is not None:
-        report = json.dumps(stryker, indent=2)
-        if report_to_stdout:
-            print(report)
-        else:
-            try:
-                Path(json_path).write_text(report, encoding="utf-8")
-            except OSError as error:
-                print(f"error: cannot write report to {json_path}: {error}", file=sys.stderr)
-                return 2
-            print(f"\nWrote report to {json_path}")
+    return _write_reports(stryker, json_path, html_path)
+
+
+def _write_reports(stryker: dict[str, object], json_path: str | None, html_path: str | None) -> int:
+    """Write the ``--json`` / ``--html`` reports (both rendered from the same Stryker dict). Returns
+    2 on a write error, else 0. ``--json -`` streams JSON to stdout; the caller has already routed
+    the human summary appropriately. Shared by the single- and multi-file run paths."""
+    if json_path == "-":
+        print(json.dumps(stryker, indent=2))
+    elif json_path is not None:
+        try:
+            Path(json_path).write_text(json.dumps(stryker, indent=2), encoding="utf-8")
+        except OSError as error:
+            print(f"error: cannot write report to {json_path}: {error}", file=sys.stderr)
+            return 2
+        print(f"\nWrote report to {json_path}")
     if html_path is not None:
         try:
             Path(html_path).write_text(html_report(stryker), encoding="utf-8")
@@ -289,6 +355,78 @@ def run_mutation(
             return 2
         print(f"\nWrote HTML report to {html_path} — open it in a browser.")
     return 0
+
+
+def run_mutation_paths(
+    source_paths: list[str],
+    project_dir: str,
+    runner: Runner,
+    *,
+    timeout: float | None = None,
+    json_path: str | None = None,
+    html_path: str | None = None,
+    require_clean: bool = False,
+) -> int:
+    """Mutate several `.gd` files against one project in a single pass — the baseline runs **once**
+    and the score is aggregated across every file, with one merged report ([ticket]). Same return
+    codes as `run_mutation`. Every source is loaded/validated before anything runs (a bad file fails
+    fast)."""
+    sources: dict[str, str] = {}
+    for source_path in source_paths:
+        source = _load_gdscript(source_path)
+        if source is None:
+            return 2
+        _warn_unknown_ignore_operators(source)
+        sources[str(Path(source_path))] = source
+    if not Path(project_dir).is_dir():
+        print(f"error: project directory not found: {project_dir}", file=sys.stderr)
+        return 2
+    for problem in (
+        _report_path_problem(json_path, "--json", stdout_ok=True),
+        _report_path_problem(html_path, "--html", stdout_ok=False),
+    ):
+        if problem is not None:
+            print(f"error: {problem}", file=sys.stderr)
+            return 2
+    for source_path in source_paths:
+        if _has_uncommitted_changes(source_path):
+            if require_clean:
+                print(
+                    f"error: {source_path} has uncommitted changes and --require-clean was given. "
+                    "Commit or stash first.",
+                    file=sys.stderr,
+                )
+                return 2
+            print(
+                f"warning: {source_path} has uncommitted changes — gdmutant mutates it in place "
+                "(restoring it when done). Commit or stash first to be safe. Continuing ...",
+                file=sys.stderr,
+            )
+    try:
+        runs = run_paths(
+            project_dir,
+            sources,
+            runner,
+            timeout=timeout,
+            progress=lambda line: print(line, file=sys.stderr),
+        )
+    except BaselineFailed as error:
+        return _report_baseline_failure(error, project_dir)
+    report_to_stdout = json_path == "-"
+    out = sys.stderr if report_to_stdout else sys.stdout
+    print(f"\n{len(runs)} files:", file=out)
+    for path, file_run in runs.items():
+        score = file_run.mutation_score
+        score_str = "n/a" if score is None else f"{score * 100:.1f}%"
+        scored = file_run.detected + file_run.survived
+        print(f"  {path}: {score_str}  ({file_run.detected} detected / {scored})", file=out)
+    print("", file=out)
+    # Survivors carry their own path, so one aggregate summary lists them per file with the overall
+    # score across every file's mutants.
+    aggregate = MutationRun(tuple(o for r in runs.values() for o in r.outcomes))
+    print(console_summary(aggregate), file=out)
+    stryker = stryker_report_multi({p: (r, sources[p]) for p, r in runs.items()}, "gdscript")
+    return _write_reports(stryker, json_path, html_path)
 
 
 #: Config-file (`.gdmutant.toml`) key -> argparse dest. Keys mirror the CLI flag names (so a project
@@ -365,8 +503,14 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     )
     parser.add_argument("--version", action="version", version=f"gdmutant {__version__}")
     sub = parser.add_subparsers(dest="command")
-    run_parser = sub.add_parser("run", help="mutate a GDScript file and report survivors")
-    run_parser.add_argument("source", help="the .gd file to mutate")
+    run_parser = sub.add_parser("run", help="mutate GDScript files and report survivors")
+    run_parser.add_argument(
+        "source",
+        nargs="+",
+        metavar="path",
+        help="one or more .gd files or directories to mutate (a directory mutates every .gd under "
+        "it, recursively, excluding addons/ and dot-dirs)",
+    )
     run_parser.add_argument("--project", help="the Godot project dir (default: the source's dir)")
     run_parser.add_argument(
         "--runner",
@@ -439,6 +583,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser(config)
     args = parser.parse_args(argv)
     if args.command == "run":
+        files = _expand_sources(args.source)
+        if files is None:
+            return 2
         if args.dry_run:
             ignored = [
                 flag
@@ -462,8 +609,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"{'is' if len(ignored) == 1 else 'are'} ignored",
                     file=sys.stderr,
                 )
-            return list_mutants(args.source)
-        project_dir = args.project or str(Path(args.source).resolve().parent)
+            for index, gd_file in enumerate(files):
+                if index:
+                    print()  # blank line between files
+                rc = list_mutants(gd_file)
+                if rc != 0:
+                    return rc
+            return 0
+        project_dir = args.project or _default_project_dir(args.source, files)
         # The runner's own timeout is the *baseline* budget (the loop derives per-mutant budgets
         # from the baseline's wall-clock); without an explicit --timeout it falls back to the
         # historical default so a legitimately slow baseline still completes.
@@ -493,15 +646,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 report_path=args.report_path,
                 timeout=baseline_timeout,
             )
-        return run_mutation(
-            args.source,
-            project_dir,
-            runner,
-            timeout=args.timeout,
-            json_path=args.json_path,
-            html_path=args.html_path,
-            require_clean=args.require_clean,
-        )
+        common = {
+            "timeout": args.timeout,
+            "json_path": args.json_path,
+            "html_path": args.html_path,
+            "require_clean": args.require_clean,
+        }
+        if len(files) == 1:
+            return run_mutation(files[0], project_dir, runner, **common)
+        return run_mutation_paths(files, project_dir, runner, **common)
     parser.print_help()
     return 0
 
