@@ -157,6 +157,7 @@ command = "godot --headless --script res://tests/run_tests.gd"
 |---|---|
 | `--runner gdunit4\|command` | read GdUnit4's JUnit XML, or judge by exit code |
 | `--since <ref>` | mutate only lines changed since a git ref — the fast, per-PR diff-scoped mode |
+| `--jobs N` (`-j`) | evaluate N mutants in parallel, each on its own project copy — same verdicts, faster |
 | `--exclude '<glob>'` | skip files on a directory target (repeatable; adds to the config list) |
 | `--timeout <s>` | per-mutant timeout (default: 10× the baseline run, floored 10s, capped 600s) |
 | `--report-path` | where the project writes GdUnit4's JUnit XML |
