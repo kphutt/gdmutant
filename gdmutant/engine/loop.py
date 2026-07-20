@@ -19,8 +19,13 @@ mutant is applied in isolation and the original restored in a ``finally`` — se
 
 from __future__ import annotations
 
+import os
+import queue
+import shutil
+import tempfile
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -171,6 +176,7 @@ def run(
     *,
     timeout: float | None = None,
     progress: Callable[[str], None] | None = None,
+    jobs: int = 1,
 ) -> MutationRun:
     """Run the full mutation pass over `source` (the contents of `path`) using `runner`.
 
@@ -184,11 +190,19 @@ def run(
     from the baseline run's own wall-clock* (`_derive_timeout`), so a hanging mutant is cut off in
     seconds instead of blocking for the flat default — an explicit value overrides the derivation.
 
+    `jobs` is the number of mutants to evaluate concurrently (default 1 = serial). With ``jobs > 1``
+    the loop gives each worker its own copy of the project so in-place mutation can't collide, then
+    reassembles the outcomes in generation order (ADR-0003). Process isolation makes the pass/fail
+    verdict of each mutant identical to a serial run; to keep the *timeout* verdict identical too,
+    the per-mutant time budget is scaled by the worker count so CPU/RAM contention can't turn a
+    genuinely-passing suite into a false TIMEOUT (see `_run_mutants_parallel`).
+
     If `progress` is given, it is called with the baseline notice, then — for each mutant that
     actually runs — a "running (<=Ns)" heartbeat *before* it runs and a verdict line *after*, in
     generation order (invalid mutants never run, so they get only the verdict line). The CLI wires
     it to stderr so a long or hanging run shows steady output instead of looking frozen; `None`
-    runs silently.
+    runs silently. Under ``jobs > 1`` verdict lines arrive as each mutant finishes (their true
+    generation index is shown); the per-mutant heartbeat is omitted (the lines would interleave).
     """
     per_mutant_timeout, baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
     return _mutate_file(
@@ -201,6 +215,7 @@ def run(
         baseline_secs,
         catalog,
         progress,
+        jobs,
     )
 
 
@@ -250,15 +265,40 @@ def _mutate_file(
     baseline_secs: float,
     catalog: tuple[Operator, ...],
     progress: Callable[[str], None] | None,
+    jobs: int = 1,
 ) -> MutationRun:
     """Generate and run every mutant for a single file (the baseline is assumed already green). The
-    file at `path` must hold `source`; it is restored before returning."""
-    outcomes: list[MutantOutcome] = []
+    file at `path` must hold `source`; it is restored before returning. `jobs > 1` evaluates mutants
+    concurrently on per-worker project copies, then reassembles them in generation order."""
     mutants = adapter.generate_mutants(path, source, catalog)
     total = len(mutants)
     if progress is not None:
         runnable = sum(1 for m in mutants if m.ignore_reason is None)
         progress(_progress_estimate(runnable, total, baseline_secs))
+    if jobs > 1 and total > 0:
+        outcomes = _run_mutants_parallel(
+            project_dir, path, source, runner, adapter, mutants, per_mutant_timeout, progress, jobs
+        )
+    else:
+        outcomes = _run_mutants_serial(
+            project_dir, path, source, runner, adapter, mutants, per_mutant_timeout, progress
+        )
+    return MutationRun(tuple(outcomes))
+
+
+def _run_mutants_serial(
+    project_dir: str,
+    path: str,
+    source: str,
+    runner: Runner,
+    adapter: Adapter,
+    mutants: Sequence[Mutant],
+    per_mutant_timeout: float,
+    progress: Callable[[str], None] | None,
+) -> list[MutantOutcome]:
+    """Evaluate every mutant one at a time against the real project file (the trusted default)."""
+    outcomes: list[MutantOutcome] = []
+    total = len(mutants)
     for index, mutant in enumerate(mutants, start=1):
         if mutant.ignore_reason is not None:
             # A `# gdmutant: ignore` annotation suppresses this mutant — generated for the report
@@ -276,7 +316,107 @@ def _mutate_file(
         outcomes.append(outcome)
         if progress is not None:
             progress(_progress_line(index, total, outcome))
-    return MutationRun(tuple(outcomes))
+    return outcomes
+
+
+def _run_mutants_parallel(
+    project_dir: str,
+    path: str,
+    source: str,
+    runner: Runner,
+    adapter: Adapter,
+    mutants: Sequence[Mutant],
+    per_mutant_timeout: float,
+    progress: Callable[[str], None] | None,
+    jobs: int,
+) -> list[MutantOutcome]:
+    """Evaluate mutants concurrently, each worker on its OWN copy of the project so the in-place
+    file mutation (`_run_one`) can never collide. The pass/fail/timeout verdict of each mutant is
+    identical to the serial path — only the wall-clock changes — and results are reassembled in
+    generation order (NF-1). Bounded to one worker per runnable mutant.
+
+    Two things stay SINGLE-THREADED, up front, because they aren't parallel-safe or need no Godot:
+    deciding `ignore`d/invalid mutants (no suite run), and **applying** each mutant — `apply_mutant`
+    re-parses via gdtoolkit, whose lexer/indenter keeps shared state and is NOT thread-safe (running
+    it from N workers corrupts it, e.g. a `paren_level` assertion deep in the parser). So the
+    parse/mutate/validate half runs here on the main thread; workers do only the process-isolated
+    test run, which touches no shared parser. Applying is cheap; booting Godot is the cost — so this
+    keeps the expensive half parallel while making the whole thing sound.
+
+    Runners are stateless (keyed on `project_dir` per call), so the one instance is shared across
+    workers; each passes its own copy's dir. The Godot import cache (`.godot/`) is copied along with
+    the project, so a worker doesn't pay a cold re-scan.
+
+    The per-mutant timeout is scaled by the worker count. The budget is derived from the *serial*
+    baseline (`_derive_timeout` = 10x its wall-clock), but W workers contend for CPU/RAM, so each
+    suite runs up to ~Wx slower in wall-clock than it did alone. Without scaling, a genuinely
+    *passing* suite could exceed its serial budget under contention and be misrecorded as a TIMEOUT
+    (scored as killed) — silently hiding a survivor. Multiplying the budget by W restores the same
+    10x headroom in per-worker-second terms, so a timeout still means a real hang, not a lost CPU
+    lottery (fail toward slower, never toward fewer — the prime directive).
+    """
+    total = len(mutants)
+    rel = os.path.relpath(Path(path).resolve(), Path(project_dir).resolve())
+    outcomes: dict[int, MutantOutcome] = {}
+
+    # Serial pre-pass: resolve ignored/invalid without Godot, and apply (gdtoolkit) single-threaded.
+    # Runnable mutants carry their already-applied source into the parallel run.
+    runnable: list[tuple[int, Mutant, str]] = []
+    for index, mutant in enumerate(mutants):
+        if mutant.ignore_reason is not None:
+            outcome = MutantOutcome(mutant, Verdict.IGNORED)
+        else:
+            mutated, valid = adapter.apply_mutant(mutant, source)
+            if valid:
+                runnable.append((index, mutant, mutated))
+                continue
+            outcome = MutantOutcome(mutant, Verdict.INVALID)
+        outcomes[index] = outcome
+        if progress is not None:
+            progress(_progress_line(index + 1, total, outcome))
+    if not runnable:  # every mutant was ignored/invalid — no Godot run needed
+        return [outcomes[index] for index in range(total)]
+
+    worker_count = min(jobs, len(runnable))
+    contention_timeout = per_mutant_timeout * worker_count
+    work: queue.Queue[tuple[int, Mutant, str]] = queue.Queue()
+    for item in runnable:
+        work.put(item)
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def worker(worker_dir: str) -> None:
+        target = str(Path(worker_dir) / rel)
+        while True:
+            try:
+                index, mutant, mutated = work.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                verdict = _run_one(worker_dir, target, source, mutated, runner, contention_timeout)
+            except BaseException as exc:  # noqa: BLE001 — capture + re-raise in the main thread
+                with lock:
+                    errors.append(exc)
+                return
+            outcome = MutantOutcome(mutant, verdict)
+            with lock:
+                outcomes[index] = outcome
+                if progress is not None:
+                    progress(_progress_line(index + 1, total, outcome))
+
+    with tempfile.TemporaryDirectory(prefix="gdmutant-jobs-") as tmp:
+        threads: list[threading.Thread] = []
+        for w in range(worker_count):
+            worker_dir = str(Path(tmp) / f"w{w}")
+            shutil.copytree(project_dir, worker_dir)
+            thread = threading.Thread(target=worker, args=(worker_dir,))
+            thread.start()
+            threads.append(thread)
+        for thread in threads:
+            thread.join()
+    if errors:
+        raise errors[0]
+    return [outcomes[index] for index in range(total)]
 
 
 def run_paths(
@@ -288,12 +428,14 @@ def run_paths(
     *,
     timeout: float | None = None,
     progress: Callable[[str], None] | None = None,
+    jobs: int = 1,
 ) -> dict[str, MutationRun]:
     """Mutate several files against one project — the baseline runs **once**, then each file's
     mutants run in turn (LOD-79). `sources` maps each file path to its contents (each held on entry,
     restored after its own mutants). `adapter` is the injected language adapter (NF-3, like `run`).
-    Returns ``{path: MutationRun}`` in `sources` order. Raises `BaselineFailed` (like `run`) if the
-    unmutated suite can't run or is red."""
+    `jobs` parallelizes each file's mutants exactly as `run` does. Returns ``{path: MutationRun}``
+    in `sources` order. Raises `BaselineFailed` (like `run`) if the baseline can't run or is red.
+    """
     per_mutant_timeout, baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
     runs: dict[str, MutationRun] = {}
     for path, source in sources.items():
@@ -309,6 +451,7 @@ def run_paths(
             baseline_secs,
             catalog,
             progress,
+            jobs,
         )
     return runs
 
