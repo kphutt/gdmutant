@@ -446,6 +446,7 @@ def run_mutation(
     html_path: str | None = None,
     require_clean: bool = False,
     changed: dict[str, set[int]] | None = None,
+    jobs: int = 1,
 ) -> int:
     """Mutate `source_path`, run via `runner`, print the summary, optionally write a report file.
 
@@ -505,6 +506,7 @@ def run_mutation(
             adapter,
             timeout=timeout,
             progress=lambda line: print(line, file=sys.stderr),
+            jobs=jobs,
         )
     except BaselineFailed as error:
         return _report_baseline_failure(error, project_dir)
@@ -549,11 +551,12 @@ def run_mutation_paths(
     html_path: str | None = None,
     require_clean: bool = False,
     changed: dict[str, set[int]] | None = None,
+    jobs: int = 1,
 ) -> int:
     """Mutate several `.gd` files against one project in a single pass — the baseline runs **once**
     and the score is aggregated across every file, with one merged report ([ticket]). Same return
     codes as `run_mutation`. Every source is loaded/validated before anything runs (a bad file fails
-    fast)."""
+    fast). `jobs` parallelizes each file's mutants (see `run_mutation`)."""
     sources: dict[str, str] = {}
     for source_path in source_paths:
         source = _load_gdscript(source_path)
@@ -594,6 +597,7 @@ def run_mutation_paths(
             adapter,
             timeout=timeout,
             progress=lambda line: print(line, file=sys.stderr),
+            jobs=jobs,
         )
     except BaselineFailed as error:
         return _report_baseline_failure(error, project_dir)
@@ -771,6 +775,17 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "diff-scoped mode; a much faster, gate-able signal than a whole-file run",
     )
     run_parser.add_argument(
+        "--jobs",
+        "-j",
+        type=int,
+        metavar="N",
+        default=1,
+        help="evaluate N mutants in parallel, each on its own copy of the project (default: 1 = "
+        "serial), for a faster run with the same verdicts — process isolation, and the per-mutant "
+        "timeout is scaled by N so contention can't cause a false timeout. Bounded by your "
+        "cores/RAM; a plain per-worker copy is made per job.",
+    )
+    run_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="list the mutants without running any tests (no Godot needed)",
@@ -791,6 +806,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser(config)
     args = parser.parse_args(argv)
     if args.command == "run":
+        if args.jobs < 1:
+            print("error: --jobs must be a positive integer", file=sys.stderr)
+            return 2
         # Excludes are additive: any .gdmutant.toml `exclude` list plus every --exclude on the CLI
         # (both narrow a directory target; neither can drop an explicitly named file). [ticket].
         config_exclude = config.get("exclude")
@@ -901,6 +919,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "html_path": args.html_path,
             "require_clean": args.require_clean,
             "changed": changed,
+            "jobs": args.jobs,
         }
         if len(files) == 1:
             return run_mutation(files[0], project_dir, runner, **common)

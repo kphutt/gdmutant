@@ -225,6 +225,16 @@ def test_run_mutation_missing_executable_with_no_filename_uses_fallback(
     assert capsys.readouterr().err.endswith(_FALLBACK_MISSING)
 
 
+def test_jobs_must_be_a_positive_integer(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --jobs < 1 is a setup error (exit 2), rejected up front before any run starts.
+    path = _gd(tmp_path)
+    rc = main(["run", str(path), "--jobs", "0"])
+    assert rc == 2
+    assert "--jobs must be a positive integer" in capsys.readouterr().err
+
+
 def test_run_mutation_nonexistent_project_dir_reports_directory_not_executable(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
