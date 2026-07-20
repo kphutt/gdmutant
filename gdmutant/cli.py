@@ -781,8 +781,9 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         metavar="N",
         default=1,
         help="evaluate N mutants in parallel, each on its own copy of the project (default: 1 = "
-        "serial). Verdicts are identical to a serial run — process isolation keeps them sound — "
-        "just faster. Bounded by your cores/RAM; a plain per-worker copy is made per job.",
+        "serial), for a faster run with the same verdicts — process isolation, and the per-mutant "
+        "timeout is scaled by N so contention can't cause a false timeout. Bounded by your "
+        "cores/RAM; a plain per-worker copy is made per job.",
     )
     run_parser.add_argument(
         "--dry-run",

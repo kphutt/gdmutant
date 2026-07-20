@@ -192,8 +192,10 @@ def run(
 
     `jobs` is the number of mutants to evaluate concurrently (default 1 = serial). With ``jobs > 1``
     the loop gives each worker its own copy of the project so in-place mutation can't collide, then
-    reassembles the outcomes in generation order — so the result is identical to a serial run, just
-    faster (process isolation keeps every verdict sound; ADR-0003).
+    reassembles the outcomes in generation order (ADR-0003). Process isolation makes the pass/fail
+    verdict of each mutant identical to a serial run; to keep the *timeout* verdict identical too,
+    the per-mutant time budget is scaled by the worker count so CPU/RAM contention can't turn a
+    genuinely-passing suite into a false TIMEOUT (see `_run_mutants_parallel`).
 
     If `progress` is given, it is called with the baseline notice, then — for each mutant that
     actually runs — a "running (<=Ns)" heartbeat *before* it runs and a verdict line *after*, in
@@ -317,25 +319,6 @@ def _run_mutants_serial(
     return outcomes
 
 
-def _classify_mutant(
-    mutant: Mutant,
-    source: str,
-    adapter: Adapter,
-    project_dir: str,
-    target: str,
-    runner: Runner,
-    per_mutant_timeout: float,
-) -> Verdict:
-    """The verdict for one mutant, run against `target` in `project_dir` — the shared apply→run
-    decision (ignored → invalid → run) used by every worker in the parallel path."""
-    if mutant.ignore_reason is not None:
-        return Verdict.IGNORED
-    mutated, valid = adapter.apply_mutant(mutant, source)
-    if not valid:
-        return Verdict.INVALID
-    return _run_one(project_dir, target, source, mutated, runner, per_mutant_timeout)
-
-
 def _run_mutants_parallel(
     project_dir: str,
     path: str,
@@ -348,20 +331,57 @@ def _run_mutants_parallel(
     jobs: int,
 ) -> list[MutantOutcome]:
     """Evaluate mutants concurrently, each worker on its OWN copy of the project so the in-place
-    file mutation (`_run_one`) can never collide. Verdicts are identical to the serial path — only
-    the wall-clock changes — because each worker copy is a faithful, isolated clone of the project
-    and results are reassembled in generation order (NF-1). Bounded to one worker per mutant.
+    file mutation (`_run_one`) can never collide. The pass/fail/timeout verdict of each mutant is
+    identical to the serial path — only the wall-clock changes — and results are reassembled in
+    generation order (NF-1). Bounded to one worker per runnable mutant.
 
-    Runners are stateless (frozen dataclasses keyed on `project_dir` per call), so the one instance
-    is shared across workers; each worker simply passes its own copy's dir. The Godot import cache
-    (`.godot/`) is copied along with the project, so a worker doesn't pay a cold re-scan.
+    Two things stay SINGLE-THREADED, up front, because they aren't parallel-safe or need no Godot:
+    deciding `ignore`d/invalid mutants (no suite run), and **applying** each mutant — `apply_mutant`
+    re-parses via gdtoolkit, whose lexer/indenter keeps shared state and is NOT thread-safe (running
+    it from N workers corrupts it, e.g. a `paren_level` assertion deep in the parser). So the
+    parse/mutate/validate half runs here on the main thread; workers do only the process-isolated
+    test run, which touches no shared parser. Applying is cheap; booting Godot is the cost — so this
+    keeps the expensive half parallel while making the whole thing sound.
+
+    Runners are stateless (keyed on `project_dir` per call), so the one instance is shared across
+    workers; each passes its own copy's dir. The Godot import cache (`.godot/`) is copied along with
+    the project, so a worker doesn't pay a cold re-scan.
+
+    The per-mutant timeout is scaled by the worker count. The budget is derived from the *serial*
+    baseline (`_derive_timeout` = 10x its wall-clock), but W workers contend for CPU/RAM, so each
+    suite runs up to ~Wx slower in wall-clock than it did alone. Without scaling, a genuinely
+    *passing* suite could exceed its serial budget under contention and be misrecorded as a TIMEOUT
+    (scored as killed) — silently hiding a survivor. Multiplying the budget by W restores the same
+    10x headroom in per-worker-second terms, so a timeout still means a real hang, not a lost CPU
+    lottery (fail toward slower, never toward fewer — the prime directive).
     """
     total = len(mutants)
     rel = os.path.relpath(Path(path).resolve(), Path(project_dir).resolve())
-    work: queue.Queue[tuple[int, Mutant]] = queue.Queue()
-    for item in enumerate(mutants):
-        work.put(item)
     outcomes: dict[int, MutantOutcome] = {}
+
+    # Serial pre-pass: resolve ignored/invalid without Godot, and apply (gdtoolkit) single-threaded.
+    # Runnable mutants carry their already-applied source into the parallel run.
+    runnable: list[tuple[int, Mutant, str]] = []
+    for index, mutant in enumerate(mutants):
+        if mutant.ignore_reason is not None:
+            outcome = MutantOutcome(mutant, Verdict.IGNORED)
+        else:
+            mutated, valid = adapter.apply_mutant(mutant, source)
+            if valid:
+                runnable.append((index, mutant, mutated))
+                continue
+            outcome = MutantOutcome(mutant, Verdict.INVALID)
+        outcomes[index] = outcome
+        if progress is not None:
+            progress(_progress_line(index + 1, total, outcome))
+    if not runnable:  # every mutant was ignored/invalid — no Godot run needed
+        return [outcomes[index] for index in range(total)]
+
+    worker_count = min(jobs, len(runnable))
+    contention_timeout = per_mutant_timeout * worker_count
+    work: queue.Queue[tuple[int, Mutant, str]] = queue.Queue()
+    for item in runnable:
+        work.put(item)
     errors: list[BaseException] = []
     lock = threading.Lock()
 
@@ -369,13 +389,11 @@ def _run_mutants_parallel(
         target = str(Path(worker_dir) / rel)
         while True:
             try:
-                index, mutant = work.get_nowait()
+                index, mutant, mutated = work.get_nowait()
             except queue.Empty:
                 return
             try:
-                verdict = _classify_mutant(
-                    mutant, source, adapter, worker_dir, target, runner, per_mutant_timeout
-                )
+                verdict = _run_one(worker_dir, target, source, mutated, runner, contention_timeout)
             except BaseException as exc:  # noqa: BLE001 — capture + re-raise in the main thread
                 with lock:
                     errors.append(exc)
@@ -386,7 +404,6 @@ def _run_mutants_parallel(
                 if progress is not None:
                     progress(_progress_line(index + 1, total, outcome))
 
-    worker_count = min(jobs, total)
     with tempfile.TemporaryDirectory(prefix="gdmutant-jobs-") as tmp:
         threads: list[threading.Thread] = []
         for w in range(worker_count):

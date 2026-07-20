@@ -592,6 +592,9 @@ def test_parallel_matches_serial_verdicts_and_order(tmp_path: Path) -> None:
         progress=lines.append,
     )
 
+    # This covers pass/fail/ignored/invalid verdicts + ordering for a deterministic runner; the
+    # timeout axis (a budget scaled under contention) is pinned separately below — this fake runner
+    # is instant and never times out.
     assert _outcome_key(parallel) == _outcome_key(serial)  # identical verdicts AND order
     verdicts = {v for *_, v in _outcome_key(serial)}
     assert verdicts == {
@@ -602,6 +605,22 @@ def test_parallel_matches_serial_verdicts_and_order(tmp_path: Path) -> None:
     assert any(line.endswith("killed") for line in lines)  # parallel emitted verdict progress lines
     # The original project file is NEVER mutated in the parallel path — only the worker copies are.
     assert Path(parallel_path).read_text(encoding="utf-8") == src
+
+
+def test_parallel_scales_the_per_mutant_timeout_by_worker_count(tmp_path: Path) -> None:
+    # Soundness on the timeout axis: the per-mutant budget is derived from the SERIAL baseline, but
+    # W workers contend for CPU so each suite runs slower in wall-clock. Scaling the budget by the
+    # worker count keeps a genuinely-passing suite from crossing its timeout under load and being
+    # misrecorded as a (killed) TIMEOUT — which would silently hide a survivor.
+    src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"  # 3 runnable mutants
+    path = _write(tmp_path, "f.gd", src)
+    runner = TimeoutRecordingRunner()
+    run(str(tmp_path), path, src, runner, timeout=5.0, jobs=2)
+    baseline, *mutant_timeouts = runner.seen
+    assert baseline is None  # the baseline still uses the runner's own budget
+    assert len(mutant_timeouts) == 3  # every mutant ran
+    # worker_count = min(jobs=2, mutants=3) = 2, so each budget is the 5.0s serial value x2.
+    assert all(t == 5.0 * 2 for t in mutant_timeouts)
 
 
 def test_parallel_classifies_an_invalid_mutant_like_serial(tmp_path: Path) -> None:
@@ -623,10 +642,10 @@ def test_parallel_classifies_an_invalid_mutant_like_serial(tmp_path: Path) -> No
     assert [v for *_, v in _outcome_key(parallel)] == [Verdict.INVALID]
 
 
-def test_parallel_worker_error_is_reraised_in_the_main_thread(tmp_path: Path) -> None:
-    # A worker that hits an unexpected exception (not a runner failure — those become ERROR inside
-    # _run_one) must not vanish into a dead thread: it is captured and re-raised on the main thread,
-    # so a real bug fails loud instead of silently dropping a mutant from the report.
+def test_parallel_apply_error_propagates(tmp_path: Path) -> None:
+    # Applying a mutant (gdtoolkit) runs single-threaded in the parallel path's serial pre-pass —
+    # NOT thread-safe, so it must not run in workers. If it raises, that propagates straight out
+    # (no worker has started yet), so a real adapter bug fails loud.
     src = "func f(a, b) -> bool:\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
 
@@ -646,3 +665,27 @@ def test_parallel_worker_error_is_reraised_in_the_main_thread(tmp_path: Path) ->
             adapter=adapter,
             jobs=2,
         )
+
+
+def test_parallel_worker_run_error_is_reraised_in_the_main_thread(tmp_path: Path) -> None:
+    # A BaseException raised inside a worker's test run (which _run_one's `except Exception`
+    # deliberately does NOT swallow) must be captured and re-raised on the main thread — never lost
+    # in a dead worker, which would silently drop a mutant from the report.
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path = _write(tmp_path, "f.gd", src)
+
+    class WorkerBoom(BaseException):
+        pass
+
+    @dataclass
+    class BoomRunner:
+        calls: int = 0
+
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            self.calls += 1
+            if self.calls == 1:
+                return SuiteResult(tests=1, failures=0, errors=0)  # baseline passes
+            raise WorkerBoom("worker boom")
+
+    with pytest.raises(WorkerBoom, match="worker boom"):
+        run(str(tmp_path), path, src, BoomRunner(), jobs=2)
