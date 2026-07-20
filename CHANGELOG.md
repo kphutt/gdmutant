@@ -19,6 +19,9 @@ Pre-release. gdmutant mutates real GDScript and reports survivors end-to-end via
   any headless harness — no GdUnit4 addon required.
 - Multi-file and directory targets: mutate several files or a whole directory in one pass with a
   per-file breakdown and one aggregate mutation score.
+- `--jobs N` runs N mutants in parallel, each on its own copy of the project so in-place mutation
+  can't collide — verdicts are identical to a serial run (process isolation keeps them sound), just
+  faster (measured ~3× at `--jobs 4` on a real GdUnit4 module).
 - Test suites are skipped by default on directory targets (by `test/`/`tests/` folder, `test_*.gd` /
   `*_test.gd` / `*Test.gd` name, or `extends GdUnitTestSuite` / `GutTest`), with an `--exclude` glob
   (and a `.gdmutant.toml` `exclude` list) to skip anything else.

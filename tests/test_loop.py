@@ -533,3 +533,116 @@ def test_run_drives_a_custom_non_gdscript_adapter(tmp_path: Path) -> None:
     )
     assert seen == [(path, src)]  # the engine used the injected adapter, not gdscript
     assert result.outcomes == ()
+
+
+@dataclass
+class ProjectRelMarkerRunner:
+    """Like MarkerRunner, but reads the target relative to the `project_dir` it is handed each call
+    — so it reacts to whatever a parallel worker wrote to ITS OWN project copy, not a fixed path.
+    This mirrors the real runners (CommandRunner/GdUnit4Runner both operate on the given dir)."""
+
+    relname: str
+    kill_marker: str
+    tests: int = 3
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        content = (Path(project_dir) / self.relname).read_text(encoding="utf-8")
+        return SuiteResult(tests=self.tests, failures=int(self.kill_marker in content), errors=0)
+
+
+def _outcome_key(result: object) -> list[tuple[int, int, str, str, Verdict]]:
+    # Order-preserving fingerprint of a run: (line, col, original, replacement, verdict) per mutant.
+    return [
+        (
+            o.mutant.span.line,
+            o.mutant.span.column,
+            o.mutant.original,
+            o.mutant.replacement,
+            o.verdict,
+        )
+        for o in result.outcomes  # type: ignore[attr-defined]
+    ]
+
+
+def test_parallel_matches_serial_verdicts_and_order(tmp_path: Path) -> None:
+    # The core correctness guarantee: --jobs is sound. A parallel run must produce byte-identical
+    # verdicts to the serial oracle, in the same generation order (NF-1) — process isolation on
+    # per-worker copies means concurrency changes only the wall-clock, never a verdict.
+    src = (
+        "func f(a, b) -> bool:\n"
+        "\tvar hi = a > b\n"  # '>' -> '>=' killed by the ">=" marker
+        # 'and' -> 'or' survives (no ">=" produced); the '<' comparison mutant is ignored.
+        "\treturn hi and a < b  # gdmutant: ignore[comparison]\n"
+    )
+    serial_dir = tmp_path / "serial"
+    serial_dir.mkdir()
+    serial_path = _write(serial_dir, "f.gd", src)
+    serial = run(str(serial_dir), serial_path, src, ProjectRelMarkerRunner("f.gd", ">="))
+
+    parallel_dir = tmp_path / "parallel"
+    parallel_dir.mkdir()
+    parallel_path = _write(parallel_dir, "f.gd", src)
+    lines: list[str] = []
+    parallel = run(
+        str(parallel_dir),
+        parallel_path,
+        src,
+        ProjectRelMarkerRunner("f.gd", ">="),
+        jobs=4,  # more jobs than mutants: exercises the min(jobs, total) worker cap
+        progress=lines.append,
+    )
+
+    assert _outcome_key(parallel) == _outcome_key(serial)  # identical verdicts AND order
+    verdicts = {v for *_, v in _outcome_key(serial)}
+    assert verdicts == {
+        Verdict.KILLED,
+        Verdict.SURVIVED,
+        Verdict.IGNORED,
+    }  # a real mix ran parallel
+    assert any(line.endswith("killed") for line in lines)  # parallel emitted verdict progress lines
+    # The original project file is NEVER mutated in the parallel path — only the worker copies are.
+    assert Path(parallel_path).read_text(encoding="utf-8") == src
+
+
+def test_parallel_classifies_an_invalid_mutant_like_serial(tmp_path: Path) -> None:
+    # The INVALID (NF-5) branch must resolve identically under --jobs: a mutant that doesn't parse
+    # is never run, in parallel just as in serial.
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    bad = TableOperator("bad", {">": ("))",)})  # unparseable GDScript
+    serial_dir = tmp_path / "serial"
+    serial_dir.mkdir()
+    sp = _write(serial_dir, "f.gd", src)
+    serial = run(str(serial_dir), sp, src, ProjectRelMarkerRunner("f.gd", "ZZZ"), catalog=(bad,))
+    par_dir = tmp_path / "parallel"
+    par_dir.mkdir()
+    pp = _write(par_dir, "f.gd", src)
+    parallel = run(
+        str(par_dir), pp, src, ProjectRelMarkerRunner("f.gd", "ZZZ"), catalog=(bad,), jobs=2
+    )
+    assert _outcome_key(parallel) == _outcome_key(serial)
+    assert [v for *_, v in _outcome_key(parallel)] == [Verdict.INVALID]
+
+
+def test_parallel_worker_error_is_reraised_in_the_main_thread(tmp_path: Path) -> None:
+    # A worker that hits an unexpected exception (not a runner failure — those become ERROR inside
+    # _run_one) must not vanish into a dead thread: it is captured and re-raised on the main thread,
+    # so a real bug fails loud instead of silently dropping a mutant from the report.
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path = _write(tmp_path, "f.gd", src)
+
+    def fake_generate(p: str, s: str, _catalog: object) -> tuple[Mutant, ...]:
+        return (Mutant(p, Span(2, 9, 2, 10), "comparison", ">", ">="),)
+
+    def fake_apply(_mutant: Mutant, _source: str) -> tuple[str, bool]:
+        raise RuntimeError("apply boom")
+
+    adapter = Adapter(generate_mutants=fake_generate, apply_mutant=fake_apply)
+    with pytest.raises(RuntimeError, match="apply boom"):
+        _run(
+            str(tmp_path),
+            path,
+            src,
+            ProjectRelMarkerRunner("f.gd", "ZZZ"),
+            adapter=adapter,
+            jobs=2,
+        )
