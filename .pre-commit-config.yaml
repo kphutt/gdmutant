@@ -6,64 +6,73 @@
 #     local and CI can't drift apart — same commands, not a reimplementation.
 # always_run: true on every hook — these mirror CI's Verify job, which always runs the full suite
 # regardless of which files changed, so file-based filtering here would silently under-check.
+#
+# Both hook groups below run through scripts/dev-run (mise if present, else a direct fallback) or
+# check for their own binary before running, rather than hard-requiring a specific local toolchain
+# — found live via Litmus review that a no-mise contributor (a path CONTRIBUTING.md documents as
+# supported) got every pre-push hook failing with "mise: command not found", and a fresh clone
+# with no local `gitleaks` binary got the pre-commit-stage hook failing the same way.
 default_stages: [pre-push]
 
 repos:
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.30.1
-    hooks:
-      - id: gitleaks-system
-        stages: [pre-commit]
-        pass_filenames: false
-        always_run: true
-
   - repo: local
     hooks:
+      - id: gitleaks
+        name: gitleaks (secret scan; skips gracefully if gitleaks isn't installed)
+        entry: >-
+          sh -c 'command -v gitleaks >/dev/null 2>&1 &&
+          gitleaks git --pre-commit --redact --staged --verbose ||
+          echo "gitleaks not found on PATH -- skipping secret scan (install: https://github.com/gitleaks/gitleaks#installing, then re-run \"pre-commit run gitleaks\" to confirm it works)"'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
       - id: toolchain-sync
         name: toolchain sync (mise + uv)
-        entry: mise exec -- uv sync --frozen
+        entry: sh scripts/dev-run uv sync --frozen
         language: system
         pass_filenames: false
         always_run: true
 
       - id: ruff-check
         name: ruff check
-        entry: mise exec -- uv run ruff check .
+        entry: sh scripts/dev-run uv run ruff check .
         language: system
         pass_filenames: false
         always_run: true
 
       - id: ruff-format
         name: ruff format --check
-        entry: mise exec -- uv run ruff format --check .
+        entry: sh scripts/dev-run uv run ruff format --check .
         language: system
         pass_filenames: false
         always_run: true
 
       - id: gdlint
         name: gdlint (corpus fixture)
-        entry: mise exec -- uv run gdlint corpus/turn_order.gd corpus/test corpus/harness
+        entry: sh scripts/dev-run uv run gdlint corpus/turn_order.gd corpus/test corpus/harness
         language: system
         pass_filenames: false
         always_run: true
 
       - id: mypy
         name: mypy
-        entry: mise exec -- uv run mypy gdmutant
+        entry: sh scripts/dev-run uv run mypy gdmutant
         language: system
         pass_filenames: false
         always_run: true
 
       - id: pytest
         name: pytest
-        entry: mise exec -- uv run pytest
+        entry: sh scripts/dev-run uv run pytest
         language: system
         pass_filenames: false
         always_run: true
 
       - id: pip-audit
         name: pip-audit
-        entry: mise exec -- uv run pip-audit
+        entry: sh scripts/dev-run uv run pip-audit
         language: system
         pass_filenames: false
         always_run: true
@@ -72,7 +81,7 @@ repos:
       # selftest-godot job. Run by hand: `pre-commit run --hook-stage manual gdmutant-selftest`
       - id: gdmutant-selftest
         name: Godot self-test (manual, requires a real Godot binary)
-        entry: sh -c './scripts/install-gdunit4.sh && GDMUTANT_GODOT=godot mise exec -- uv run pytest tests/test_selftest_live.py -v --no-cov'
+        entry: sh -c './scripts/install-gdunit4.sh && GDMUTANT_GODOT=godot sh scripts/dev-run uv run pytest tests/test_selftest_live.py -v --no-cov'
         language: system
         pass_filenames: false
         always_run: true
@@ -83,7 +92,7 @@ repos:
       - id: gdmutant-mutation
         name: mutmut (advisory, manual)
         entry: >-
-          sh -c 'mise exec -- uv run mutmut run > mutmut-run.log 2>&1;
+          sh -c 'sh scripts/dev-run uv run mutmut run > mutmut-run.log 2>&1;
           cat mutmut-run.log;
           ! grep -qiF "failed to collect stats" mutmut-run.log'
         language: system
