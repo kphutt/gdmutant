@@ -1,0 +1,92 @@
+# Standard pre-commit config (https://pre-commit.com) — self-contained, so any clone (yours or a
+# contributor's) gets the same checks with `pre-commit install --hook-type pre-commit --hook-type
+# pre-push`. Two stages, matching the tradeoff CI already makes:
+#   - pre-commit (every commit): gitleaks only — cheap, catches a secret before it's even committed.
+#   - pre-push (before it leaves the machine): the full Verify job, mirrored 1:1 from ci.yml so
+#     local and CI can't drift apart — same commands, not a reimplementation.
+# always_run: true on every hook — these mirror CI's Verify job, which always runs the full suite
+# regardless of which files changed, so file-based filtering here would silently under-check.
+default_stages: [pre-push]
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks-system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+
+  - repo: local
+    hooks:
+      - id: toolchain-sync
+        name: toolchain sync (mise + uv)
+        entry: mise exec -- uv sync --frozen
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: ruff-check
+        name: ruff check
+        entry: mise exec -- uv run ruff check .
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: ruff-format
+        name: ruff format --check
+        entry: mise exec -- uv run ruff format --check .
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: gdlint
+        name: gdlint (corpus fixture)
+        entry: mise exec -- uv run gdlint corpus/turn_order.gd corpus/test corpus/harness
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: mypy
+        name: mypy
+        entry: mise exec -- uv run mypy gdmutant
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: pytest
+        name: pytest
+        entry: mise exec -- uv run pytest
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: pip-audit
+        name: pip-audit
+        entry: mise exec -- uv run pip-audit
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      # Opt-in, not run automatically (needs a real Godot binary) — mirrors ci.yml's
+      # selftest-godot job. Run by hand: `pre-commit run --hook-stage manual gdmutant-selftest`
+      - id: gdmutant-selftest
+        name: Godot self-test (manual, requires a real Godot binary)
+        entry: sh -c './scripts/install-gdunit4.sh && GDMUTANT_GODOT=godot mise exec -- uv run pytest tests/test_selftest_live.py -v --no-cov'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+
+      # Opt-in, advisory, not run automatically — mirrors mutation.yml's baseline-failure guard
+      # (a surviving mutant is fine; a baseline that won't run clean unmutated is not).
+      - id: gdmutant-mutation
+        name: mutmut (advisory, manual)
+        entry: >-
+          sh -c 'mise exec -- uv run mutmut run > mutmut-run.log 2>&1;
+          cat mutmut-run.log;
+          ! grep -qiF "failed to collect stats" mutmut-run.log'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
