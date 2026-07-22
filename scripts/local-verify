@@ -1,0 +1,79 @@
+#!/bin/sh
+# Local equivalent of CI's `Verify` job (.github/workflows/ci.yml) -- run automatically before
+# every push by ai-toolkit's global githooks/pre-push (see that repo's githooks/README.md for the
+# local-verify convention). Deliberately invokes the SAME commands the CI job runs, not a
+# reimplementation, so local and CI can't drift apart -- if you change a step here, change it there
+# too (and vice versa).
+#
+# Fast by design (matches CI's required Verify gate only): the slower, non-required checks --
+# Self-test (real Godot) and Mutation (mutmut, advisory) -- are opt-in, not run on every push.
+# Run them yourself before a release or a change to core logic:
+#   scripts/local-verify --with-selftest
+#   scripts/local-verify --with-mutation
+set -eu
+
+cd "$(dirname "$0")/.."
+
+WITH_SELFTEST=0
+WITH_MUTATION=0
+for arg in "$@"; do
+  case "$arg" in
+    --with-selftest) WITH_SELFTEST=1 ;;
+    --with-mutation) WITH_MUTATION=1 ;;
+  esac
+done
+
+# --- toolchain: same pin as CI (mise.toml), auto-installs anything missing/wrong-version ---------
+if ! command -v mise >/dev/null 2>&1; then
+  echo "local-verify: 'mise' not found. Install it once per machine (the one documented seed):"
+  echo "  macOS:   brew install mise"
+  echo "  Windows: winget install jdx.mise"
+  echo "  Linux:   curl https://mise.run | sh"
+  exit 1
+fi
+mise install
+
+# --- Verify job, mirrored 1:1 from ci.yml ---------------------------------------------------------
+mise exec -- uv sync --frozen
+
+echo "== ruff =="
+mise exec -- uv run ruff check .
+mise exec -- uv run ruff format --check .
+
+echo "== gdlint (corpus fixture) =="
+mise exec -- uv run gdlint corpus/turn_order.gd corpus/test corpus/harness
+
+echo "== mypy =="
+mise exec -- uv run mypy gdmutant
+
+echo "== pytest =="
+mise exec -- uv run pytest
+
+echo "== pip-audit =="
+mise exec -- uv run pip-audit
+
+# --- optional: Self-test (real Godot), mirrored from ci.yml's selftest-godot job ------------------
+if [ "$WITH_SELFTEST" -eq 1 ]; then
+  if ! command -v godot >/dev/null 2>&1; then
+    echo "local-verify: --with-selftest requires a 'godot' binary on PATH, but none was found."
+    echo "This repo assumes Godot is already part of your normal dev setup for this project"
+    echo "(the same way CI's setup-godot action pins it) -- install Godot 4.7.0 and re-run."
+    exit 1
+  fi
+  echo "== Godot smoke check =="
+  godot --version
+
+  echo "== install GdUnit4 addon (pinned) =="
+  ./scripts/install-gdunit4.sh
+
+  echo "== live self-test (real Godot) =="
+  GDMUTANT_GODOT=godot mise exec -- uv run pytest tests/test_selftest_live.py -v --no-cov
+fi
+
+# --- optional: Mutation (mutmut, advisory), mirrored from mutation.yml ----------------------------
+if [ "$WITH_MUTATION" -eq 1 ]; then
+  echo "== mutmut (report mode; a surviving mutant does not fail this) =="
+  mise exec -- uv run mutmut run || true
+fi
+
+echo "local-verify: all requested checks passed."
