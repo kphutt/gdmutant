@@ -22,7 +22,7 @@ def test_command_construction() -> None:
         "godot4",
         "--headless",
         "--path",
-        "/proj",
+        str(Path("/proj").resolve()),  # command() resolves to a platform-native absolute path
         "-s",
         "res://addons/gdUnit4/bin/GdUnitCmdTool.gd",
         "-a",
