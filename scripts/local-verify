@@ -5,6 +5,13 @@
 # reimplementation, so local and CI can't drift apart -- if you change a step here, change it there
 # too (and vice versa).
 #
+# NOT AN AUTO-RUN VECTOR FOR ANYONE ELSE: this file only does anything on the maintainer's own
+# machine, via a private, personal git-hook convention that lives in a separate (private) repo, and
+# only after that file's exact content has been explicitly approved once by hand. Cloning this repo
+# cannot configure your git, run this file, or trigger anything on your machine. If you're a
+# contributor and this isn't your convention, this is just documentation of the local dev-check
+# commands -- run them yourself directly, same as CI does.
+#
 # Fast by design (matches CI's required Verify gate only): the slower, non-required checks --
 # Self-test (real Godot) and Mutation (mutmut, advisory) -- are opt-in, not run on every push.
 # Run them yourself before a release or a change to core logic:
