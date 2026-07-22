@@ -1,7 +1,8 @@
 #!/bin/sh
-# Local equivalent of CI's `Verify` job (.github/workflows/ci.yml) -- run automatically before
-# every push by ai-toolkit's global githooks/pre-push (see that repo's githooks/README.md for the
-# local-verify convention). Deliberately invokes the SAME commands the CI job runs, not a
+# Local equivalent of CI's `Verify` job (.github/workflows/ci.yml). Once approved (see below) and
+# picked up by ai-toolkit's global githooks/pre-push (see that repo's githooks/README.md for the
+# local-verify convention -- this depends on that dispatch logic being merged there), runs
+# automatically before every push. Deliberately invokes the SAME commands the CI job runs, not a
 # reimplementation, so local and CI can't drift apart -- if you change a step here, change it there
 # too (and vice versa).
 #
@@ -80,7 +81,16 @@ fi
 # --- optional: Mutation (mutmut, advisory), mirrored from mutation.yml ----------------------------
 if [ "$WITH_MUTATION" -eq 1 ]; then
   echo "== mutmut (report mode; a surviving mutant does not fail this) =="
-  mise exec -- uv run mutmut run || true
+  # A surviving mutant is expected and must not fail this (the || true). But a BASELINE
+  # failure (the suite doesn't run cleanly unmutated) also aborts mutmut, and a bare ||
+  # true would silently swallow that as a green advisory run too (LOD-127) -- mirrors
+  # mutation.yml's own guard exactly, so local and CI can't drift on this either.
+  mise exec -- uv run mutmut run > mutmut-run.log 2>&1 || true
+  cat mutmut-run.log
+  if grep -qiF "failed to collect stats" mutmut-run.log; then
+    echo "local-verify: mutmut baseline failed -- could not collect stats (the suite does not run cleanly unmutated); any advisory score would be meaningless."
+    exit 1
+  fi
 fi
 
 echo "local-verify: all requested checks passed."
