@@ -720,7 +720,10 @@ def test_main_uses_config_defaults_when_cli_flags_omitted(
     proj = tmp_path / "proj"
     proj.mkdir()
     cfg = tmp_path / ".gdmutant.toml"
-    cfg.write_text(f"project = {str(proj)!r}\n", encoding="utf-8")
+    # A TOML *literal* string (single quotes): backslashes are not escape sequences there.
+    # Python's !r produced 'C:\\Users\\...' with doubled backslashes, which TOML then read back
+    # verbatim -- so this only ever matched on POSIX, where paths carry no backslashes at all.
+    cfg.write_text(f"project = '{proj}'\n", encoding="utf-8")
     monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     runner = RecordingRunner()
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
@@ -734,7 +737,7 @@ def test_main_cli_flag_overrides_config(tmp_path: Path, monkeypatch: pytest.Monk
     cfg_proj.mkdir()
     cli_proj.mkdir()
     cfg = tmp_path / ".gdmutant.toml"
-    cfg.write_text(f"project = {str(cfg_proj)!r}\n", encoding="utf-8")
+    cfg.write_text(f"project = '{cfg_proj}'\n", encoding="utf-8")  # TOML literal string; see above
     monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     runner = RecordingRunner()
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
