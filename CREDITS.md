@@ -23,6 +23,8 @@ clean. **Re-verify each license at the moment of use** — licenses and repos ch
 | Python | Runtime | PSF |
 | uv | Dependency + environment manager | Apache-2.0 / MIT |
 | ruff · mypy · pytest · pip-audit | Lint / typecheck / test / audit | MIT / MIT / MIT / Apache-2.0 |
+| [pre-commit](https://pre-commit.com) | Manages the local git hooks that run the checks in `.pre-commit-config.yaml` | MIT |
+| gitleaks | Secret scan, local (pre-commit stage) and in CI | MIT |
 
 ## Prior art (studied for ideas only — no code copied)
 - **hanse7962/GodotMutationTesting** — **unlicensed** (all rights reserved). Studied for
