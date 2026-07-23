@@ -456,12 +456,38 @@ def run_paths(
     return runs
 
 
+def _detect_eol(target: Path) -> str:
+    """The line ending `target` actually uses on disk, so it can be restored byte-exactly.
+
+    Callers hand us source that was read with `read_text`, which normalises CRLF to LF. Writing
+    it back with `write_text` then translates LF to `os.linesep` — so on Windows a
+    mutate-then-restore cycle silently rewrites the file with CRLF. Against a project whose
+    `.gitattributes` declares `eol=lf` that leaves every mutated file permanently "modified"
+    with an empty diff, which is exactly the noise `_run_one`'s finally-block exists to prevent.
+    Sampling the real ending first is what makes "never leave the project mutated" true at the
+    byte level rather than only at the text level.
+    """
+    try:
+        with open(target, "rb") as handle:
+            return "\r\n" if b"\r\n" in handle.read() else "\n"
+    except OSError:
+        return "\n"
+
+
+def _write_source(target: Path, text: str, eol: str) -> None:
+    """Write LF-normalised `text` using `eol`, with newline translation disabled."""
+    with open(target, "w", encoding="utf-8", newline="") as handle:
+        handle.write(text if eol == "\n" else text.replace("\n", eol))
+
+
 def _run_one(
     project_dir: str, path: str, source: str, mutated: str, runner: Runner, timeout: float
 ) -> Verdict:
     target = Path(path)
+    # Sample before the first write, while the file still holds the unmutated source.
+    eol = _detect_eol(target)
     try:
-        target.write_text(mutated, encoding="utf-8")
+        _write_source(target, mutated, eol)
         try:
             result = runner.run(project_dir, timeout=timeout)
         except SuiteTimeout:
@@ -474,4 +500,4 @@ def _run_one(
             return Verdict.ERROR
         return Verdict.KILLED if result.failed else Verdict.SURVIVED
     finally:
-        target.write_text(source, encoding="utf-8")  # never leave the project mutated
+        _write_source(target, source, eol)  # never leave the project mutated
