@@ -53,6 +53,7 @@ dev = [
   "mypy>=1.11",
   "pip-audit>=2.7",
   "mutmut>=3.6.0",
+  "pre-commit>=4",
 ]
 
 [build-system]

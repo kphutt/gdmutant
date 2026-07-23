@@ -17,9 +17,20 @@ uv sync --frozen      # installs the exact locked dependencies into .venv
 
 Prefer not to use mise? Install [uv](https://docs.astral.sh/uv/) yourself, then `uv sync --frozen`.
 
+Optional but recommended: install the git hooks in `.pre-commit-config.yaml` so these checks run
+automatically instead of by hand.
+
+```sh
+uv run pre-commit install --hook-type pre-commit --hook-type pre-push
+```
+
+This is self-contained — it works the same way for anyone who clones this repo, with no
+dependency on the maintainer's personal machine setup. Once installed: a secret scan runs on every
+commit, and the full checks below run automatically before every push.
+
 ## Before you open a PR
 
-Run the same checks CI runs:
+If you didn't install the hooks above, run the same checks CI runs by hand:
 
 ```sh
 uv run ruff check .        # lint

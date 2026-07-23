@@ -1,0 +1,106 @@
+# Standard pre-commit config (https://pre-commit.com) — self-contained, so any clone (yours or a
+# contributor's) gets the same checks with `pre-commit install --hook-type pre-commit --hook-type
+# pre-push`. Two stages, matching the tradeoff CI already makes:
+#   - pre-commit (every commit): gitleaks only — cheap, catches a secret before it's even committed.
+#   - pre-push (before it leaves the machine): the full Verify job, mirrored 1:1 from ci.yml so
+#     local and CI can't drift apart — same commands, not a reimplementation.
+# always_run: true on every hook — these mirror CI's Verify job, which always runs the full suite
+# regardless of which files changed, so file-based filtering here would silently under-check.
+#
+# All dispatch logic here is Python (scripts/*.py), not shell — invoked directly as
+# `python scripts/....py` rather than relying on a shebang, since a shebang line can't be
+# resolved on Windows (no literal /bin/sh or /usr/bin/env path).
+#
+# `python`, NOT `python3` — measured on Windows 11 (Litmus P2, then verified from a Windows
+# session): `python3` resolves ONLY via the Microsoft Store alias, and to a DIFFERENT interpreter
+# than `python` (3.13.14 vs 3.13.3 on the same box). Worse, on a machine without Store Python that
+# alias still exists and LAUNCHES THE MICROSOFT STORE rather than running anything — hanging every
+# hook here on a stock python.org install. python.org ships `python.exe`; mise and uv both provide
+# `python` as well, and CONTRIBUTING.md requires one of them.
+#
+# Two further gaps this closes, found live
+# via Litmus review: a no-mise contributor (a path CONTRIBUTING.md documents as supported) got
+# every pre-push hook failing with "mise: command not found", and a fresh clone with no local
+# `gitleaks` binary got the pre-commit-stage hook failing the same way -- both scripts degrade
+# gracefully instead of hard-requiring either tool.
+default_stages: [pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (secret scan; skips gracefully if gitleaks isn't installed)
+        entry: python scripts/run_gitleaks.py
+        language: python
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: toolchain-sync
+        name: toolchain sync (mise + uv)
+        entry: python scripts/dev_run.py uv sync --frozen
+        language: python
+        pass_filenames: false
+        always_run: true
+
+      - id: ruff-check
+        name: ruff check
+        entry: python scripts/dev_run.py uv run ruff check .
+        language: python
+        pass_filenames: false
+        always_run: true
+
+      - id: ruff-format
+        name: ruff format --check
+        entry: python scripts/dev_run.py uv run ruff format --check .
+        language: python
+        pass_filenames: false
+        always_run: true
+
+      - id: gdlint
+        name: gdlint (corpus fixture)
+        entry: python scripts/dev_run.py uv run gdlint corpus/turn_order.gd corpus/test corpus/harness
+        language: python
+        pass_filenames: false
+        always_run: true
+
+      - id: mypy
+        name: mypy
+        entry: python scripts/dev_run.py uv run mypy gdmutant
+        language: python
+        pass_filenames: false
+        always_run: true
+
+      - id: pytest
+        name: pytest
+        entry: python scripts/dev_run.py uv run pytest
+        language: python
+        pass_filenames: false
+        always_run: true
+
+      - id: pip-audit
+        name: pip-audit
+        entry: python scripts/dev_run.py uv run pip-audit
+        language: python
+        pass_filenames: false
+        always_run: true
+
+      # Opt-in, not run automatically (needs a real Godot binary) — mirrors ci.yml's
+      # selftest-godot job. Run by hand: `pre-commit run --hook-stage manual gdmutant-selftest`
+      - id: gdmutant-selftest
+        name: Godot self-test (manual, requires a real Godot binary)
+        entry: python scripts/run_selftest.py
+        language: python
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+
+      # Opt-in, advisory, not run automatically — mirrors mutation.yml's baseline-failure guard
+      # (a surviving mutant is fine; a baseline that won't run clean unmutated is not).
+      - id: gdmutant-mutation
+        name: mutmut (advisory, manual)
+        entry: python scripts/check_mutation_baseline.py
+        language: python
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
