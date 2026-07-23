@@ -689,3 +689,49 @@ def test_parallel_worker_run_error_is_reraised_in_the_main_thread(tmp_path: Path
 
     with pytest.raises(WorkerBoom, match="worker boom"):
         run(str(tmp_path), path, src, BoomRunner(), jobs=2)
+
+
+def test_a_run_restores_the_file_byte_for_byte_including_its_line_endings(
+    tmp_path: Path,
+) -> None:
+    # _run_one's finally-block promises "never leave the project mutated". That promise was only
+    # true at the TEXT level: source arrives normalised to LF (read_text does that), and write_text
+    # translates LF back to os.linesep -- so on Windows every run silently rewrote the target with
+    # CRLF. Against a project declaring `eol=lf` in .gitattributes, that leaves each mutated file
+    # permanently "modified" with an empty diff.
+    #
+    # Asserting on bytes rather than text is what makes this catch the bug at all.
+    #
+    # This test and its LF twin below are a PAIR, and neither is redundant: each catches the
+    # regression on the platform where the other cannot. Verified by reverting the fix:
+    #   - here (CRLF fixture): fails on Linux/macOS, where write_text would restore LF into a
+    #     file that should be CRLF. On Windows the bug accidentally produces the right answer,
+    #     so this one passes there.
+    #   - the LF twin: fails on Windows, where write_text turns LF into CRLF.
+    # CI runs Linux, so this is the one that guards the build; the twin guards the dev machine.
+    # Deleting either leaves half the platforms unprotected.
+    path = tmp_path / "crlf.gd"
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path.write_bytes(src.replace("\n", "\r\n").encode("utf-8"))
+    before = path.read_bytes()
+    assert b"\r\n" in before  # fixture sanity: the file really is CRLF
+
+    result = run(str(tmp_path), str(path), src, MarkerRunner(str(path), "a >= b"))
+
+    assert result.outcomes, "expected the loop to have produced and run mutants"
+    assert path.read_bytes() == before, "the run did not restore the file byte-for-byte"
+
+
+def test_an_lf_file_stays_lf_after_a_run(tmp_path: Path) -> None:
+    # The other direction: preserving CRLF must not mean introducing it. A project that is LF on
+    # disk has to come back LF, whatever OS the run happened on.
+    path = tmp_path / "lf.gd"
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path.write_bytes(src.encode("utf-8"))
+    before = path.read_bytes()
+
+    run(str(tmp_path), str(path), src, MarkerRunner(str(path), "a >= b"))
+
+    after = path.read_bytes()
+    assert b"\r\n" not in after, "an LF file must not gain carriage returns"
+    assert after == before
