@@ -13,6 +13,7 @@ from gdmutant.engine.loop import (
     MutantOutcome,
     Verdict,
     _derive_timeout,
+    _detect_eol,
     _format_duration,
     _progress_estimate,
     _progress_line,
@@ -720,6 +721,14 @@ def test_a_run_restores_the_file_byte_for_byte_including_its_line_endings(
 
     assert result.outcomes, "expected the loop to have produced and run mutants"
     assert path.read_bytes() == before, "the run did not restore the file byte-for-byte"
+
+
+def test_eol_detection_falls_back_to_lf_when_the_file_cannot_be_read() -> None:
+    # _detect_eol samples the file before the first write. If that read fails -- the path is
+    # gone, or unreadable -- it must not take the whole run down: the caller is about to write
+    # the file anyway, and LF is the safe default. Covers the OSError arm, which the two
+    # round-trip tests below never reach because they always have a readable file.
+    assert _detect_eol(Path("no", "such", "file.gd")) == "\n"
 
 
 def test_an_lf_file_stays_lf_after_a_run(tmp_path: Path) -> None:
