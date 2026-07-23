@@ -34,8 +34,14 @@ Options considered:
 Adopt **pre-commit**, self-contained via `.pre-commit-config.yaml`, replacing `scripts/local-verify`
 and its dispatch/trust-gate machinery entirely (PR #73 closed unmerged, superseded by #74):
 
-- **`pre-commit` stage:** gitleaks (`gitleaks-system`, pinned to a tagged release) — cheap, catches a
-  secret before it's even committed rather than only before push.
+- **`pre-commit` stage:** gitleaks, run via `scripts/run_gitleaks.py` — cheap, catches a secret before
+  it's even committed rather than only before push. Deliberately **not version-pinned**: it calls
+  whatever `gitleaks` binary is already on the contributor's PATH, skipping gracefully (not failing)
+  if none is found. A pinned version (e.g. via the vendored `gitleaks-system` pre-commit hook, which
+  builds/requires a specific release) would reintroduce the exact "breaks unless you already have the
+  right thing installed" problem this migration exists to remove — the self-containment goal wins over
+  version-pin precision here. (Found via Litmus review of PR #74: an earlier draft's ADR text and PR
+  description both claimed pinning that wasn't actually true; corrected here rather than re-adding it.)
 - **`pre-push` stage:** the same commands CI's Verify job runs (ruff check/format, gdlint, mypy,
   pytest, pip-audit) — not a reimplementation, so local and CI can't drift apart.
 - `always_run: true` on every hook — pre-commit's default file-based filtering would otherwise skip a
