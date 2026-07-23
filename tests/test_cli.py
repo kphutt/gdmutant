@@ -738,7 +738,7 @@ def test_main_cli_flag_overrides_config(tmp_path: Path, monkeypatch: pytest.Monk
     cfg_proj.mkdir()
     cli_proj.mkdir()
     cfg = tmp_path / ".gdmutant.toml"
-    cfg.write_text(f"project = {str(cfg_proj)!r}\n", encoding="utf-8")
+    cfg.write_text(f"project = '{cfg_proj}'\n", encoding="utf-8")  # TOML literal string; see above
     monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     runner = RecordingRunner()
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)

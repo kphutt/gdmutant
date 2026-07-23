@@ -16,13 +16,19 @@ def _report(tmp_path: Path) -> Path:
     return path
 
 
-def test_command_construction() -> None:
-    cmd = GdUnit4Runner(test_path="res://test", godot="godot4").command("/proj")
+def test_command_construction(tmp_path: Path) -> None:
+    # command() resolves --path deliberately (see runner.py), so a hardcoded POSIX literal cannot
+    # survive it on Windows: "/proj" resolves to "C:\proj" there. tmp_path is already absolute and
+    # platform-native, so the flag list and its order stay pinned exactly while the path itself
+    # stops being an assertion about which OS the suite happens to run on.
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cmd = GdUnit4Runner(test_path="res://test", godot="godot4").command(str(proj))
     assert cmd == [
         "godot4",
         "--headless",
         "--path",
-        str(Path("/proj").resolve()),  # command() resolves to a platform-native absolute path
+        str(proj),
         "-s",
         "res://addons/gdUnit4/bin/GdUnitCmdTool.gd",
         "-a",
