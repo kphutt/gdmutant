@@ -132,5 +132,5 @@ source_paths = ["gdmutant"]
 # docs/ (the guide-consistency test), and AGENTS.md (the guide links to ../AGENTS.md and the
 # link-resolution test checks it exists), so all three must be copied in. Skip coverage — it is
 # pure overhead per mutant run.
-also_copy = ["corpus", "docs", "AGENTS.md"]
+also_copy = ["corpus", "docs", "AGENTS.md", "README.md"]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
