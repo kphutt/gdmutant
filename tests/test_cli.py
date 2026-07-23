@@ -720,9 +720,10 @@ def test_main_uses_config_defaults_when_cli_flags_omitted(
     proj = tmp_path / "proj"
     proj.mkdir()
     cfg = tmp_path / ".gdmutant.toml"
-    # A TOML *literal* string (single quotes): backslashes are not escape sequences there.
-    # Python's !r produced 'C:\\Users\\...' with doubled backslashes, which TOML then read back
-    # verbatim -- so this only ever matched on POSIX, where paths carry no backslashes at all.
+    # TOML literal strings (single-quoted) take their content byte-for-byte, no escape
+    # processing -- the correct way to write an arbitrary path (esp. a Windows one, with
+    # backslashes) into TOML. Python's repr() escapes backslashes for *Python's own* syntax,
+    # which isn't TOML's, so tomllib was reading back a doubled-backslash value on Windows.
     cfg.write_text(f"project = '{proj}'\n", encoding="utf-8")
     monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     runner = RecordingRunner()

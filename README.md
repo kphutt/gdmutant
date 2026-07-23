@@ -85,6 +85,7 @@ Clone the repo and install the pinned toolchain to hack on gdmutant itself:
 ```sh
 mise install       # the pinned Python + uv  (or install uv yourself and skip this)
 uv sync --frozen   # the exact locked dependencies
+uv run pre-commit install --hook-type pre-commit --hook-type pre-push   # optional: run CI's checks locally, automatically
 ```
 
 **See it work without Godot** — list the mutants for the bundled fixture:
