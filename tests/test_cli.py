@@ -1611,3 +1611,35 @@ def test_run_mutation_with_changed_scopes_the_real_run(
     data = json.loads(report.read_text(encoding="utf-8"))
     lines = {m["location"]["start"]["line"] for m in data["files"][str(path)]["mutants"]}
     assert lines == {2}  # only the changed line was mutated
+
+
+def test_force_utf8_reconfigures_a_stream() -> None:
+    """The happy path: a real text stream is switched to UTF-8 with replacement so the CLI's
+    Unicode output can't crash on a Windows cp1252 console."""
+
+    class _Stream:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, str] = {}
+
+        def reconfigure(self, *, encoding: str, errors: str) -> None:
+            self.kwargs = {"encoding": encoding, "errors": errors}
+
+    stream = _Stream()
+    cli._force_utf8(stream)
+    assert stream.kwargs == {"encoding": "utf-8", "errors": "replace"}
+
+
+def test_force_utf8_skips_a_stream_without_reconfigure() -> None:
+    """A redirected/wrapped stream that has no ``reconfigure`` is a silent no-op, never an error."""
+    cli._force_utf8(object())  # no exception
+
+
+def test_force_utf8_swallows_reconfigure_errors() -> None:
+    """A stream that refuses reconfiguration (detached/locked) is left as-is, not fatal — the worst
+    case stays the original behaviour, never a new crash."""
+
+    class _Stream:
+        def reconfigure(self, *, encoding: str, errors: str) -> None:
+            raise ValueError("stream is detached")
+
+    cli._force_utf8(_Stream())  # no exception
