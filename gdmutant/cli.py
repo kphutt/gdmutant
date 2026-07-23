@@ -7,6 +7,7 @@ core (inject any `Runner`); `main` wires the real `GdUnit4Runner`.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fnmatch
 import json
 import os
@@ -799,7 +800,24 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     return parser
 
 
+def _force_utf8(stream: object) -> None:
+    """Reconfigure a text stream to UTF-8 so the CLI's Unicode output prints on Windows, whose
+    console defaults to cp1252 and raises ``UnicodeEncodeError`` mid-print. Found running the
+    gdUnit4 dogfood on Windows: every mutant generated fine, but the run died on *output*.
+    ``errors="replace"`` degrades a stray glyph to ``?`` instead of crashing. Reached via
+    ``getattr`` because ``reconfigure`` is on ``TextIOWrapper``, not the ``TextIO`` type of
+    ``sys.stdout`` (a direct call fails mypy); a stream without it, or that errors, is skipped."""
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return
+    with contextlib.suppress(ValueError, OSError):
+        reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    # Make the CLI's Unicode output survive a Windows cp1252 console (see `_force_utf8`).
+    for _stream in (sys.stdout, sys.stderr):
+        _force_utf8(_stream)
     config = _load_config()
     if config is None:
         return 2  # a malformed/invalid .gdmutant.toml is a setup error
