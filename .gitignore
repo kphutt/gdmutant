@@ -19,6 +19,7 @@ htmlcov/
 # mutmut v3 writes a generated copy of the project + its result DB here while it runs
 mutants/
 mutmut-results.db
+mutmut-run.log
 # Godot (test fixtures may include a small Godot project)
 .godot/
 # Godot self-test fixture (tests/test_selftest_live.py): the GdUnit4 addon is downloaded
