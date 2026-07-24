@@ -1,7 +1,9 @@
 # Method-body mutation coverage: a manual cosmic-ray spot-check, not a second CI job
 
 ## Status
-Accepted.
+Accepted — **superseded 2026-07-23**: the manual cosmic-ray spot-check and its committed
+`cosmic-ray.toml` were removed as unused clutter; mutmut remains the sole mutation check. The
+analysis below is kept as history (the mutmut-3.x method-body limitation it documents still holds).
 
 ## Context
 gdmutant dogfoods its own Python suite with **mutmut 3.6** (`[tool.mutmut]`, the advisory

@@ -12,7 +12,6 @@
 # Toolchain + supply-chain surfaces.
 /pyproject.toml  @kphutt
 /uv.lock         @kphutt
-/mise.toml       @kphutt
 /.gitleaks.toml  @kphutt
 
 # --- Engine surfaces (land with the v0.1 milestone) ------------------------
