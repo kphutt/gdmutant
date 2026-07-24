@@ -143,7 +143,7 @@ def _format_duration(secs: float) -> str:
 def _progress_estimate(runnable: int, total: int, baseline_secs: float) -> str:
     """The pre-run estimate line: how many mutants will run and roughly how long, derived from the
     baseline's own wall-clock. "Looks hung" is the #1 documented reason people abandon mutation
-    testing (LOD-110); a stated ETA makes a long run read as *expected*. Rough by construction —
+    testing; a stated ETA makes a long run read as *expected*. Rough by construction —
     each mutant is budgeted at ~the baseline time, and killed mutants often finish sooner — so it's
     an upper-ish "about" figure, not a promise. Ignored mutants never run, so they're excluded from
     the time but noted in the count."""
@@ -229,7 +229,7 @@ def _run_baseline(
     per-mutant budget (derived from the baseline's wall-clock unless `timeout` overrides) and it.
     Raises `BaselineFailed` if the suite can't run or is red (FG-3.3)."""
     # One-time setup (e.g. a Godot import scan) runs BEFORE the clock starts, so its cost never
-    # inflates the baseline wall-clock that derives per-mutant timeouts and the ETA (LOD-213). A
+    # inflates the baseline wall-clock that derives per-mutant timeouts and the ETA. A
     # runner with nothing to prepare simply isn't Preparable — the engine stays language-neutral.
     if isinstance(runner, Preparable):
         if progress is not None:
@@ -431,7 +431,7 @@ def run_paths(
     jobs: int = 1,
 ) -> dict[str, MutationRun]:
     """Mutate several files against one project — the baseline runs **once**, then each file's
-    mutants run in turn (LOD-79). `sources` maps each file path to its contents (each held on entry,
+    mutants run in turn. `sources` maps each file path to its contents (each held on entry,
     restored after its own mutants). `adapter` is the injected language adapter (NF-3, like `run`).
     `jobs` parallelizes each file's mutants exactly as `run` does. Returns ``{path: MutationRun}``
     in `sources` order. Raises `BaselineFailed` (like `run`) if the baseline can't run or is red.

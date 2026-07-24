@@ -59,6 +59,6 @@ suppression of a known-broken mutant class, in the conservative direction.
 - In fully-typed code, a function with a sole `return` gets no deletion mutant. Accepted for v0.1;
   richer flow analysis (or an opt-in "aggressive" mode) is future work.
 
-Decision reached via the Catalyst method on the design fork (grounded against the real corpus,
+Decision reached via a structured design-review method on the design fork (grounded against the real corpus,
 runners, and Godot). Independent follow-up: harden the corpus harness to `quit()` on a load error so
 a *future* broken script fails fast rather than hanging (a CommandRunner-adoption gotcha).

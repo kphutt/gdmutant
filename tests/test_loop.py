@@ -122,7 +122,7 @@ def test_prepare_runs_before_baseline_and_its_cost_is_excluded_from_the_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A Preparable runner's one-time setup (e.g. a Godot import scan) must run BEFORE the baseline
-    # clock starts, so its cost never inflates the derived per-mutant timeout or the ETA (LOD-213).
+    # clock starts, so its cost never inflates the derived per-mutant timeout or the ETA.
     # A slow prepare (5s) + a fast suite (0.05s): every mutant's timeout must be derived from the
     # 0.05s suite alone (→ the 10s floor), NOT 5.05s (→ 50.5s).
     from gdmutant.engine import loop as loop_mod
@@ -354,7 +354,7 @@ def test_progress_fires_a_heartbeat_then_a_verdict_per_mutant_in_order(tmp_path:
     runner = MarkerRunner(target=path, kill_marker=">=")
     run(str(tmp_path), path, src, runner, timeout=10.0, progress=lines.append)
     assert lines[0] == "running the unmutated (baseline) suite ..."
-    # The pre-run estimate (LOD-110) follows the baseline; its wall-clock timing is
+    # The pre-run estimate follows the baseline; its wall-clock timing is
     # nondeterministic, so pin its shape, not the exact seconds.
     assert lines[1].startswith("3 mutants;") and "estimated ≈" in lines[1]
     assert lines[2:] == [
@@ -378,7 +378,7 @@ def test_progress_reports_invalid_and_error_verdicts(tmp_path: Path) -> None:
         str(tmp_path), path, src, MarkerRunner(path, "ZZZ"), catalog=(bad,), progress=invalid.append
     )
     # An invalid mutant never runs, so it gets NO heartbeat — only the verdict line. (lines[1] is
-    # the LOD-110 estimate, timing-dependent, so asserted by shape.)
+    # the estimate, timing-dependent, so asserted by shape.)
     assert invalid[0] == "running the unmutated (baseline) suite ..."
     assert invalid[1].startswith("1 mutant;") and "estimated ≈" in invalid[1]
     assert invalid[2:] == [f"[1/1] {path}:2:11  > -> ))  ... invalid"]
@@ -396,7 +396,7 @@ def test_progress_reports_invalid_and_error_verdicts(tmp_path: Path) -> None:
 
 def test_progress_lines_render_a_deletion_as_deleted() -> None:
     # The stderr progress heartbeat + verdict line are the most-seen render surface, so a deletion
-    # (empty replacement) must show `not -> (deleted)` there too, not a dangling arrow (LOD-131).
+    # (empty replacement) must show `not -> (deleted)` there too, not a dangling arrow.
     deletion = Mutant("f.gd", Span(2, 8, 2, 11), "logical-not", "not", "")
     start = _progress_start(1, 1, deletion, 10.0)
     line = _progress_line(1, 1, MutantOutcome(deletion, Verdict.SURVIVED))
@@ -414,7 +414,7 @@ def test_format_duration_scales_seconds_minutes_hours() -> None:
 
 
 def test_progress_estimate_reports_count_and_eta_from_baseline() -> None:
-    # 15 runnable mutants at ~9s baseline each ≈ 2m 15s — the LOD-110 example.
+    # 15 runnable mutants at ~9s baseline each ≈ 2m 15s — the ETA example.
     line = _progress_estimate(runnable=15, total=15, baseline_secs=9.0)
     assert line == "15 mutants; baseline ~9.0s each → estimated ≈ 2m 15s"
 
@@ -446,7 +446,7 @@ def test_run_is_deterministic(tmp_path: Path) -> None:
 
 
 def test_run_paths_runs_baseline_once_then_mutates_each_file(tmp_path: Path) -> None:
-    # Multi-file (LOD-79): the baseline suite runs ONCE, then each file's mutants run in turn. A
+    # Multi-file: the baseline suite runs ONCE, then each file's mutants run in turn. A
     # "mutating <path> ..." line marks each file; each file is restored after its own mutants.
     src_a = "func f(x) -> bool:\n\treturn x > 0\n"
     src_b = "func g(x) -> bool:\n\treturn x < 0\n"
