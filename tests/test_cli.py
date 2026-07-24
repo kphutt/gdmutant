@@ -1,6 +1,7 @@
 """Tests for the CLI (`gdmutant run`), driven without Godot via an injected fake runner."""
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,10 +21,20 @@ from gdmutant.cli import (
 )
 from gdmutant.engine.runner import SuiteResult
 
+# git exports these to point subprocesses at the *invoking* repo. When pytest runs inside a git
+# hook (e.g. pre-push), inheriting them makes `_git` operate on the hook's repo instead of the
+# intended tmp dir — corrupting every fixture that builds a throwaway repo (LOD-238).
+_GIT_ENV_LEAKS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+
 
 def _git(repo: Path, *args: str) -> None:
-    """Run a git command in `repo`, failing the test loudly on error."""
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+    """Run a git command in `repo`, failing the test loudly on error.
+
+    Scrubs the inherited GIT_* location vars (see `_GIT_ENV_LEAKS`) so the command acts on `repo`
+    regardless of any hook environment that spawned pytest.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_ENV_LEAKS}
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True, env=env)
 
 
 def _committed_repo(tmp_path: Path) -> Path:
@@ -1010,6 +1021,21 @@ def test_has_uncommitted_changes_false_when_git_unavailable(
 
     monkeypatch.setattr(cli.subprocess, "run", raise_fnf)
     assert _has_uncommitted_changes(str(path)) is False
+
+
+def test_git_helper_isolated_from_hook_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # LOD-238: pytest run from a git hook inherits GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE pointing at
+    # the hook's repo. `_git` must scrub them so `git init` lands in the intended dir, not the decoy
+    # GIT_DIR. Without the scrub, git would create the repo at GIT_DIR and leave `work/.git` absent.
+    decoy = tmp_path / "decoy.git"
+    monkeypatch.setenv("GIT_DIR", str(decoy))
+    monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "decoy_worktree"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "decoy.index"))
+    work = tmp_path / "work"
+    work.mkdir()
+    _git(work, "init")
+    assert (work / ".git").exists()  # init acted on `work` (env scrubbed)
+    assert not decoy.exists()  # ...not on the leaked GIT_DIR
 
 
 @dataclass
