@@ -1,9 +1,9 @@
 # Contributing to gdmutant
 
-Thanks for your interest! gdmutant is early (pre-v0.1): the engine, GDScript adapter, GdUnit4
-runner, reporter, and CLI are built and tested — including a live self-test that runs both runner
-paths against real Godot in CI. The most useful contributions right now are issues: bug reports,
-GDScript patterns that should be mutated, and real-world use cases.
+gdmutant is early (pre-v0.1): the engine, GDScript adapter, GdUnit4 runner, reporter, and CLI are
+built and tested — including a live self-test that runs both runner paths against real Godot in CI.
+The most useful contributions right now are issues: bug reports, GDScript patterns that should be
+mutated, and real-world use cases.
 
 ## Development setup
 
@@ -14,21 +14,19 @@ docs), then from the repo root:
 uv sync --frozen      # fetches the pinned Python + installs the exact locked deps into .venv
 ```
 
-That's the whole setup: uv reads `.python-version` and fetches the pinned Python for you. Run project
-commands with `uv run` (e.g. `uv run pytest`).
+That's the whole setup — uv reads `.python-version` to fetch the interpreter. Run project commands
+with `uv run` (e.g. `uv run pytest`).
 
-GitHub Actions is the authoritative gate: every PR must pass CI, and that is what decides a merge.
-The git hooks in `.pre-commit-config.yaml` are an **optional** local convenience that mirrors those
-same CI checks so you catch problems before pushing — they never block a merge, and skipping them
-changes nothing about what CI enforces. To install them:
+GitHub Actions is the authoritative gate: every PR must pass CI to merge. The git hooks in
+`.pre-commit-config.yaml` are an **optional** local mirror of those same checks, so you catch
+problems before pushing — they never affect what CI enforces. They're self-contained: no dependency
+on any personal machine setup. To install them:
 
 ```sh
 uv run pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-This is self-contained — it works the same way for anyone who clones this repo, with no
-dependency on the maintainer's personal machine setup. Once installed: a secret scan runs on every
-commit, and the full checks below run automatically before every push.
+Once installed, a secret scan runs on every commit and the full checks below run before every push.
 
 ## Before you open a PR
 
