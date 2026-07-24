@@ -7,15 +7,15 @@ GDScript patterns that should be mutated, and real-world use cases.
 
 ## Development setup
 
-The toolchain is pinned so setup is one command per machine.
+gdmutant is a [uv](https://docs.astral.sh/uv/) project. Install uv (one line — see uv's install
+docs), then from the repo root:
 
 ```sh
-# 1. Install mise once (https://mise.jdx.dev), then:
-mise install          # installs the pinned Python + uv
-uv sync --frozen      # installs the exact locked dependencies into .venv
+uv sync --frozen      # fetches the pinned Python + installs the exact locked deps into .venv
 ```
 
-Prefer not to use mise? Install [uv](https://docs.astral.sh/uv/) yourself, then `uv sync --frozen`.
+That's the whole setup: uv reads `.python-version` and fetches the pinned Python for you. Run project
+commands with `uv run` (e.g. `uv run pytest`).
 
 Optional but recommended: install the git hooks in `.pre-commit-config.yaml` so these checks run
 automatically instead of by hand.
@@ -57,11 +57,6 @@ GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-
   existing records for the format) and, where relevant, reflected in `docs/design/`.
 - Commits and PRs carry **no AI co-author trailer**.
 - Add any new third-party dependency to `CREDITS.md` with its license.
-
-## Code of conduct
-
-This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). By participating, you agree
-to uphold it.
 
 ## License
 

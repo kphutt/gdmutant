@@ -6,10 +6,6 @@ real Godot binary. Mirrors ci.yml's selftest-godot job. Requires a `godot` binar
 import os
 import subprocess
 import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent))
-from dev_run import resolve  # noqa: E402
 
 
 def main() -> int:
@@ -18,7 +14,7 @@ def main() -> int:
         return install.returncode
     env = os.environ.copy()
     env["GDMUTANT_GODOT"] = "godot"
-    cmd = resolve(["uv", "run", "pytest", "tests/test_selftest_live.py", "-v", "--no-cov"])
+    cmd = ["uv", "run", "pytest", "tests/test_selftest_live.py", "-v", "--no-cov"]
     return subprocess.run(cmd, env=env).returncode
 
 
