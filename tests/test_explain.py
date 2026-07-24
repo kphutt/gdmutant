@@ -8,6 +8,7 @@ from gdmutant.engine.explain import (
     _enclosing_func,
     doc_url,
     render_survivor,
+    survivor_report_fields,
 )
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.spans import Span
@@ -140,6 +141,34 @@ def test_display_col_expands_tabs() -> None:
     assert _display_col("\t") == 4  # one tab -> width 4
     assert _display_col("\tab") == 6
     assert _display_col("ab\t") == 4  # a tab mid-line advances to the next multiple of 4 (not +)
+
+
+def test_survivor_report_fields_reuse_the_same_narrative_as_the_console_block() -> None:
+    # The HTML-report fields are the exact gap/risk/start copy the console block renders (single
+    # source: `_narrative`) — description = the gap, statusReason = risk + start, blank-line joined.
+    m = _mutant("comparison", ">", ">=")
+    description, status_reason = survivor_report_fields(m)
+    gap, risk, start = (
+        "Your tests pass whether this says `>` or `>=`. They run this line, but never the one "
+        "input where the two disagree — equal operands. That case is untested.",
+        "Passing here is false confidence, not proof. A later refactor or merge that changes the "
+        "equal case slips through green. If the equal case has a right answer, no test guards it.",
+        "Add a test that reaches this line with two equal operands (a value compared to itself) "
+        "and assert the result you expect. Only you know that result — gdmutant reports the gap, "
+        "not it.",
+    )
+    assert description == gap
+    assert status_reason == f"{risk}\n\n{start}"
+
+
+def test_survivor_report_fields_use_the_fallback_for_an_unknown_operator() -> None:
+    # An operator with no bespoke copy falls back to the safe generic narrative (same _FALLBACK the
+    # console block uses), so an unrecognized operator still gets non-empty report fields.
+    description, status_reason = survivor_report_fields(_mutant("custom-op", "x", "y"))
+    assert description == "Your tests pass with this change applied — nothing distinguishes it."
+    assert status_reason == (
+        "A change here would pass every test.\n\nAdd a test that fails under this exact change."
+    )
 
 
 def test_doc_url_is_the_stable_per_operator_page() -> None:
