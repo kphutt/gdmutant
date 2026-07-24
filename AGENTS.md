@@ -11,14 +11,14 @@ fast-orientation guide for anyone (human or AI) working on the code; the product
 
 ## Setup
 
-The toolchain is pinned, so setup is one command:
+gdmutant is a [uv](https://docs.astral.sh/uv/) project — install uv, then:
 
 ```sh
-mise install          # installs the pinned Python + uv
-uv sync --frozen      # installs the exact locked dependencies into .venv
+uv sync --frozen      # fetches the pinned Python (via .python-version) + locked deps into .venv
 ```
 
-Prefer not to use mise? Install [uv](https://docs.astral.sh/uv/) yourself, then `uv sync --frozen`.
+Run commands with `uv run`. Optional fully-pinned path via [mise](https://mise.jdx.dev) (pins uv
+itself): `mise install`, then activate mise or prefix commands with `mise exec --`.
 
 ## Build · test
 

@@ -7,15 +7,19 @@ GDScript patterns that should be mutated, and real-world use cases.
 
 ## Development setup
 
-The toolchain is pinned so setup is one command per machine.
+gdmutant is a [uv](https://docs.astral.sh/uv/) project. Install uv (one line — see uv's install
+docs), then from the repo root:
 
 ```sh
-# 1. Install mise once (https://mise.jdx.dev), then:
-mise install          # installs the pinned Python + uv
-uv sync --frozen      # installs the exact locked dependencies into .venv
+uv sync --frozen      # fetches the pinned Python + installs the exact locked deps into .venv
 ```
 
-Prefer not to use mise? Install [uv](https://docs.astral.sh/uv/) yourself, then `uv sync --frozen`.
+That's the whole setup: uv reads `.python-version` and fetches the pinned Python for you. Run project
+commands with `uv run` (e.g. `uv run pytest`).
+
+Optional — a fully pinned toolchain via [mise](https://mise.jdx.dev), which pins uv itself too:
+`mise install`, then either activate mise in your shell (`mise activate`) or prefix commands with
+`mise exec --` (e.g. `mise exec -- uv sync --frozen`) so `uv` is on PATH.
 
 Optional but recommended: install the git hooks in `.pre-commit-config.yaml` so these checks run
 automatically instead of by hand.
