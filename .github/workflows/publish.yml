@@ -1,0 +1,106 @@
+name: Publish
+
+# Publish gdmutant's distributions to a package index using PyPI Trusted Publishing
+# (OIDC) — NO long-lived API token is stored in the repo. The index mints a short-lived
+# credential for this exact repo+workflow+environment at publish time. See
+# docs/decisions/0010-pypi-trusted-publishing.md for the design and the one-time manual
+# seed the maintainer must do on pypi.org / test.pypi.org before either path can succeed.
+#
+# Two paths:
+#   - workflow_dispatch  -> build + publish to TestPyPI  (the deliberate dry-run)
+#   - release: published -> build + publish to PyPI      (a real release)
+#
+# The build runs in its own job with NO elevated permissions; only the publish jobs get
+# `id-token: write`, and each is gated behind a protection-capable GitHub Environment
+# (`testpypi` / `pypi`). This keeps the OIDC-token job doing nothing but download+upload.
+on:
+  workflow_dispatch: # deliberate TestPyPI dry-run, fired by hand
+  release:
+    types: [published] # a published GitHub Release -> real PyPI
+
+# Least privilege at the workflow level; only the publish jobs opt into id-token below.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false # never cancel an in-flight publish
+
+jobs:
+  # --- Build once: sdist + wheel, metadata-validated -------------------------
+  # Runs with only the workflow-level `contents: read` — no OIDC here, so the build
+  # backend's code never executes in a job that can mint a publishing credential.
+  build:
+    name: Build distributions
+    runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so a runner-image migration can't silently break us
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false # this job never uses git creds — don't leave them on the runner
+
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true # cache uv's global store
+
+      - name: Build sdist + wheel
+        run: uv build # writes dist/*.tar.gz + dist/*.whl
+
+      - name: Validate distribution metadata (twine check)
+        run: uv run --with twine twine check dist/*
+
+      - name: Upload dist as an artifact for the publish jobs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # --- Dry-run path: TestPyPI via workflow_dispatch --------------------------
+  publish-testpypi:
+    name: Publish to TestPyPI (dry-run)
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/gdmutant
+    permissions:
+      contents: read
+      id-token: write # OIDC: mint the short-lived TestPyPI credential — the ONLY job that needs it
+    steps:
+      - name: Download the built distributions
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI (Trusted Publishing / OIDC)
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  # --- Release path: PyPI via a published GitHub Release ---------------------
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/gdmutant
+    permissions:
+      contents: read
+      id-token: write # OIDC: mint the short-lived PyPI credential — the ONLY job that needs it
+    steps:
+      - name: Download the built distributions
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI (Trusted Publishing / OIDC)
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
