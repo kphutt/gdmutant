@@ -79,8 +79,6 @@ include = [
   "/README.md",
   "/CHANGELOG.md",
   "/CONTRIBUTING.md",
-  "/CODE_OF_CONDUCT.md",
-  "/SECURITY.md",
   "/CREDITS.md",
   "/AGENTS.md",
   "/LICENSE",

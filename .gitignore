@@ -35,6 +35,3 @@ corpus/reports/
 Thumbs.db
 .idea/
 *.swp
-
-# cosmic-ray manual spot-check session DB (ADR-0008)
-cr-session.sqlite

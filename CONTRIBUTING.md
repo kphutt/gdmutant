@@ -58,11 +58,6 @@ GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-
 - Commits and PRs carry **no AI co-author trailer**.
 - Add any new third-party dependency to `CREDITS.md` with its license.
 
-## Code of conduct
-
-This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). By participating, you agree
-to uphold it.
-
 ## License
 
 By contributing, you agree that your contributions are licensed under the project's
