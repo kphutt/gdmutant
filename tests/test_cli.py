@@ -963,6 +963,78 @@ def test_main_command_runner_rejects_unbalanced_quotes(
     assert capsys.readouterr().err.startswith("error: could not parse --command:")
 
 
+def test_split_command_posix_uses_default_shlex(monkeypatch: pytest.MonkeyPatch) -> None:
+    # On a POSIX host, the standard (correct) shlex default applies: quotes strip, forward-slash
+    # paths pass through untouched, and a quoted path with spaces stays one token.
+    monkeypatch.setattr(cli.os, "name", "posix")
+    assert cli._split_command("godot --script res://t/run.gd") == [
+        "godot",
+        "--script",
+        "res://t/run.gd",
+    ]
+    assert cli._split_command('godot --script "res://my test/run.gd"') == [
+        "godot",
+        "--script",
+        "res://my test/run.gd",
+    ]
+
+
+def test_split_command_windows_keeps_backslash_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The path parsing bug: default POSIX shlex eats backslashes, turning C:\Godot\godot.exe into
+    # C:Godotgodot.exe ("runner not found"). On Windows we must keep them literal. This assertion
+    # fails on the old posix-only split.
+    monkeypatch.setattr(cli.os, "name", "nt")
+    assert cli._split_command(r"C:\Godot\godot.exe --headless res://t/run.gd") == [
+        r"C:\Godot\godot.exe",
+        "--headless",
+        "res://t/run.gd",
+    ]
+
+
+def test_split_command_windows_forward_slash_path_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A forward-slash Windows path (which CreateProcess accepts) is what many users naturally type;
+    # it must pass through with no mangling and no rewrite.
+    monkeypatch.setattr(cli.os, "name", "nt")
+    assert cli._split_command("C:/Godot/godot.exe --headless") == [
+        "C:/Godot/godot.exe",
+        "--headless",
+    ]
+
+
+def test_split_command_windows_strips_quotes_from_spaced_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Non-POSIX lexing leaves a quoted token's surrounding quotes in place; a spaced path like
+    # "C:\Program Files\Godot\godot.exe" must have them stripped so CreateProcess can resolve it.
+    monkeypatch.setattr(cli.os, "name", "nt")
+    assert cli._split_command(r'"C:\Program Files\Godot\godot.exe" --headless') == [
+        r"C:\Program Files\Godot\godot.exe",
+        "--headless",
+    ]
+
+
+def test_split_command_windows_rewrites_msys_drive_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An MSYS/Git-Bash drive path (/c/Godot/godot.exe) is not resolvable by CreateProcess; it must
+    # be rewritten to Windows form. No lexer mode fixes this — it's a path-shape rewrite.
+    monkeypatch.setattr(cli.os, "name", "nt")
+    assert cli._split_command("/c/Godot/godot.exe --headless") == [
+        r"C:\Godot\godot.exe",
+        "--headless",
+    ]
+
+
+def test_split_command_windows_unbalanced_quote_still_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Switching to posix=False on Windows must not lose the unbalanced-quote guard the CLI relies on
+    # to return a clean exit-2 (rather than a raw traceback).
+    monkeypatch.setattr(cli.os, "name", "nt")
+    with pytest.raises(ValueError, match="No closing quotation"):
+        cli._split_command('godot "unterminated')
+
+
 def test_main_command_without_runner_command_is_flagged_not_dropped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

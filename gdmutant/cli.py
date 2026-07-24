@@ -825,6 +825,45 @@ def _force_utf8(stream: object) -> None:
         reconfigure(encoding="utf-8", errors="replace")
 
 
+_MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])/(.*)$")
+
+
+def _split_command(command: str) -> list[str]:
+    """Split a ``--command`` string into an argv list, honouring the host OS's path syntax.
+
+    Default ``shlex.split`` runs in POSIX mode, where a backslash is an *escape* — so on Windows an
+    unquoted native path like ``C:\\Godot\\godot.exe`` loses its separators (``C:Godotgodot.exe``)
+    and the runner is "not found" (a known path parsing bug). On Windows we lex in non-POSIX
+    mode instead, which keeps backslashes literal — matching what a user naturally types and how
+    `CreateProcess` reads an argv. Unbalanced quotes still raise ``ValueError`` in either mode, so
+    the caller's clean exit-2 for that case is unaffected.
+
+    Two Windows fix-ups follow, because the host runs the command via `CreateProcess` (never a
+    shell), so only Windows-resolvable tokens work:
+    - Non-POSIX mode leaves a token's surrounding quotes in place (POSIX mode strips them), so a
+      quoted path with spaces (``"C:\\Program Files\\Godot\\godot.exe"``) would keep literal quotes
+      and fail to resolve — strip one matched outer pair.
+    - An MSYS/Git-Bash drive path (``/c/Godot/godot.exe``, common when invoking from Git Bash) is
+      not resolvable by `CreateProcess`; rewrite it to Windows form (``C:\\Godot\\godot.exe``).
+
+    A dedicated Windows lexer (``mslex``/``oslex``) is deliberately *not* used: it solves only the
+    lexing half, not the MSYS path rewrite, so it wouldn't remove this helper — and it would add a
+    dependency to a repo heading public. POSIX hosts keep the standard, correct default.
+    """
+    if os.name != "nt":
+        return shlex.split(command)
+    return [_normalize_windows_token(token) for token in shlex.split(command, posix=False)]
+
+
+def _normalize_windows_token(token: str) -> str:
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "'\"":
+        token = token[1:-1]
+    drive = _MSYS_DRIVE_RE.match(token)
+    if drive:
+        token = f"{drive.group(1).upper()}:\\" + drive.group(2).replace("/", "\\")
+    return token
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     # Make the CLI's Unicode output survive a Windows cp1252 console (see `_force_utf8`).
     for _stream in (sys.stdout, sys.stderr):
@@ -919,12 +958,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         baseline_timeout = DEFAULT_TIMEOUT if args.timeout is None else args.timeout
         runner: Runner
         if args.runner == "command":
-            # shlex-split first, then require a non-empty result: this rejects a missing --command
-            # AND a whitespace-only one (which would otherwise become `[]` -> a confusing subprocess
-            # IndexError deep in the run). Unbalanced quotes make shlex raise ValueError — surface
-            # it as a clean exit-2, not a raw traceback, like every other bad-input case here.
+            # Split OS-aware (see `_split_command`), then require a non-empty result: this rejects a
+            # missing --command AND a whitespace-only one (which would otherwise become `[]` -> a
+            # confusing subprocess IndexError deep in the run). Unbalanced quotes make shlex raise
+            # ValueError — surface it as a clean exit-2, not a raw traceback, like every other
+            # bad-input case here.
             try:
-                test_command = shlex.split(args.test_command) if args.test_command else []
+                test_command = _split_command(args.test_command) if args.test_command else []
             except ValueError as error:
                 print(f"error: could not parse --command: {error}", file=sys.stderr)
                 return 2
