@@ -107,6 +107,25 @@ def doc_url(operator_id: str) -> str:
     return f"{DOC_BASE_URL}/{operator_id}.md"
 
 
+def _narrative(mutant: Mutant) -> tuple[str, str, str]:
+    """The ``(gap, risk, start)`` sentences for `mutant`'s operator, token-substituted. This is the
+    single source of the survivor copy: both the console block (`render_survivor`) and the HTML
+    report fields (`survivor_report_fields`) read it, so the two outputs can never drift."""
+    gap_t, risk_t, start_t = _EXPLAIN.get(mutant.operator_id, _FALLBACK)
+    fmt = {"a": mutant.original, "b": mutant.replacement}
+    return gap_t.format(**fmt), risk_t.format(**fmt), start_t.format(**fmt)
+
+
+def survivor_report_fields(mutant: Mutant) -> tuple[str, str]:
+    """The survivor narrative trimmed for the HTML report's ``description`` and ``statusReason``
+    fields — the same gap/risk/start copy `render_survivor` shows, minus the box-drawing, caret,
+    and docs link the HTML viewer already draws for itself. ``description`` carries the gap (what
+    the tests miss); ``statusReason`` carries the risk and the starting point (why it matters and
+    where to begin), blank-line separated. Both are non-empty for every survivor."""
+    gap, risk, start = _narrative(mutant)
+    return gap, f"{risk}\n\n{start}"
+
+
 def _display_col(prefix: str, tabsize: int = 4) -> int:
     """Display column of `prefix` with tabs expanded — so a caret lands under a tabbed token."""
     col = 0
@@ -140,8 +159,7 @@ def render_survivor(mutant: Mutant, source_lines: list[str] | None) -> list[str]
     op = mutant.operator_id
     a = mutant.original
     b = mutant.replacement  # only rendered for non-deletion operators (deletions use the code line)
-    gap_t, risk_t, start_t = _EXPLAIN.get(op, _FALLBACK)
-    fmt = {"a": a, "b": b}
+    gap, risk, start = _narrative(mutant)
 
     line_no, col = mutant.span.line, mutant.span.column
     func = None
@@ -167,11 +185,11 @@ def render_survivor(mutant: Mutant, source_lines: list[str] | None) -> list[str]
             change = f"changed  {a}  to  {b}"
         out.append(f"        | {' ' * caret_at}^  {change} — every test still passed")
         out.append("")
-    out += _block("gap", gap_t.format(**fmt))
+    out += _block("gap", gap)
     out.append("")
-    out += _block("risk", risk_t.format(**fmt))
+    out += _block("risk", risk)
     out.append("")
-    out += _block("start", start_t.format(**fmt))
+    out += _block("start", start)
     out.append("")
     out.append(f"  more   {doc_url(op)}")
     out.append("─" * _WIDTH)

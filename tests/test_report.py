@@ -97,6 +97,60 @@ def test_ignored_maps_to_stryker_ignored_with_reason_and_excluded_from_score() -
     assert "ignored:  2  (suppressed, excluded from score)" in console_summary(run)
 
 
+def test_report_json_survivor_carries_the_gap_risk_start_narrative() -> None:
+    # A survivor's report JSON now carries the same explanation the console block shows: the gap in
+    # `description`, the risk + starting point in `statusReason` — so the HTML viewer explains *why
+    # it matters* and *where to start*, not just the diff (was empty for survivors before).
+    survivor = stryker_report(_run(), "f.gd", _SRC, "gdscript")["files"]["f.gd"]["mutants"][1]
+    assert survivor["status"] == "Survived"
+    # description = the gap sentence (what the tests miss), for this boolean `and`->`or` survivor
+    assert survivor["description"] == (
+        "Your tests pass whether this needs both sides (`and`) or just one (`or`). No test covers "
+        "the case that tells them apart: the operands disagreeing (one true, one false)."
+    )
+    # statusReason = risk (why it matters) + start (where to begin), blank-line separated
+    assert survivor["statusReason"] == (
+        "Your tests can't tell 'needs both' from 'needs either.' A change that loosens or tightens "
+        "this guard would pass every test."
+        "\n\n"
+        "Add a test where exactly one side is true and the other false, and assert the outcome."
+    )
+
+
+def test_report_json_only_survivors_get_the_narrative() -> None:
+    # The narrative fields are survivor-only: killed/invalid/error mutants carry no `description`
+    # and no survivor `statusReason`; the ignored mutant keeps its own ignore-reason statusReason
+    # and gains no `description` — so populating survivors doesn't disturb any other verdict.
+    run = MutationRun(
+        (
+            MutantOutcome(
+                Mutant("f.gd", Span(2, 9, 2, 10), "comparison", ">", ">="), Verdict.KILLED
+            ),
+            MutantOutcome(
+                Mutant("f.gd", Span(2, 13, 2, 14), "numeric", "0", "1", ignore_reason="equivalent"),
+                Verdict.IGNORED,
+            ),
+            MutantOutcome(
+                Mutant("f.gd", Span(2, 15, 2, 18), "boolean", "and", "or"), Verdict.SURVIVED
+            ),
+        )
+    )
+    killed, ignored, survived = stryker_report(run, "f.gd", _SRC, "gdscript")["files"]["f.gd"][
+        "mutants"
+    ]
+    assert "description" not in killed and "statusReason" not in killed
+    assert "description" not in ignored and ignored["statusReason"] == "equivalent"  # unchanged
+    assert survived["description"] and survived["statusReason"]  # both populated for the survivor
+
+
+def test_report_json_survivor_narrative_omits_console_only_decoration() -> None:
+    # The report fields are the trimmed narrative: the three sentences, none of the console block's
+    # box-drawing, caret, or the `more` docs link the HTML viewer draws for itself.
+    survivor = stryker_report(_run(), "f.gd", _SRC, "gdscript")["files"]["f.gd"]["mutants"][1]
+    blob = survivor["description"] + survivor["statusReason"]
+    assert "─" not in blob and "^" not in blob and "docs/survivors" not in blob
+
+
 def test_stryker_report_mutant_fields_and_location() -> None:
     first = stryker_report(_run(), "f.gd", _SRC, "gdscript")["files"]["f.gd"]["mutants"][0]
     assert first["id"] == "0"
