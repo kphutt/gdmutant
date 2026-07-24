@@ -62,6 +62,25 @@ against real Godot in CI (both runners, pinned to exact per-mutant outcomes).
 | **Python** | 3.12+ |
 | **GdUnit4** | optional — only for the GdUnit4 runner; the exit-code runner needs no addon |
 
+### GdUnit4 runner compatibility
+
+The GdUnit4 runner talks to GdUnit4 through its stable command-line contract — the
+`res://addons/gdUnit4/bin/GdUnitCmdTool.gd` entry point, its flags, and JUnit-XML output — which is
+unchanged across the range below. The Godot column is GdUnit4's own requirement for each version.
+
+| GdUnit4 | Godot (GdUnit4's own requirement) | gdmutant support |
+|---|---|---|
+| v6.1.x | 4.5 – 4.6.x | Supported |
+| v6.0.x | 4.5 – 4.5.2 | Supported |
+
+**Tested against:** GdUnit4 **v6.1.3** on **Godot 4.7** — the exact versions gdmutant's self-test
+runs. The other rows share the same CmdTool contract and are expected to work, but are not
+continuously exercised. v6.1.x is the largest in-the-wild bucket and v6.0.x is what the Godot Asset
+Library currently ships to new users, so gdmutant targets both.
+
+The **exit-code runner** needs no GdUnit4 addon at all — it works on any Godot (4.4+) that can run
+your headless test command.
+
 ## Install
 
 gdmutant is a dev tool, not a runtime dependency. Install it into your project from git at a
