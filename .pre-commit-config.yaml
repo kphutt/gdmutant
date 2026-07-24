@@ -14,14 +14,14 @@
 # resolved on Windows (no literal /bin/sh or /usr/bin/env path). The toolchain/lint/type/test hooks
 # call `uv` directly (uv is the pinned toolchain — see pyproject's [tool.uv]).
 #
-# `python`, NOT `python3` — measured on Windows 11 (Litmus P2, then verified from a Windows
+# `python`, NOT `python3` — measured on Windows 11 (flagged in review, then verified from a Windows
 # session): `python3` resolves ONLY via the Microsoft Store alias, and to a DIFFERENT interpreter
 # than `python` (3.13.14 vs 3.13.3 on the same box). Worse, on a machine without Store Python that
 # alias still exists and LAUNCHES THE MICROSOFT STORE rather than running anything — hanging every
 # hook here on a stock python.org install. python.org ships `python.exe`; uv provides `python` as
 # well, and CONTRIBUTING.md requires it.
 #
-# One further gap this closes, found live via Litmus review: a fresh clone with no local `gitleaks`
+# One further gap this closes, found live in review: a fresh clone with no local `gitleaks`
 # binary got the pre-commit-stage hook failing with "gitleaks: command not found" -- that script
 # degrades gracefully instead of hard-requiring the tool.
 default_stages: [pre-push]

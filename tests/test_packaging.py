@@ -1,4 +1,4 @@
-"""Packaging-hygiene guards (LOD-102).
+"""Packaging-hygiene guards.
 
 These assert the distribution *metadata* stays correct without building an artifact: the PEP 561
 `py.typed` marker ships, the strict-typing signal is declared, and the sdist ships from an explicit
