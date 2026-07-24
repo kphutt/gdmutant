@@ -1,0 +1,51 @@
+name: Feature Request
+description: Suggest an idea, a mutation operator, or a new use case for gdmutant
+title: "Brief description of the feature"
+labels: ["enhancement"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Thanks for suggesting an improvement!
+        - Please search [existing issues](https://github.com/kphutt/gdmutant/issues) to avoid duplicates.
+        - For an open-ended idea or a question about direction, consider a
+          [Discussion](https://github.com/kphutt/gdmutant/discussions) first.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do that gdmutant doesn't support yet?
+      placeholder: |
+        Example: "gdmutant has no operator for `match` statement arms, so a bug in a match branch
+        never shows up as a survivor."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: |
+        What you'd like to see. For a new mutation operator, an example of the source before/after
+        helps a lot.
+      placeholder: |
+        ```gd
+        # before
+        match state:
+            IDLE: return true
+        # after (proposed mutant)
+        match state:
+            IDLE: return false
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Anything you've already tried, worked around, or ruled out.
+    validations:
+      required: false
