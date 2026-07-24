@@ -9,8 +9,8 @@ It is **env-gated** on ``GDMUTANT_GDUNIT4_CLONE`` (the path to a GdUnit4 checkou
 ``uv run pytest`` — local dev and the ``verify`` CI job — auto-skips it with zero config. Run it
 with, e.g.::
 
-    git clone https://github.com/godot-gdunit-labs/gdUnit4 [dev-path]
-    GDMUTANT_GDUNIT4_CLONE=[dev-path] uv run pytest tests/test_dogfood_gdunit4.py
+    git clone https://github.com/godot-gdunit-labs/gdUnit4 ~/gdunit4-dogfood
+    GDMUTANT_GDUNIT4_CLONE=~/gdunit4-dogfood uv run pytest tests/test_dogfood_gdunit4.py
 
 Both checks are **Godot-free** (gdtoolkit parse + the ``--dry-run`` mutant-generation path), so they
 are fast (~4s) and cheap enough to gate. The *real*-Godot run of GdUnit4's own suite for survivor
