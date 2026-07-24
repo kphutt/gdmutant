@@ -66,6 +66,31 @@ def test_run_mutation_prints_summary_and_returns_zero_with_survivors(
     assert str(path) in out  # each survivor line names the real source path
 
 
+def test_all_survived_warning_reaches_stderr_when_no_mutant_is_killed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A suite that always passes (a marker that never appears in the source) mimics tests that never
+    # touch the file: every mutant survives, so the warning fires on stderr — score/exit unchanged.
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), "NEVER_IN_SOURCE"))
+    assert rc == 0  # a warning, not an error
+    captured = capsys.readouterr()
+    assert "evaluated mutants survived" in captured.err  # warning is on stderr
+    assert str(path) in captured.err  # names the mutated file
+    assert "Mutation score:" in captured.out  # score still printed (unchanged)
+
+
+def test_all_survived_warning_absent_when_a_mutant_is_killed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A suite that catches the `>` -> `>=` mutant means a test does reach the file: not the vacuous
+    # case, so no warning.
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), ">="))
+    assert rc == 0
+    assert "evaluated mutants survived" not in capsys.readouterr().err
+
+
 def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = _gd(tmp_path)
     report_file = tmp_path / "report.json"
@@ -938,6 +963,78 @@ def test_main_command_runner_rejects_unbalanced_quotes(
     assert capsys.readouterr().err.startswith("error: could not parse --command:")
 
 
+def test_split_command_posix_uses_default_shlex(monkeypatch: pytest.MonkeyPatch) -> None:
+    # On a POSIX host, the standard (correct) shlex default applies: quotes strip, forward-slash
+    # paths pass through untouched, and a quoted path with spaces stays one token.
+    monkeypatch.setattr(cli.os, "name", "posix")
+    assert cli._split_command("godot --script res://t/run.gd") == [
+        "godot",
+        "--script",
+        "res://t/run.gd",
+    ]
+    assert cli._split_command('godot --script "res://my test/run.gd"') == [
+        "godot",
+        "--script",
+        "res://my test/run.gd",
+    ]
+
+
+def test_split_command_windows_keeps_backslash_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The path parsing bug: default POSIX shlex eats backslashes, turning C:\Godot\godot.exe into
+    # C:Godotgodot.exe ("runner not found"). On Windows we must keep them literal. This assertion
+    # fails on the old posix-only split.
+    monkeypatch.setattr(cli.os, "name", "nt")
+    assert cli._split_command(r"C:\Godot\godot.exe --headless res://t/run.gd") == [
+        r"C:\Godot\godot.exe",
+        "--headless",
+        "res://t/run.gd",
+    ]
+
+
+def test_split_command_windows_forward_slash_path_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A forward-slash Windows path (which CreateProcess accepts) is what many users naturally type;
+    # it must pass through with no mangling and no rewrite.
+    monkeypatch.setattr(cli.os, "name", "nt")
+    assert cli._split_command("C:/Godot/godot.exe --headless") == [
+        "C:/Godot/godot.exe",
+        "--headless",
+    ]
+
+
+def test_split_command_windows_strips_quotes_from_spaced_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Non-POSIX lexing leaves a quoted token's surrounding quotes in place; a spaced path like
+    # "C:\Program Files\Godot\godot.exe" must have them stripped so CreateProcess can resolve it.
+    monkeypatch.setattr(cli.os, "name", "nt")
+    assert cli._split_command(r'"C:\Program Files\Godot\godot.exe" --headless') == [
+        r"C:\Program Files\Godot\godot.exe",
+        "--headless",
+    ]
+
+
+def test_split_command_windows_rewrites_msys_drive_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An MSYS/Git-Bash drive path (/c/Godot/godot.exe) is not resolvable by CreateProcess; it must
+    # be rewritten to Windows form. No lexer mode fixes this — it's a path-shape rewrite.
+    monkeypatch.setattr(cli.os, "name", "nt")
+    assert cli._split_command("/c/Godot/godot.exe --headless") == [
+        r"C:\Godot\godot.exe",
+        "--headless",
+    ]
+
+
+def test_split_command_windows_unbalanced_quote_still_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Switching to posix=False on Windows must not lose the unbalanced-quote guard the CLI relies on
+    # to return a clean exit-2 (rather than a raw traceback).
+    monkeypatch.setattr(cli.os, "name", "nt")
+    with pytest.raises(ValueError, match="No closing quotation"):
+        cli._split_command('godot "unterminated')
+
+
 def test_main_command_without_runner_command_is_flagged_not_dropped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1349,6 +1446,26 @@ def test_run_mutation_paths_aggregates_and_writes_merged_report(
     assert "2 files:" in out and "Mutation score:" in out  # per-file breakdown + one aggregate
     data = json.loads(report.read_text(encoding="utf-8"))
     assert set(data["files"]) == {a, b}  # one merged report keyed by path
+
+
+def test_all_survived_warning_fires_on_a_multi_file_run_with_no_kills(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Across every file the baseline passed but nothing was detected -> the aggregate warning fires.
+    a, b = _multi_project(tmp_path)
+    rc = cli.run_mutation_paths([a, b], str(tmp_path), RecordingRunner())
+    assert rc == 0
+    assert "evaluated mutants survived" in capsys.readouterr().err
+
+
+def test_all_survived_warning_absent_on_a_multi_file_run_with_a_kill(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # One mutant killed anywhere means a test reaches the code -> not the vacuous case, no warning.
+    a, b = _multi_project(tmp_path)
+    rc = cli.run_mutation_paths([a, b], str(tmp_path), MarkerRunner(a, ">="))
+    assert rc == 0
+    assert "evaluated mutants survived" not in capsys.readouterr().err
 
 
 def test_run_mutation_paths_baseline_failure_returns_one(

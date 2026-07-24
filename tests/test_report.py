@@ -6,7 +6,12 @@ from pathlib import Path
 from gdmutant.engine.explain import render_survivor
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
 from gdmutant.engine.mutants import Mutant
-from gdmutant.engine.report import console_summary, html_report, stryker_report
+from gdmutant.engine.report import (
+    all_survived_warning,
+    console_summary,
+    html_report,
+    stryker_report,
+)
 from gdmutant.engine.spans import Span
 
 _SRC = "func f(a, b):\n\treturn a > b and a < b\n\treturn a + b\n"
@@ -272,6 +277,58 @@ def test_console_summary_score_na_when_no_killable_mutants() -> None:
     out = console_summary(run)
     assert "Mutation score: n/a" in out
     assert "Survivors" not in out  # none to list
+
+
+def _survivor(path: str, col: int) -> MutantOutcome:
+    mutant = Mutant(path, Span(2, col, 2, col + 1), "boolean", "and", "or")
+    return MutantOutcome(mutant, Verdict.SURVIVED)
+
+
+def test_all_survived_warning_fires_when_baseline_passed_and_every_mutant_survived() -> None:
+    # The vacuous "all survived" fingerprint: zero detected, several survivors. The warning names
+    # the mutated file and points at the likely fix — the tests never touched it.
+    run = MutationRun((_survivor("game/board.gd", 9), _survivor("game/board.gd", 15)))
+    warning = all_survived_warning(run)
+    assert warning is not None
+    assert "all 2 evaluated mutants survived" in warning
+    assert "game/board.gd" in warning  # names the mutated file
+    assert "--tests" in warning  # points at the fix
+
+
+def test_all_survived_warning_silent_when_a_mutant_was_detected() -> None:
+    # One kill means a test does reach this file — not the vacuous case, so no warning (option A
+    # only catches a *total* miss; a partial miss is a weak suite reported honestly).
+    run = MutationRun(
+        (
+            MutantOutcome(
+                Mutant("f.gd", Span(2, 9, 2, 10), "comparison", ">", ">="), Verdict.KILLED
+            ),
+            _survivor("f.gd", 15),
+            _survivor("f.gd", 21),
+        )
+    )
+    assert all_survived_warning(run) is None
+
+
+def test_all_survived_warning_silent_on_a_single_surviving_mutant() -> None:
+    # Don't cry wolf on a 1-of-1 survivor: too small a sample to tell "tests miss this file" apart
+    # from one genuinely-surviving mutant.
+    run = MutationRun((_survivor("f.gd", 9),))
+    assert all_survived_warning(run) is None
+
+
+def test_all_survived_warning_ignores_unscored_verdicts() -> None:
+    # invalid/error/ignored don't count toward the score, so a run that is all-survived among its
+    # scored mutants still warns even with unscored mutants mixed in.
+    run = MutationRun(
+        (
+            _survivor("f.gd", 9),
+            _survivor("f.gd", 15),
+            MutantOutcome(Mutant("f.gd", Span(3, 1, 3, 2), "x", "a", "b"), Verdict.INVALID),
+            MutantOutcome(Mutant("f.gd", Span(4, 1, 4, 2), "x", "a", "b"), Verdict.ERROR),
+        )
+    )
+    assert all_survived_warning(run) is not None
 
 
 def test_html_report_embeds_the_report_and_the_pinned_viewer() -> None:
