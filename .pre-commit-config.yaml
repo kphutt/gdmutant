@@ -1,6 +1,8 @@
 # Standard pre-commit config (https://pre-commit.com) — self-contained, so any clone (yours or a
 # contributor's) gets the same checks with `pre-commit install --hook-type pre-commit --hook-type
-# pre-push`. Two stages, matching the tradeoff CI already makes:
+# pre-push`. These hooks are OPTIONAL: GitHub Actions is the authoritative gate, and this config only
+# mirrors that CI locally as a convenience — installing it never changes what a merge requires.
+# Two stages, matching the tradeoff CI already makes:
 #   - pre-commit (every commit): gitleaks only — cheap, catches a secret before it's even committed.
 #   - pre-push (before it leaves the machine): the full Verify job, mirrored 1:1 from ci.yml so
 #     local and CI can't drift apart — same commands, not a reimplementation.
