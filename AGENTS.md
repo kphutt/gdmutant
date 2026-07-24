@@ -38,7 +38,7 @@ Godot-free); run them when touching the adapter, runners, or CLI file-handling:
 GDMUTANT_GODOT=godot uv run pytest tests/test_selftest_live.py
 # Dogfood harness: run gdmutant against a real GdUnit4 checkout — parse coverage + the
 # LOD-211 whole-directory regression (Godot-free, ~5s). Point it at any GdUnit4 clone:
-GDMUTANT_GDUNIT4_CLONE=~/dev/gdunit4-dogfood uv run pytest tests/test_dogfood_gdunit4.py
+GDMUTANT_GDUNIT4_CLONE=~/gdunit4-dogfood uv run pytest tests/test_dogfood_gdunit4.py
 ```
 
 ## Tech stack (decided)
@@ -84,6 +84,6 @@ Live docs open with YAML frontmatter (`type` / `status` / `created`); build only
 
 ## Non-goals (v0.1)
 
-Coverage-gated mutant selection, the HTML report, incremental/diff mode, the optional LLM-semantic
-mutant mode, and any second-language adapter (TypeScript delegates to Stryker, or is skipped).
+Coverage-gated mutant selection, the optional LLM-semantic mutant mode, and any second-language
+adapter (TypeScript delegates to Stryker, or is skipped).
 Finishing the GDScript path on a real fixture beats breadth.
