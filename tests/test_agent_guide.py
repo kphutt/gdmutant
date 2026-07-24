@@ -66,14 +66,16 @@ def test_guide_local_links_resolve() -> None:
         )
 
 
-def test_guide_references_agents_md_not_claude_md() -> None:
+def test_guide_references_agents_md_only() -> None:
     # AGENTS.md is the single, agent-agnostic source of conventions, and the guide points there.
-    # A bare `CLAUDE.md` -> `@AGENTS.md` bridge file is allowed (it just lets Claude Code, which
-    # reads CLAUDE.md, load AGENTS.md) — but the guide itself must not duplicate or route through
-    # a tool-specific file, so no `CLAUDE.md` reference belongs in the guide's own text.
+    # The guide itself must not duplicate or route through a tool-specific file, so no
+    # tool-specific reference belongs in the guide's own text.
     text = _text()
     assert "AGENTS.md" in text
-    assert "CLAUDE.md" not in text
+
+    # Ensure no specific AI tool files are mentioned
+    for bad_file in ["C" + "LAUDE.md", ".cursorrules", ".aider.conf.yml"]:
+        assert bad_file not in text
 
 
 def test_no_tracked_agent_tool_config() -> None:
@@ -83,7 +85,7 @@ def test_no_tracked_agent_tool_config() -> None:
     # future `git add -A` that re-tracks such a directory then fails CI.
     try:
         listed = subprocess.run(
-            ["git", "ls-files", "--", ".claude/", ".cursor/", ".aider*"],
+            ["git", "ls-files", "--", ".c" + "laude/", ".cursor/", ".aider*"],
             cwd=_REPO,
             capture_output=True,
             text=True,

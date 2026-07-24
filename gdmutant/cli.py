@@ -822,10 +822,10 @@ def _split_command(command: str) -> list[str]:
 
     Default ``shlex.split`` runs in POSIX mode, where a backslash is an *escape* — so on Windows an
     unquoted native path like ``C:\\Godot\\godot.exe`` loses its separators (``C:Godotgodot.exe``)
-    and the runner is "not found" (LOD-240). On Windows we lex in non-POSIX mode instead, which
-    keeps backslashes literal — matching what a user naturally types and how `CreateProcess` reads
-    an argv. Unbalanced quotes still raise ``ValueError`` in either mode, so the caller's clean
-    exit-2 for that case is unaffected.
+    and the runner is "not found" (a known path parsing bug). On Windows we lex in non-POSIX
+    mode instead, which keeps backslashes literal — matching what a user naturally types and how
+    `CreateProcess` reads an argv. Unbalanced quotes still raise ``ValueError`` in either mode, so
+    the caller's clean exit-2 for that case is unaffected.
 
     Two Windows fix-ups follow, because the host runs the command via `CreateProcess` (never a
     shell), so only Windows-resolvable tokens work:

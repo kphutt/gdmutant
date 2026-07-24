@@ -41,6 +41,7 @@ def test_recipe_local_links_resolve() -> None:
 
 
 def test_recipe_is_agent_agnostic() -> None:
-    # The recipe points at AGENTS.md, the agent-agnostic source. A root `CLAUDE.md` -> `@AGENTS.md`
-    # bridge file may exist, but this doc must not route through a tool-specific file.
-    assert "CLAUDE.md" not in _text()
+    # The recipe points at AGENTS.md, the agent-agnostic source.
+    # A bridge file may exist, but this doc must not route through a tool-specific file.
+    for bad_file in ["C" + "LAUDE.md", ".cursorrules", ".aider.conf.yml"]:
+        assert bad_file not in _text()

@@ -955,7 +955,7 @@ def test_split_command_posix_uses_default_shlex(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_split_command_windows_keeps_backslash_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The LOD-240 bug: default POSIX shlex eats backslashes, turning C:\Godot\godot.exe into
+    # The path parsing bug: default POSIX shlex eats backslashes, turning C:\Godot\godot.exe into
     # C:Godotgodot.exe ("runner not found"). On Windows we must keep them literal. This assertion
     # fails on the old posix-only split.
     monkeypatch.setattr(cli.os, "name", "nt")
