@@ -1,0 +1,120 @@
+name: Bug Report
+description: Report a gdmutant bug
+title: "Brief description of the issue"
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Thanks for taking the time to report a bug!
+        - Please search [existing issues](https://github.com/kphutt/gdmutant/issues) for a duplicate
+          before filing yours.
+        - Try the latest version first — mutation testing depends closely on the GDScript adapter and
+          your test runner, and a fix may already have landed.
+        - If your project is public, a minimal repro (or the exact source file + test command) is the
+          single most useful thing you can attach — mutant behavior is very sensitive to real GDScript.
+
+  - type: input
+    id: gdmutant-version
+    attributes:
+      label: gdmutant version
+      description: Output of `gdmutant --version` (or `uv run gdmutant --version`)
+      placeholder: gdmutant 0.3.0
+    validations:
+      required: true
+
+  - type: input
+    id: godot-version
+    attributes:
+      label: Godot version
+      description: Output of `godot --version`
+      placeholder: 4.4.0.stable.official [478e246c1]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runner-type
+    attributes:
+      label: Test runner
+      description: Which runner is gdmutant driving?
+      options:
+        - GdUnit4 runner (default, reads JUnit XML)
+        - Exit-code runner (--runner command) with GUT
+        - Exit-code runner (--runner command) with GdUnit4's CLI
+        - Exit-code runner (--runner command) with a hand-rolled SceneTree harness
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: runner-version
+    attributes:
+      label: Test runner version
+      description: The GdUnit4 or GUT addon version (or "n/a" for a hand-rolled harness)
+      placeholder: GdUnit4 5.0.2
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      description: OS and version you're running gdmutant on
+      placeholder: Windows 11 / macOS 14 Sonoma / Ubuntu 22.04
+    validations:
+      required: true
+
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: What happened / what did you expect?
+      description: A clear, concise description of the bug and the behavior you expected instead.
+      placeholder: |
+        **What happened?**
+        Describe what actually occurred.
+
+        **What did you expect to happen?**
+        Describe the expected behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact gdmutant command
+      description: The full command line you ran, including flags (redact paths/secrets as needed).
+      render: shell
+      placeholder: |
+        uv run gdmutant run path/to/module.gd --project . \
+          --runner command --command "godot --headless --script res://tests/run_tests.gd"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console output / logs
+      description: |
+        Paste the relevant console output — a mutant listing, an error traceback, or an unexpected
+        survivor/killed verdict. This is rendered as a code block automatically.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction (optional)
+      description: |
+        A small `.gd` file (and its test) that reproduces the issue, or a link to a minimal Godot
+        project. Not every bug needs one, but if the issue is adapter- or mutant-specific, this is
+        what turns it into a fixable one.
+      placeholder: |
+        ```gd
+        # the source line the mutant touches
+        func example(a: int, b: int) -> bool:
+            return a > b
+        ```
+    validations:
+      required: false
