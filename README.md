@@ -20,7 +20,7 @@ gdmutant's whole job — and it widens when an AI writes the tests, since a mode
 it just wrote. Mutation is one of the few executable, model-independent signals that a test actually
 bites.
 
-It's a standalone CLI (no AI required), the first usable mutation tester for GDScript, validated
+It's a standalone CLI (no AI required), validated
 end-to-end against real Godot in CI. Reports use Stryker's `mutation-testing-elements` schema, so
 they render in tooling the JS/TS world already has.
 
