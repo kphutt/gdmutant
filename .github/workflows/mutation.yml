@@ -59,7 +59,7 @@ jobs:
         # Surviving mutants make `mutmut run` exit non-zero — expected here (documented equivalents),
         # so that alone must not fail the step. But a *baseline* failure (the suite doesn't run
         # cleanly unmutated) ALSO aborts mutmut, and a bare `|| true` would mask it as a green
-        # advisory run ([ticket]). Keep the run non-fatal, but re-raise the baseline signature.
+        # advisory run. Keep the run non-fatal, but re-raise the baseline signature.
         run: |
           uv run mutmut run > mutmut-run.log 2>&1 || true
           cat mutmut-run.log
@@ -82,12 +82,12 @@ jobs:
           evaluated = killed + survived + d.get("timeout", 0) + d.get("suspicious", 0)
           # A baseline failure (or a missing/empty stats file) means mutmut evaluated ZERO mutants —
           # indistinguishable from "all killed" unless we check. Fail loudly instead of masking it
-          # as a green advisory run ([ticket]); a real run always evaluates >0 mutants.
+          # as a green advisory run; a real run always evaluates >0 mutants.
           if evaluated == 0:
               print("## Mutation testing (mutmut) — BASELINE FAILED ⚠️")
               print()
               print("mutmut evaluated **0 mutants** — the suite does not run cleanly unmutated, so "
-                    "no score exists. This advisory job is red on purpose ([ticket]).")
+                    "no score exists. This advisory job is red on purpose.")
               sys.exit(1)
           scored = killed + survived
           score = f"{100 * killed / scored:.1f}%" if scored else "n/a"

@@ -23,7 +23,7 @@ from gdmutant.engine.runner import SuiteResult
 
 # git exports these to point subprocesses at the *invoking* repo. When pytest runs inside a git
 # hook (e.g. pre-push), inheriting them makes `_git` operate on the hook's repo instead of the
-# intended tmp dir — corrupting every fixture that builds a throwaway repo ([ticket]).
+# intended tmp dir — corrupting every fixture that builds a throwaway repo.
 _GIT_ENV_LEAKS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 
 
@@ -88,7 +88,7 @@ def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFi
 def test_run_mutation_writes_html_report(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # --html writes a ready-to-open page with the mutation-testing-elements viewer ([ticket]).
+    # --html writes a ready-to-open page with the mutation-testing-elements viewer.
     path = _gd(tmp_path)
     html_file = tmp_path / "report.html"
     rc = run_mutation(
@@ -378,7 +378,7 @@ def test_run_mutation_preflights_a_bad_report_dir_before_running(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # A --json target in a nonexistent directory must fail *before* booting Godot per mutant
-    # ([ticket]), not after a multi-minute run — so the runner is never invoked.
+    # not after a multi-minute run — so the runner is never invoked.
     path = _gd(tmp_path)
     bad_json = tmp_path / "missing" / "report.json"
     rc = run_mutation(str(path), str(tmp_path), RaiseIfRunRunner(), json_path=str(bad_json))
@@ -411,7 +411,7 @@ def test_run_mutation_missing_addon_returns_two_with_actionable_hint(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # A GdUnit4 baseline that wrote no report AND no addon installed is an addon-absent *setup*
-    # error (exit 2) — surface an actionable hint, not a raw stderr dump ([ticket]). No addon here.
+    # error (exit 2) — surface an actionable hint, not a raw stderr dump. No addon here.
     path = _gd(tmp_path)
     rc = run_mutation(str(path), str(tmp_path), NoReportRunner())
     assert rc == 2
@@ -554,7 +554,7 @@ def test_parser_run_subcommand() -> None:
         ["run", "f.gd", "--godot", "godot4", "--tests", "res://t", "--json", "r.json"]
     )
     assert args.command == "run"
-    assert args.source == ["f.gd"]  # nargs="+" -> a list, even for one path ([ticket])
+    assert args.source == ["f.gd"]  # nargs="+" -> a list, even for one path
     assert args.godot == "godot4"
     assert args.tests == "res://t"
     assert args.json_path == "r.json"
@@ -663,7 +663,7 @@ def test_main_default_project_uses_the_source_dir(
     assert runner.seen[0] == str(path.resolve().parent)  # defaulted to the source's directory
 
 
-# --- .gdmutant.toml config file ([ticket]) ---------------------------------------------------------
+# --- .gdmutant.toml config file ---------------------------------------------------------
 
 
 def test_load_config_absent_returns_empty(tmp_path: Path) -> None:
@@ -768,7 +768,7 @@ def test_main_malformed_config_exits_two(
 
 
 def test_config_require_clean_can_be_overridden_off_by_cli(tmp_path: Path) -> None:
-    # [ticket] follow-up: a config `require-clean = true` must be overridable back OFF for a single
+    # Follow-up: a config `require-clean = true` must be overridable back OFF for a single
     # run via --no-require-clean — the old store_true action had no such escape hatch.
     cfg = tmp_path / ".gdmutant.toml"
     cfg.write_text("require-clean = true\n", encoding="utf-8")
@@ -956,7 +956,7 @@ def test_main_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None
     assert "usage" in capsys.readouterr().out  # the help text, not just a silent exit 0
 
 
-# ---- [ticket]: warn before mutating an uncommitted working tree ----------------------------------
+# ---- warn before mutating an uncommitted working tree ----------------------------------
 
 
 # Exact messages, pinned so mutmut's string mutation is caught.
@@ -1024,7 +1024,7 @@ def test_has_uncommitted_changes_false_when_git_unavailable(
 
 
 def test_git_helper_isolated_from_hook_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # [ticket]: pytest run from a git hook inherits GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE pointing at
+    # pytest run from a git hook inherits GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE pointing at
     # the hook's repo. `_git` must scrub them so `git init` lands in the intended dir, not the decoy
     # GIT_DIR. Without the scrub, git would create the repo at GIT_DIR and leave `work/.git` absent.
     decoy = tmp_path / "decoy.git"
@@ -1097,7 +1097,7 @@ def test_run_mutation_require_clean_allows_clean_tree(
 def test_run_mutation_read_error_precedes_dirty_warning(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Ordering (the [ticket] re-review nit): a tracked-but-deleted source is BOTH dirty (git sees the
+    # Ordering (the re-review nit): a tracked-but-deleted source is BOTH dirty (git sees the
     # deletion) and unreadable. The read error must come first, with no misleading "Continuing ..."
     # dirty-warning printed ahead of it. Guards the git check sitting after _load_gdscript.
     repo = _committed_repo(tmp_path)
@@ -1138,7 +1138,7 @@ def test_main_threads_require_clean_to_run_mutation(
     assert captured["require_clean"] is False
 
 
-# --- multi-file / directory targets ([ticket]) ------------------------------------------------------
+# --- multi-file / directory targets ------------------------------------------------------
 
 
 def _multi_project(tmp_path: Path) -> tuple[str, str]:
@@ -1212,7 +1212,7 @@ def test_expand_sources_duplicate_dir_args_do_not_inflate_skip_count(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # Passing the same directory twice must not double-count skipped test files — the note is meant
-    # to be a trustworthy signal, and the file set is already de-duped (P3, [internal-tool] review of #53).
+    # to be a trustworthy signal, and the file set is already de-duped (from review of #53).
     a, b = _multi_project(tmp_path)
     _write_test_suites(tmp_path)
     result = cli._expand_sources([str(tmp_path), str(tmp_path)])
@@ -1256,7 +1256,7 @@ def test_expand_sources_exclude_note_silent_when_file_also_named_explicitly(
 ) -> None:
     # The escape hatch in practice: exclude a glob for the dir scan, then name one file back in.
     # That file IS mutated, so the "excluded ... name one explicitly" note must not fire for it
-    # (would tell the user to do what they just did). [internal-tool] P2 on #55.
+    # (would tell the user to do what they just did). Flagged in review of #55.
     a, b = _multi_project(tmp_path)
     result = cli._expand_sources([str(tmp_path), b], exclude=["b.gd"])
     assert result == sorted([a, b])  # b.gd excluded from the scan but mutated via the explicit arg
@@ -1266,7 +1266,7 @@ def test_expand_sources_exclude_note_silent_when_file_also_named_explicitly(
 def test_expand_sources_skip_note_silent_when_test_file_also_named_explicitly(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Same rule for the test-skip note (the pre-existing analog [internal-tool] flagged): a test file both
+    # Same rule for the test-skip note (the pre-existing analog review flagged): a test file both
     # under the dir scan and named explicitly is mutated, so it must not be counted as skipped.
     a, _b = _multi_project(tmp_path)
     suite = tmp_path / "player_test.gd"
@@ -1430,7 +1430,7 @@ def test_run_mutation_paths_dirty_tree_warns_or_refuses(
     assert "uncommitted changes" in capsys.readouterr().err
 
 
-# --- resilience: one unparseable file must not abort a multi-file run ([ticket], GdUnit4) ---
+# --- resilience: one unparseable file must not abort a multi-file run (GdUnit4) ---
 
 
 def test_drop_unparseable_partitions_by_readability_and_parse(tmp_path: Path) -> None:
@@ -1504,7 +1504,7 @@ def test_main_two_explicit_files_one_unparseable_still_exits_two(
 ) -> None:
     # The resilience gate keys on directory-discovered vs explicitly-named, NOT on file count:
     # naming two files where one can't parse must stay a hard exit-2, exactly as naming one does.
-    # (A count-only gate silently dropped the 2nd explicit file and exited 0 — [ticket] [internal-tool] P1.)
+    # (A count-only gate silently dropped the 2nd explicit file and exited 0.)
     good = tmp_path / "good.gd"
     good.write_text("func f():\n\treturn 1\n", encoding="utf-8")
     bad = tmp_path / "bad_explicit.gd"
@@ -1514,7 +1514,7 @@ def test_main_two_explicit_files_one_unparseable_still_exits_two(
     assert "skipped" not in capsys.readouterr().err
 
 
-# --- diff-scoped / incremental mode (--since, [ticket]) --------------------------------------------
+# --- diff-scoped / incremental mode (--since) --------------------------------------------
 
 # Two mutable lines (2 and 4) so a change to one is distinguishable from the other under --since.
 _TWO_LINE_SRC = "func f(x) -> bool:\n\treturn x > 0\nfunc g(x) -> bool:\n\treturn x < 0\n"
@@ -1550,7 +1550,7 @@ def test_changed_lines_bad_ref_returns_none(
 
 def test_changed_lines_treats_an_untracked_new_file_as_fully_changed(tmp_path: Path) -> None:
     # git diff is silent on a never-`git add`-ed file, so a brand-new .gd must be treated as fully
-    # changed (every line new), not silently skipped as "no changes". [internal-tool] P2 on #61.
+    # changed (every line new), not silently skipped as "no changes". Flagged in review of #61.
     _git(tmp_path, "init")
     _git(tmp_path, "config", "user.email", "t@example.com")
     _git(tmp_path, "config", "user.name", "Test")

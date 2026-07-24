@@ -1,5 +1,5 @@
 """Survivor explanations — turn a surviving mutant into a clear "here's the gap, here's why it
-matters, here's where to start" narrative ([ticket]).
+matters, here's where to start" narrative.
 
 Every mutation tool only *locates* a survivor and shows the diff; the untested-gap narrative is
 what makes it actionable. The copy follows the diagnostics gold standard (rustc/Clippy/Ruff/

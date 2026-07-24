@@ -20,7 +20,7 @@ def test_describe_change_renders_a_normal_swap() -> None:
 
 def test_describe_change_renders_an_empty_replacement_as_deleted() -> None:
     # A deletion operator (unary-`not` removal) has an empty replacement; it must not render as a
-    # dangling "not -> " with nothing after the arrow ([ticket]).
+    # dangling "not -> " with nothing after the arrow.
     m = Mutant("x.gd", Span(1, 8, 1, 11), "logical-not", "not", "")
     assert m.describe_change() == "not -> (deleted)"
 

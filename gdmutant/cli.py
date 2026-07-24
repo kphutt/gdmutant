@@ -111,7 +111,7 @@ def _missing_executable_hint(filename: str) -> str:
 
     Generic by default (install it / pass its full path); adds the macOS Godot app-bundle path when
     the missing binary looks like Godot — the single most common first-run failure, since most Godot
-    users are on macOS where Godot is never on PATH ([ticket])."""
+    users are on macOS where Godot is never on PATH."""
     lines = [
         f"error: could not run the test suite — executable {filename!r} not found.",
         "  Install it and put it on your PATH, or pass its full path with --godot.",
@@ -130,7 +130,7 @@ def _gdunit4_addon_hint(error: BaselineFailed, project_dir: str) -> str | None:
     else None. This is the second most common first-run failure after a missing godot binary — but
     unlike a missing binary it surfaces as an opaque ``RuntimeError`` ("GdUnit4 wrote no report"),
     not ``FileNotFoundError``, so without this it fell through to a raw stderr dump with no next
-    step ([ticket]). Gated on both the GdUnit4-specific error signature *and* the addon being absent,
+    step. Gated on both the GdUnit4-specific error signature *and* the addon being absent,
     so it never fires for the `command` runner (whose projects have no addon by design)."""
     cause = error.__cause__
     if not (isinstance(cause, RuntimeError) and "wrote no report" in str(cause)):
@@ -202,7 +202,7 @@ def _is_test_file(full_path: Path, relative: Path) -> bool:
 def _gd_files_under(directory: Path) -> tuple[list[str], list[str]]:
     """Every mutable ``.gd`` file under `directory` (recursive), sorted, plus the test-file paths
     skipped. Skips ``addons/`` (third-party), any dot-directory (``.godot``, ``.git``, …), and — so
-    a directory target reports mutants on *your source*, not your test machinery ([ticket]) —
+    a directory target reports mutants on *your source*, not your test machinery —
     GdUnit4 / GUT test suites (`_is_test_file`). Name a test file explicitly to mutate it anyway;
     only directory expansion applies the test skip."""
     files: list[str] = []
@@ -249,10 +249,10 @@ def _matches_glob(path: str, patterns: list[str]) -> bool:
 def _expand_sources(paths: list[str], exclude: list[str] | None = None) -> list[str] | None:
     """Expand each given path (a ``.gd`` file or a directory) into a de-duplicated, sorted list of
     `.gd` files. A directory skips GdUnit4 test files (`_gd_files_under`) and any file matching an
-    `exclude` glob ([ticket]), noting how many of each (counted per *unique* file, so duplicate dir
+    `exclude` glob, noting how many of each (counted per *unique* file, so duplicate dir
     args don't inflate the note); an **explicit** file path is always included (name a test/excluded
     file to mutate it). Returns None (after printing an error) when nothing resolves to a `.gd` file
-    — the "point it at a directory" adoption case ([ticket]). Existence/validity of each file is
+    — the "point it at a directory" adoption case. Existence/validity of each file is
     checked later by `_load_gdscript`."""
     exclude = exclude or []
     collected: list[str] = []
@@ -298,7 +298,7 @@ _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 
 def _changed_lines(ref: str, files: list[str]) -> dict[str, set[int]] | None:
     """Map each of `files` (by resolved path) to the line numbers added/modified since git `ref`
-    ([ticket]) — the ``+`` side of ``git diff --unified=0``, i.e. the current-tree lines a change
+    the ``+`` side of ``git diff --unified=0``, i.e. the current-tree lines a change
     touched. A file with no changes maps to an empty set. Returns None (after printing an error) if
     `ref` is unknown or a file isn't in a git repo — a bad base ref is a setup error, not a silently
     empty run."""
@@ -343,7 +343,7 @@ def _changed_lines(ref: str, files: list[str]) -> dict[str, set[int]] | None:
 
 
 def _diff_scoped(base: Adapter, changed: dict[str, set[int]]) -> Adapter:
-    """Wrap `base` so it emits only mutants on lines changed since the base ref ([ticket]) — a filter
+    """Wrap `base` so it emits only mutants on lines changed since the base ref — a filter
     on the generated set, keyed by resolved path; a file with no changed lines yields no mutants.
     Application is unchanged, so this rides the engine's adapter seam (NF-3) with no engine edit."""
 
@@ -358,7 +358,7 @@ def _drop_unparseable(files: list[str]) -> tuple[list[str], list[str]]:
     """Partition `files` into (parseable, unparseable). A file that can't be read or that gdtoolkit
     can't parse — e.g. a grammar gap on real-world GDScript (a comment inside a line-continuation, a
     newer Godot annotation) — is dropped so one odd file in a directory doesn't abort the whole run
-    ([ticket]). Silent; the caller warns with a summary."""
+    Silent; the caller warns with a summary."""
     good: list[str] = []
     bad: list[str] = []
     for candidate in files:
@@ -399,7 +399,7 @@ def _warn_unknown_ignore_operators(source: str) -> None:
 def _report_path_problem(path: str | None, flag: str, *, stdout_ok: bool) -> str | None:
     """A human message (naming `flag`) if a report `path` can't be written, else None — checked
     *before* the run so a long pass (minutes of booting Godot per mutant) never ends on an avoidable
-    write error ([ticket]). ``None`` (no report) is always fine; only a real file path is validated,
+    write error. ``None`` (no report) is always fine; only a real file path is validated,
     and only its parent directory (the file itself needn't exist yet). ``-`` means stdout, valid
     only where `stdout_ok` (``--json``); for a file-only flag (``--html``) it's rejected rather than
     written as a file literally named ``-``."""
@@ -417,7 +417,7 @@ def _report_path_problem(path: str | None, flag: str, *, stdout_ok: bool) -> str
 
 def list_mutants(source_path: str, only_lines: set[int] | None = None) -> int:
     """Print every mutant gdmutant would generate for `source_path` **without running any tests** —
-    a Godot-free way to see the tool work. With `only_lines` (diff-scoped, [ticket]) only mutants on
+    a Godot-free way to see the tool work. With `only_lines` (diff-scoped) only mutants on
     those lines are listed. Returns 0, or 2 if the source can't be read/parsed."""
     source = _load_gdscript(source_path)
     if source is None:
@@ -467,7 +467,7 @@ def run_mutation(
     if not Path(project_dir).is_dir():
         print(f"error: project directory not found: {project_dir}", file=sys.stderr)
         return 2
-    # Preflight the report paths up front ([ticket]): a run boots Godot per mutant for minutes, so an
+    # Preflight the report paths up front: a run boots Godot per mutant for minutes, so an
     # unwritable --json/--html target must fail now, not after the whole pass completes.
     for problem in (
         _report_path_problem(json_path, "--json", stdout_ok=True),
@@ -476,7 +476,7 @@ def run_mutation(
         if problem is not None:
             print(f"error: {problem}", file=sys.stderr)
             return 2
-    # In-place-mutation safety ([ticket]): the run edits the source file per mutant. Warn (or, with
+    # In-place-mutation safety: the run edits the source file per mutant. Warn (or, with
     # require_clean, refuse) on a dirty tree so a hard interrupt can't lose uncommitted work.
     # Ordered after the read/parse validation above so a genuine read error is reported first,
     # not preceded by a "Continuing ..." warning.
@@ -555,7 +555,7 @@ def run_mutation_paths(
     jobs: int = 1,
 ) -> int:
     """Mutate several `.gd` files against one project in a single pass — the baseline runs **once**
-    and the score is aggregated across every file, with one merged report ([ticket]). Same return
+    and the score is aggregated across every file, with one merged report. Same return
     codes as `run_mutation`. Every source is loaded/validated before anything runs (a bad file fails
     fast). `jobs` parallelizes each file's mutants (see `run_mutation`)."""
     sources: dict[str, str] = {}
@@ -792,7 +792,7 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         help="list the mutants without running any tests (no Godot needed)",
     )
     # Config values seed the run subparser's defaults, so an explicit CLI flag still overrides them
-    # (argparse precedence: passed value > set_defaults > add_argument default). [ticket]. `exclude`
+    # (argparse precedence: passed value > set_defaults > add_argument default). `exclude`
     # is the exception: it's resolved in main() as config + CLI (additive, like every mutation
     # tool's exclude list), so it must NOT seed the append-action default here.
     if config:
@@ -828,7 +828,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("error: --jobs must be a positive integer", file=sys.stderr)
             return 2
         # Excludes are additive: any .gdmutant.toml `exclude` list plus every --exclude on the CLI
-        # (both narrow a directory target; neither can drop an explicitly named file). [ticket].
+        # (both narrow a directory target; neither can drop an explicitly named file).
         config_exclude = config.get("exclude")
         exclude = list(config_exclude) if isinstance(config_exclude, list) else []
         if args.exclude:
@@ -836,7 +836,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         files = _expand_sources(args.source, exclude)
         if files is None:
             return 2
-        # Resilience ([ticket]): a file discovered by expanding a *directory* that gdtoolkit can't
+        # Resilience: a file discovered by expanding a *directory* that gdtoolkit can't
         # parse is skipped with a warning and the rest are mutated — one odd file (a grammar gap on
         # real GDScript) shouldn't zero out a whole directory run. A file named *explicitly* stays
         # strict, at any count: it's never dropped here, so its parse error exits 2 downstream —
@@ -857,7 +857,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not files:
             print("error: no parseable .gd files in the given path(s)", file=sys.stderr)
             return 2
-        # Diff-scoped mode ([ticket]): restrict mutation to lines changed since a base ref. A bad ref
+        # Diff-scoped mode: restrict mutation to lines changed since a base ref. A bad ref
         # is a setup error; no changed lines at all is a clean no-op (exit 0), not a failed run.
         changed: dict[str, set[int]] | None = None
         if args.since:

@@ -174,7 +174,7 @@ def test_run_warms_the_import_cache_once_before_the_first_suite_run(
 ) -> None:
     # On a cold checkout GdUnit4's class_name types don't resolve until Godot's --import scan writes
     # the global class cache, so the runner must warm it — once — before the very first suite run,
-    # or the baseline fails to even load the tool ([ticket]). Assert the --import fires first, and
+    # or the baseline fails to even load the tool. Assert the --import fires first, and
     # exactly once across repeated runs (the cache persists across mutants).
     report = _report(tmp_path)
     calls: list[tuple[list[str], dict[str, object]]] = []
@@ -233,7 +233,7 @@ def test_prepare_retries_after_a_non_timeout_failure(
     # A non-timeout warm-up failure (a transient OSError, a permission error, …) must NOT poison the
     # warm-up on a reused runner instance: the retryable state is only marked done once the scan
     # actually completes, so a later run() (after the transient cause clears) re-attempts the
-    # import rather than silently skipping it forever ([ticket] [internal-tool] P3). A swallowed timeout, by
+    # import rather than silently skipping it forever. A swallowed timeout, by
     # contrast, IS deliberately marked done (don't re-attempt a slow import every mutant — see the
     # slow-import test above).
     report = _report(tmp_path)

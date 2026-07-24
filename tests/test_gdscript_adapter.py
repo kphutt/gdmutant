@@ -52,7 +52,7 @@ def test_bare_ignore_marks_every_operator_on_the_line_with_its_reason() -> None:
 
 
 def test_operator_scoped_ignore_marks_only_the_named_operator() -> None:
-    # The point of [ticket]: `ignore[comparison]` suppresses only the comparison mutant on the line;
+    # The point here: `ignore[comparison]` suppresses only the comparison mutant on the line;
     # the numeric mutants on the SAME line (the `0`) stay active — line-level was too coarse.
     src = "func f(value):\n\tif value < 0:  # gdmutant: ignore[comparison]\n\t\treturn 0\n"
     marked = {

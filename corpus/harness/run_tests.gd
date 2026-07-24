@@ -11,7 +11,7 @@ extends SceneTree
 ## Uses explicit `if …: fail()` / quit codes, never GDScript `assert()` — `assert()` is stripped
 ## from release-template builds, so a harness built on it would silently pass everything there.
 ##
-## Robustness ([ticket]): the target is loaded at RUNTIME and gated on `can_instantiate()`, NOT
+## Robustness: the target is loaded at RUNTIME and gated on `can_instantiate()`, NOT
 ## `preload`ed. A `preload` of a target that fails to compile makes THIS script fail to compile too,
 ## and `godot --script` then exits 0 on that load failure — a silent false PASS (a broken mutant
 ## would wrongly survive). `load()` sidesteps that, but it returns a NON-null *broken* GDScript on a
