@@ -4,9 +4,9 @@
 
 [project]
 name = "gdmutant"
-version = "0.0.0"                       # engine + CLI are built and validated against real Godot in
-                                        # CI; stays 0.0.0 until the first tagged release (see
-                                        # CHANGELOG.md).
+version = "0.1.0"                       # current in-development version; the first tag is pending
+                                        # (see CHANGELOG.md). Engine + CLI are built and validated
+                                        # against real Godot in CI.
 description = "An AST-based, language-agnostic mutation-testing tool for GDScript/Godot."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -56,6 +56,11 @@ dev = [
   "pre-commit>=4",
 ]
 
+[tool.uv]
+# Pin uv itself: the toolchain is uv-first, and Python is pinned via .python-version. Older uv
+# releases can resolve the lockfile differently, so require a floor.
+required-version = ">=0.11"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -79,8 +84,6 @@ include = [
   "/README.md",
   "/CHANGELOG.md",
   "/CONTRIBUTING.md",
-  "/CODE_OF_CONDUCT.md",
-  "/SECURITY.md",
   "/CREDITS.md",
   "/AGENTS.md",
   "/LICENSE",
