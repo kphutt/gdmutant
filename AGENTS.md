@@ -1,6 +1,6 @@
 # gdmutant — contributor & AI-assistant guide
 
-A language-agnostic **mutation-testing** tool — the first *usable* one for GDScript/Godot. It
+A language-agnostic **mutation-testing** tool for GDScript/Godot. It
 mutates a project's source (flip `>`↔`>=`, `and`↔`or`, bump a number, …), reruns the tests per
 mutant, and reports **survivors** — lines a bug could live on that no test catches. This is the
 fast-orientation guide for anyone (human or AI) working on the code; the product rationale is in
