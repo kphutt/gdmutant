@@ -11,7 +11,7 @@ it generates no mutants inside class-method bodies (`docs/mutation-testing.md`).
 `Span.__post_init__`, `SuiteResult.failed`/`passed`, the `replacements` impls) are unit-tested but
 not *mutation-measured*. This is a known mutmut 3.x limitation — its own docs say "if you want to
 mutate code outside of functions, you can try using mutmut 2" — and is reproduced below (0 mutants
-in any class method). (LOD-80.)
+in any class method).
 
 The candidate fix is **cosmic-ray**, evaluated hands-on:
 - **It closes the gap.** On `engine/runner.py` (the evaluation vehicle — a copy, with a trivial
