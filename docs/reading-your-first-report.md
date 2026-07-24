@@ -13,12 +13,12 @@ that means and what to do next. (Driving gdmutant from an AI agent instead? See
 ## What a survivor is
 
 gdmutant changes your source one tiny edit at a time — flip `>` to `>=`, `and` to `or`, bump a number
-— and reruns your tests for each edit. If the tests still pass with the edit in place, that edit
-**survived**: it's a change to your code's behaviour that **no test noticed**. Coverage says a line
-*ran*; a survivor says a bug could live on that line and your suite would stay green.
+— and reruns your tests for each edit. If the tests still pass, that edit **survived**: a change to
+your code's behaviour that **no test noticed**. Coverage says a line *ran*; a survivor says a bug
+could live on that line and your suite would stay green.
 
-A survivor is not a bug in your code and not a bug in gdmutant. It's a **gap in your tests** — a
-specific, located "here's a change nothing caught."
+A survivor isn't a bug in your code or in gdmutant — it's a **gap in your tests**, a specific, located
+"here's a change nothing caught."
 
 ## The summary, line by line
 
@@ -67,8 +67,7 @@ Survivors (4):
 ## Killing a survivor
 
 Write (or strengthen) a test that **fails** under the survivor's change, then re-run — it should flip
-to `killed`. The `start` line tells you the shape of that test; the general rule is *pin the exact
-behaviour the edit moves*:
+to `killed`. The `start` line gives the shape; the rule is *pin the exact behaviour the edit moves*:
 
 - **comparison** (`< -> <=`): test the **boundary** — the equal-inputs case where `<` and `<=` differ.
 - **boolean** (`and -> or`): test a case where the operands **disagree** (one true, one false).
@@ -80,8 +79,8 @@ behaviour the edit moves*:
 
 Sometimes a survivor **cannot** change observable behaviour — e.g. a clamp whose boundary is
 unreachable, so `<` and `<=` give the same result on every possible input. That's an **equivalent
-mutant**: a known, unavoidable limitation of mutation testing, not a tool bug. Chasing it with a test
-is impossible by definition.
+mutant**: a known, unavoidable limitation of mutation testing, not a tool bug, and impossible to chase
+with a test by definition.
 
 When you've **proven** a survivor is equivalent (or is benign and genuinely not worth a brittle test),
 annotate its line so it becomes `Ignored` and drops out of the score:
@@ -102,10 +101,10 @@ Work down the survivor list: each one is either **killed** (you wrote the missin
 (you proved it equivalent, with a reason). Both raise your confidence in the suite; neither leaves you
 chasing a mutant forever. A perfect score isn't the goal — *understanding each survivor* is.
 
-## Wiring a viewer yourself
+## Viewing the report
 
 `--html report.html` gives you a self-contained page, and `--json` renders in the Stryker Dashboard.
-If you'd rather keep the report and the page separate, the `--json` output is the standard
+Prefer the report and the page separate? The `--json` output is the standard
 [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema,
 so any host of that viewer works. Save this next to your `report.json` as `view.html`:
 
