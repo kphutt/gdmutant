@@ -65,7 +65,7 @@ def _file_entry(run: MutationRun, source: str, language: str) -> dict[str, Any]:
 def stryker_report_multi(
     files: dict[str, tuple[MutationRun, str]], language: str
 ) -> dict[str, Any]:
-    """Build a merged mutation-testing-elements report for one or more files ([ticket]). `files` maps
+    """Build a merged mutation-testing-elements report for one or more files. `files` maps
     each file path to its ``(run, source)``. The schema keys `files` by path, so a whole-directory
     run renders as one report with per-file drill-down and one overall score in the viewer.
 
@@ -91,7 +91,7 @@ _HTML_VIEWER_VERSION = "3.8.4"
 
 
 def html_report(report: dict[str, Any]) -> str:
-    """A ready-to-open HTML report ([ticket]): the standard mutation-testing-elements viewer with the
+    """A ready-to-open HTML report: the standard mutation-testing-elements viewer with the
     Stryker `report` dict inlined, so ``gdmutant run --html out.html`` yields **one file you
     double-click** — no manual viewer wiring. This automates the ``view.html`` recipe the README
     documents; the interactive viewer itself loads from a pinned CDN (needs network to *render*, not

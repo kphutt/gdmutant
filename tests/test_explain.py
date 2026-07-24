@@ -1,4 +1,4 @@
-"""Tests for the survivor-explanation renderer ([ticket])."""
+"""Tests for the survivor-explanation renderer."""
 
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def test_logical_not_removal_reads_as_removed_not_a_deleted_line() -> None:
     out = "\n".join(render_survivor(_mutant("logical-not", "not", "", line=1, col=5), src))
     assert "removed  not — every test still passed" in out
     assert "this whole line was removed" not in out
-    assert "-> " not in out  # no dangling arrow ([ticket])
+    assert "-> " not in out  # no dangling arrow
 
 
 def test_statement_deletion_reads_as_whole_line_removed() -> None:

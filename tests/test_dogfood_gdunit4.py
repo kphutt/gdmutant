@@ -1,7 +1,7 @@
 """Repeatable dogfood harness — run gdmutant against a real, large GDScript codebase (GdUnit4).
 
 gdmutant's own corpus is tiny and hand-built. Real adoption bugs only show up on a real tree: the
-GdUnit4 dogfood ([ticket]) immediately surfaced [ticket] — a whole-directory run aborting at exit 2 on
+GdUnit4 dogfood immediately surfaced a whole-directory run aborting at exit 2 on
 the *one* file gdtoolkit couldn't parse. This harness makes that dogfood **repeatable** so a
 regression can't creep back, and is wired to run the same way locally and (later) in CI.
 
@@ -70,7 +70,7 @@ def test_gdunit4_src_parse_coverage_stays_high() -> None:
 
 
 def test_gdunit4_whole_src_dry_run_completes_over_the_unparseable_file() -> None:
-    """The [ticket] regression guard, against the *real* tree that surfaced it: a whole-directory
+    """The regression guard, against the *real* tree that surfaced it: a whole-directory
     ``--dry-run`` must complete (exit 0) and skip the odd file with a note — not abort at exit 2 on
     the first thing gdtoolkit can't parse. Godot-free, so it stays a fast per-run check."""
     src = _src_dir()
@@ -85,7 +85,7 @@ def test_gdunit4_whole_src_dry_run_completes_over_the_unparseable_file() -> None
         f"\n--- stderr ---\n{completed.stderr[-800:]}"
         f"\n--- stdout tail ---\n{completed.stdout[-400:]}"
     )
-    assert completed.returncode == 0, f"whole-dir dry-run aborted ([ticket] regression){detail}"
+    assert completed.returncode == 0, f"whole-dir dry-run aborted (regression){detail}"
     # The one known-unparseable file must be reported as skipped, not silently missing or fatal.
     assert "gdtoolkit couldn't parse" in completed.stderr, (
         f"expected a skip note for the odd file{detail}"
@@ -94,7 +94,7 @@ def test_gdunit4_whole_src_dry_run_completes_over_the_unparseable_file() -> None
     # prints a "<N> mutants for <path>:" header, so sum the real counts. A bare "mutants for"
     # substring check would be a no-op: list_mutants prints that header even at N=0, so it couldn't
     # catch a regression that silently zeroes generation across the tree — the very failure class
-    # this guards ([internal-tool] P2). Observed 2026-07-19: 10,440 mutants over 227 files; the floor leaves
+    # this guards. Observed 2026-07-19: 10,440 mutants over 227 files; the floor leaves
     # wide headroom (new operators only ever add) while still catching a near-total collapse.
     total_mutants = sum(
         int(line.split(" ", 1)[0])

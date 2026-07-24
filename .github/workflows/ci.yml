@@ -75,7 +75,7 @@ jobs:
       - name: Supply-chain audit (pip-audit)
         run: uv run pip-audit
 
-  # --- Live self-test: real Godot, end-to-end (closes [ticket]) ----------------
+  # --- Live self-test: real Godot, end-to-end ----------------
   # Drives the shipped gdmutant CLI (via subprocess) against a real godot binary + the corpus,
   # pinning EXACT per-mutant outcomes. This is the only check that proves the godot --headless path
   # works against real Godot rather than a mock. One plain job (no matrix): a 2nd supported Godot

@@ -124,7 +124,7 @@ def test_console_summary_score_counts_and_survivors() -> None:
     assert "killed:   1" in out and "survived: 1" in out
     assert "invalid:  1" in out and "error:    1" in out
     assert "Survivors (1):" in out
-    # New per-survivor explanation block ([ticket]): header with category, then gap/risk/start/more.
+    # New per-survivor explanation block: header with category, then gap/risk/start/more.
     assert "survived" in out and "boolean ─" in out
     assert "f.gd:2" in out
     assert "gap    Your tests pass whether this needs both sides" in out
@@ -145,7 +145,7 @@ def test_console_summary_survivor_block_has_all_slots_and_the_doc_link() -> None
 def test_docs_show_the_current_console_format_not_the_retired_one() -> None:
     # The old "→ kill it" one-liner format is retired; no shipping doc may still describe it, and
     # the onboarding doc's sample survivor must match what render_survivor produces — reinstates the
-    # doc-sync guard removed with _kill_hint ([internal-tool] P2 on the [ticket] slice-1 PR).
+    # doc-sync guard removed with _kill_hint (flagged in review of the slice-1 PR).
     repo = Path(__file__).resolve().parent.parent
     onboarding = (repo / "docs" / "reading-your-first-report.md").read_text(encoding="utf-8")
     readme = (repo / "README.md").read_text(encoding="utf-8")
@@ -196,7 +196,7 @@ def test_console_summary_start_never_suggests_an_assertion_value() -> None:
 
 def test_console_summary_renders_a_deletion_survivor_without_a_dangling_arrow() -> None:
     # A deletion operator (unary-`not` removal) has an empty replacement — it must not render as a
-    # dangling "-> " ([ticket]). The statement-deletion narrative covers the whole-line removal.
+    # dangling "-> ". The statement-deletion narrative covers the whole-line removal.
     run = MutationRun(
         (
             MutantOutcome(
@@ -222,7 +222,7 @@ def test_console_summary_score_na_when_no_killable_mutants() -> None:
 
 def test_html_report_embeds_the_report_and_the_pinned_viewer() -> None:
     # --html writes a ready-to-open page: the mutation-testing-elements viewer (pinned CDN) with the
-    # Stryker report inlined in a non-executable <script type="application/json"> block ([ticket]).
+    # Stryker report inlined in a non-executable <script type="application/json"> block.
     report = stryker_report(_run(), "f.gd", _SRC, "gdscript")
     html = html_report(report)
     assert "<mutation-test-report-app>" in html

@@ -1,6 +1,6 @@
 """Live self-test — drive the REAL gdmutant CLI against a REAL Godot binary + the corpus.
 
-This is the end-to-end sanity check that closes the "never run against real Godot" gate ([ticket]):
+This is the end-to-end sanity check that closes the "never run against real Godot" gate:
 both runner paths are exercised through the *shipped* CLI (argparse / exit codes / Stryker JSON —
 via subprocess, never in-process) and pinned to *exact* per-mutant outcomes, not just "it ran".
 
@@ -152,7 +152,7 @@ def test_command_runner_against_real_godot(tmp_path: Path) -> None:
 
 
 def test_gdunit4_against_real_godot(tmp_path: Path) -> None:
-    """The GdUnit4 path — the [ticket] close: exercises the real ``-s GdUnitCmdTool.gd -a res://test
+    """The GdUnit4 path — the real-Godot close: exercises the real ``-s GdUnitCmdTool.gd -a res://test
     -rc 1 --ignoreHeadlessMode`` flags and reads the actual ``reports/report_1/results.xml``."""
     if not ADDON.is_dir():
         pytest.skip("GdUnit4 addon not installed — run scripts/install-gdunit4.sh")
@@ -219,7 +219,7 @@ func typed_with_backstop(a: int) -> int:
 def test_typed_lambda_return_deletion_is_guarded_and_emitted_deletions_compile(
     tmp_path: Path,
 ) -> None:
-    """Closes the [ticket] typed-lambda gap: a `lambda_header` carries the same `-> TYPE_HINT` as a
+    """Closes the typed-lambda gap: a `lambda_header` carries the same `-> TYPE_HINT` as a
     function, so a typed lambda's return is a return-value requirement Godot enforces. Assert the
     guard never emits that sole return, and that every deletion it *does* emit for this adversarial
     source loads clean in real Godot (the untyped lambda's return and the backstopped early one)."""
@@ -255,7 +255,7 @@ def test_typed_lambda_return_deletion_is_guarded_and_emitted_deletions_compile(
 
 
 def test_command_harness_fails_fast_on_an_uncompilable_target(tmp_path: Path) -> None:
-    """[ticket]: a mutant that makes the target uncompilable must make the CommandRunner harness exit
+    """A mutant that makes the target uncompilable must make the CommandRunner harness exit
     NON-ZERO promptly — not exit 0 (a false PASS that would let a broken mutant survive) and not
     hang. The reference harness gates on ``GDScript.can_instantiate()`` before calling the target.
     The ``timeout=`` here doubles as the hang guard: a hang raises TimeoutExpired and fails."""
@@ -271,6 +271,6 @@ def test_command_harness_fails_fast_on_an_uncompilable_target(tmp_path: Path) ->
     )
     broken = subprocess.run([str(_GODOT), *harness], capture_output=True, text=True, timeout=60)
     assert broken.returncode != 0, (
-        "the harness exited 0 on an uncompilable target — a false PASS ([ticket]):\n"
+        "the harness exited 0 on an uncompilable target — a false PASS:\n"
         f"{(broken.stdout + broken.stderr)[-600:]}"
     )

@@ -40,7 +40,7 @@ and its dispatch/trust-gate machinery entirely (PR #73 closed unmerged, supersed
   if none is found. A pinned version (e.g. via the vendored `gitleaks-system` pre-commit hook, which
   builds/requires a specific release) would reintroduce the exact "breaks unless you already have the
   right thing installed" problem this migration exists to remove — the self-containment goal wins over
-  version-pin precision here. (Found via [internal-tool] review of PR #74: an earlier draft's ADR text and PR
+  version-pin precision here. (Found in review of PR #74: an earlier draft's ADR text and PR
   description both claimed pinning that wasn't actually true; corrected here rather than re-adding it.)
 - **`pre-push` stage:** the same commands CI's Verify job runs (ruff check/format, gdlint, mypy,
   pytest, pip-audit) — not a reimplementation, so local and CI can't drift apart.

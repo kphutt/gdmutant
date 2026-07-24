@@ -49,7 +49,7 @@ class GdUnit4Runner:
         """Warm Godot's import cache once, so ``class_name`` types resolve on a cold checkout.
 
         The engine's `Preparable` hook (called once before it times the baseline, so this scan's
-        cost never inflates the derived per-mutant timeout or the ETA — [ticket]); ``run`` also
+        cost never inflates the derived per-mutant timeout or the ETA); ``run`` also
         calls it defensively, so a direct ``run`` still works cold. Idempotent via ``_imported``.
 
         GdUnit4's ``GdUnitCmdTool.gd`` references ``class_name`` types (``GdUnitTestCIRunner``, …)
@@ -80,7 +80,7 @@ class GdUnit4Runner:
         # on (a suppressed timeout falls through to here). A *non-timeout* failure (a transient
         # OSError, a permission error, Godot crashing) propagates out before this, leaving the
         # warm-up retryable on a reused runner instance rather than silently skipped forever after
-        # ([ticket] [internal-tool] P3). The shipped CLI builds a fresh runner per run, but a library/daemon
+        # The shipped CLI builds a fresh runner per run, but a library/daemon
         # reuse would otherwise poison retry.
         self._imported = True
 
@@ -120,7 +120,7 @@ class GdUnit4Runner:
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         # Warm Godot's import cache once (before the very first suite run) so GdUnit4's class_name
-        # types resolve on a cold checkout ([ticket]); a no-op if the engine already prepared, and on
+        # types resolve on a cold checkout; a no-op if the engine already prepared, and on
         # every subsequent mutant.
         self.prepare(project_dir)
         budget = self.timeout if timeout is None else timeout
