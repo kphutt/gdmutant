@@ -17,8 +17,10 @@ uv sync --frozen      # fetches the pinned Python + installs the exact locked de
 That's the whole setup: uv reads `.python-version` and fetches the pinned Python for you. Run project
 commands with `uv run` (e.g. `uv run pytest`).
 
-Optional but recommended: install the git hooks in `.pre-commit-config.yaml` so these checks run
-automatically instead of by hand.
+GitHub Actions is the authoritative gate: every PR must pass CI, and that is what decides a merge.
+The git hooks in `.pre-commit-config.yaml` are an **optional** local convenience that mirrors those
+same CI checks so you catch problems before pushing — they never block a merge, and skipping them
+changes nothing about what CI enforces. To install them:
 
 ```sh
 uv run pre-commit install --hook-type pre-commit --hook-type pre-push
