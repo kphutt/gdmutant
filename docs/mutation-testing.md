@@ -39,10 +39,8 @@ bodies. So the 781 spans the package's 28 module-level functions (the operator c
 generation, the loop, JUnit parsing, the reporter, the CLI, the adapter), but **not** the method
 bodies: `GdUnit4Runner.run`/`command`, `CommandRunner.run`, the two `replacements` implementations,
 `MutationRun`'s properties, `Mutant.apply`, `Span.__post_init__`, and `SuiteResult.failed`/`passed`.
-Those are covered by unit tests but are not *mutation-measured* here — so read the score as "every
-behavioral
-mutant mutmut generates is killed," over the module-level surface. The method bodies are
-covered by unit tests, though not *mutation-measured* here.
+Those are covered by unit tests but not *mutation-measured* here — so read the score as "every
+behavioral mutant mutmut generates is killed," over the module-level surface.
 
 ### The 18 equivalent mutants
 
