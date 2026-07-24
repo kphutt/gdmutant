@@ -84,6 +84,6 @@ Live docs open with YAML frontmatter (`type` / `status` / `created`); build only
 
 ## Non-goals (v0.1)
 
-Coverage-gated mutant selection, the HTML report, incremental/diff mode, the optional LLM-semantic
-mutant mode, and any second-language adapter (TypeScript delegates to Stryker, or is skipped).
+Coverage-gated mutant selection, the optional LLM-semantic mutant mode, and any second-language
+adapter (TypeScript delegates to Stryker, or is skipped).
 Finishing the GDScript path on a real fixture beats breadth.

@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+contact_links:
+  - name: gdmutant Community Support
+    url: https://github.com/kphutt/gdmutant/discussions
+    about: Ask and answer usage questions here — not every question needs a bug report.
+
+  - name: gdmutant Documentation
+    url: https://github.com/kphutt/gdmutant#readme
+    about: Start here for install, configuration, and the full flag reference.
