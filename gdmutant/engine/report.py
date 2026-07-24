@@ -7,7 +7,9 @@ ecosystem's HTML viewer. Verdicts map to the schema's ``MutantStatus``:
     invalid -> CompileError, error -> RuntimeError.
 
 A suppressed (ignored) mutant carries its ``# gdmutant: ignore`` reason as the schema's optional
-``statusReason`` field, so the viewer shows *why* it was ignored.
+``statusReason`` field, so the viewer shows *why* it was ignored. A **survivor** carries the same
+gap/risk/start narrative the console block shows, split across the schema's ``description`` (the
+gap) and ``statusReason`` (the risk + where to start), so the HTML viewer explains it too.
 
 Locations are 1-based line + column with an exclusive end column, which is exactly what a
 `Span` carries, so no coordinate conversion is needed.
@@ -19,7 +21,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from gdmutant.engine.explain import render_survivor
+from gdmutant.engine.explain import render_survivor, survivor_report_fields
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
 
 SCHEMA_VERSION = "2"
@@ -50,6 +52,12 @@ def _mutant_json(index: int, outcome: MutantOutcome) -> dict[str, Any]:
     # statusReason — omitted when empty, so a bare `# gdmutant: ignore` adds no key.
     if outcome.verdict is Verdict.IGNORED and m.ignore_reason:
         mutant["statusReason"] = m.ignore_reason
+    # A survivor carries the same gap/risk/start narrative the console block shows, so the HTML
+    # viewer explains *why it matters* and *where to start* — not just the diff. `description` gets
+    # the gap; `statusReason` gets the risk + starting point. (Killed/timeout/invalid/error mutants
+    # need no such narrative; ignored keeps its own reason above.)
+    if outcome.verdict is Verdict.SURVIVED:
+        mutant["description"], mutant["statusReason"] = survivor_report_fields(m)
     return mutant
 
 
