@@ -9,16 +9,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-from dev_run import resolve  # noqa: E402
-
 
 def main() -> int:
     log_path = Path("mutmut-run.log")
     with log_path.open("w", encoding="utf-8") as log:
-        subprocess.run(
-            resolve(["uv", "run", "mutmut", "run"]), stdout=log, stderr=subprocess.STDOUT
-        )
+        subprocess.run(["uv", "run", "mutmut", "run"], stdout=log, stderr=subprocess.STDOUT)
     log_text = log_path.read_text(encoding="utf-8")
     print(log_text)
     if "failed to collect stats" in log_text.lower():

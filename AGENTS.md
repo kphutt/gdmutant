@@ -7,18 +7,15 @@ fast-orientation guide for anyone (human or AI) working on the code; the product
 [`README.md`](README.md), and the authoritative design is in
 [`docs/design/DESIGN.md`](docs/design/DESIGN.md).
 
-> `gdmutant` is a provisional codename.
-
 ## Setup
 
-The toolchain is pinned, so setup is one command:
+gdmutant is a [uv](https://docs.astral.sh/uv/) project — install uv, then:
 
 ```sh
-mise install          # installs the pinned Python + uv
-uv sync --frozen      # installs the exact locked dependencies into .venv
+uv sync --frozen      # fetches the pinned Python (via .python-version) + locked deps into .venv
 ```
 
-Prefer not to use mise? Install [uv](https://docs.astral.sh/uv/) yourself, then `uv sync --frozen`.
+Run commands with `uv run`.
 
 ## Build · test
 
@@ -43,8 +40,8 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
 
 ## Tech stack (decided)
 
-- **Language:** Python 3.12, managed with **uv** (hash-pinned `uv.lock`); toolchain pinned in
-  `mise.toml`. Rationale for Python over GDScript:
+- **Language:** Python 3.12 (pinned via `.python-version`), managed with **uv** (hash-pinned
+  `uv.lock`; uv itself floored in `pyproject.toml`'s `[tool.uv]`). Rationale for Python over GDScript:
   [`docs/decisions/0001`](docs/decisions/0001-write-the-engine-in-python-not-gdscript.md).
 - **Runtime dependency:** [`gdtoolkit`](https://github.com/Scony/godot-gdscript-toolkit) — the
   GDScript parser the adapter mutates.
