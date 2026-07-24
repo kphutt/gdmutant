@@ -17,8 +17,7 @@ gdmutant is a [uv](https://docs.astral.sh/uv/) project — install uv, then:
 uv sync --frozen      # fetches the pinned Python (via .python-version) + locked deps into .venv
 ```
 
-Run commands with `uv run`. Optional fully-pinned path via [mise](https://mise.jdx.dev) (pins uv
-itself): `mise install`, then activate mise or prefix commands with `mise exec --`.
+Run commands with `uv run`.
 
 ## Build · test
 
@@ -43,8 +42,8 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
 
 ## Tech stack (decided)
 
-- **Language:** Python 3.12, managed with **uv** (hash-pinned `uv.lock`); toolchain pinned in
-  `mise.toml`. Rationale for Python over GDScript:
+- **Language:** Python 3.12 (pinned via `.python-version`), managed with **uv** (hash-pinned
+  `uv.lock`; uv itself floored in `pyproject.toml`'s `[tool.uv]`). Rationale for Python over GDScript:
   [`docs/decisions/0001`](docs/decisions/0001-write-the-engine-in-python-not-gdscript.md).
 - **Runtime dependency:** [`gdtoolkit`](https://github.com/Scony/godot-gdscript-toolkit) — the
   GDScript parser the adapter mutates.

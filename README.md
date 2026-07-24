@@ -102,8 +102,7 @@ published, `pipx install gdmutant` will be the one-liner.
 Clone the repo and install the pinned toolchain to hack on gdmutant itself:
 
 ```sh
-mise install       # the pinned Python + uv  (or install uv yourself and skip this)
-uv sync --frozen   # the exact locked dependencies
+uv sync --frozen   # the exact locked dependencies (uv reads .python-version and fetches Python 3.12)
 uv run pre-commit install --hook-type pre-commit --hook-type pre-push   # optional: run CI's checks locally, automatically
 ```
 

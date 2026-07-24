@@ -17,10 +17,6 @@ uv sync --frozen      # fetches the pinned Python + installs the exact locked de
 That's the whole setup: uv reads `.python-version` and fetches the pinned Python for you. Run project
 commands with `uv run` (e.g. `uv run pytest`).
 
-Optional — a fully pinned toolchain via [mise](https://mise.jdx.dev), which pins uv itself too:
-`mise install`, then either activate mise in your shell (`mise activate`) or prefix commands with
-`mise exec --` (e.g. `mise exec -- uv sync --frozen`) so `uv` is on PATH.
-
 Optional but recommended: install the git hooks in `.pre-commit-config.yaml` so these checks run
 automatically instead of by hand.
 
