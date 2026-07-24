@@ -66,6 +66,31 @@ def test_run_mutation_prints_summary_and_returns_zero_with_survivors(
     assert str(path) in out  # each survivor line names the real source path
 
 
+def test_all_survived_warning_reaches_stderr_when_no_mutant_is_killed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A suite that always passes (a marker that never appears in the source) mimics tests that never
+    # touch the file: every mutant survives, so the warning fires on stderr — score/exit unchanged.
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), "NEVER_IN_SOURCE"))
+    assert rc == 0  # a warning, not an error
+    captured = capsys.readouterr()
+    assert "evaluated mutants survived" in captured.err  # warning is on stderr
+    assert str(path) in captured.err  # names the mutated file
+    assert "Mutation score:" in captured.out  # score still printed (unchanged)
+
+
+def test_all_survived_warning_absent_when_a_mutant_is_killed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A suite that catches the `>` -> `>=` mutant means a test does reach the file: not the vacuous
+    # case, so no warning.
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), ">="))
+    assert rc == 0
+    assert "evaluated mutants survived" not in capsys.readouterr().err
+
+
 def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = _gd(tmp_path)
     report_file = tmp_path / "report.json"
@@ -1349,6 +1374,26 @@ def test_run_mutation_paths_aggregates_and_writes_merged_report(
     assert "2 files:" in out and "Mutation score:" in out  # per-file breakdown + one aggregate
     data = json.loads(report.read_text(encoding="utf-8"))
     assert set(data["files"]) == {a, b}  # one merged report keyed by path
+
+
+def test_all_survived_warning_fires_on_a_multi_file_run_with_no_kills(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Across every file the baseline passed but nothing was detected -> the aggregate warning fires.
+    a, b = _multi_project(tmp_path)
+    rc = cli.run_mutation_paths([a, b], str(tmp_path), RecordingRunner())
+    assert rc == 0
+    assert "evaluated mutants survived" in capsys.readouterr().err
+
+
+def test_all_survived_warning_absent_on_a_multi_file_run_with_a_kill(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # One mutant killed anywhere means a test reaches the code -> not the vacuous case, no warning.
+    a, b = _multi_project(tmp_path)
+    rc = cli.run_mutation_paths([a, b], str(tmp_path), MarkerRunner(a, ">="))
+    assert rc == 0
+    assert "evaluated mutants survived" not in capsys.readouterr().err
 
 
 def test_run_mutation_paths_baseline_failure_returns_one(

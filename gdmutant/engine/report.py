@@ -117,6 +117,38 @@ def html_report(report: dict[str, Any]) -> str:
     )
 
 
+#: Below this many surviving mutants the all-survived warning stays quiet: a 1-of-1 survivor is too
+#: small a sample to tell "the tests never touched this file" apart from a single
+#: genuinely-surviving mutant, so warning there would cry wolf.
+_MIN_SURVIVORS_FOR_ALL_SURVIVED_WARNING = 2
+
+
+def all_survived_warning(run: MutationRun) -> str | None:
+    """A stderr warning for the "vacuous all-survived" case, or ``None`` when it doesn't apply.
+
+    A ``MutationRun`` only exists once the baseline passed (`loop._run_baseline` raises otherwise),
+    so a run whose every score-counting mutant survived — zero detected (``killed`` + ``timeout``),
+    every scored mutant in the ``survived`` bucket — is the fingerprint of a test command that runs
+    green but never actually exercises the mutated file. That reads as "your tests catch nothing"
+    when the truth is "nothing was tested" — the tool's most dangerous false signal. Surface it as a
+    warning (never an error: the score and exit code are unchanged) that names the mutated file and
+    points at the likely fix.
+
+    This is the cheap heuristic, not a coverage probe (DESIGN.md FG-4.1 folds no-coverage into
+    survived for v0.1); it reads only the finalized tally. Stays quiet below
+    `_MIN_SURVIVORS_FOR_ALL_SURVIVED_WARNING` survivors so a lone surviving mutant doesn't trip it.
+    """
+    if run.detected != 0 or run.survived < _MIN_SURVIVORS_FOR_ALL_SURVIVED_WARNING:
+        return None
+    files = sorted({m.path for m in run.survivors})
+    where = files[0] if len(files) == 1 else ", ".join(files)
+    return (
+        f"warning: all {run.survived} evaluated mutants survived. This usually means the test "
+        f"suite ran but never exercised {where} — check that --tests (or --command) targets it. "
+        "The mutation score and exit code are unchanged."
+    )
+
+
 def console_summary(run: MutationRun) -> str:
     """A human-readable summary: score, per-verdict counts, and each survivor's location."""
     score = run.mutation_score

@@ -36,6 +36,7 @@ from gdmutant.engine.loop import BaselineFailed, MutationRun, run, run_paths
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import Operator
 from gdmutant.engine.report import (
+    all_survived_warning,
     console_summary,
     html_report,
     stryker_report,
@@ -515,6 +516,11 @@ def run_mutation(
     # capturing stdout then gets pure JSON.
     report_to_stdout = json_path == "-"
     print(console_summary(result), file=sys.stderr if report_to_stdout else sys.stdout)
+    # A run whose baseline passed yet every mutant survived is usually a test command that never
+    # touches the mutated file, not a worthless suite — warn (stderr, score/exit code unchanged).
+    warning = all_survived_warning(result)
+    if warning is not None:
+        print(warning, file=sys.stderr)
     stryker = stryker_report(result, str(path), source, "gdscript")
     return _write_reports(stryker, json_path, html_path)
 
@@ -615,6 +621,11 @@ def run_mutation_paths(
     # score across every file's mutants.
     aggregate = MutationRun(tuple(o for r in runs.values() for o in r.outcomes))
     print(console_summary(aggregate), file=out)
+    # Across every file: baseline passed but nothing was detected — usually the test command never
+    # exercised the mutated files, not a suite that catches nothing (stderr, score/exit unchanged).
+    warning = all_survived_warning(aggregate)
+    if warning is not None:
+        print(warning, file=sys.stderr)
     stryker = stryker_report_multi({p: (r, sources[p]) for p, r in runs.items()}, "gdscript")
     return _write_reports(stryker, json_path, html_path)
 
