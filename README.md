@@ -8,8 +8,6 @@
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
-<p align="center"><em>gdmutant is a provisional codename, not yet cleared for public use — it lives only in this README and the repo name.</em></p>
-
 ## What is gdmutant?
 
 gdmutant is a mutation-testing tool for GDScript. Point it at a module with a test suite and it
@@ -84,7 +82,7 @@ your headless test command.
 ## Install
 
 gdmutant is a dev tool, not a runtime dependency. Install it into your project from git at a
-**pinned commit** (it is not on PyPI yet):
+**pinned commit**:
 
 ```sh
 uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
@@ -94,8 +92,8 @@ uv run gdmutant run path/to/module.gd --project . \
 
 If your Godot project has no Python, keep gdmutant in a tiny **non-package** uv project beside your
 game (e.g. under `devtools/`) so it never touches shipped code — a `pyproject.toml` with
-`[tool.uv] package = false` and a `.python-version` pinning 3.12+, then `uv add` there. Once
-published, `pipx install gdmutant` will be the one-liner.
+`[tool.uv] package = false` and a `.python-version` pinning 3.12+, then `uv add` there. A PyPI
+release is planned, which will make `pipx install gdmutant` the one-liner.
 
 ## Quickstart
 

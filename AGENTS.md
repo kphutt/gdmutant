@@ -7,8 +7,6 @@ fast-orientation guide for anyone (human or AI) working on the code; the product
 [`README.md`](README.md), and the authoritative design is in
 [`docs/design/DESIGN.md`](docs/design/DESIGN.md).
 
-> `gdmutant` is a provisional codename.
-
 ## Setup
 
 gdmutant is a [uv](https://docs.astral.sh/uv/) project — install uv, then:
