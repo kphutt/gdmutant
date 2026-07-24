@@ -47,7 +47,7 @@ The CLI selects it with `--runner command --command "<the test command>"` (defau
   XML). A future runner could read a richer convention (TAP, a stdout count) without changing the
   engine — the `Runner` protocol is the seam.
 
-### Harness-authoring caveat: the load-failure exit-0 trap (LOD-179)
+### Harness-authoring caveat: the load-failure exit-0 trap
 
 The exit-code convention has one sharp edge for a **`godot --headless --script <harness>`** harness:
 Godot exits **0 when the entry script itself fails to load** (a parse/compile error), not just on a
@@ -57,7 +57,7 @@ the broken mutant wrongly **survives**. Verified against Godot 4.7.
 
 This is largely theoretical for gdmutant because generation-time guards (NF-5 gdtoolkit re-parse +
 the return-path guard, `docs/decisions/0007`) block most uncompilable mutants before they run, and
-the external per-mutant timeout (LOD-153) catches hangs. But a harness author must not rely on that.
+the external per-mutant timeout catches hangs. But a harness author must not rely on that.
 Guidance for a hand-rolled harness, in order of reliability:
 
 1. **Don't couple to the target at compile time.** `load()` the file-under-test at runtime and
