@@ -245,7 +245,8 @@ class GutRunner(_GodotJUnitRunner):
     breaks only the file(s) referencing the mutated source yields a report of the *healthy* suites'
     green tests → a pass → SURVIVED: a **false survivor**, gdmutant's worst failure. `tests == 0`
     (the whole run zeroed — GUT's empty-report shape, or every suite skipped) does not catch this,
-    because the healthy suites still ran. So `_result_from_report` upholds the clause two ways:
+    because the healthy suites still ran. So `_result_from_report` upholds the clause two ways —
+    both **errors** — with a third, symmetric **warning** closing the loop:
       1. **`tests == 0` → error** — the empty-report / all-skipped shape (raise → the engine tallies
          ``error``), never a zero-test pass.
       2. **a drop below the baseline test count → error** — the first run (the engine's healthy
@@ -256,12 +257,24 @@ class GutRunner(_GodotJUnitRunner):
          total → error, never a silent pass. It does **not** cover a suite whose test count varies
          run-to-run: such variance can *mask* a real skip (if another suite rises by the same
          amount — a residual false survivor the scalar total can't see) or *false-error* on a benign
-         dip. Stabilize a flaky suite before a run; widen to per-suite baseline tracking only if
-         variance-masking is observed in practice (prove it with a probe first).
+         dip. That residual variance is exactly what the canary (3) makes observable.
+      3. **`tests > baseline` → run-level WARNING (never an error).** A legitimate mutant can never
+         raise the collected test count *above* the healthy baseline — a mutation cannot add test
+         files — so a later run reporting MORE tests than the baseline deterministically proves the
+         baseline *undercounted*: suite collection is non-deterministic, the one condition (2)'s
+         stability assumption excludes. This is the **canary** that makes the otherwise-unobservable
+         variance-masking case observable (a silent false survivor can never be *seen*, so anchoring
+         the widening on "variance observed in practice" was itself unobservable — this closes that
+         gap). It is surfaced as a **warning** via `run_warning` (on the same stderr surface as the
+         "all mutants survived" warning), **never** an error — flipping the mutant to error would
+         false-error on benign flakiness. **When it fires, that is the trigger to widen to per-suite
+         baseline tracking** (the correctly-deferred work); until then the scalar-total guard
+         stands. Stabilize the flaky suite it names first.
 
     Thread-safety under ``--jobs``: the baseline floor is set on the first run (the engine runs the
     baseline serially, *before* it fans mutants out to workers) and only **read** thereafter, so the
-    one shared instance is safe across worker threads (they never write it).
+    one shared instance is safe across worker threads (they never write it). The canary flag is only
+    ever set to ``True`` (idempotent, single-valued), so concurrent worker writes are safe too.
     """
 
     test_dir: str = "res://test"
@@ -272,6 +285,10 @@ class GutRunner(_GodotJUnitRunner):
     #: The healthy baseline's test count, captured on the first run; a later run with fewer tests is
     #: a skipped (failed-to-load) suite → error. ``None`` until the first run establishes it.
     _baseline_tests: int | None = field(default=None, init=False, repr=False)
+    #: Non-determinism canary: set once any run collects MORE tests than the baseline (which a
+    #: legitimate mutant cannot cause), proving collection is non-deterministic. Read out by
+    #: `run_warning` as a run-level warning; never raises. See the class docstring, point (3).
+    _nondeterminism_canary: bool = field(default=False, init=False, repr=False)
     _framework: ClassVar[str] = "GUT"
 
     def command(self, project_dir: str) -> list[str]:
@@ -321,6 +338,15 @@ class GutRunner(_GodotJUnitRunner):
             # fixes the expected count. Later runs only read it, so the shared instance is safe.
             self._baseline_tests = tests
             baseline = tests
+        elif tests > baseline:
+            # Non-determinism canary (symmetric to the < baseline guard below). A legitimate mutant
+            # can never raise the collected test count ABOVE the baseline — a mutation cannot add
+            # test files — so more tests than the healthy baseline deterministically proves the
+            # baseline undercounted: suite collection is non-deterministic. That degrades the
+            # < baseline guard (a real skip can be masked by a flaky suite rising to compensate).
+            # Flag it (read out by `run_warning`); NEVER raise — benign flakiness must not
+            # false-error the mutant. Setting a bool from --jobs workers is safe (only ever True).
+            self._nondeterminism_canary = True
         if result is None or tests == 0 or tests < baseline:
             detail = (completed.stderr or completed.stdout or "").strip()
             reason = (
@@ -334,3 +360,21 @@ class GutRunner(_GodotJUnitRunner):
                 + (f":\n{detail[-1000:]}" if detail else "")
             )
         return result
+
+    def run_warning(self) -> str | None:
+        """The non-determinism canary as a run-level warning (`engine.runner.RunWarning`), or
+        ``None`` when it never fired. See the class docstring's crash-safety point (3): a run
+        collected MORE tests than the healthy baseline — which a legitimate mutant cannot cause — so
+        test collection is non-deterministic and the crash-safety drop-guard's protection against a
+        silently-masked skipped suite is degraded here. A warning, never an error: it leaves the
+        mutation score and exit code unchanged."""
+        if not self._nondeterminism_canary:
+            return None
+        return (
+            "warning: test collection was non-deterministic — a run collected more tests than the "
+            "healthy baseline, which a legitimate mutant cannot cause (a mutation cannot add test "
+            "files). The crash-safety guard's protection against a silently-masked skipped test "
+            "suite is degraded in this environment; investigate flaky suite loading. This is the "
+            "trigger to build per-suite baseline tracking. The mutation score and exit code are "
+            "unchanged."
+        )

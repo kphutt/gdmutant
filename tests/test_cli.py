@@ -91,6 +91,47 @@ def test_all_survived_warning_absent_when_a_mutant_is_killed(
     assert "evaluated mutants survived" not in capsys.readouterr().err
 
 
+class _RunWarningRunner:
+    """A minimal runner that implements the optional `RunWarning` contract, for the helper tests."""
+
+    def __init__(self, warning: str | None) -> None:
+        self._warning = warning
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        raise NotImplementedError  # the helper never runs it; it only reads run_warning()
+
+    def run_warning(self) -> str | None:
+        return self._warning
+
+
+def test_emit_runner_warning_prints_a_runners_warning_to_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A runner that implements RunWarning and has something to say (e.g. GUT's non-determinism
+    # canary): the helper prints it on stderr, the same surface as the all-survived warning.
+    cli._emit_runner_warning(_RunWarningRunner("warning: collection was non-deterministic"))
+    captured = capsys.readouterr()
+    assert "non-deterministic" in captured.err
+    assert captured.out == ""  # never on stdout (keeps --json - clean)
+
+
+def test_emit_runner_warning_silent_when_the_runner_has_nothing_to_report(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A RunWarning runner whose canary never fired returns None -> the helper prints nothing.
+    cli._emit_runner_warning(_RunWarningRunner(None))
+    assert capsys.readouterr() == ("", "")
+
+
+def test_emit_runner_warning_silent_for_a_runner_without_the_contract(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A runner that doesn't implement RunWarning (e.g. the marker runner / GdUnit4) is skipped
+    # entirely via the isinstance guard — no attribute error, no output.
+    cli._emit_runner_warning(MarkerRunner(str(_gd(tmp_path)), ">="))
+    assert capsys.readouterr() == ("", "")
+
+
 def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = _gd(tmp_path)
     report_file = tmp_path / "report.json"

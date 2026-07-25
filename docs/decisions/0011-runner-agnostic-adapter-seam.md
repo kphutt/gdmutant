@@ -53,8 +53,9 @@ the way *its* framework fails:
 - **`GdUnit4Runner`** — a crash writes **no** report, caught by the report-reappear freshness guard
   (raises → `error`). Its `_result_from_report` is the base's plain parse; no override needed.
 - **`GutRunner`** — GUT does **not** fail a run when a test file fails to compile/load: it **skips**
-  that suite, runs the rest green, and exits **0** (confirmed live — see below). Two shapes result,
-  both of which `GutRunner` surfaces as an execution error (raises → `error`), never a pass:
+  that suite, runs the rest green, and exits **0** (confirmed live — see below). Two shapes surface as
+  an execution **error** (raises → `error`), never a pass — plus a third, symmetric **warning** (the
+  non-determinism canary) that closes the gap the drop-guard's stability assumption leaves open:
   1. **`tests == 0`** — the empty-report shape (a `<testsuites tests="0"/>` with no child, which the
      parser raises an *incidental* `ValueError` on — caught — or a child `<testsuite tests="0">`), or
      every suite skipped.
@@ -66,10 +67,23 @@ the way *its* framework fails:
      **not** cover variance — a suite whose test count varies run-to-run, or that loads flakily.
      Such variance can (a) *mask* a real skip if another suite rises by the same amount (a residual
      false survivor the scalar total can't see), or (b) *false-error* on a benign dip. Stabilize a
-     flaky suite before a run; if variance-masking is ever observed in practice, widen to per-suite
-     baseline tracking — but prove it with a probe first (per this ADR's method), don't widen on
-     assumption.
-  Both are directly tested (unit) and pinned by the live n>1 probe below.
+     flaky suite before a run.
+  3. **a rise *above* the baseline test count → a run-level WARNING (the non-determinism canary).** A
+     legitimate mutant can never raise the collected test count *above* the healthy baseline — a
+     mutation cannot add test files — so a later run reporting **more** tests than the baseline
+     deterministically proves the baseline *undercounted*: suite collection is non-deterministic, the
+     one condition (2)'s stability assumption excludes. This is surfaced as a **warning** (via the
+     runner's `run_warning`, on the same stderr surface as the "all mutants survived" warning),
+     **never** an error — flipping the mutant to error would false-error on benign flakiness. It is
+     the **canary that makes the otherwise-unobservable variance-masking case observable**: a
+     silently-masked skip is a false survivor that can never be *seen*, so the earlier trigger
+     "widen if variance-masking is observed in practice" was anchored on something unobservable. The
+     canary closes that loop. **Trigger to widen to per-suite baseline tracking:** when the
+     non-determinism canary (`tests > baseline`) fires — not on assumption, and not on the old
+     unobservable condition. Until it fires, the scalar-total guard (1)+(2) stands; per-suite
+     tracking stays correctly deferred.
+  (1) and (2) are directly tested (unit) and pinned by the live n>1 probe below; (3) is unit-tested
+  (a run above baseline warns and does not error).
 
 #### Proving GUT's clause at n>1 (not just n=1)
 The `tests == 0` guard only bites if a compile crash actually *zeroes* the run. The bundled corpus has

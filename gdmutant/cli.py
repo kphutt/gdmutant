@@ -44,7 +44,7 @@ from gdmutant.engine.report import (
     stryker_report,
     stryker_report_multi,
 )
-from gdmutant.engine.runner import CommandRunner, Runner
+from gdmutant.engine.runner import CommandRunner, Runner, RunWarning
 
 _MISSING_GODOT_MACOS_HINT = (
     "  On macOS, Godot ships as an app bundle and is never on PATH — pass the binary directly:\n"
@@ -564,8 +564,19 @@ def run_mutation(
     warning = all_survived_warning(result)
     if warning is not None:
         print(warning, file=sys.stderr)
+    _emit_runner_warning(runner)
     stryker = stryker_report(result, str(path), source, "gdscript")
     return _write_reports(stryker, json_path, html_path)
+
+
+def _emit_runner_warning(runner: Runner) -> None:
+    """Print a runner's optional post-run warning (e.g. `GutRunner`'s non-determinism canary) to
+    stderr, on the same surface as `all_survived_warning`. A no-op for a runner that doesn't
+    implement `RunWarning` or has nothing to report; it never changes the score or the exit code."""
+    if isinstance(runner, RunWarning):
+        warning = runner.run_warning()
+        if warning is not None:
+            print(warning, file=sys.stderr)
 
 
 def _write_reports(stryker: dict[str, object], json_path: str | None, html_path: str | None) -> int:
@@ -669,6 +680,7 @@ def run_mutation_paths(
     warning = all_survived_warning(aggregate)
     if warning is not None:
         print(warning, file=sys.stderr)
+    _emit_runner_warning(runner)
     stryker = stryker_report_multi({p: (r, sources[p]) for p, r in runs.items()}, "gdscript")
     return _write_reports(stryker, json_path, html_path)
 

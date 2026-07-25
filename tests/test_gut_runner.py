@@ -11,7 +11,7 @@ import pytest
 
 import gdmutant.adapters.gdscript.runner as runner_mod
 from gdmutant.adapters.gdscript.runner import GutRunner
-from gdmutant.engine.runner import Runner, SuiteTimeout
+from gdmutant.engine.runner import Runner, RunWarning, SuiteTimeout
 
 
 def _report(tmp_path: Path) -> Path:
@@ -308,5 +308,64 @@ def test_run_creates_the_report_directory_when_missing(
     assert (result.tests, result.failed) == (2, False)
 
 
+def test_run_warns_but_does_not_error_when_test_count_rises_above_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # THE non-determinism canary — symmetric to the drop guard above. A legitimate mutant can never
+    # raise the collected test count ABOVE the healthy baseline (a mutation cannot add test files),
+    # so a later run reporting MORE tests deterministically proves the baseline undercounted: suite
+    # collection is non-deterministic. That must surface as a run-level WARNING (run_warning), NOT a
+    # per-mutant error — flipping the mutant to error would false-error on benign flakiness. Here:
+    # baseline 3 tests, then a run of 5. The mutant must still be a PASS, and the canary must fire.
+    report = _report(tmp_path)
+    counts = iter(["3", "5"])
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text(
+                f'<testsuites><testsuite tests="{next(counts)}" failures="0"/></testsuites>',
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    runner = GutRunner()
+    assert runner.run(str(tmp_path)).passed  # baseline: 3 tests
+    assert runner.run(str(tmp_path)).passed  # 5 tests -> a PASS, never an error (the key assertion)
+    warning = runner.run_warning()
+    assert warning is not None  # the canary fired
+    assert "non-deterministic" in warning
+    assert "per-suite baseline tracking" in warning  # names the deferred widening it triggers
+
+
+def test_run_warning_is_silent_when_test_count_is_stable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A stable suite never trips the canary: run_warning stays None across equal-count runs, so it
+    # cannot cry wolf on a healthy environment (guards the > baseline branch from misfiring).
+    report = _report(tmp_path)
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text('<testsuites><testsuite tests="4" failures="0"/></testsuites>')
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    runner = GutRunner()
+    runner.run(str(tmp_path))  # baseline: 4
+    runner.run(str(tmp_path))  # 4 again -> no rise, no canary
+    assert runner.run_warning() is None
+
+
 def test_gut_runner_satisfies_the_protocol() -> None:
     assert isinstance(GutRunner(), Runner)
+
+
+def test_gut_runner_satisfies_the_run_warning_protocol() -> None:
+    # GUT surfaces the non-determinism canary via the optional RunWarning contract, so the CLI can
+    # emit it generically (isinstance) without naming the framework.
+    assert isinstance(GutRunner(), RunWarning)

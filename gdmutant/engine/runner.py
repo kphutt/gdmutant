@@ -87,6 +87,24 @@ class Preparable(Protocol):
     def prepare(self, project_dir: str) -> None: ...
 
 
+@runtime_checkable
+class RunWarning(Protocol):
+    """A runner that may surface a single **run-level warning** once the whole mutation run ends.
+
+    Optional (checked via ``isinstance``, exactly like `Preparable`), so the engine/CLI stays
+    language-neutral (NF-3): a runner with nothing to say simply doesn't implement it. `run_warning`
+    is called once, *after* the run completes, and returns a stderr warning string, or ``None`` when
+    nothing is amiss.
+
+    Unlike a per-mutant error, this **never** changes the mutation score or the exit code — it flags
+    a condition the operator should investigate (e.g. `GutRunner`'s non-determinism canary: test
+    collection that varies run-to-run, degrading the crash-safety drop-guard), on the same stderr
+    surface as the "all mutants survived" warning.
+    """
+
+    def run_warning(self) -> str | None: ...
+
+
 @dataclass(frozen=True)
 class CommandRunner:
     """Runs an arbitrary test command and maps its **exit code** to a `SuiteResult`: exit 0 means
