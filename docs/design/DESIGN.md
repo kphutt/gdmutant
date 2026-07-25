@@ -55,11 +55,16 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
 - **FG-3.1** For each mutant, the system shall run the target project's test suite against a tree in which
   only that mutant is applied, and capture the pass/fail outcome.
 - **FG-3.2** For the GDScript adapter, execution runs the project's tests headless via the pluggable
-  **Runner** seam. Two ship: the general **exit-code command runner** (any `godot --headless` command
-  that exits non-zero on failure — GUT, GdUnit4's CLI, or a hand-rolled `SceneTree` harness;
-  [ADR-0005](../decisions/0005-exit-code-test-runner-convention.md)) is the universal path; a
-  dedicated **GdUnit4 runner** parses GdUnit4's machine-readable (JUnit-XML)
-  output for finer per-test detail.
+  **Runner** seam — a **runner-agnostic adapter contract** ([ADR-0011](../decisions/0011-runner-agnostic-adapter-seam.md)):
+  the engine knows only the contract, never a framework. Two **peer JUnit adapters** ship
+  first-class — **GdUnit4** and **GUT** (both run via `godot --headless` and parse JUnit-XML for
+  per-test detail; neither is privileged) — plus the framework-neutral **exit-code command runner**
+  ([ADR-0005](../decisions/0005-exit-code-test-runner-convention.md)) as the fallback for any harness
+  without JUnit output (a hand-rolled `SceneTree` runner, a bespoke CLI). Every runner upholds the
+  **crash-safety** clause: a load/compile crash surfaces as a kill or error, never a silent zero-test
+  pass — GdUnit4 via the "report must reappear" guard, GUT via a `tests == 0` → error guard, the
+  command runner via its exit code. Any future JUnit-emitting framework is first-class by adding one
+  small adapter, with no engine change.
 - **FG-3.3** The original (unmutated) suite must pass first; if it doesn't, the run aborts with a clear
   error (mutation testing a red suite is meaningless).
 
@@ -133,11 +138,11 @@ graph TD
     subgraph Service
         OPS["Operators — the saboteurs<br/>(engine/operators/): neutral catalog"]
         ADAPT["GDScript adapter — the field agent<br/>(adapters/gdscript/): gdtoolkit AST + runner"]
-        RUN["Runner — the executioner<br/>godot --headless (exit-code command / GdUnit4-XML)"]
+        RUN["Runner — the executioner<br/>godot --headless (GdUnit4 / GUT JUnit-XML peers, or exit-code command)"]
     end
     subgraph Data
         SCHEMA["Report — the court record<br/>mutation-testing-elements JSON + console"]
-        CORPUS["Fixture corpus<br/>(corpus/): GDScript module + GdUnit4 suite"]
+        CORPUS["Fixture corpus<br/>(corpus/): GDScript module + GdUnit4 & GUT suites"]
     end
 
     CLI --> ENGINE
@@ -156,7 +161,7 @@ graph TD
 | `engine/` | Case manager | Orchestrate the loop: enumerate targets, drive operators + adapter, collect verdicts, hand off to the reporter. Language-neutral. |
 | `engine/operators/` | The saboteurs | The neutral operator catalog — *what* to change, expressed abstractly. |
 | `adapters/gdscript/` | The field agent | Parse GDScript (gdtoolkit), apply an operator at a node, re-emit valid source (NF-5), invoke the runner, translate its output to a verdict. |
-| runner (in adapter) | The executioner | `godot --headless` + GdUnit4; return pass/fail from the JUnit-XML. |
+| runner (in adapter) | The executioner | `godot --headless` + GdUnit4 or GUT (peer JUnit-XML adapters over one contract), or the exit-code command runner; return pass/fail. |
 | tally (in engine) | The jury foreman | Classify each mutant (FG-4) and compute the score. |
 | reporter (in engine) | The court record | Emit the `mutation-testing-elements` JSON + the console summary (FG-5). |
 
@@ -174,8 +179,9 @@ either choice safe. This is the only piece deliberately left for the spike; ever
    round-trips to valid GDScript.
 2. Operator catalog (FG-2) + engine loop (select → mutate → run → tally → report), full-suite-per-mutant.
 3. GDScript adapter (FG-1/FG-3) + the NF-5 validity guard.
-4. Bundled `corpus/` (a small GDScript module + a GdUnit4 suite) that doubles as gdmutant's own regression
-   tests; prove the tool mutates it and prints real survivors.
+4. Bundled `corpus/` (a small GDScript module + GdUnit4 and GUT suites) that doubles as gdmutant's own
+   regression tests; prove the tool mutates it and prints real survivors — identically under both
+   JUnit adapters.
 5. `mutation-testing-elements` JSON + console reporter (FG-5).
 
 **Tier B — deferred, designed for but not built in v0.1:**

@@ -79,7 +79,7 @@ jobs:
       # Lint only the fixture's own GDScript (not the downloaded addon). gdlint ships with gdtoolkit,
       # already in the lockfile — a step, not a separate job.
       - name: Lint GDScript fixture (gdlint)
-        run: uv run gdlint corpus/turn_order.gd corpus/test corpus/harness
+        run: uv run gdlint corpus/turn_order.gd corpus/test corpus/gut_test corpus/harness
 
       - name: Typecheck (mypy)
         run: uv run mypy gdmutant
@@ -178,3 +178,49 @@ jobs:
           name: corpus-mutation-report
           path: report.json
           if-no-files-found: warn
+
+  # --- Live self-test: real Godot + GUT, end-to-end ----------------
+  # The peer of selftest-godot for the GUT adapter (ADR-0011): installs the pinned GUT addon and
+  # drives the shipped CLI (--runner gut) against real Godot on the same corpus, pinning the SAME
+  # 18/11/7 per-mutant outcome as GdUnit4 — mutant-for-mutant agreement across the two frameworks is
+  # the proof the runner seam is genuinely framework-agnostic. Same Godot pin/rationale as above.
+  selftest-gut:
+    name: Self-test (real Godot + GUT)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false # this job never uses git creds — don't leave them on the runner
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true # cache uv's global store — skips re-downloading the locked deps each job
+
+      - name: Install deps (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Set up Godot
+        uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2.4.1
+        with:
+          version: 4.7.0
+          use-dotnet: false
+          cache: true
+
+      - name: Godot smoke check
+        run: godot --version
+
+      - name: Install GUT addon (pinned commit + tree-hash verified)
+        run: scripts/install-gut.sh
+
+      # Run only the GUT leg of the live self-test (-k gut); the GdUnit4 leg auto-skips here (no
+      # gdUnit4 addon installed), and running just the GUT test keeps this job focused, not a
+      # duplicate of selftest-godot. On failure it prints the full per-mutant table + gdmutant's
+      # stdout/stderr, so a red run is diagnosable from this log alone.
+      - name: Live self-test (real Godot + GUT)
+        run: GDMUTANT_GODOT=godot uv run pytest tests/test_selftest_live.py -k gut -v --no-cov
