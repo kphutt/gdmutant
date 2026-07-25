@@ -1,3 +1,8 @@
+---
+type: reference
+status: active
+---
+
 # Survivor explainers
 
 A **surviving mutant** is a change gdmutant made to your source that every test still passed —
