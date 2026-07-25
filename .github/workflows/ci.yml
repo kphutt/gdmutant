@@ -36,7 +36,16 @@ jobs:
   # --- Verify: lint + typecheck + tests + supply-chain audit ----------------
   verify:
     name: Verify
-    runs-on: ubuntu-24.04
+    # gdmutant is a cross-platform CLI shipped to Windows users. A Windows-only cp1252 console
+    # encoding bug once shipped *because* CI was Linux-only, so this fast, Godot-free gate runs on
+    # both Linux and Windows to catch that bug class (encoding + path). Both runners are pinned
+    # (never `-latest`) so a runner-image migration can't silently break us. macOS is intentionally
+    # out — there is no macOS-specific code path to guard, and it would only add cost.
+    strategy:
+      fail-fast: false # a failure on one OS must not cancel the other — we want both signals
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -57,6 +66,12 @@ jobs:
         run: uv sync --frozen
 
       - name: Lint (ruff)
+        # Force bash: this is the only multi-command step, and GitHub's default Windows shell
+        # (pwsh) does not stop on a native command's non-zero exit — only the last line's code is
+        # returned, so a `ruff check` failure could be masked by a passing `ruff format --check`.
+        # bash (errexit + pipefail, GitHub's Linux default) fails the step on the first error on
+        # both OSes. Every other step runs a single command, where this divergence can't occur.
+        shell: bash
         run: |
           uv run ruff check .
           uv run ruff format --check .
