@@ -9,7 +9,7 @@ import sys
 
 
 def main() -> int:
-    install = subprocess.run(["sh", "scripts/install-gut.sh"])
+    install = subprocess.run([sys.executable, "scripts/install_gut.py"])
     if install.returncode != 0:
         return install.returncode
     env = os.environ.copy()

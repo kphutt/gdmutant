@@ -132,7 +132,7 @@ jobs:
         run: godot --version
 
       - name: Install GdUnit4 addon (pinned commit + tree-hash verified)
-        run: scripts/install-gdunit4.sh
+        run: python scripts/install_gdunit4.py
 
       # On failure the test prints the full per-mutant table + gdmutant's stdout/stderr, so a red run
       # is diagnosable from this log alone. --no-cov: this job runs only the live test in isolation.
@@ -216,7 +216,7 @@ jobs:
         run: godot --version
 
       - name: Install GUT addon (pinned commit + tree-hash verified)
-        run: scripts/install-gut.sh
+        run: python scripts/install_gut.py
 
       # Run only the GUT leg of the live self-test (-k gut); the GdUnit4 leg auto-skips here (no
       # gdUnit4 addon installed), and running just the GUT test keeps this job focused, not a
