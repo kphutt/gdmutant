@@ -27,9 +27,11 @@ from gdmutant.adapters.gdscript import (
     unknown_ignore_operators,
 )
 from gdmutant.adapters.gdscript.runner import (
+    DEFAULT_GUT_REPORT_PATH,
     DEFAULT_REPORT_PATH,
     DEFAULT_TIMEOUT,
     GdUnit4Runner,
+    GutRunner,
 )
 from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.loop import BaselineFailed, MutationRun, run, run_paths
@@ -42,7 +44,7 @@ from gdmutant.engine.report import (
     stryker_report,
     stryker_report_multi,
 )
-from gdmutant.engine.runner import CommandRunner, Runner
+from gdmutant.engine.runner import CommandRunner, Runner, RunWarning
 
 _MISSING_GODOT_MACOS_HINT = (
     "  On macOS, Godot ships as an app bundle and is never on PATH — pass the binary directly:\n"
@@ -122,27 +124,65 @@ def _missing_executable_hint(filename: str) -> str:
     return "\n".join(lines)
 
 
-#: The GdUnit4 addon's location inside a Godot project (relative to the project dir).
+#: The JUnit adapters' addon locations inside a Godot project (relative to the project dir).
 _GDUNIT_ADDON_REL = Path("addons") / "gdUnit4"
+_GUT_ADDON_REL = Path("addons") / "gut"
+
+
+def _addon_hint(
+    error: BaselineFailed,
+    project_dir: str,
+    *,
+    framework: str,
+    addon_rel: Path,
+    install_hint: str,
+) -> str | None:
+    """An actionable message when a JUnit-adapter baseline failed *because its addon isn't
+    installed*, else None. This is the second most common first-run failure after a missing godot
+    binary — but unlike a missing binary it surfaces as an opaque ``RuntimeError`` ("<framework>
+    wrote no report"), not ``FileNotFoundError``, so without this it fell through to a raw stderr
+    dump with no next step. Gated on both the framework-specific error signature (the message names
+    `framework`) *and* the addon being absent, so it never fires for the other JUnit runner or for
+    the `command` runner (whose projects have no addon by design)."""
+    cause = error.__cause__
+    if not (
+        isinstance(cause, RuntimeError)
+        and framework in str(cause)
+        and "wrote no report" in str(cause)
+    ):
+        return None
+    if (Path(project_dir) / addon_rel).is_dir():
+        return None  # addon is present — some other framework/Godot failure, not a setup problem
+    return (
+        f"error: the {framework} addon was not found in the project — {addon_rel}/ is missing "
+        f"under {project_dir}.\n"
+        f"  {install_hint}, or run without the addon via "
+        '--runner command --command "<your headless test command>".'
+    )
 
 
 def _gdunit4_addon_hint(error: BaselineFailed, project_dir: str) -> str | None:
-    """An actionable message when the gdunit4 baseline failed *because the addon isn't installed*,
-    else None. This is the second most common first-run failure after a missing godot binary — but
-    unlike a missing binary it surfaces as an opaque ``RuntimeError`` ("GdUnit4 wrote no report"),
-    not ``FileNotFoundError``, so without this it fell through to a raw stderr dump with no next
-    step. Gated on both the GdUnit4-specific error signature *and* the addon being absent,
-    so it never fires for the `command` runner (whose projects have no addon by design)."""
-    cause = error.__cause__
-    if not (isinstance(cause, RuntimeError) and "wrote no report" in str(cause)):
-        return None
-    if (Path(project_dir) / _GDUNIT_ADDON_REL).is_dir():
-        return None  # addon is present — some other GdUnit4/Godot failure, not a setup problem
-    return (
-        f"error: the GdUnit4 addon was not found in the project — {_GDUNIT_ADDON_REL}/ is missing "
-        f"under {project_dir}.\n"
-        "  Install GdUnit4 (Godot Asset Library), or run without the addon via "
-        '--runner command --command "<your headless test command>".'
+    """`_addon_hint` for GdUnit4 — fires only on GdUnit4's "wrote no report" signature."""
+    return _addon_hint(
+        error,
+        project_dir,
+        framework="GdUnit4",
+        addon_rel=_GDUNIT_ADDON_REL,
+        install_hint="Install GdUnit4 (Godot Asset Library)",
+    )
+
+
+def _gut_addon_hint(error: BaselineFailed, project_dir: str) -> str | None:
+    """`_addon_hint` for GUT — fires only on GUT's "wrote no report" signature (a missing GUT addon
+    can't load ``gut_cmdln.gd``, so the run writes no report). GUT's other crash-safety error
+    (``tests == 0`` from a compile crash) does not match "wrote no report", so this never misfires
+    on it."""
+    return _addon_hint(
+        error,
+        project_dir,
+        framework="GUT",
+        addon_rel=_GUT_ADDON_REL,
+        install_hint="Install GUT (Godot Asset Library)",
     )
 
 
@@ -154,10 +194,13 @@ def _report_baseline_failure(error: BaselineFailed, project_dir: str) -> int:
     if missing is not None:
         print(_missing_executable_hint(missing), file=sys.stderr)
         return 2
-    addon_hint = _gdunit4_addon_hint(error, project_dir)
-    if addon_hint is not None:
-        print(addon_hint, file=sys.stderr)
-        return 2
+    # Try each JUnit adapter's addon hint. Each is gated on its own framework's error signature, so
+    # at most one fires — no need to thread the runner kind through: a GUT "wrote no report" never
+    # matches the GdUnit4 hint, and vice versa.
+    for hint in (_gdunit4_addon_hint(error, project_dir), _gut_addon_hint(error, project_dir)):
+        if hint is not None:
+            print(hint, file=sys.stderr)
+            return 2
     print(f"error: {error}", file=sys.stderr)
     return 1
 
@@ -521,8 +564,19 @@ def run_mutation(
     warning = all_survived_warning(result)
     if warning is not None:
         print(warning, file=sys.stderr)
+    _emit_runner_warning(runner)
     stryker = stryker_report(result, str(path), source, "gdscript")
     return _write_reports(stryker, json_path, html_path)
+
+
+def _emit_runner_warning(runner: Runner) -> None:
+    """Print a runner's optional post-run warning (e.g. `GutRunner`'s non-determinism canary) to
+    stderr, on the same surface as `all_survived_warning`. A no-op for a runner that doesn't
+    implement `RunWarning` or has nothing to report; it never changes the score or the exit code."""
+    if isinstance(runner, RunWarning):
+        warning = runner.run_warning()
+        if warning is not None:
+            print(warning, file=sys.stderr)
 
 
 def _write_reports(stryker: dict[str, object], json_path: str | None, html_path: str | None) -> int:
@@ -626,6 +680,7 @@ def run_mutation_paths(
     warning = all_survived_warning(aggregate)
     if warning is not None:
         print(warning, file=sys.stderr)
+    _emit_runner_warning(runner)
     stryker = stryker_report_multi({p: (r, sources[p]) for p, r in runs.items()}, "gdscript")
     return _write_reports(stryker, json_path, html_path)
 
@@ -692,8 +747,8 @@ def _load_config(path: Path | None = None) -> dict[str, object] | None:
     if not isinstance(settings.get("require_clean", False), bool):
         print(f"error: {path}: 'require-clean' must be true or false", file=sys.stderr)
         return None
-    if settings.get("runner") not in (None, "gdunit4", "command"):
-        print(f"error: {path}: 'runner' must be 'gdunit4' or 'command'", file=sys.stderr)
+    if settings.get("runner") not in (None, "gdunit4", "gut", "command"):
+        print(f"error: {path}: 'runner' must be 'gdunit4', 'gut', or 'command'", file=sys.stderr)
         return None
     exclude = settings.get("exclude")
     if exclude is not None and (
@@ -722,9 +777,9 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     run_parser.add_argument("--project", help="the Godot project dir (default: the source's dir)")
     run_parser.add_argument(
         "--runner",
-        choices=("gdunit4", "command"),
+        choices=("gdunit4", "gut", "command"),
         default="gdunit4",
-        help="test runner: gdunit4 (JUnit XML) or command (any harness, by exit code) "
+        help="test runner: gdunit4 or gut (both JUnit XML) or command (any harness, by exit code) "
         "(default: gdunit4)",
     )
     run_parser.add_argument(
@@ -737,13 +792,15 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "--godot", default="godot", help="the Godot executable (default: godot)"
     )
     run_parser.add_argument(
-        "--tests", default="res://test", help="the GdUnit4 test path (default: res://test)"
+        "--tests",
+        default="res://test",
+        help="the test directory (gdunit4's -a / gut's -gdir) (default: res://test)",
     )
     run_parser.add_argument(
         "--report-path",
-        default=DEFAULT_REPORT_PATH,
-        help="GdUnit4 JUnit-XML path, relative to the project dir "
-        f"(default: {DEFAULT_REPORT_PATH})",
+        default=None,
+        help="JUnit-XML report path, relative to the project dir (default: per runner — "
+        f"gdunit4 {DEFAULT_REPORT_PATH}, gut {DEFAULT_GUT_REPORT_PATH})",
     )
     run_parser.add_argument(
         "--timeout",
@@ -929,7 +986,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--command", args.test_command, None),
                     ("--godot", args.godot, "godot"),
                     ("--tests", args.tests, "res://test"),
-                    ("--report-path", args.report_path, DEFAULT_REPORT_PATH),
+                    ("--report-path", args.report_path, None),
                     ("--timeout", args.timeout, None),
                     ("--require-clean", args.require_clean, False),
                     ("--json", args.json_path, None),
@@ -976,12 +1033,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.test_command:
                 # --command only applies to --runner command; flag it rather than silently drop it.
                 print("note: --command is ignored unless --runner command is set", file=sys.stderr)
-            runner = GdUnit4Runner(
-                test_path=args.tests,
-                godot=args.godot,
-                report_path=args.report_path,
-                timeout=baseline_timeout,
-            )
+            # gdunit4 and gut are peer JUnit adapters over one contract (docs/decisions/0011); each
+            # owns its own default report layout, resolved here when --report-path is omitted.
+            if args.runner == "gut":
+                runner = GutRunner(
+                    test_dir=args.tests,
+                    godot=args.godot,
+                    report_path=args.report_path or DEFAULT_GUT_REPORT_PATH,
+                    timeout=baseline_timeout,
+                )
+            else:
+                runner = GdUnit4Runner(
+                    test_path=args.tests,
+                    godot=args.godot,
+                    report_path=args.report_path or DEFAULT_REPORT_PATH,
+                    timeout=baseline_timeout,
+                )
         common = {
             "timeout": args.timeout,
             "json_path": args.json_path,

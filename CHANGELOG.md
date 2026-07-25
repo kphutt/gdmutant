@@ -15,8 +15,12 @@ CLI. `0.1.0` is the current in-development version; the first git tag is still p
   with a re-parse validity guard so invalid mutants are never run.
 - Operators: comparison, boolean, arithmetic, constant, numeric-literal, compound assignment,
   modulo, unary-not, and statement-deletion.
-- Two test runners: the GdUnit4 runner (JUnit XML) and an exit-code runner (`--runner command`) for
-  any headless harness — no GdUnit4 addon required.
+- Framework-agnostic test runners over one shared runner contract (a runner-agnostic adapter seam):
+  **GdUnit4** and **GUT** as first-class peer JUnit-XML adapters (`--runner gdunit4` / `--runner gut`,
+  neither privileged in the engine), plus an exit-code runner (`--runner command`) for any headless
+  harness without JUnit output — no addon required. Every runner upholds a crash-safety guarantee: a
+  load/compile crash surfaces as a kill or error, never a silent zero-test pass (GUT's empty-report
+  case is caught explicitly as `tests == 0` → error).
 - Multi-file and directory targets: mutate several files or a whole directory in one pass with a
   per-file breakdown and one aggregate mutation score.
 - `--jobs N` runs N mutants in parallel, each on its own copy of the project so in-place mutation
