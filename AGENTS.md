@@ -45,7 +45,10 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   [`docs/decisions/0001`](docs/decisions/0001-write-the-engine-in-python-not-gdscript.md).
 - **Runtime dependency:** [`gdtoolkit`](https://github.com/Scony/godot-gdscript-toolkit) — the
   GDScript parser the adapter mutates.
-- **First test-runner adapter:** GdUnit4 (run via `godot --headless`, JUnit-XML output).
+- **Test-runner adapters:** GdUnit4 and GUT are **peer JUnit-XML adapters** over one runner contract
+  (both run via `godot --headless`; neither is privileged in the engine), plus the framework-neutral
+  **exit-code command runner** for any harness without JUnit output. See
+  [`docs/decisions/0011`](docs/decisions/0011-runner-agnostic-adapter-seam.md).
 - **Report format:** Stryker's `mutation-testing-elements` JSON schema (renders in its HTML viewer).
 
 ## Conventions

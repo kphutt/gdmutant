@@ -55,6 +55,19 @@ class Runner(Protocol):
     `timeout` overrides the runner's own budget for this call (seconds); ``None`` uses the runner's
     configured default. The engine derives a per-mutant budget from the baseline run and passes it
     here, so a hanging mutant is cut off in seconds rather than blocking for the full default.
+
+    **Crash-safety contract (the property every runner must uphold).** A mutation that makes a test
+    file fail to *load or compile* must surface as a **kill or an error** — **never** a silent
+    zero-test *pass*. A runner that returned "0 tests, 0 failures" for such a crash would mark the
+    responsible mutant SURVIVED, gdmutant's single worst failure mode (a wrong survivor report).
+    Each concrete adapter upholds this in the way its framework fails:
+      * ``CommandRunner`` — a non-zero exit is a failure (killed); a command that can't be executed
+        at all raises (the engine tallies ``error``).
+      * ``GdUnit4Runner`` — a crash writes *no* report, caught by the "the report must reappear"
+        freshness guard (it raises → ``error``).
+      * ``GutRunner`` — GUT *skips* a suite that fails to load and runs the rest green (exit 0), so
+        it raises on both ``tests == 0`` *and* a drop below the healthy baseline's test count (a
+        skipped suite) → ``error``, never a false survivor.
     """
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult: ...
@@ -72,6 +85,24 @@ class Preparable(Protocol):
     """
 
     def prepare(self, project_dir: str) -> None: ...
+
+
+@runtime_checkable
+class RunWarning(Protocol):
+    """A runner that may surface a single **run-level warning** once the whole mutation run ends.
+
+    Optional (checked via ``isinstance``, exactly like `Preparable`), so the engine/CLI stays
+    language-neutral (NF-3): a runner with nothing to say simply doesn't implement it. `run_warning`
+    is called once, *after* the run completes, and returns a stderr warning string, or ``None`` when
+    nothing is amiss.
+
+    Unlike a per-mutant error, this **never** changes the mutation score or the exit code — it flags
+    a condition the operator should investigate (e.g. `GutRunner`'s non-determinism canary: test
+    collection that varies run-to-run, degrading the crash-safety drop-guard), on the same stderr
+    surface as the "all mutants survived" warning.
+    """
+
+    def run_warning(self) -> str | None: ...
 
 
 @dataclass(frozen=True)

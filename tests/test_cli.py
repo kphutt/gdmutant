@@ -91,6 +91,47 @@ def test_all_survived_warning_absent_when_a_mutant_is_killed(
     assert "evaluated mutants survived" not in capsys.readouterr().err
 
 
+class _RunWarningRunner:
+    """A minimal runner that implements the optional `RunWarning` contract, for the helper tests."""
+
+    def __init__(self, warning: str | None) -> None:
+        self._warning = warning
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        raise NotImplementedError  # the helper never runs it; it only reads run_warning()
+
+    def run_warning(self) -> str | None:
+        return self._warning
+
+
+def test_emit_runner_warning_prints_a_runners_warning_to_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A runner that implements RunWarning and has something to say (e.g. GUT's non-determinism
+    # canary): the helper prints it on stderr, the same surface as the all-survived warning.
+    cli._emit_runner_warning(_RunWarningRunner("warning: collection was non-deterministic"))
+    captured = capsys.readouterr()
+    assert "non-deterministic" in captured.err
+    assert captured.out == ""  # never on stdout (keeps --json - clean)
+
+
+def test_emit_runner_warning_silent_when_the_runner_has_nothing_to_report(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A RunWarning runner whose canary never fired returns None -> the helper prints nothing.
+    cli._emit_runner_warning(_RunWarningRunner(None))
+    assert capsys.readouterr() == ("", "")
+
+
+def test_emit_runner_warning_silent_for_a_runner_without_the_contract(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A runner that doesn't implement RunWarning (e.g. the marker runner / GdUnit4) is skipped
+    # entirely via the isinstance guard — no attribute error, no output.
+    cli._emit_runner_warning(MarkerRunner(str(_gd(tmp_path)), ">="))
+    assert capsys.readouterr() == ("", "")
+
+
 def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = _gd(tmp_path)
     report_file = tmp_path / "report.json"
@@ -458,6 +499,42 @@ def test_run_mutation_no_report_with_addon_present_is_generic_baseline_error(
     assert "wrote no report" in err  # the raw runner error is still surfaced
 
 
+class GutNoReportRunner:
+    """Raises GutRunner's exact 'wrote no report' RuntimeError on the baseline — what an
+    uninstalled/broken GUT addon produces (Godot can't load gut_cmdln.gd, so nothing is written)."""
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        raise RuntimeError("GUT wrote no report at res://reports — Godot may have failed to run")
+
+
+def test_run_mutation_missing_gut_addon_returns_two_with_actionable_hint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A GUT baseline that wrote no report AND no GUT addon installed is an addon-absent setup error
+    # (exit 2) — the GUT-specific hint fires (gated on GUT's own message signature, so it never
+    # cross-fires with the GdUnit4 hint). No addon here.
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), GutNoReportRunner())
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "GUT addon was not found" in err and "--runner command" in err
+    assert "GdUnit4 addon was not found" not in err  # the GdUnit4 hint must not misfire
+
+
+def test_run_mutation_gut_no_report_with_addon_present_is_generic_baseline_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Same GUT 'wrote no report' error, but the GUT addon IS installed -> not a setup problem: fall
+    # through to the generic exit 1 with the raw error, never the misleading addon hint.
+    path = _gd(tmp_path)
+    (tmp_path / "addons" / "gut").mkdir(parents=True)
+    rc = run_mutation(str(path), str(tmp_path), GutNoReportRunner())
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "GUT addon was not found" not in err
+    assert "wrote no report" in err  # the raw runner error is still surfaced
+
+
 def test_list_mutants_prints_every_mutant_and_returns_zero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -600,7 +677,8 @@ def test_parser_defaults() -> None:
     assert args.project is None
     assert args.json_path is None
     assert args.dry_run is False
-    assert args.report_path == "reports/report_1/results.xml"
+    # --report-path defaults to None so the per-runner default (gdunit4 vs gut) is resolved in main.
+    assert args.report_path is None
     assert args.timeout is None  # default: derived per-mutant from the baseline run time
     assert args.require_clean is False
     assert args.runner == "gdunit4"
@@ -614,10 +692,10 @@ def test_parser_rejects_an_unknown_runner() -> None:
         build_parser().parse_args(["run", "x.gd", "--runner", "nope"])
 
 
-def test_parser_accepts_both_runner_choices() -> None:
-    # Both valid runners parse — pins each choice literal (so "gdunit4" -> "GDUNIT4" is caught: an
-    # explicit --runner gdunit4 would then be rejected).
-    for name in ("gdunit4", "command"):
+def test_parser_accepts_all_runner_choices() -> None:
+    # Every valid runner parses — pins each choice literal (so "gdunit4" -> "GDUNIT4" is caught: an
+    # explicit --runner gdunit4 would then be rejected). gut is a peer JUnit adapter (ADR-0011).
+    for name in ("gdunit4", "gut", "command"):
         assert build_parser().parse_args(["run", "x.gd", "--runner", name]).runner == name
 
 
@@ -643,11 +721,11 @@ def test_parser_help_text(
     for expected in (
         "one or more .gd files or directories to mutate (a directory mutates every .gd under it, recursively, excluding addons/ and dot-dirs)",  # noqa: E501
         "the Godot project dir (default: the source's dir)",
-        "test runner: gdunit4 (JUnit XML) or command (any harness, by exit code) (default: gdunit4)",  # noqa: E501
+        "test runner: gdunit4 or gut (both JUnit XML) or command (any harness, by exit code) (default: gdunit4)",  # noqa: E501
         "test command for --runner command (exit 0 = pass), e.g. 'godot --headless --script res://tests/run_tests.gd'",  # noqa: E501
         "the Godot executable (default: godot)",
-        "the GdUnit4 test path (default: res://test)",
-        "GdUnit4 JUnit-XML path, relative to the project dir (default: reports/report_1/results.xml)",  # noqa: E501
+        "the test directory (gdunit4's -a / gut's -gdir) (default: res://test)",
+        "JUnit-XML report path, relative to the project dir (default: per runner — gdunit4 reports/report_1/results.xml, gut reports/gut_results.xml)",  # noqa: E501
         "per-mutant test-run timeout, in seconds (default: derived from the baseline run — 10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",  # noqa: E501
         "refuse to run if the source file has uncommitted git changes (default: warn only)",
         "write the Stryker JSON report here (use - for stdout)",
@@ -744,6 +822,15 @@ def test_load_config_rejects_bad_typed_values(tmp_path: Path) -> None:
         cfg = tmp_path / f"{name}.toml"
         cfg.write_text(body, encoding="utf-8")
         assert _load_config(cfg) is None, body
+
+
+def test_load_config_accepts_every_runner_choice(tmp_path: Path) -> None:
+    # All three runners (gdunit4, gut, command) are valid config values — pins that "gut" is
+    # accepted (a peer JUnit adapter, ADR-0011), not rejected like "nope" above.
+    for runner in ("gdunit4", "gut", "command"):
+        cfg = tmp_path / f"{runner}.toml"
+        cfg.write_text(f'runner = "{runner}"\n', encoding="utf-8")
+        assert _load_config(cfg) == {"runner": runner}
 
 
 def test_main_uses_config_defaults_when_cli_flags_omitted(
@@ -912,6 +999,75 @@ def test_main_command_runner_builds_from_shlex_split_command(
     assert rc == 0
     assert captured["command"] == ["godot", "--headless", "--script", "res://tests/run.gd"]
     assert captured["timeout"] == 30.0
+
+
+def test_main_gut_runner_builds_from_tests_godot_and_default_report_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # --runner gut builds a GutRunner from --tests (-> test_dir) and --godot, defaulting report_path
+    # to GUT's own layout (reports/gut_results.xml, NOT GdUnit4's), and must NOT build a
+    # GdUnit4Runner. Pins the peer-adapter wiring (ADR-0011).
+    path = _gd(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_gut_runner(**kwargs: object) -> RecordingRunner:
+        captured.update(kwargs)
+        return RecordingRunner()
+
+    def boom_gdunit(**kwargs: object) -> object:
+        raise AssertionError("GdUnit4Runner must not be built for --runner gut")
+
+    monkeypatch.setattr(cli, "GutRunner", fake_gut_runner)
+    monkeypatch.setattr(cli, "GdUnit4Runner", boom_gdunit)
+    rc = main(
+        [
+            "run",
+            str(path),
+            "--project",
+            str(tmp_path),
+            "--runner",
+            "gut",
+            "--godot",
+            "godot4",
+            "--tests",
+            "res://gut_test",
+        ]
+    )
+    assert rc == 0
+    assert captured == {
+        "test_dir": "res://gut_test",
+        "godot": "godot4",
+        "report_path": "reports/gut_results.xml",  # GUT's default layout, not report_1/results.xml
+        "timeout": 600.0,
+    }
+
+
+def test_main_gut_runner_honours_an_explicit_report_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An explicit --report-path overrides GUT's default (proves the `args.report_path or DEFAULT`
+    # resolution passes the user's value through, not the default).
+    path = _gd(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_gut_runner(**kwargs: object) -> RecordingRunner:
+        captured.update(kwargs)
+        return RecordingRunner()
+
+    monkeypatch.setattr(cli, "GutRunner", fake_gut_runner)
+    main(
+        [
+            "run",
+            str(path),
+            "--project",
+            str(tmp_path),
+            "--runner",
+            "gut",
+            "--report-path",
+            "out/gut.xml",
+        ]
+    )
+    assert captured["report_path"] == "out/gut.xml"
 
 
 def test_main_command_runner_requires_the_command_flag(
