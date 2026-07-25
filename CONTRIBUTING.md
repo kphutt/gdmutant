@@ -44,7 +44,7 @@ The live self-test (`tests/test_selftest_live.py`) auto-skips unless you opt in 
 To run it locally:
 
 ```sh
-scripts/install-gdunit4.sh                                   # download + verify the GdUnit4 addon
+python scripts/install_gdunit4.py                            # download + verify the GdUnit4 addon
 GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-cov
 ```
 
