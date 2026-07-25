@@ -30,21 +30,15 @@ Once installed, a secret scan runs on every commit and the full checks below run
 
 ## Before you open a PR
 
-If you didn't install the hooks above, run the same checks CI runs by hand:
-
-```sh
-uv run ruff check .        # lint
-uv run ruff format .       # format (CI checks this with --check)
-uv run mypy gdmutant       # type check
-uv run pytest              # tests + coverage
-uv run pip-audit           # dependency vulnerability audit
-```
+If you didn't install the hooks above, run the same checks CI runs by hand — the exact command list
+is in [`AGENTS.md`](AGENTS.md) under **Build · test** (`ruff` lint + format, `mypy`, `pytest`,
+`pip-audit`).
 
 The live self-test (`tests/test_selftest_live.py`) auto-skips unless you opt in with a real Godot.
 To run it locally:
 
 ```sh
-scripts/install-gdunit4.sh                                   # download + verify the GdUnit4 addon
+python scripts/install_gdunit4.py                            # download + verify the GdUnit4 addon
 GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-cov
 ```
 

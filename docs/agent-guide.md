@@ -1,5 +1,5 @@
 ---
-type: guide
+type: how-to
 status: active
 created: 2026-07-11
 ---
@@ -21,7 +21,7 @@ uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
 
 For a Godot project with no Python of its own, put that in a tiny **non-package** uv project beside
 the game and pin the interpreter (a `.python-version`) so uv doesn't resolve to a newer system
-Python — full recipe in the README's "Install into your project" section. Then `uv run gdmutant …`.
+Python — full recipe in the README's [Quickstart](../README.md#quickstart). Then `uv run gdmutant …`.
 
 ## Invoke
 
@@ -36,6 +36,8 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
 - `--require-clean` refuses to run if the source file has uncommitted git changes (exit 2).
   Without it, gdmutant only *warns* and proceeds (it never blocks on a prompt — safe for headless
   agents).
+- `--since <ref>` mutates only the lines changed since a git ref (e.g. `--since origin/main`) — the
+  fast per-PR mode for CI; `--jobs N` evaluates mutants in parallel.
 - Other flags: `--tests res://test`, `--godot <path>`, `--report-path <rel>`, `--timeout <seconds>`.
   `gdmutant run --help` lists them all.
 - **Runner selection.** `--runner gdunit4` (default) and `--runner gut` are first-class peer JUnit
@@ -119,9 +121,46 @@ stash first, or pass `--require-clean`.
    [`docs/decisions/0004`](decisions/0004-equivalent-mutant-ignore-annotation.md) and
    [`0006`](decisions/0006-operator-scoped-ignore-and-ignored-status.md).
 
-A well-behaved fixer loop terminates because every survivor is either killed (step 3) or suppressed
-as equivalent (step 4) — never retried forever.
+The loop **terminates**: every survivor ends up either killed (step 3) or suppressed as a proven
+equivalent (step 4) — there is no "retry forever" branch. Run one module at a time (the report is
+per-file) and fix its whole survivor list before moving on.
 
-For a fuller, copy-pasteable version of this loop with a real worked example (a killable survivor
-and a genuine equivalent from the bundled corpus), see
-[`mutation-fixer-recipe.md`](mutation-fixer-recipe.md).
+## Worked example (the bundled corpus)
+
+`corpus/turn_order.gd` clamps an initiative value into `[0, max_value]`:
+
+```gdscript
+static func clamp_initiative(value: int, max_value: int) -> int:
+	if value < 0:
+		return 0
+	if value > max_value:
+		return max_value
+	return value
+```
+
+The corpus suite tests `clamp_initiative(-3, 10) == 0`, `(12, 10) == 10`, `(6, 10) == 6`.
+
+**A killable survivor.** The numeric mutant `0 -> -1` on `if value < 0` survives: at `value == -3`
+both the original and the mutant return `0`, so the existing tests can't tell them apart. At
+`value == -1` they differ — the original clamps to `0`, the mutant returns `-1`. The boundary test
+kills it:
+
+```gdscript
+func test_clamp_initiative_lower_boundary() -> void:
+	assert_int(TurnOrder.clamp_initiative(-1, 10)).is_equal(0)  # kills `< 0` -> `< -1`
+```
+
+**A genuine equivalent.** The comparison mutant `> -> >=` on the *upper* clamp
+(`if value >= max_value`) can never be caught: at `value == max_value` the original falls through to
+`return value` — which is `max_value` — while the mutant returns `max_value` directly; every other
+input already agrees. Suppress it with a reason:
+
+```gdscript
+	if value > max_value:  # gdmutant: ignore  (>= is equivalent: value == max_value returns max either way)
+		return max_value
+```
+
+Beware near-misses: the *lower* clamp's `< -> <=` looks equivalent but isn't — at
+`value == 0, max_value == -1` the original returns `-1` while `<= 0` returns `0`, so a test kills it.
+Suppress only a mutant you have *proven* equivalent across all inputs. If you're unsure whether a
+mutant is killable, it usually is — write the test.
