@@ -1,0 +1,56 @@
+name: Zizmor
+
+# Static-analysis security lint for the GitHub Actions workflows themselves (zizmor). It fails CI on
+# an unpinned/insecure action, an over-permissioned token, template-injection in a `run:` block, and
+# unsafe pull_request_target / artifact patterns — the workflow-file class that pip-audit (Python
+# deps) and gitleaks (secrets) do not look at. gdmutant already SHA-pins every action and runs
+# least-privilege by hand; this makes that posture *enforced* rather than a matter of discipline, so
+# a future unpinned action or injection sink can't merge unnoticed.
+#
+# Standalone (not a job in ci.yml) so it stays file-disjoint from other in-flight ci.yml work and is
+# easy to add as its own required check. Trigger on pull_request (never pull_request_target — that
+# would run fork code with repo secrets) and on push to main; unfiltered by path so, once it's a
+# required check, it always reports (a path-filtered required check would leave PRs pending forever).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only: zizmor needs the API token only to *query* GitHub (below). No SARIF upload, so no
+# security-events: write.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zizmor:
+    name: Workflow security (zizmor)
+    runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so a runner-image migration can't silently break us
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false # this job never uses git creds — don't leave them on the runner
+
+      # zizmor is a Python tool; run it through uv (already the repo's toolchain) with a pinned version
+      # so a new zizmor release can't silently change the gate. setup-uv is SHA-pinned like every other
+      # action here (Dependabot bumps it); the zizmor version string is bumped alongside our other tool
+      # pins (uv, godot).
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true # cache uv's global store — skips re-downloading the tool each run
+
+      # --persona=pedantic asserts SHA-pinning going forward (flags a tag-pinned or unpinned action,
+      # not just a completely unpinned one) and requires each granted permission to carry a comment —
+      # the drift-prevention this floor control exists for. Scoped to .github/workflows/ (the only
+      # thing to lint). GH_TOKEN enables the online audits (known-vulnerable-actions, stale-action-refs,
+      # impostor-commit, ref-confusion, ref-version-mismatch); the default read-only token is enough.
+      # zizmor exits non-zero on any finding, which fails the step — this is a floor gate, not advisory.
+      - name: Lint workflows (zizmor)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uvx zizmor@1.14.2 --persona=pedantic .github/workflows/
