@@ -43,6 +43,7 @@ pytestmark = pytest.mark.skipif(
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CORPUS = REPO_ROOT / "corpus"
 ADDON = CORPUS / "addons" / "gdUnit4"
+GUT_ADDON = CORPUS / "addons" / "gut"
 TARGET = "turn_order.gd"
 
 # The exact per-mutant outcome of running gdmutant against corpus/turn_order.gd on real Godot.
@@ -161,6 +162,23 @@ def test_gdunit4_against_real_godot(tmp_path: Path) -> None:
         project,
         ["--runner", "gdunit4", "--godot", str(_GODOT)],
         tmp_path / "gdunit_report.json",
+    )
+    _assert_pinned_outcomes(report)
+
+
+def test_gut_against_real_godot(tmp_path: Path) -> None:
+    """The GUT path — the peer JUnit adapter (ADR-0011): exercises the real ``-s gut_cmdln.gd
+    -gdir=res://gut_test -gjunit_xml_file=… -gexit`` flags and reads GUT's actual JUnit report. GUT
+    is a *peer* of GdUnit4 over one runner contract, so it must pin the EXACT SAME per-mutant
+    outcome (18/11/7 with the identical survivor set) — mutant-for-mutant agreement across the two
+    frameworks is the proof the seam is genuinely runner-agnostic, not GdUnit4-shaped."""
+    if not GUT_ADDON.is_dir():
+        pytest.skip("GUT addon not installed — run scripts/install-gut.sh")
+    project = _corpus_copy(tmp_path)
+    report = _run_gdmutant(
+        project,
+        ["--runner", "gut", "--tests", "res://gut_test", "--godot", str(_GODOT)],
+        tmp_path / "gut_report.json",
     )
     _assert_pinned_outcomes(report)
 

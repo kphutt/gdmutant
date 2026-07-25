@@ -1,7 +1,8 @@
-; Minimal Godot project for the gdmutant corpus fixture. The GdUnit4 addon is downloaded
-; (not vendored) by scripts/install-gdunit4.sh for the live self-test — see
-; tests/test_selftest_live.py. config/features stays "4.4" (the fixture's floor); CI runs a
-; newer Godot against it, and the pure-logic mutants are Godot-version-independent.
+; Minimal Godot project for the gdmutant corpus fixture. The GdUnit4 and GUT addons are downloaded
+; (not vendored) by scripts/install-gdunit4.sh / scripts/install-gut.sh for the live self-test — see
+; tests/test_selftest_live.py. The GdUnit4 suite lives in test/, the GUT suite in gut_test/.
+; config/features stays "4.4" (the fixture's floor); CI runs a newer Godot against it, and the
+; pure-logic mutants are Godot-version-independent.
 
 config_version=5
 

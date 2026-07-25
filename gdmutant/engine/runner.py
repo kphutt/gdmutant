@@ -55,6 +55,18 @@ class Runner(Protocol):
     `timeout` overrides the runner's own budget for this call (seconds); ``None`` uses the runner's
     configured default. The engine derives a per-mutant budget from the baseline run and passes it
     here, so a hanging mutant is cut off in seconds rather than blocking for the full default.
+
+    **Crash-safety contract (the property every runner must uphold).** A mutation that makes a test
+    file fail to *load or compile* must surface as a **kill or an error** — **never** a silent
+    zero-test *pass*. A runner that returned "0 tests, 0 failures" for such a crash would mark the
+    responsible mutant SURVIVED, gdmutant's single worst failure mode (a wrong survivor report).
+    Each concrete adapter upholds this in the way its framework fails:
+      * ``CommandRunner`` — a non-zero exit is a failure (killed); a command that can't be executed
+        at all raises (the engine tallies ``error``).
+      * ``GdUnit4Runner`` — a crash writes *no* report, caught by the "the report must reappear"
+        freshness guard (it raises → ``error``).
+      * ``GutRunner`` — a crash writes an *empty* ``<testsuites tests="0">`` and exits 0, so it
+        makes ``tests == 0`` an explicit execution error (it raises → ``error``).
     """
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult: ...

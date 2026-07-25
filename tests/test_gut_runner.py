@@ -1,0 +1,235 @@
+"""Tests for the GUT runner (subprocess mocked — no real Godot).
+
+GUT is a peer JUnit adapter to GdUnit4 over the shared `_GodotJUnitRunner` contract (ADR-0011), so
+these mirror `test_gdunit_runner.py` — same behaviour, GUT's own flags — plus the one GUT-specific
+hardening: the ``tests == 0 → ERROR`` crash-safety guard (a false-survivor regression test)."""
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+import gdmutant.adapters.gdscript.runner as runner_mod
+from gdmutant.adapters.gdscript.runner import GutRunner
+from gdmutant.engine.runner import Runner, SuiteTimeout
+
+
+def _report(tmp_path: Path) -> Path:
+    path = tmp_path / "reports" / "gut_results.xml"
+    path.parent.mkdir(parents=True)
+    return path
+
+
+def test_command_construction(tmp_path: Path) -> None:
+    # command() resolves --path deliberately (see runner.py), so a hardcoded POSIX literal cannot
+    # survive it on Windows. tmp_path is already absolute and platform-native, so the flag list and
+    # its order stay pinned exactly while the path itself stops asserting which OS the suite runs.
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cmd = GutRunner(test_dir="res://gut_test", godot="godot4").command(str(proj))
+    assert cmd == [
+        "godot4",
+        "--headless",
+        "--path",
+        str(proj),
+        "-s",
+        "res://addons/gut/gut_cmdln.gd",
+        "-gdir=res://gut_test",  # GUT's flags are =-joined, not space-separated
+        "-gjunit_xml_file=res://reports/gut_results.xml",  # the JUnit report GUT writes
+        "-gexit",  # quit when the run finishes (headless CI mode)
+    ]
+
+
+def test_command_resolves_a_relative_project_dir_to_absolute() -> None:
+    # run() sets cwd=project_dir, so a relative --path would be applied twice (Godot would look for
+    # 'corpus/corpus' and abort). The --path arg must be absolute so it is cwd-independent.
+    cmd = GutRunner().command("corpus")
+    path_arg = cmd[cmd.index("--path") + 1]
+    assert Path(path_arg).is_absolute()
+    assert Path(path_arg) == Path("corpus").resolve()
+
+
+def test_run_parses_the_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    report = _report(tmp_path)
+    # GUT wraps its suites in <testsuites>; the parser sums the child <testsuite> elements.
+    xml = '<testsuites><testsuite tests="4" failures="1" errors="0"/></testsuites>'
+    monkeypatch.setattr(runner_mod.subprocess, "run", lambda *a, **k: report.write_text(xml))
+
+    result = GutRunner().run(str(tmp_path))
+
+    assert (result.tests, result.failures) == (4, 1)
+    assert result.failed is True
+
+
+def test_run_invokes_subprocess_with_the_constructed_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Assert run() actually USES the constructed command, runs in the project dir, honours the
+    # timeout, and passes check=False (GUT exits non-zero on failures — the report decides).
+    report = _report(tmp_path)
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def capture(*args: object, **kwargs: object) -> None:
+        calls.append((args, kwargs))
+        report.write_text('<testsuites><testsuite tests="1" failures="0"/></testsuites>')
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", capture)
+    runner = GutRunner(test_dir="res://t", godot="godot4", timeout=42.0)
+    runner.run(str(tmp_path))
+
+    # run() also issues a one-time --import warm-up; assert against the *suite* call specifically.
+    suite_calls = [(a, k) for (a, k) in calls if "--import" not in a[0]]
+    (args, kwargs) = suite_calls[0]
+    assert args[0] == runner.command(str(tmp_path))
+    assert kwargs["cwd"] == str(tmp_path)
+    assert kwargs["timeout"] == 42.0
+    assert kwargs["check"] is False
+    assert kwargs["capture_output"] is True
+    assert kwargs["text"] is True
+
+
+def test_run_reflects_latest_report_on_repeated_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The engine calls run() many times against the same project; each run must reflect its OWN
+    # result — never a stale earlier one.
+    report = _report(tmp_path)
+    outcomes = iter(
+        [
+            '<testsuites><testsuite tests="3" failures="0"/></testsuites>',  # baseline: passes
+            '<testsuites><testsuite tests="3" failures="1"/></testsuites>',  # mutant: fails
+        ]
+    )
+
+    def fake_run(*args: object, **kwargs: object) -> None:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" in command:
+            return
+        report.write_text(next(outcomes), encoding="utf-8")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    runner = GutRunner()
+    assert runner.run(str(tmp_path)).failed is False
+    assert runner.run(str(tmp_path)).failed is True
+
+
+def test_run_does_not_return_a_stale_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A previous mutant's (passing) report is on disk, and THIS invocation writes nothing (a Godot
+    # crash / addon-load failure). It must raise, not silently return the stale passing verdict.
+    report = _report(tmp_path)
+    report.write_text('<testsuites><testsuite tests="9" failures="0"/></testsuites>', "utf-8")
+    monkeypatch.setattr(
+        runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, "", "")
+    )
+
+    with pytest.raises(RuntimeError, match="no report"):
+        GutRunner().run(str(tmp_path))
+
+
+def test_run_raises_when_no_report_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, "", "")
+    )
+    with pytest.raises(RuntimeError, match="GUT wrote no report"):
+        GutRunner().run(str(tmp_path))
+
+
+def test_run_surfaces_godot_output_when_no_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess([], 1, "", "SCRIPT ERROR: boom"),
+    )
+    with pytest.raises(RuntimeError, match="SCRIPT ERROR: boom"):
+        GutRunner().run(str(tmp_path))
+
+
+def test_run_treats_zero_tests_as_an_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # THE GUT-specific crash-safety guard (a false-survivor regression test). On a test-file compile
+    # crash GUT writes an EMPTY <testsuites tests="0"/> and exits 0. Parsed naively that is a clean
+    # zero-test pass -> the responsible mutant would be marked SURVIVED (a wrong survivor — the
+    # worst failure). The adapter must instead surface tests == 0 as an execution ERROR.
+    report = _report(tmp_path)
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text('<testsuites tests="0"></testsuites>', encoding="utf-8")
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="GUT ran 0 tests"):
+        GutRunner().run(str(tmp_path))
+
+
+def test_zero_tests_error_for_a_parseable_zero_test_suite_surfaces_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The OTHER empty-report shape: a child <testsuite tests="0"> that DOES parse (tests == 0), so
+    # this exercises the non-ValueError branch of the guard — and the error tails Godot's captured
+    # output so a compile crash is diagnosable.
+    report = _report(tmp_path)
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text('<testsuites><testsuite tests="0"/></testsuites>', encoding="utf-8")
+        return subprocess.CompletedProcess([], 0, "", "SCRIPT ERROR: bad script")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    # The detail is appended after a newline, so match across it ([\s\S], not . which stops at \n).
+    with pytest.raises(RuntimeError, match=r"GUT ran 0 tests[\s\S]*SCRIPT ERROR: bad script"):
+        GutRunner().run(str(tmp_path))
+
+
+def test_run_raises_suite_timeout_on_subprocess_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A GUT run that outruns its budget surfaces as SuiteTimeout (a detection), not a leaked
+    # subprocess.TimeoutExpired or a no-report RuntimeError.
+    def boom(*args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(cmd="godot", timeout=1.0)
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", boom)
+    with pytest.raises(SuiteTimeout):
+        GutRunner(timeout=1.0).run(str(tmp_path))
+
+
+def test_run_warms_the_import_cache_once_before_the_first_suite_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On a cold checkout GUT's class_names don't resolve until Godot's --import scan writes the
+    # global class cache ("Some GUT class_names have not been imported"), so the runner must warm it
+    # — once — before the first suite run. Assert the --import fires first, exactly once.
+    report = _report(tmp_path)
+    calls: list[list[str]] = []
+
+    def capture(*args: object, **kwargs: object) -> None:
+        command = args[0]
+        assert isinstance(command, list)
+        calls.append(command)
+        if "--import" not in command:
+            report.write_text('<testsuites><testsuite tests="1" failures="0"/></testsuites>')
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", capture)
+    runner = GutRunner(godot="godot4")
+    runner.run(str(tmp_path))
+    runner.run(str(tmp_path))  # second mutant: must NOT re-import
+
+    import_calls = [c for c in calls if "--import" in c]
+    assert len(import_calls) == 1, f"expected exactly one --import warm-up, got {len(import_calls)}"
+    assert calls[0] == ["godot4", "--headless", "--path", str(tmp_path.resolve()), "--import"]
+    assert "--import" not in calls[1]  # the suite run follows the warm-up
+
+
+def test_gut_runner_satisfies_the_protocol() -> None:
+    assert isinstance(GutRunner(), Runner)

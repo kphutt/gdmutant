@@ -60,7 +60,7 @@ repos:
 
       - id: gdlint
         name: gdlint (corpus fixture)
-        entry: uv run gdlint corpus/turn_order.gd corpus/test corpus/harness
+        entry: uv run gdlint corpus/turn_order.gd corpus/test corpus/gut_test corpus/harness
         language: system
         pass_filenames: false
         always_run: true
@@ -91,6 +91,16 @@ repos:
       - id: gdmutant-selftest
         name: Godot self-test (manual, requires a real Godot binary)
         entry: python scripts/run_selftest.py
+        language: python
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+
+      # The GUT peer of gdmutant-selftest — mirrors ci.yml's selftest-gut job (installs the pinned
+      # GUT addon, runs the GUT leg). Run by hand: `pre-commit run --hook-stage manual gdmutant-selftest-gut`
+      - id: gdmutant-selftest-gut
+        name: GUT self-test (manual, requires a real Godot binary)
+        entry: python scripts/run_selftest_gut.py
         language: python
         pass_filenames: false
         always_run: true
