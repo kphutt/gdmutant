@@ -1,0 +1,193 @@
+# gdmutant — a distributable GitHub Action.
+#
+# A consumer runs mutation testing on their Godot project in a few lines of YAML:
+#
+#     - uses: kphutt/gdmutant@v1
+#       with:
+#         godot-version: 4.7.0
+#         project-path: ./
+#         paths: scripts            # the source to mutate (default: the whole project)
+#
+# The action sets up Godot, installs gdmutant, runs it, and writes the surviving mutants — WITH their
+# gap/risk/start explanations — to the GitHub Actions job summary ($GITHUB_STEP_SUMMARY), right where
+# reviewers look. Inputs map 1:1 to gdmutant's CLI flags.
+#
+# Scope (this variant): it assumes the consumer's test-runner addon (GdUnit4 or GUT) is ALREADY in
+# their project — the common case, since it's a prerequisite of their existing test job. Cloning the
+# addon at a pinned ref (`addon-version` other than `installed`) is a deliberate fast-follow, not
+# built here; gdmutant's CLI prints an actionable hint if the addon is missing, so assume-present
+# degrades gracefully.
+name: gdmutant — mutation testing for Godot
+description: >-
+  Run gdmutant mutation testing on a Godot/GDScript project and report the surviving mutants (with
+  explanations) to the job summary.
+branding:
+  icon: crosshair
+  color: purple
+
+inputs:
+  godot-version:
+    description: The Godot version to set up (e.g. 4.7.0). Required.
+    required: true
+  project-path:
+    description: The Godot project directory (gdmutant's --project).
+    required: false
+    default: ./
+  paths:
+    description: >-
+      The source file(s) or director(ies) to mutate (gdmutant's positional targets, space-separated).
+      Defaults to the whole project (`project-path`), which mutates every .gd under it, excluding
+      addons/ and test files.
+    required: false
+    default: ""
+  runner:
+    description: "Test runner: gdunit4, gut, or command (gdmutant's --runner)."
+    required: false
+    default: gdunit4
+  tests:
+    description: >-
+      The test directory, gdunit4's -a / gut's -gdir (gdmutant's --tests). Empty = gdmutant's own
+      default (res://test).
+    required: false
+    default: ""
+  godot-use-dotnet:
+    description: Set up the .NET (Mono) build of Godot instead of the standard build.
+    required: false
+    default: "false"
+  gdmutant-version:
+    description: >-
+      The published gdmutant version to install once it's on PyPI (reserved for the launch switch;
+      see the install step's TODO). Ignored today — the interim install uses `ref`.
+    required: false
+    default: ""
+  ref:
+    description: >-
+      The gdmutant git ref (tag/branch/SHA) to install from during the pre-PyPI interim. Defaults to
+      the v1 tag that consumers pin.
+    required: false
+    default: v1
+  since:
+    description: >-
+      Only mutate lines changed since this git ref (gdmutant's --since) — the fast, per-PR
+      diff-scoped mode. Empty = mutate the full target.
+    required: false
+    default: ""
+  args:
+    description: Extra raw arguments appended to the gdmutant invocation (space-separated).
+    required: false
+    default: ""
+  job-summary:
+    description: >-
+      Write the surviving mutants (with their explanations) to the job summary as Markdown
+      (gdmutant's --report step-summary). Set to false to skip.
+    required: false
+    default: "true"
+  addon-version:
+    description: >-
+      How the test-runner addon is provided. Only `installed` is supported (the consumer's project
+      already vendors its addon). Cloning the addon at a ref is a fast-follow.
+    required: false
+    default: installed
+
+outputs:
+  report-json:
+    description: Path to the Stryker-format JSON mutation report the run wrote.
+    value: ${{ steps.run.outputs.report-json }}
+
+runs:
+  using: "composite"
+  steps:
+    # Only the assume-present addon mode ships today; fail early and clearly on anything else so a
+    # consumer expecting the (fast-follow) clone mode isn't silently misled.
+    - name: Validate the addon mode
+      shell: bash
+      env:
+        ADDON_VERSION: ${{ inputs.addon-version }}
+      run: |
+        if [ "$ADDON_VERSION" != "installed" ]; then
+          echo "::error::addon-version='$ADDON_VERSION' is not supported yet — only 'installed'" \
+               "(assume the addon is already in your project) ships today. Cloning the addon at a" \
+               "ref is a planned fast-follow." >&2
+          exit 1
+        fi
+
+    # Pin Python to 3.12 (gdmutant's requires-python floor) for a reproducible install.
+    - name: Set up Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      with:
+        python-version: "3.12"
+
+    # SHA-pinned, mirroring ci.yml's selftest jobs (a runner-image migration can't silently break us).
+    - name: Set up Godot
+      uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2.4.1
+      with:
+        version: ${{ inputs.godot-version }}
+        use-dotnet: ${{ inputs.godot-use-dotnet }}
+        cache: true
+
+    - name: Install gdmutant
+      shell: bash
+      env:
+        GDMUTANT_REF: ${{ inputs.ref }}
+        # GDMUTANT_VERSION is reserved for the PyPI switch below; unused during the git interim.
+        GDMUTANT_VERSION: ${{ inputs.gdmutant-version }}
+      run: |
+        python -m pip install --upgrade pip
+        # INTERIM: gdmutant isn't on PyPI yet, so install it from git at the requested ref.
+        # TODO(launch): switch to `pip install gdmutant==<ver>` once published to PyPI (drive <ver>
+        # from GDMUTANT_VERSION, keep `ref` only as an escape hatch for testing unreleased commits).
+        python -m pip install "git+https://github.com/kphutt/gdmutant@${GDMUTANT_REF}"
+
+    - name: Run gdmutant
+      id: run
+      shell: bash
+      env:
+        INPUT_PATHS: ${{ inputs.paths }}
+        INPUT_PROJECT: ${{ inputs.project-path }}
+        INPUT_RUNNER: ${{ inputs.runner }}
+        INPUT_TESTS: ${{ inputs.tests }}
+        INPUT_SINCE: ${{ inputs.since }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_JOB_SUMMARY: ${{ inputs.job-summary }}
+        REPORT_JSON: ${{ runner.temp }}/gdmutant-report.json
+      run: |
+        # Assemble the gdmutant argv from the inputs in Python (robust quoting + optional flags),
+        # then exec it. gdmutant's own reporter writes the job summary to $GITHUB_STEP_SUMMARY — no
+        # shell heredoc; the reporter is first-class in the tool (--report step-summary).
+        python - <<'PY'
+        import os
+        import shlex
+        import subprocess
+        import sys
+
+        project = os.environ["INPUT_PROJECT"]
+        # Default the mutation target to the whole project when `paths` is empty.
+        paths = os.environ.get("INPUT_PATHS", "").strip() or project
+
+        cmd = ["gdmutant", "run", *shlex.split(paths)]
+        cmd += ["--project", project]
+        cmd += ["--runner", os.environ["INPUT_RUNNER"]]
+        if os.environ.get("INPUT_TESTS", "").strip():
+            cmd += ["--tests", os.environ["INPUT_TESTS"].strip()]
+        if os.environ.get("INPUT_SINCE", "").strip():
+            cmd += ["--since", os.environ["INPUT_SINCE"].strip()]
+        cmd += ["--json", os.environ["REPORT_JSON"]]
+        if os.environ.get("INPUT_JOB_SUMMARY", "true").strip().lower() == "true":
+            cmd += ["--report", "step-summary"]
+        if os.environ.get("INPUT_ARGS", "").strip():
+            cmd += shlex.split(os.environ["INPUT_ARGS"])
+
+        print("::group::gdmutant command")
+        print(" ".join(shlex.quote(part) for part in cmd))
+        print("::endgroup::")
+
+        # Expose the JSON report path as a step output (for a later upload-artifact step).
+        github_output = os.environ.get("GITHUB_OUTPUT")
+        if github_output:
+            with open(github_output, "a", encoding="utf-8") as handle:
+                handle.write(f"report-json={os.environ['REPORT_JSON']}\n")
+
+        # gdmutant returns 0 on a completed pass — survivors are report output, not a failure — and
+        # non-zero only on a real error (bad setup, red baseline). Propagate that exit code.
+        sys.exit(subprocess.run(cmd).returncode)
+        PY

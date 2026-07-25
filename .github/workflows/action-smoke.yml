@@ -1,0 +1,123 @@
+name: Action smoke test
+
+# Proves the distributable action (action.yml) end-to-end by CONSUMING it (`uses: ./`) against
+# gdmutant's own corpus: it sets up Godot, installs gdmutant, runs it, and writes the survivor
+# job summary. This is how the action is tested — no unit test can exercise the composite plumbing.
+#
+# The interim git-install (action.yml) makes this work pre-PyPI: the action installs gdmutant from
+# the branch under test, so this smoke run exercises THIS PR's code through the real install path.
+on:
+  pull_request:
+    paths:
+      - "action.yml" # the action under test
+      - ".github/workflows/action-smoke.yml" # this workflow itself
+      - "gdmutant/**" # the tool the action installs + runs
+      - "corpus/**" # the fixture it runs against
+  push:
+    branches: [main]
+    paths:
+      - "action.yml"
+      - ".github/workflows/action-smoke.yml"
+      - "gdmutant/**"
+      - "corpus/**"
+
+# Least privilege: contents:read is all the git-install of the (still-private) repo needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Consume the action end-to-end
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false # we authorize the git-install explicitly below
+
+      # INTERIM (pre-PyPI): the action installs gdmutant with `pip install git+https://…@<ref>`.
+      # While the repo is private that clone needs auth, so rewrite github.com URLs to carry the
+      # job token. Passed via env (never inlined) so it can't leak into the command line, and
+      # harmless once the repo is public at launch.
+      - name: Authorize the interim git-install (private repo)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+
+      # The action assumes the runner addon is already present (addon-version: installed), so install
+      # it into the corpus first — the same pinned, hash-verified GdUnit4 the live self-test uses.
+      - name: Install the GdUnit4 addon into the corpus
+        run: scripts/install-gdunit4.sh
+
+      - name: Run gdmutant via the action
+        id: gdmutant
+        uses: ./
+        with:
+          godot-version: 4.7.0
+          project-path: corpus
+          paths: corpus/turn_order.gd
+          runner: gdunit4
+          job-summary: true
+          # Install THIS PR's gdmutant (the branch head) through the action's interim git path.
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      # End-to-end proof: the action produced a JSON report, and the real Godot run found survivors.
+      - name: Assert the run produced a report with survivors
+        env:
+          REPORT_JSON: ${{ steps.gdmutant.outputs.report-json }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          path = os.environ["REPORT_JSON"]
+          if not path or not os.path.isfile(path):
+              sys.exit(f"no JSON report at {path!r} — the action did not run gdmutant to completion")
+          report = json.load(open(path, encoding="utf-8"))
+          statuses = [
+              m["status"] for f in report["files"].values() for m in f["mutants"]
+          ]
+          print(f"mutant statuses: {statuses}")
+          if "Survived" not in statuses:
+              sys.exit("expected at least one Survived mutant in the corpus report")
+          print("OK: the action ran end-to-end and reported survivors")
+          PY
+
+      # Falsifiable proof of the job-summary reporter itself: re-run the (now-installed) gdmutant with
+      # $GITHUB_STEP_SUMMARY unset so the reporter prints to stdout, and assert the survivor Markdown
+      # is there. Uses the exit-code command runner (a trivially-passing `true`) so every mutant
+      # survives — no second Godot boot needed, so this stays fast.
+      - name: Assert the step-summary reporter emits the survivor Markdown
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+          result = subprocess.run(
+              [
+                  "gdmutant", "run", "corpus/turn_order.gd",
+                  "--project", "corpus",
+                  "--runner", "command", "--command", "true",
+                  "--report", "step-summary",
+              ],
+              capture_output=True,
+              text=True,
+              env=env,
+              check=True,
+          )
+          print(result.stdout)
+          for needle in ("## gdmutant — mutation report", "Surviving mutants", "**The gap.**"):
+              if needle not in result.stdout:
+                  sys.exit(f"the step-summary reporter did not emit {needle!r}")
+          print("OK: --report step-summary emitted the survivor explanations")
+          PY

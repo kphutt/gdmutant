@@ -41,6 +41,7 @@ from gdmutant.engine.report import (
     all_survived_warning,
     console_summary,
     html_report,
+    job_summary_markdown,
     stryker_report,
     stryker_report_multi,
 )
@@ -492,6 +493,7 @@ def run_mutation(
     require_clean: bool = False,
     changed: dict[str, set[int]] | None = None,
     jobs: int = 1,
+    step_summary: bool = False,
 ) -> int:
     """Mutate `source_path`, run via `runner`, print the summary, optionally write a report file.
 
@@ -565,6 +567,8 @@ def run_mutation(
     if warning is not None:
         print(warning, file=sys.stderr)
     _emit_runner_warning(runner)
+    if step_summary:
+        _emit_step_summary(result)
     stryker = stryker_report(result, str(path), source, "gdscript")
     return _write_reports(stryker, json_path, html_path)
 
@@ -577,6 +581,27 @@ def _emit_runner_warning(runner: Runner) -> None:
         warning = runner.run_warning()
         if warning is not None:
             print(warning, file=sys.stderr)
+
+
+def _emit_step_summary(run: MutationRun) -> None:
+    """Emit the survivor explanations as Markdown for the ``--report step-summary`` reporter. The
+    destination is the file named by ``$GITHUB_STEP_SUMMARY`` (appended, as GitHub Actions expects)
+    when that env var is set — so the survivors land right in the CI run summary, where reviewers
+    look — and stdout otherwise, so the reporter is useful locally too. Advisory output: a write
+    failure warns but never changes the score or the exit code."""
+    markdown = job_summary_markdown(run)
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        print(markdown)
+        return
+    try:
+        with Path(summary_path).open("a", encoding="utf-8") as handle:
+            handle.write(markdown)
+    except OSError as error:
+        print(
+            f"warning: could not write the job summary to {summary_path}: {error}",
+            file=sys.stderr,
+        )
 
 
 def _write_reports(stryker: dict[str, object], json_path: str | None, html_path: str | None) -> int:
@@ -613,6 +638,7 @@ def run_mutation_paths(
     require_clean: bool = False,
     changed: dict[str, set[int]] | None = None,
     jobs: int = 1,
+    step_summary: bool = False,
 ) -> int:
     """Mutate several `.gd` files against one project in a single pass — the baseline runs **once**
     and the score is aggregated across every file, with one merged report. Same return
@@ -681,6 +707,8 @@ def run_mutation_paths(
     if warning is not None:
         print(warning, file=sys.stderr)
     _emit_runner_warning(runner)
+    if step_summary:
+        _emit_step_summary(aggregate)
     stryker = stryker_report_multi({p: (r, sources[p]) for p, r in runs.items()}, "gdscript")
     return _write_reports(stryker, json_path, html_path)
 
@@ -855,6 +883,15 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "cores/RAM; a plain per-worker copy is made per job.",
     )
     run_parser.add_argument(
+        "--report",
+        action="append",
+        choices=("step-summary",),
+        metavar="KIND",
+        help="emit an extra report (repeatable). 'step-summary' renders the surviving mutants and "
+        "their explanations as Markdown to the GitHub Actions job summary ($GITHUB_STEP_SUMMARY) "
+        "when it's set, and to stdout otherwise.",
+    )
+    run_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="list the mutants without running any tests (no Godot needed)",
@@ -991,6 +1028,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--require-clean", args.require_clean, False),
                     ("--json", args.json_path, None),
                     ("--html", args.html_path, None),
+                    ("--report", args.report, None),
                 )
                 if value != default
             ]
@@ -1056,6 +1094,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "require_clean": args.require_clean,
             "changed": changed,
             "jobs": args.jobs,
+            "step_summary": bool(args.report) and "step-summary" in args.report,
         }
         if len(files) == 1:
             return run_mutation(files[0], project_dir, runner, **common)
