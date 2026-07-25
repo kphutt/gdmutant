@@ -1,3 +1,8 @@
+---
+type: reference
+status: active
+---
+
 # comparison survivor
 
 **The change:** gdmutant swapped a comparison operator (e.g. `>` → `>=`, `<` → `<=`, `==` → `!=`).
