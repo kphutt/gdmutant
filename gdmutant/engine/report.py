@@ -21,8 +21,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from gdmutant.engine.explain import render_survivor, survivor_report_fields
+from gdmutant.engine.explain import doc_url, render_survivor, survivor_report_fields
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
+from gdmutant.engine.mutants import Mutant
 
 SCHEMA_VERSION = "2"
 
@@ -179,6 +180,85 @@ def console_summary(run: MutationRun) -> str:
             lines += render_survivor(m, source_cache[m.path])
             lines.append("")
     return "\n".join(lines)
+
+
+def _change_note(mutant: Mutant) -> str:
+    """A plain-language, one-line rendering of what this survivor changed — the Markdown peer of the
+    caret note `render_survivor` draws. Deletion operators (a whole line, or a lone ``not`` token)
+    have no meaningful replacement, so they're phrased as a removal rather than an ``x -> ``."""
+    if mutant.operator_id == "statement-deletion":
+        return "This whole line was removed"
+    if mutant.replacement == "":
+        return f"Removed `{mutant.original}`"
+    return f"Changed `{mutant.original}` to `{mutant.replacement}`"
+
+
+def _survivor_markdown(mutant: Mutant, source_lines: list[str] | None) -> list[str]:
+    """One survivor as Markdown lines: a heading (``path:line`` + operator), the source line in a
+    fenced block with a plain note of the change, then the gap and the risk+start narrative, and the
+    stable per-operator docs link. This is `render_survivor`'s content rendered as Markdown instead
+    of box-drawing; the code slot drops out gracefully when the source is unreadable. The narrative
+    is `survivor_report_fields` — the exact copy the console block and the Stryker JSON carry, so
+    the three surfaces can never drift."""
+    gap, risk_start = survivor_report_fields(mutant)
+    line_no = mutant.span.line
+    out = [f"#### `{mutant.path}:{line_no}` · {mutant.operator_id}", ""]
+    if source_lines is not None and 1 <= line_no <= len(source_lines):
+        out += [
+            "```gdscript",
+            source_lines[line_no - 1].expandtabs(4),
+            "```",
+            "",
+            f"{_change_note(mutant)} — every test still passed.",
+            "",
+        ]
+    out += [
+        f"**The gap.** {gap}",
+        "",
+        "**Why it matters, and where to start.**",
+        "",
+        risk_start,
+        "",
+        f"[Explain the `{mutant.operator_id}` operator]({doc_url(mutant.operator_id)})",
+        "",
+    ]
+    return out
+
+
+def job_summary_markdown(run: MutationRun) -> str:
+    """Render `run` as GitHub-flavored Markdown for the Actions job summary
+    (``$GITHUB_STEP_SUMMARY``): the score, the per-verdict tally, and — gdmutant's differentiator —
+    each survivor's gap/risk/start *explanation*, not just its location. No established mutation
+    tool surfaces the explanations in a GitHub view; this puts them right in the CI run, where
+    reviewers look (the HTML artifact goes unclicked). Ends with a trailing newline so it appends
+    cleanly to the summary file."""
+    score = run.mutation_score
+    score_str = "n/a" if score is None else f"{score * 100:.1f}%"
+    out = [
+        "## gdmutant — mutation report",
+        "",
+        f"**Mutation score: {score_str}**",
+        "",
+        f"{run.killed} killed · {run.timeouts} timeout · **{run.survived} survived** · "
+        f"{run.ignored} ignored · {run.invalid} invalid · {run.errors} error",
+        "",
+    ]
+    if not run.survivors:
+        out.append("No surviving mutants — every mutant your tests could catch, they caught.")
+        return "\n".join(out) + "\n"
+    out += [
+        f"### Surviving mutants ({len(run.survivors)})",
+        "",
+        "Each is a line a bug could live on that no test catches. gdmutant explains the gap — "
+        "not just the location:",
+        "",
+    ]
+    source_cache: dict[str, list[str] | None] = {}
+    for mutant in run.survivors:
+        if mutant.path not in source_cache:
+            source_cache[mutant.path] = _read_source_lines(mutant.path)
+        out += _survivor_markdown(mutant, source_cache[mutant.path])
+    return "\n".join(out) + "\n"
 
 
 def _read_source_lines(path: str) -> list[str] | None:
