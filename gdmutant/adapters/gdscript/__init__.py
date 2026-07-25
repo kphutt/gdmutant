@@ -109,12 +109,14 @@ def _string_format_percents(tree: Tree[Token]) -> set[tuple[int | None, int | No
     it. Here each ``%`` in an ``mdr_expr`` (mul/div/remainder) node is skipped only when the node
     child *directly* to its left is a ``string`` node.
 
-    Scope (deliberate): only a **bare string-literal** left operand is recognised. A *computed*
-    string — concatenation like ``("Hi " + name) % x`` — is not, so its ``%`` is still mutated as
-    modulo. Distinguishing that needs type inference (``(a + "b") % x`` is formatting or a type
-    error depending on ``a``'s runtime type), which is out of scope for v0.1. This is the *noise*
-    direction (a format ``%`` mutated to ``*``/``/`` errors at runtime — an ERROR verdict, never a
-    silently-wrong survivor), unlike dropping a genuine modulo site. Tracked as a follow-up.
+    Also recognised: a **computed string** left operand — a parenthesised ``+``-concatenation with a
+    string-literal operand, e.g. ``("Hi " + name) % x``. No type inference: `name`'s runtime type is
+    never checked, only the parse-tree shape (a `+`-only ``arith_expr`` with a bare-string operand
+    somewhere in it) — a heuristic, not a proof, but this is the *noise* direction (a format ``%``
+    wrongly mutated to ``*``/``/`` errors at runtime — an ERROR verdict, never a silently-wrong
+    survivor). The risk this function actually guards against is the opposite one: newly suppressing
+    a *genuine* modulo site. A `-` anywhere in the parenthesised expression (arithmetic, not
+    string-building), or no string literal in it at all, both still rule that out.
     """
     skip: set[tuple[int | None, int | None]] = set()
     for node in tree.iter_subtrees():
@@ -125,10 +127,37 @@ def _string_format_percents(tree: Tree[Token]) -> set[tuple[int | None, int | No
                 isinstance(cur, Token)
                 and cur.value == "%"
                 and isinstance(prev, Tree)
-                and prev.data == "string"
+                and _is_string_format_operand(prev)
             ):
                 skip.add((cur.line, cur.column))
     return skip
+
+
+def _is_string_format_operand(node: Tree[Token]) -> bool:
+    """True if `node` (the direct left operand of a ``%``) is a bare string literal, or a
+    parenthesised ``+``-only concatenation containing one (see `_string_format_percents`)."""
+    if node.data == "string":
+        return True
+    if node.data == "par_expr" and len(node.children) == 1:
+        inner = node.children[0]
+        return isinstance(inner, Tree) and _is_string_concatenation(inner)
+    return False
+
+
+def _is_string_concatenation(node: Tree[Token]) -> bool:
+    """True if `node` is an ``arith_expr`` joined only by ``+`` (never ``-``, which means genuine
+    arithmetic) with at least one operand that is itself a string-format operand — a bare literal or
+    a nested parenthesised concatenation, so ``("a" + ("b" + c)) % x`` is also recognised."""
+    if node.data != "arith_expr":
+        return False
+    # `arith_expr` is flat and mixed: PLUS/MINUS operator *tokens* interleave with operands that are
+    # themselves either Trees (a nested expression, e.g. a string literal) or bare Tokens (a NAME,
+    # NUMBER, ...) — so operators must be picked out by token *type*, not by `isinstance(_, Token)`
+    # alone, which every bare-token operand also satisfies.
+    if any(isinstance(child, Token) and child.type == "MINUS" for child in node.children):
+        return False
+    operands = [child for child in node.children if isinstance(child, Tree)]
+    return any(_is_string_format_operand(operand) for operand in operands)
 
 
 def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[MutationSite]:

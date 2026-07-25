@@ -290,12 +290,44 @@ def test_modulo_on_a_parenthesised_expression_ending_in_a_string_is_still_a_site
 
 
 def test_computed_string_before_percent_is_a_known_scope_limitation() -> None:
-    # DOCUMENTED SCOPE: only a bare string *literal* left operand is recognised as string-format.
-    # A computed string (concatenation) is NOT — distinguishing it needs type inference — so its
-    # `%` is (rarely) still mutated as modulo. That's the NF-5-safe noise direction; pinned here as
-    # intentional, tracked as a follow-up. If this starts skipping, the follow-up landed.
+    # A computed string (parenthesised `+`-concatenation with a string-literal operand) is now
+    # recognised as string-format, closing the scope limitation this test used to pin: its `%` is
+    # skipped rather than mutated as modulo ([ticket], describes "modulo: skip computed string-format
+    # operands").
     src = 'func f(name, x):\n\treturn ("Hi " + name) % x\n'
-    assert any(s.token == "%" for s in find_sites(src))
+    assert not any(s.token == "%" for s in find_sites(src))
+
+
+def test_computed_string_concatenation_can_have_the_literal_on_either_side() -> None:
+    # The string-literal operand that signals concatenation may be first, last, or in the middle —
+    # the check isn't positional.
+    for src in (
+        'func f(name, x):\n\treturn (name + "!") % x\n',
+        'func f(a, b, x):\n\treturn (a + "-" + b) % x\n',
+    ):
+        assert not any(s.token == "%" for s in find_sites(src)), src
+
+
+def test_arithmetic_concatenation_with_a_minus_is_still_a_genuine_site() -> None:
+    # A `-` anywhere in the parenthesised expression means arithmetic, not string-building, even
+    # though a `+` is also present — must NOT be newly suppressed.
+    src = "func f(a, b, c, x):\n\treturn (a + b - c) % x\n"
+    assert any(s.token == "%" for s in find_sites(src)), "genuine modulo site was skipped"
+
+
+def test_numeric_concatenation_without_any_string_literal_is_still_a_genuine_site() -> None:
+    # A `+`-only parenthesised expression with no string literal anywhere is ordinary numeric
+    # addition — must NOT be newly suppressed just because it's shaped like concatenation.
+    src = "func f(a, b, x):\n\treturn (a + b) % x\n"
+    assert any(s.token == "%" for s in find_sites(src)), "genuine modulo site was skipped"
+
+
+def test_single_element_array_with_a_concatenation_is_still_a_genuine_site() -> None:
+    # `[a + "b"] % x` has a string-concatenation *inside* it, but the node directly left of `%` is
+    # the array literal `[...]`, not a parenthesised expression — recognition is specific to
+    # parentheses (a real ``%`` string-format), so this must stay a genuine site.
+    src = 'func f(a, x):\n\treturn [a + "b"] % x\n'
+    assert any(s.token == "%" for s in find_sites(src)), "genuine modulo site was skipped"
 
 
 def test_not_deletion_removes_the_keyword_and_stays_valid() -> None:
