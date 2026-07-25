@@ -1,3 +1,9 @@
+---
+type: explanation
+status: active
+created: 2026-07-11
+---
+
 # Mutation testing gdmutant itself
 
 gdmutant is a mutation tester, so its own Python suite is held to the standard it exists to enforce:
@@ -25,12 +31,12 @@ complements the coverage gate — coverage says a line *ran*, mutation says a bu
 
 ## Current result
 
-**763 / 781 mutants killed — the remaining 18 are equivalent mutants** (changes that cannot alter
-observable behavior, so no test *can* catch them; this is the well-known
+At the last run, **763 / 781 mutants were killed — the remaining 18 are equivalent mutants** (changes
+that cannot alter observable behavior, so no test *can* catch them; this is the well-known
 [equivalent mutant problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)).
 Rather than contort the suite to "kill" them — which would only pin implementation trivia — they are
-enumerated and justified here. Every behavioral mutant mutmut generates is killed (see the scope note
-below for what that set covers).
+enumerated and justified below. Every behavioral mutant mutmut generates is killed (see the scope note
+for what that set covers).
 
 ### Scope: what the 781 covers
 

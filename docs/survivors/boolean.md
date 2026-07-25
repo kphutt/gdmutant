@@ -1,3 +1,8 @@
+---
+type: reference
+status: active
+---
+
 # boolean survivor
 
 **The change:** gdmutant swapped `and` ↔ `or`.
