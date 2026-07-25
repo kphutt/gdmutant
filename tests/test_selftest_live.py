@@ -183,6 +183,67 @@ def test_gut_against_real_godot(tmp_path: Path) -> None:
     _assert_pinned_outcomes(report)
 
 
+# An uncompilable target (a parse gdtoolkit would reject too, but here it's the file *under test*,
+# not a mutant): keeps `class_name TurnOrder` so the TurnOrder-referencing GUT suite still resolves
+# the name yet fails to load, while the independent suite stays healthy.
+_UNCOMPILABLE_TARGET = "class_name TurnOrder\nextends RefCounted\nfunc broken( ->:\n"
+
+
+def test_gut_crash_safety_never_reports_a_false_survivor_at_n_gt_1(tmp_path: Path) -> None:
+    """Crash-safety at **n>1** (ADR-0011) — the probe the single-file corpus could never run.
+
+    The `tests == 0 → error` guard is only meaningful if a compile crash actually zeroes the run.
+    The corpus's lone TurnOrder-referencing GUT suite guarantees that (breaking turn_order.gd breaks
+    the only suite), so it proves the guard at n=1 only. A REAL multi-file suite is the risk: if a
+    mutant breaks just the file(s) referencing the mutated source and GUT skips the broken file and
+    runs the rest, the report carries the healthy files' green tests → a PASS → SURVIVED, a false
+    survivor straight through the `tests == 0` guard.
+
+    This drives that exact shape against real GUT: with a SECOND, independent suite
+    (``test_independent_gut.gd``) present that compiles and passes on its own, make turn_order.gd
+    uncompilable and run the GUT runner directly. The invariant is **never a false survivor** — the
+    run must come back as a **kill** (``failures``/``errors`` > 0) or an **error** (the guard
+    raises), but **never a passing `SuiteResult`**. It also records which branch real GUT took
+    (abort-all vs skip-and-continue vs run-and-fail) in the message, so CI documents the behavior.
+    """
+    if not GUT_ADDON.is_dir():
+        pytest.skip("GUT addon not installed — run scripts/install-gut.sh")
+    from gdmutant.adapters.gdscript.runner import GutRunner
+    from gdmutant.engine.runner import SuiteResult
+
+    project = _corpus_copy(tmp_path)
+    # Sanity: the second, independent suite is present, so this is genuinely an n>1 run.
+    assert (project / "gut_test" / "test_independent_gut.gd").is_file()
+    (project / TARGET).write_text(_UNCOMPILABLE_TARGET, encoding="utf-8")
+
+    runner = GutRunner(test_dir="res://gut_test", godot=str(_GODOT))
+    branch: str
+    result: SuiteResult | None = None
+    try:
+        result = runner.run(str(project))
+    except RuntimeError as error:
+        branch = f"ERROR — the guard raised (abort-all / zero-test report): {error}"
+    else:
+        if result.failed:
+            branch = (
+                f"KILLED — GUT ran the broken suite and it failed at runtime "
+                f"(tests={result.tests}, failures={result.failures}, errors={result.errors})"
+            )
+        else:
+            branch = (
+                f"FALSE SURVIVOR — GUT skipped the broken suite and passed the rest "
+                f"(tests={result.tests}, failures={result.failures}, errors={result.errors})"
+            )
+
+    print(f"\n[GUT crash-safety probe] real GUT branch: {branch}")
+    # The one outcome that must never happen: a clean pass off the healthy suite alone.
+    assert result is None or result.failed, (
+        "GUT reported a PASS for an uncompilable source-under-test at n>1 — a false survivor "
+        "straight through the tests == 0 guard. The guard must be widened (e.g. error on a "
+        f"per-run test-count drop from the baseline). Observed: {branch}"
+    )
+
+
 def test_statement_deletion_mutants_all_compile_in_godot(tmp_path: Path) -> None:
     """ADR-0007's falsifiable check: every statement-deletion mutant gdmutant emits for the corpus
     must actually *load* in Godot. gdtoolkit has no return-path analysis, so if the generation-time

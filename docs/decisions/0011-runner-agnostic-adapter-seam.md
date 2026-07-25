@@ -58,6 +58,29 @@ the way *its* framework fails:
   execution error (raises → `error`). This is the one GUT-specific hardening, and it is directly
   tested as a false-survivor regression guard.
 
+#### Proving GUT's clause at n>1 (not just n=1)
+The `tests == 0` guard only bites if a compile crash actually *zeroes* the run. The bundled corpus has
+a single TurnOrder-referencing GUT suite, so breaking `turn_order.gd` breaks the only suite — the
+guard is proven there **only at n=1**. The real-world risk is a **multi-file** suite: if a mutant
+breaks just the file(s) that reference the mutated source and GUT **skips the broken file and runs the
+rest**, the report carries the healthy files' green tests (`tests > 0, failures = 0`) → a pass →
+SURVIVED — a false survivor straight *through* the `tests == 0` guard.
+
+Rather than widen the guard on assumption, a **live probe** settles it empirically
+(`tests/test_selftest_live.py::test_gut_crash_safety_never_reports_a_false_survivor_at_n_gt_1`): a
+second, independent GUT suite (`corpus/gut_test/test_independent_gut.gd`) that compiles and passes on
+its own is added, `turn_order.gd` is made uncompilable, and the GUT runner is driven directly. The
+invariant it asserts is the real one — **never a passing `SuiteResult`**; the run must come back a
+kill *or* an error. The probe runs against real Godot + GUT in the `selftest-gut` CI leg and prints
+which branch GUT actually took (abort-all → the empty `tests == 0` report → the guard fires;
+skip-and-continue → healthy tests → a false survivor; run-and-fail → the broken suite errors at
+runtime → killed). If the probe passes, the `tests == 0` guard is sufficient at n>1 as-is; if it reds
+(GUT skip-and-continues), the guard is widened then (e.g. a per-run test-count-drop check) — either
+way the failing case is caught here, in gdmutant's own gate, not in an adopter's report.
+
+> **CI finding (real GUT v9.7.1):** recorded from the `selftest-gut` leg once it has run the probe —
+> which of {abort-all, skip-and-continue, run-and-fail} GUT takes, and whether the guard was widened.
+
 ## Consequences
 - **GUT is a first-class runner** (`--runner gut`), with the same per-test JUnit detail as GdUnit4 and
   no new engine code. The live self-test pins GUT to the *same* 18/11/7 corpus outcome as GdUnit4 —
