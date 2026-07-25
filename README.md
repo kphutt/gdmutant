@@ -10,6 +10,8 @@
   <a href="https://github.com/kphutt/gdmutant/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
 </p>
 
+<p align="center"><sub>A community tool — not affiliated with or endorsed by the Godot Foundation.</sub></p>
+
 ## What it is
 
 gdmutant mutates your GDScript — flips `>`↔`>=`, `and`↔`or`, bumps a number, deletes a statement —
