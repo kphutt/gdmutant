@@ -94,6 +94,64 @@ jobs:
       - name: Supply-chain audit (pip-audit)
         run: uv run pip-audit
 
+  # --- Path filter: does this PR touch anything the real-Godot self-tests could care about? -------
+  # Shared by both self-test gates below. "Godot-relevant" = source, tests, the corpus fixture, the
+  # addon-install scripts the worker jobs run, locked deps, or this workflow file itself. A docs-only
+  # PR (README, ROADMAP, decisions/) changes none of these, so the heavy jobs can be skipped.
+  changes:
+    name: Detect Godot-relevant changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # dorny/paths-filter reads the PR's changed-files list on pull_request runs
+    outputs:
+      godot: ${{ steps.filter.outputs.godot }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # this job never uses git creds — don't leave them on the runner
+
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        id: filter
+        with:
+          filters: |
+            godot:
+              - "gdmutant/**"
+              - "tests/**"
+              - "corpus/**"
+              - "scripts/install_gdunit4.py"
+              - "scripts/install_gut.py"
+              - "pyproject.toml"
+              - "uv.lock"
+              - ".github/workflows/ci.yml"
+
+  # --- Required gate: "Self-test (real Godot)" ----------------------------------------------------
+  # CRITICAL ([ticket]): branch protection requires the check name "Self-test (real Godot)" — this
+  # job's `name:` — so it MUST keep reporting on every PR, or every PR hangs pending forever (GitHub
+  # never reports a skipped *workflow-level-path-filtered* required check as passed). This job carries
+  # that name and always runs; the actual Godot work moved to `selftest-godot-run` below, which is
+  # path-filtered and NOT itself a required check, so skipping it is safe. `if: always()` makes this
+  # gate run even when its path-filtered dependency was skipped rather than cascading to skip too.
+  selftest-godot:
+    name: Self-test (real Godot)
+    needs: [selftest-godot-run]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Report worker result
+        # "skipped" (docs-only PR, path filter didn't match) passes the gate same as "success"; only
+        # a genuine "failure"/"cancelled" from the worker fails it. The result goes through env:, not
+        # directly into the script, so the expansion isn't a template-injection sink (zizmor).
+        env:
+          RESULT: ${{ needs.selftest-godot-run.result }}
+        run: |
+          echo "selftest-godot-run result: $RESULT"
+          if [ "$RESULT" = "failure" ] || [ "$RESULT" = "cancelled" ]; then
+            exit 1
+          fi
+
   # --- Live self-test: real Godot, end-to-end ----------------
   # Drives the shipped gdmutant CLI (via subprocess) against a real godot binary + the corpus,
   # pinning EXACT per-mutant outcomes. This is the only check that proves the godot --headless path
@@ -101,8 +159,13 @@ jobs:
   # version later adds a matrix + a finalize gate together — neither earns its keep for one version.
   # Godot is pinned to an exact patch (semver resolution is an API-rate-limit + silent-drift vector);
   # the mutation outcomes are Godot-version-independent for this pure-logic fixture.
-  selftest-godot:
-    name: Self-test (real Godot)
+  #
+  # NOT a required check itself ([ticket]) — path-filtered, gated behind `selftest-godot` above, which
+  # is the required one and always reports.
+  selftest-godot-run:
+    name: Self-test (real Godot) [worker]
+    needs: changes
+    if: needs.changes.outputs.godot == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -183,13 +246,37 @@ jobs:
           path: report.json
           if-no-files-found: warn
 
+  # --- Required gate: "Self-test (real Godot + GUT)" ----------------------------------------------
+  # Peer of `selftest-godot` above — same shim, same CRITICAL rationale ([ticket]): this job's `name:`
+  # is the exact branch-protection required-check name, so it always runs and reports; the real work
+  # is in the path-filtered `selftest-gut-run` below.
+  selftest-gut:
+    name: Self-test (real Godot + GUT)
+    needs: [selftest-gut-run]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Report worker result
+        env:
+          RESULT: ${{ needs.selftest-gut-run.result }}
+        run: |
+          echo "selftest-gut-run result: $RESULT"
+          if [ "$RESULT" = "failure" ] || [ "$RESULT" = "cancelled" ]; then
+            exit 1
+          fi
+
   # --- Live self-test: real Godot + GUT, end-to-end ----------------
-  # The peer of selftest-godot for the GUT adapter (ADR-0011): installs the pinned GUT addon and
+  # The peer of selftest-godot-run for the GUT adapter (ADR-0011): installs the pinned GUT addon and
   # drives the shipped CLI (--runner gut) against real Godot on the same corpus, pinning the SAME
   # 18/11/7 per-mutant outcome as GdUnit4 — mutant-for-mutant agreement across the two frameworks is
   # the proof the runner seam is genuinely framework-agnostic. Same Godot pin/rationale as above.
-  selftest-gut:
-    name: Self-test (real Godot + GUT)
+  #
+  # NOT a required check itself ([ticket]) — path-filtered, gated behind `selftest-gut` above.
+  selftest-gut-run:
+    name: Self-test (real Godot + GUT) [worker]
+    needs: changes
+    if: needs.changes.outputs.godot == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
