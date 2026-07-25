@@ -1,3 +1,8 @@
+---
+type: reference
+status: active
+---
+
 # numeric survivor
 
 **The change:** gdmutant changed a numeric literal (e.g. `0` → `1`, bumped a bound).

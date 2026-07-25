@@ -1,3 +1,8 @@
+---
+type: reference
+status: active
+---
+
 # arithmetic survivor
 
 **The change:** gdmutant swapped an arithmetic operator (e.g. `+` → `-`, `*` → `/`). Note `+` may also concatenate strings.

@@ -1,5 +1,5 @@
 ---
-type: guide
+type: explanation
 status: active
 created: 2026-07-18
 ---
@@ -67,13 +67,10 @@ Survivors (4):
 ## Killing a survivor
 
 Write (or strengthen) a test that **fails** under the survivor's change, then re-run — it should flip
-to `killed`. The `start` line gives the shape; the rule is *pin the exact behaviour the edit moves*:
-
-- **comparison** (`< -> <=`): test the **boundary** — the equal-inputs case where `<` and `<=` differ.
-- **boolean** (`and -> or`): test a case where the operands **disagree** (one true, one false).
-- **arithmetic / numeric**: assert the **exact** value or result, not just its sign or "nonzero".
-- **constant / logical-not**: exercise the **branch** whose outcome the flip changes, both ways.
-- **statement-deletion**: assert an effect that **disappears** when the statement is removed.
+to `killed`. The `start` line gives the shape; the rule is *pin the exact behaviour the edit moves*
+(for a comparison flip, test the equal-inputs boundary; for `and`/`or`, the case where the operands
+disagree). Each operator's `more` link opens a page in [`docs/survivors/`](survivors/README.md) with
+the exact test to add for that mutation.
 
 ## Equivalent mutants (not every survivor is killable)
 
@@ -83,17 +80,15 @@ mutant**: a known, unavoidable limitation of mutation testing, not a tool bug, a
 with a test by definition.
 
 When you've **proven** a survivor is equivalent (or is benign and genuinely not worth a brittle test),
-annotate its line so it becomes `Ignored` and drops out of the score:
-
-- `# gdmutant: ignore` — suppress **every** mutant on the line.
-- `# gdmutant: ignore[comparison]` — suppress only that operator's mutant(s) on the line (use the
-  operator name from the report). Comma-list several: `ignore[comparison, numeric]`.
-- Trailing text is the **reason**, surfaced in the report:
-  `# gdmutant: ignore[comparison] equivalent — boundary unreachable`.
+annotate its line with `# gdmutant: ignore` so it becomes `Ignored` and drops out of the score. Add
+an operator name to scope it (`# gdmutant: ignore[comparison]`) and trailing text for the **reason**,
+which the report surfaces: `# gdmutant: ignore[comparison] equivalent — boundary unreachable`.
 
 Only ignore *proven* equivalents, and always leave a reason — an `ignore` with no justification is
-just a hidden coverage gap. See [`decisions/0004`](decisions/0004-equivalent-mutant-ignore-annotation.md)
-and [`decisions/0006`](decisions/0006-operator-scoped-ignore-and-ignored-status.md) for the details.
+just a hidden coverage gap. The [agent guide](agent-guide.md#the-survivor--killing-test-loop) has the
+full annotation syntax and a worked example;
+[`decisions/0004`](decisions/0004-equivalent-mutant-ignore-annotation.md) and
+[`0006`](decisions/0006-operator-scoped-ignore-and-ignored-status.md) record the design.
 
 ## A healthy loop
 
@@ -103,20 +98,7 @@ chasing a mutant forever. A perfect score isn't the goal — *understanding each
 
 ## Viewing the report
 
-`--html report.html` gives you a self-contained page, and `--json` renders in the Stryker Dashboard.
-Prefer the report and the page separate? The `--json` output is the standard
-[`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema,
-so any host of that viewer works. Save this next to your `report.json` as `view.html`:
-
-```html
-<mutation-test-report-app></mutation-test-report-app>
-<script src="https://www.unpkg.com/mutation-testing-elements@3.8.4"></script>
-<script>
-  fetch("report.json")
-    .then((r) => r.json())
-    .then((report) => (document.querySelector("mutation-test-report-app").report = report));
-</script>
-```
-
-then serve the folder and open it (`python3 -m http.server` → visit `view.html`) for a
-source-highlighted, survivor-by-survivor view.
+`--html report.html` writes a self-contained, source-highlighted page you can open directly — the
+easiest survivor-by-survivor view. `--json` emits the standard
+[`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema, so
+the same report also renders in the Stryker Dashboard or any host of that viewer.
