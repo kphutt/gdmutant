@@ -52,11 +52,16 @@ the way *its* framework fails:
   raises (→ `error`).
 - **`GdUnit4Runner`** — a crash writes **no** report, caught by the report-reappear freshness guard
   (raises → `error`). Its `_result_from_report` is the base's plain parse; no override needed.
-- **`GutRunner`** — a crash writes an **empty** `<testsuites tests="0" …/>` and exits **0**. Left
-  alone that either parses to a clean zero-test pass or raises an *incidental* `ValueError` deep in
-  the parser. `GutRunner` makes it **explicit**: `tests == 0` (by any empty-report shape) is an
-  execution error (raises → `error`). This is the one GUT-specific hardening, and it is directly
-  tested as a false-survivor regression guard.
+- **`GutRunner`** — GUT does **not** fail a run when a test file fails to compile/load: it **skips**
+  that suite, runs the rest green, and exits **0** (confirmed live — see below). Two shapes result,
+  both of which `GutRunner` surfaces as an execution error (raises → `error`), never a pass:
+  1. **`tests == 0`** — the empty-report shape (a `<testsuites tests="0"/>` with no child, which the
+     parser raises an *incidental* `ValueError` on — caught — or a child `<testsuite tests="0">`), or
+     every suite skipped.
+  2. **a drop below the baseline test count** — the first run (the engine's healthy baseline, run
+     serially before any `--jobs` fan-out) fixes the expected count; a later run with *fewer* tests
+     means a suite was skipped, so the mutant is surfaced as `error` rather than a false survivor.
+  Both are directly tested (unit) and pinned by the live n>1 probe below.
 
 #### Proving GUT's clause at n>1 (not just n=1)
 The `tests == 0` guard only bites if a compile crash actually *zeroes* the run. The bundled corpus has
@@ -66,20 +71,22 @@ breaks just the file(s) that reference the mutated source and GUT **skips the br
 rest**, the report carries the healthy files' green tests (`tests > 0, failures = 0`) → a pass →
 SURVIVED — a false survivor straight *through* the `tests == 0` guard.
 
-Rather than widen the guard on assumption, a **live probe** settles it empirically
+Rather than widen the guard on assumption, a **live probe** settled it empirically
 (`tests/test_selftest_live.py::test_gut_crash_safety_never_reports_a_false_survivor_at_n_gt_1`): a
 second, independent GUT suite (`corpus/gut_test/test_independent_gut.gd`) that compiles and passes on
-its own is added, `turn_order.gd` is made uncompilable, and the GUT runner is driven directly. The
-invariant it asserts is the real one — **never a passing `SuiteResult`**; the run must come back a
-kill *or* an error. The probe runs against real Godot + GUT in the `selftest-gut` CI leg and prints
-which branch GUT actually took (abort-all → the empty `tests == 0` report → the guard fires;
-skip-and-continue → healthy tests → a false survivor; run-and-fail → the broken suite errors at
-runtime → killed). If the probe passes, the `tests == 0` guard is sufficient at n>1 as-is; if it reds
-(GUT skip-and-continues), the guard is widened then (e.g. a per-run test-count-drop check) — either
-way the failing case is caught here, in gdmutant's own gate, not in an adopter's report.
+its own is added, a healthy baseline is run, `turn_order.gd` is made uncompilable, and the SAME GUT
+runner is run again. The invariant it asserts is the real one — **never a passing `SuiteResult`**; the
+mutant run must come back a kill *or* an error. It runs against real Godot + GUT in the `selftest-gut`
+CI leg and prints which branch GUT took.
 
-> **CI finding (real GUT v9.7.1):** recorded from the `selftest-gut` leg once it has run the probe —
-> which of {abort-all, skip-and-continue, run-and-fail} GUT takes, and whether the guard was widened.
+> **CI finding (real GUT v9.7.1, Godot 4.7):** **skip-and-continue** — with `turn_order.gd`
+> uncompilable, GUT skipped its referencing suite, ran the independent suite green, and reported
+> `tests=2, failures=0` (a would-be false survivor). So the `tests == 0` guard is **not** sufficient
+> at n>1, and the guard was **widened** to also error on a **drop below the baseline test count**
+> (implemented in `GutRunner._result_from_report`; the probe now passes because that drop is caught).
+> The failing case was caught here, in gdmutant's own gate, not in an adopter's report — exactly what
+> the probe exists for. (A separate bug surfaced alongside it and was fixed: GUT does not create the
+> `-gjunit_xml_file` parent directory, so the base runner now `mkdir -p`s it before every run.)
 
 ## Consequences
 - **GUT is a first-class runner** (`--runner gut`), with the same per-test JUnit detail as GdUnit4 and

@@ -65,8 +65,9 @@ class Runner(Protocol):
         at all raises (the engine tallies ``error``).
       * ``GdUnit4Runner`` — a crash writes *no* report, caught by the "the report must reappear"
         freshness guard (it raises → ``error``).
-      * ``GutRunner`` — a crash writes an *empty* ``<testsuites tests="0">`` and exits 0, so it
-        makes ``tests == 0`` an explicit execution error (it raises → ``error``).
+      * ``GutRunner`` — GUT *skips* a suite that fails to load and runs the rest green (exit 0), so
+        it raises on both ``tests == 0`` *and* a drop below the healthy baseline's test count (a
+        skipped suite) → ``error``, never a false survivor.
     """
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult: ...

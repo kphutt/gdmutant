@@ -199,12 +199,17 @@ def test_gut_crash_safety_never_reports_a_false_survivor_at_n_gt_1(tmp_path: Pat
     runs the rest, the report carries the healthy files' green tests → a PASS → SURVIVED, a false
     survivor straight through the `tests == 0` guard.
 
-    This drives that exact shape against real GUT: with a SECOND, independent suite
-    (``test_independent_gut.gd``) present that compiles and passes on its own, make turn_order.gd
-    uncompilable and run the GUT runner directly. The invariant is **never a false survivor** — the
-    run must come back as a **kill** (``failures``/``errors`` > 0) or an **error** (the guard
-    raises), but **never a passing `SuiteResult`**. It also records which branch real GUT took
-    (abort-all vs skip-and-continue vs run-and-fail) in the message, so CI documents the behavior.
+    This drives that exact shape against real GUT, exactly as the engine would: a **healthy baseline
+    run first** (which fixes the runner's expected test count), then — with a SECOND, independent
+    suite (``test_independent_gut.gd``) that compiles and passes on its own — turn_order.gd is made
+    uncompilable and the SAME runner is run again (the mutant scenario). The invariant is **never a
+    false survivor** — the mutant run must come back a **kill** (``failures``/``errors`` > 0) or an
+    **error** (the guard raises), but **never a passing `SuiteResult`**. It records which branch
+    real GUT took (abort-all vs skip-and-continue vs run-and-fail) so CI documents the behavior.
+
+    Real GUT v9.7.1 **skips-and-continues** (the broken suite is skipped, the healthy suite runs
+    green), so ``tests == 0`` alone would NOT catch it — the baseline-test-count-drop guard is what
+    surfaces it as an error (see `GutRunner`).
     """
     if not GUT_ADDON.is_dir():
         pytest.skip("GUT addon not installed — run scripts/install-gut.sh")
@@ -214,15 +219,22 @@ def test_gut_crash_safety_never_reports_a_false_survivor_at_n_gt_1(tmp_path: Pat
     project = _corpus_copy(tmp_path)
     # Sanity: the second, independent suite is present, so this is genuinely an n>1 run.
     assert (project / "gut_test" / "test_independent_gut.gd").is_file()
-    (project / TARGET).write_text(_UNCOMPILABLE_TARGET, encoding="utf-8")
 
     runner = GutRunner(test_dir="res://gut_test", godot=str(_GODOT))
+    # 1. Healthy baseline (as the engine runs first): every suite loads, fixing the expected count.
+    baseline = runner.run(str(project))
+    assert baseline.passed and baseline.tests >= 5, (
+        f"the healthy GUT baseline should pass with both suites loaded, got {baseline}"
+    )
+
+    # 2. Break the source-under-test and run the SAME runner again (the mutant scenario).
+    (project / TARGET).write_text(_UNCOMPILABLE_TARGET, encoding="utf-8")
     branch: str
     result: SuiteResult | None = None
     try:
         result = runner.run(str(project))
     except RuntimeError as error:
-        branch = f"ERROR — the guard raised (abort-all / zero-test report): {error}"
+        branch = f"ERROR — the guard raised (zero-test or test-count drop): {error}"
     else:
         if result.failed:
             branch = (
@@ -238,9 +250,8 @@ def test_gut_crash_safety_never_reports_a_false_survivor_at_n_gt_1(tmp_path: Pat
     print(f"\n[GUT crash-safety probe] real GUT branch: {branch}")
     # The one outcome that must never happen: a clean pass off the healthy suite alone.
     assert result is None or result.failed, (
-        "GUT reported a PASS for an uncompilable source-under-test at n>1 — a false survivor "
-        "straight through the tests == 0 guard. The guard must be widened (e.g. error on a "
-        f"per-run test-count drop from the baseline). Observed: {branch}"
+        "GUT reported a PASS for an uncompilable source-under-test at n>1 — a false survivor. "
+        f"The baseline-test-count-drop guard failed to fire. Observed: {branch}"
     )
 
 

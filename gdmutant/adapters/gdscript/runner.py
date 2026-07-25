@@ -239,13 +239,23 @@ class GutRunner(_GodotJUnitRunner):
     its report in place (no report-history hazard, so no ``-rc 1`` equivalent is needed), and it
     honours ``--headless`` directly (no ``--ignoreHeadlessMode``).
 
-    **Crash-safety (`engine.runner.Runner`) — the one GUT-specific hardening.** When a test file
-    fails to *compile*, GUT writes an **empty** ``<testsuites tests="0" …/>`` and exits **0**.
-    Left alone that either parses to a clean zero-test pass (marking the responsible mutant SURVIVED
-    — a false survivor, gdmutant's worst failure) or, for the no-child empty form, raises an
-    *incidental* ``ValueError`` deep in the parser. `_result_from_report` makes it **explicit**:
-    ``tests == 0`` (by any report shape) is an execution **error** (raise → the engine tallies
-    ``error``), never a pass.
+    **Crash-safety (`engine.runner.Runner`) — the GUT-specific hardening.** When a test file fails
+    to *compile/load*, GUT does **not** fail the run: it **skips** that suite, runs the remaining
+    ones, and exits 0 (confirmed live against GUT v9.7.1 by the n>1 probe). So a mutant that
+    breaks only the file(s) referencing the mutated source yields a report of the *healthy* suites'
+    green tests → a pass → SURVIVED: a **false survivor**, gdmutant's worst failure. `tests == 0`
+    (the whole run zeroed — GUT's empty-report shape, or every suite skipped) does not catch this,
+    because the healthy suites still ran. So `_result_from_report` upholds the clause two ways:
+      1. **`tests == 0` → error** — the empty-report / all-skipped shape (raise → the engine tallies
+         ``error``), never a zero-test pass.
+      2. **a drop below the baseline test count → error** — the first run (the engine's healthy
+         baseline) fixes the expected test count; any later run with *fewer* tests means a suite
+         failed to load and was skipped, so the mutant is surfaced as ``error`` rather than a false
+         survivor. This is the widening the probe proved necessary (GUT skips-and-continues).
+
+    Thread-safety under ``--jobs``: the baseline floor is set on the first run (the engine runs the
+    baseline serially, *before* it fans mutants out to workers) and only **read** thereafter, so the
+    one shared instance is safe across worker threads (they never write it).
     """
 
     test_dir: str = "res://test"
@@ -253,6 +263,9 @@ class GutRunner(_GodotJUnitRunner):
     godot: str = "godot"
     timeout: float = DEFAULT_TIMEOUT
     _imported: bool = field(default=False, init=False, repr=False)
+    #: The healthy baseline's test count, captured on the first run; a later run with fewer tests is
+    #: a skipped (failed-to-load) suite → error. ``None`` until the first run establishes it.
+    _baseline_tests: int | None = field(default=None, init=False, repr=False)
     _framework: ClassVar[str] = "GUT"
 
     def command(self, project_dir: str) -> list[str]:
@@ -280,19 +293,38 @@ class GutRunner(_GodotJUnitRunner):
     def _result_from_report(
         self, report_text: str, completed: subprocess.CompletedProcess[str]
     ) -> SuiteResult:
-        """Crash-safety: a GUT report with **zero tests** means a test file failed to compile (GUT
-        writes an empty report and exits 0) — surface it as an execution error, never a silent
-        zero-test pass that would mark the mutant SURVIVED. Handles both empty-report shapes: a
-        ``<testsuites tests="0"/>`` with no child (parser raises ``ValueError`` — caught here), and
-        a child ``<testsuite tests="0">`` (parses to ``tests == 0``)."""
+        """Crash-safety (see the class docstring): raise — never return a pass — when the report
+        reflects a suite that failed to load rather than a real, complete run.
+
+        Two shapes, both surfaced as an execution error:
+          * **zero tests** — GUT's empty-report shape (a ``<testsuites tests="0"/>`` with no child,
+            which the parser raises ``ValueError`` on — caught here — or a child ``<testsuite
+            tests="0">``), or every suite skipped;
+          * **fewer tests than the baseline** — GUT skips a suite whose source-under-test won't
+            compile and runs the rest green, so a drop below the first (healthy baseline) run's test
+            count means a suite was skipped: the false-survivor case zero-test alone misses.
+        """
         try:
             result = parse_junit_xml(report_text)
         except ValueError:
             result = None  # no <testsuite> at all — GUT's empty crash report
-        if result is None or result.tests == 0:
+        tests = result.tests if result is not None else 0
+        baseline = self._baseline_tests
+        if baseline is None:
+            # First run = the engine's healthy baseline (run serially before any --jobs fan-out): it
+            # fixes the expected count. Later runs only read it, so the shared instance is safe.
+            self._baseline_tests = tests
+            baseline = tests
+        if result is None or tests == 0 or tests < baseline:
             detail = (completed.stderr or completed.stdout or "").strip()
+            reason = (
+                "GUT ran 0 tests"
+                if tests == 0
+                else f"GUT ran {tests} tests, fewer than the baseline {baseline}"
+            )
             raise RuntimeError(
-                "GUT ran 0 tests — a test file likely failed to compile (GUT writes an empty "
-                "report and exits 0 in that case)" + (f":\n{detail[-1000:]}" if detail else "")
+                f"{reason} — a test suite failed to compile/load and GUT skipped it (it runs the "
+                "rest green and exits 0, so this would otherwise be a false survivor)"
+                + (f":\n{detail[-1000:]}" if detail else "")
             )
         return result

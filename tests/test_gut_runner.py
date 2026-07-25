@@ -231,6 +231,60 @@ def test_run_warms_the_import_cache_once_before_the_first_suite_run(
     assert "--import" not in calls[1]  # the suite run follows the warm-up
 
 
+def test_run_errors_when_test_count_drops_below_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # THE widening the live probe proved necessary: real GUT SKIPS a suite whose source-under-test
+    # won't compile and runs the rest green (tests>0, failures=0) — a false survivor the tests==0
+    # guard misses. The first (baseline) run fixes the expected count; a later run with FEWER tests
+    # is that skipped suite and must ERROR, never pass. Here: baseline 5 tests, then a run with 2.
+    report = _report(tmp_path)
+    counts = iter(["5", "2"])
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text(
+                f'<testsuites><testsuite tests="{next(counts)}" failures="0"/></testsuites>',
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    runner = GutRunner()
+    assert runner.run(str(tmp_path)).passed  # baseline: 5 tests, all suites loaded
+    with pytest.raises(RuntimeError, match="fewer than the baseline"):
+        runner.run(str(tmp_path))  # 2 tests -> a suite was skipped -> error, not a false survivor
+
+
+def test_run_does_not_error_when_test_count_holds_at_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A healthy mutant keeps every suite loadable, so the count holds at the baseline — that must
+    # NOT trip the drop guard (only a real drop does). Baseline 5 pass, then 5 with a failure ->
+    # killed, not error. Guards against the drop check misfiring on the common (equal-count) case.
+    report = _report(tmp_path)
+    reports = iter(
+        [
+            '<testsuites><testsuite tests="5" failures="0"/></testsuites>',  # baseline: healthy
+            '<testsuites><testsuite tests="5" failures="1"/></testsuites>',  # mutant: killed
+        ]
+    )
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text(next(reports), encoding="utf-8")
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    runner = GutRunner()
+    assert runner.run(str(tmp_path)).passed
+    assert runner.run(str(tmp_path)).failed  # 5 tests, 1 failure -> killed (no false drop-error)
+
+
 def test_run_creates_the_report_directory_when_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
