@@ -49,7 +49,7 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   (both run via `godot --headless`; neither is privileged in the engine), plus the framework-neutral
   **exit-code command runner** for any harness without JUnit output. See
   [`docs/decisions/0011`](docs/decisions/0011-runner-agnostic-adapter-seam.md).
-- **Report format:** Stryker's `mutation-testing-elements` JSON schema (renders in its HTML viewer).
+- **Report format:** the `mutation-testing-elements` JSON schema (renders in its HTML viewer).
 
 ## Conventions
 
@@ -85,5 +85,5 @@ Live docs open with YAML frontmatter (`type` / `status` / `created`); build only
 ## Non-goals (v0.1)
 
 Coverage-gated mutant selection, the optional LLM-semantic mutant mode, and any second-language
-adapter (TypeScript delegates to Stryker, or is skipped).
+adapter (TypeScript is out of scope for v0.1).
 Finishing the GDScript path on a real fixture beats breadth.

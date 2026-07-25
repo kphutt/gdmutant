@@ -31,7 +31,7 @@ CLI. `0.1.0` is the current in-development version; the first git tag is still p
   `*_test.gd` / `*Test.gd` name, or `extends GdUnitTestSuite` / `GutTest`), with an `--exclude` glob
   (and a `.gdmutant.toml` `exclude` list) to skip anything else.
 - Reports: a console survivor summary that explains each gap (what's untested, why it matters, where
-  to start a test), the Stryker
+  to start a test), the
   [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) JSON
   schema (`--json`), and a self-contained HTML report (`--html`).
 - `.gdmutant.toml` for persisted per-project flags; `--dry-run` to list mutants without running
