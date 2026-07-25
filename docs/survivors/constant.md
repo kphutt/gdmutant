@@ -1,3 +1,8 @@
+---
+type: reference
+status: active
+---
+
 # constant survivor
 
 **The change:** gdmutant flipped a boolean literal (`true` ↔ `false`).

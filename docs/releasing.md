@@ -1,3 +1,9 @@
+---
+type: how-to
+status: active
+created: 2026-07-23
+---
+
 # Releasing gdmutant
 
 How gdmutant's distributions reach PyPI. Publishing uses **Trusted Publishing (OIDC)** — no API
@@ -29,8 +35,8 @@ This runs the `build` job then `publish-testpypi` (uploading to `https://test.py
 Verify the result at https://test.pypi.org/p/gdmutant.
 
 ## Real release -> PyPI (`release: published`)
-1. Cut the version in `pyproject.toml` (separate change; `version` stays `0.0.0` until the first
-   tagged release — see `CHANGELOG.md`).
+1. Set the release version in `pyproject.toml` (a separate change; it currently reads `0.1.0`,
+   in-development — see `CHANGELOG.md`).
 2. Create and publish a **GitHub Release** (tag it, then Publish — a draft does not trigger the
    workflow; only a *published* release does).
 3. Publishing the release runs the `build` job then `publish-pypi`, uploading to PyPI over OIDC.

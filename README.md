@@ -42,7 +42,9 @@ uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
 No Python in your game repo? Keep gdmutant in a tiny non-package uv project beside it (e.g. under
 `devtools/`, with `[tool.uv] package = false`) so it never touches shipped code.
 
-**See it work with no Godot at all** — list the mutants for the bundled fixture:
+**See it work with no Godot at all** — point `--dry-run` at any `.gd` file to list the mutants
+gdmutant would generate (from a clone of this repo, the bundled `corpus/` fixture prints the
+example below):
 
 ```sh
 uv run gdmutant run corpus/turn_order.gd --dry-run
@@ -82,8 +84,7 @@ badge to the Stryker Dashboard.
 
 **Fits real projects.** Test suites auto-skipped; `--exclude` globs; `.gdmutant.toml` for per-project
 defaults; `--jobs N` evaluates mutants in parallel; `--since <ref>` mutates only the lines a PR
-changed (the fast, per-PR mode); `--dry-run` lists mutants without booting Godot. Mutates in place
-and restores after every mutant and on exit.
+changed (the fast, per-PR mode); `--dry-run` lists mutants without booting Godot.
 
 ## Example output
 
@@ -146,7 +147,7 @@ Ctrl-C). Commit or stash before a run; `--require-clean` refuses to start with u
 - [Design & architecture](docs/design/DESIGN.md) — the engine and the "Saboteur & the Jury" design.
 - [Driving gdmutant from an AI agent](docs/agent-guide.md) — invocation, JSON schema, survivor→killing-test loop.
 - [Exit-code runner convention](docs/decisions/0005-exit-code-test-runner-convention.md) — the stdout/exit-code contract.
-- [Changelog](CHANGELOG.md) · [Contributing](AGENTS.md) · [Credits](CREDITS.md)
+- [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Credits](CREDITS.md)
 
 ## License
 
