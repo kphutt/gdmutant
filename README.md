@@ -3,9 +3,9 @@
 
 <p align="center">
   <a href="https://github.com/kphutt/gdmutant/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kphutt/gdmutant/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="#requirements"><img alt="Godot 4.4+" src="https://img.shields.io/badge/Godot-4.4%2B-478cbf?logo=godot-engine&logoColor=white"></a>
-  <a href="https://github.com/godot-gdunit-labs/gdUnit4"><img alt="GdUnit4 6.0–6.1" src="https://img.shields.io/badge/GdUnit4-6.0%E2%80%936.1-478cbf"></a>
-  <a href="https://github.com/bitwes/Gut"><img alt="GUT 9.7" src="https://img.shields.io/badge/GUT-9.7-478cbf"></a>
+  <a href="#compatibility"><img alt="Godot 4.3+" src="https://img.shields.io/badge/Godot-4.3%2B-478cbf?logo=godot-engine&logoColor=white"></a>
+  <a href="https://github.com/bitwes/Gut"><img alt="GUT 9.x" src="https://img.shields.io/badge/GUT-9.x-478cbf"></a>
+  <a href="https://github.com/godot-gdunit-labs/gdUnit4"><img alt="gdUnit4 6.x" src="https://img.shields.io/badge/gdUnit4-6.x-478cbf"></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-blue?logo=python&logoColor=white"></a>
   <a href="https://github.com/kphutt/gdmutant/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
 </p>
@@ -27,9 +27,10 @@ they render in tooling the JS/TS world already has.
 
 ## Is this for you?
 
-- You write **GDScript** and test with **gdUnit4**, **GUT**, or any `godot --headless` command.
+- You write **GDScript** and test with **GUT**, **gdUnit4**, or any `godot --headless` command.
 - You already have a test suite and want to know which of it actually bites.
-- gdmutant is the natural companion to gdUnit4 — it doesn't replace your test runner, it grades it.
+- gdmutant is a natural companion to GUT and gdUnit4 alike — it doesn't replace your test runner, it
+  grades it.
 
 ## Quickstart
 
@@ -43,20 +44,22 @@ uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
 No Python in your game repo? Keep gdmutant in a tiny non-package uv project beside it (e.g. under
 `devtools/`, with `[tool.uv] package = false`) so it never touches shipped code.
 
-**See it work with no Godot at all** — list the mutants for the bundled fixture:
+**See it work with no Godot at all** — point `--dry-run` at any `.gd` file to list the mutants
+gdmutant would generate (from a clone of this repo, the bundled `corpus/` fixture prints the example
+below):
 
 ```sh
 uv run gdmutant run corpus/turn_order.gd --dry-run
 ```
 
 **Run it for real on your project** — pick the runner for your framework.
-**[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4)** and **[GUT](https://github.com/bitwes/Gut)**
-are first-class peers: both read the framework's JUnit XML for per-test detail (gdUnit4 is the
-default; GUT is `--runner gut`):
+**[GUT](https://github.com/bitwes/Gut)** and **[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4)**
+are first-class peers: both read the framework's JUnit XML for per-test detail (gdUnit4 is the default
+runner; select GUT with `--runner gut`):
 
 ```sh
-uv run gdmutant run path/to/module.gd --project . --json report.json          # gdUnit4 (default)
 uv run gdmutant run path/to/module.gd --project . --runner gut --json report.json   # GUT
+uv run gdmutant run path/to/module.gd --project . --json report.json                # gdUnit4 (default)
 ```
 
 **No JUnit XML?** Point the universal exit-code runner at the same headless test command your CI runs
@@ -91,8 +94,7 @@ badge to the Stryker Dashboard.
 
 **Fits real projects.** Test suites auto-skipped; `--exclude` globs; `.gdmutant.toml` for per-project
 defaults; `--jobs N` evaluates mutants in parallel; `--since <ref>` mutates only the lines a PR
-changed (the fast, per-PR mode); `--dry-run` lists mutants without booting Godot. Mutates in place
-and restores after every mutant and on exit.
+changed (the fast, per-PR mode); `--dry-run` lists mutants without booting Godot.
 
 ## Example output
 
@@ -108,30 +110,34 @@ and restores after every mutant and on exit.
 A real run adds a killed/survived verdict per mutant, a mutation score, and the plain-language
 survivor explanation described above.
 
-## Requirements
+## Compatibility
 
-- **Python 3.12+**, managed with [uv](https://docs.astral.sh/uv/) — a dev tool, not a runtime
-  dependency; it never touches shipped game code.
-- **Godot 4.4+** for real runs (`--dry-run` needs none).
-- **A test framework** matched to your runner (below) — or nothing beyond Godot for the exit-code
-  runner, which needs no addon.
+You need **Python 3.12+** (managed with [uv](https://docs.astral.sh/uv/) — a dev tool, never shipped
+with your game), **Godot** for real runs (`--dry-run` needs none), and a **test runner** — GUT or
+gdUnit4 (each via its dedicated JUnit-XML runner + addon), or any `godot --headless` command via the
+exit-code runner (no addon).
 
-**Test-runner support.** gdUnit4 and GUT are first-class peers; the exit-code runner covers everything
-else:
+gdmutant only parses GDScript and shells out to your runner's headless CLI — both stable across Godot's
+4.x minors — so it is version-tolerant by design.
+
+| | CI-verified every push | Expected to work (best-effort) |
+|---|---|---|
+| **Godot** | 4.7.x | 4.3+ |
+| **Runner** | GUT 9.7.1 + gdUnit4 6.1.3, each against real Godot | GUT 9.x, gdUnit4 6.x, any headless command |
+
+Only the left column is tested each push. **GUT and gdUnit4 are first-class CI peers** — a dedicated
+`selftest-gut` and `selftest-godot` job each install the pinned addon and drive the shipped CLI against
+real Godot on the same corpus, to the same per-mutant outcome, so neither runner is second-tier. The
+floor on the right is a claim, not a guarantee: gdmutant *should* run on Godot 4.3+ and current
+GUT/gdUnit4 because of how little it touches — but if it breaks on a version there, please report it.
+
+**Which runner.** GUT and gdUnit4 are peers; the exit-code runner covers everything else:
 
 | Runner | Flag | Detail | Needs |
 |---|---|---|---|
-| **gdUnit4** | `--runner gdunit4` (default) | per-test (JUnit XML) | the gdUnit4 addon |
 | **GUT** | `--runner gut` | per-test (JUnit XML) | the GUT addon |
+| **gdUnit4** | `--runner gdunit4` (default) | per-test (JUnit XML) | the gdUnit4 addon |
 | **exit-code command** | `--runner command --command "…"` | suite pass/fail | nothing (any headless `godot` command) |
-
-- **gdUnit4:** v6.0–v6.1 (tested against **v6.1.3**), via gdUnit4's stable `GdUnitCmdTool.gd`
-  command-line contract, unchanged across that range. v6.1.x is the largest in-the-wild bucket; v6.0.x
-  is what the Godot Asset Library ships to new users — gdmutant targets both.
-- **GUT:** tested against **v9.7.1**, via GUT's `gut_cmdln.gd` command-line contract.
-- **Anything else:** the exit-code runner drives any `godot --headless` command (a hand-rolled
-  `SceneTree` harness, a bespoke CLI) that exits non-zero on failure — coarser (suite-level pass/fail,
-  no per-test detail), but universal and addon-free.
 
 ## Configuration
 
@@ -169,7 +175,7 @@ Ctrl-C). Commit or stash before a run; `--require-clean` refuses to start with u
 - [Design & architecture](docs/design/DESIGN.md) — the engine and the "Saboteur & the Jury" design.
 - [Driving gdmutant from an AI agent](docs/agent-guide.md) — invocation, JSON schema, survivor→killing-test loop.
 - [Exit-code runner convention](docs/decisions/0005-exit-code-test-runner-convention.md) — the stdout/exit-code contract.
-- [Changelog](CHANGELOG.md) · [Contributing](AGENTS.md) · [Credits](CREDITS.md)
+- [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Credits](CREDITS.md)
 
 ## License
 

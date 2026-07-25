@@ -1,3 +1,8 @@
+---
+type: reference
+status: active
+---
+
 # modulo survivor
 
 **The change:** gdmutant swapped `%` with another operator (e.g. `*`, `/`).

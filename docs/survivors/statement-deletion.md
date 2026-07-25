@@ -1,3 +1,8 @@
+---
+type: reference
+status: active
+---
+
 # statement-deletion survivor
 
 **The change:** gdmutant removed a whole statement (replaced it with `pass`).
