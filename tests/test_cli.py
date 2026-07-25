@@ -37,6 +37,29 @@ def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True, env=env)
 
 
+def _leak_decoy_env(decoy_repo: Path) -> dict[str, str]:
+    """GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE pointing at `decoy_repo` — the shape git itself sets in
+    a hook's environment, but aimed at some *other* repo than the one a test is exercising. Used by
+    the [ticket] regression tests to simulate gdmutant being invoked from inside a git hook."""
+    return {
+        "GIT_DIR": str(decoy_repo / ".git"),
+        "GIT_WORK_TREE": str(decoy_repo),
+        "GIT_INDEX_FILE": str(decoy_repo / ".git" / "index"),
+    }
+
+
+def _init_decoy_repo(decoy_repo: Path) -> None:
+    """A throwaway committed repo at `decoy_repo`, unrelated to any test's real target repo — the
+    'hook's own repo' a leaked GIT_DIR/etc. would incorrectly redirect git calls to."""
+    decoy_repo.mkdir()
+    _git(decoy_repo, "init")
+    _git(decoy_repo, "config", "user.email", "hook@example.com")
+    _git(decoy_repo, "config", "user.name", "Hook")
+    (decoy_repo / "unrelated.txt").write_text("x", encoding="utf-8")
+    _git(decoy_repo, "add", "unrelated.txt")
+    _git(decoy_repo, "commit", "-m", "decoy init")
+
+
 def _committed_repo(tmp_path: Path) -> Path:
     """A git repo containing a committed, clean f.gd — the base for the dirty-tree tests."""
     _git(tmp_path, "init")
@@ -1291,6 +1314,35 @@ def test_git_helper_isolated_from_hook_env(tmp_path: Path, monkeypatch: pytest.M
     assert not decoy.exists()  # ...not on the leaked GIT_DIR
 
 
+def test_has_uncommitted_changes_ignores_leaked_hook_git_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for [ticket]: production `_has_uncommitted_changes` (the ``git status
+    --porcelain`` call) must scrub GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE itself — it must not lean on
+    conftest's autouse `_isolate_git_env` fixture, which would re-mask the very leak this test is
+    meant to pin. `monkeypatch.setenv` below runs inside the test body, i.e. *after* that fixture's
+    per-test cleanup already ran, so it faithfully reproduces gdmutant being invoked from inside a
+    git hook regardless of the autouse scrub.
+
+    Without the production scrub, `git status --porcelain -- f.gd` (cwd=target, but GIT_DIR/
+    GIT_WORK_TREE repointed at `decoy`) matches no path in the decoy repo and prints nothing — a
+    dirty target file would misread as clean, silently defeating --require-clean.
+    """
+    decoy = tmp_path / "decoy"
+    _init_decoy_repo(decoy)
+
+    target = tmp_path / "target"
+    target.mkdir()
+    _committed_repo(target)
+    path = target / "f.gd"
+    path.write_text("func f(a, b) -> bool:\n\treturn a >= b and a < b\n", encoding="utf-8")  # dirty
+
+    for key, value in _leak_decoy_env(decoy).items():
+        monkeypatch.setenv(key, value)
+
+    assert _has_uncommitted_changes(str(path)) is True
+
+
 @dataclass
 class RunBoomRunner:
     """A runner that's cheap to construct but explodes if actually run — proves --require-clean
@@ -1811,6 +1863,80 @@ def test_changed_lines_maps_the_modified_line(tmp_path: Path) -> None:
     Path(path).write_text(_TWO_LINE_SRC.replace("x > 0", "x > 1"), encoding="utf-8")
     changed = cli._changed_lines("HEAD", [path])
     assert changed == {str(Path(path).resolve()): {2}}  # the +side of the diff, line 2 only
+
+
+def test_changed_lines_ignores_leaked_hook_git_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for [ticket]: production `_changed_lines` (``git diff --unified=0`` /
+    ``git ls-files --error-unmatch``) must scrub GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE itself — it
+    must not lean on conftest's autouse `_isolate_git_env` fixture, which would re-mask the very
+    leak this test is meant to pin. `monkeypatch.setenv` below runs inside the test body, i.e.
+    *after* that fixture's per-test cleanup already ran, so it faithfully reproduces gdmutant being
+    invoked from inside a git hook regardless of the autouse scrub.
+
+    Without the production scrub, ``git diff --unified=0 HEAD -- f.gd`` (cwd=target, but GIT_DIR/
+    GIT_WORK_TREE repointed at `decoy`) diffs against the decoy repo, where the path doesn't exist —
+    an empty diff — so --since would silently report "no lines changed" for a file that changed.
+    """
+    decoy = tmp_path / "decoy"
+    _init_decoy_repo(decoy)
+
+    target = tmp_path / "target"
+    target.mkdir()
+    path = _repo_with_committed(target, "f.gd", _TWO_LINE_SRC)
+    # change line 2 only (the `> 0` return) — leave line 4 untouched
+    Path(path).write_text(_TWO_LINE_SRC.replace("x > 0", "x > 1"), encoding="utf-8")
+
+    for key, value in _leak_decoy_env(decoy).items():
+        monkeypatch.setenv(key, value)
+
+    changed = cli._changed_lines("HEAD", [path])
+    assert changed == {str(Path(path).resolve()): {2}}
+
+
+def test_all_git_subprocess_calls_scrub_leaked_hook_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for [ticket], direct unit-level pin: every git subprocess.run call gdmutant makes
+    (``git status``, ``git diff``, ``git ls-files``) must pass ``env=`` with all six inherited
+    GIT_* location vars removed — checked directly against the live env kwarg, independent of any
+    particular git version's real-repo error behavior. Spies on `cli.subprocess.run` (never
+    touching a real git binary) so the three call sites in `_has_uncommitted_changes` and
+    `_changed_lines` are each exercised and captured. Deliberately re-injects the leak vars via
+    monkeypatch inside the test body (after conftest's autouse `_isolate_git_env` fixture already
+    cleared them), so it does not depend on that fixture.
+    """
+    leaked = {
+        "GIT_DIR": "decoy-dir",
+        "GIT_WORK_TREE": "decoy-worktree",
+        "GIT_INDEX_FILE": "decoy-index",
+        "GIT_OBJECT_DIRECTORY": "decoy-objects",
+        "GIT_COMMON_DIR": "decoy-common",
+        "GIT_PREFIX": "decoy-prefix",
+    }
+    for key, value in leaked.items():
+        monkeypatch.setenv(key, value)
+
+    captured_envs: list[dict[str, str] | None] = []
+
+    def spy(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured_envs.append(kwargs.get("env"))  # type: ignore[arg-type]
+        if "ls-files" in argv:
+            return subprocess.CompletedProcess(argv, returncode=1, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", spy)
+
+    path = _gd(tmp_path)  # a real file on disk; git itself is never actually invoked (spied above)
+    cli._has_uncommitted_changes(str(path))  # -> git status
+    cli._changed_lines("HEAD", [str(path)])  # -> git diff, then git ls-files (empty diff + is_file)
+
+    assert len(captured_envs) == 3  # status, diff, ls-files — every call site hit exactly once
+    for env in captured_envs:
+        assert env is not None, "every git subprocess call must pass env="
+        for key in leaked:
+            assert key not in env, f"{key} leaked into a git subprocess call"
 
 
 def test_changed_lines_bad_ref_returns_none(
