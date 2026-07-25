@@ -135,6 +135,12 @@ class _GodotJUnitRunner:
         self.prepare(project_dir)
         budget = self.timeout if timeout is None else timeout
         report = Path(project_dir) / self.report_path
+        # Ensure the report's parent directory exists. GUT (unlike GdUnit4, which creates its own
+        # reports/report_N/) will NOT create the directory for -gjunit_xml_file: on a fresh project
+        # with no reports/ dir it runs the whole suite green but then fails to export with "Could
+        # not create export file", writing no report — so every run would raise "wrote no report".
+        # Harmless for GdUnit4 (it writes into this pre-made dir exactly as it did when it made it).
+        report.parent.mkdir(parents=True, exist_ok=True)
         # Read THIS run's report, never a stale one from a previous mutant: remove it first and
         # require it to reappear. If the framework/Godot writes no report (a crash, an addon-load
         # failure, or a mutant that errors at load time), that's an execution failure — raise so the

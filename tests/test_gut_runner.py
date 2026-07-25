@@ -231,5 +231,28 @@ def test_run_warms_the_import_cache_once_before_the_first_suite_run(
     assert "--import" not in calls[1]  # the suite run follows the warm-up
 
 
+def test_run_creates_the_report_directory_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GUT does not create the -gjunit_xml_file parent dir; on a fresh project (no reports/ dir) it
+    # runs green but fails to export, writing no report -> "wrote no report" on every run. So run()
+    # must create the parent dir first. Here the reports/ dir does NOT pre-exist; the mock writes
+    # the report (which only succeeds if run() already made the dir), proving the mkdir happened.
+    report = tmp_path / "reports" / "gut_results.xml"
+    assert not report.parent.exists()  # precondition: the dir is missing, as on a fresh checkout
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text('<testsuites><testsuite tests="2" failures="0"/></testsuites>')
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    result = GutRunner().run(str(tmp_path))
+    assert report.parent.is_dir()  # run() created it before invoking GUT
+    assert (result.tests, result.failed) == (2, False)
+
+
 def test_gut_runner_satisfies_the_protocol() -> None:
     assert isinstance(GutRunner(), Runner)
