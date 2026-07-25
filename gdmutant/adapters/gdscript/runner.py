@@ -249,9 +249,15 @@ class GutRunner(_GodotJUnitRunner):
       1. **`tests == 0` → error** — the empty-report / all-skipped shape (raise → the engine tallies
          ``error``), never a zero-test pass.
       2. **a drop below the baseline test count → error** — the first run (the engine's healthy
-         baseline) fixes the expected test count; any later run with *fewer* tests means a suite
-         failed to load and was skipped, so the mutant is surfaced as ``error`` rather than a false
-         survivor. This is the widening the probe proved necessary (GUT skips-and-continues).
+         baseline) fixes the expected test count; any later run with *fewer* tests is surfaced as
+         ``error`` rather than a false survivor. This is the widening the probe proved necessary
+         (GUT skips-and-continues). **It assumes deterministic, stable suite collection** (as all
+         mutation testing does); under that assumption any skipped suite strictly drops the scalar
+         total → error, never a silent pass. It does **not** cover a suite whose test count varies
+         run-to-run: such variance can *mask* a real skip (if another suite rises by the same
+         amount — a residual false survivor the scalar total can't see) or *false-error* on a benign
+         dip. Stabilize a flaky suite before a run; widen to per-suite baseline tracking only if
+         variance-masking is observed in practice (prove it with a probe first).
 
     Thread-safety under ``--jobs``: the baseline floor is set on the first run (the engine runs the
     baseline serially, *before* it fans mutants out to workers) and only **read** thereafter, so the

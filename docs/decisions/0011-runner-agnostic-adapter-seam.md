@@ -60,7 +60,15 @@ the way *its* framework fails:
      every suite skipped.
   2. **a drop below the baseline test count** — the first run (the engine's healthy baseline, run
      serially before any `--jobs` fan-out) fixes the expected count; a later run with *fewer* tests
-     means a suite was skipped, so the mutant is surfaced as `error` rather than a false survivor.
+     is surfaced as `error` rather than a false survivor. **This guard assumes deterministic, stable
+     suite collection** (as all mutation testing does). Under that assumption it is complete: any
+     suite a mutant skips strictly drops the scalar total → error, never a silent pass. It does
+     **not** cover variance — a suite whose test count varies run-to-run, or that loads flakily.
+     Such variance can (a) *mask* a real skip if another suite rises by the same amount (a residual
+     false survivor the scalar total can't see), or (b) *false-error* on a benign dip. Stabilize a
+     flaky suite before a run; if variance-masking is ever observed in practice, widen to per-suite
+     baseline tracking — but prove it with a probe first (per this ADR's method), don't widen on
+     assumption.
   Both are directly tested (unit) and pinned by the live n>1 probe below.
 
 #### Proving GUT's clause at n>1 (not just n=1)
