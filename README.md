@@ -22,8 +22,8 @@ it just wrote. Mutation is one of the few executable, model-independent signals 
 bites.
 
 It's a standalone CLI (no AI required), validated
-end-to-end against real Godot in CI. Reports use Stryker's `mutation-testing-elements` schema, so
-they render in tooling the JS/TS world already has.
+end-to-end against real Godot in CI. Reports use the `mutation-testing-elements` schema, so they
+render in the existing HTML viewer for it.
 
 ## Is this for you?
 
@@ -87,10 +87,10 @@ is first-class by adding one small adapter. [How the runner seam works →](docs
 shows the source line with a caret on the exact token, what's untested, why it matters, and where to
 start a test. [Reading your first report →](docs/reading-your-first-report.md)
 
-**Interoperates.** `--json` emits Stryker's
+**Interoperates.** `--json` emits the
 [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema
-and `--html` a self-contained viewer page; both render in the Stryker ecosystem and can post a score
-badge to the Stryker Dashboard.
+and `--html` a self-contained viewer page; both render in the standard viewer for that schema, and
+the JSON can post a score badge to a dashboard that reads it.
 
 **Fits real projects.** Test suites auto-skipped; `--exclude` globs; `.gdmutant.toml` for per-project
 defaults; `--jobs N` evaluates mutants in parallel; `--since <ref>` mutates only the lines a PR

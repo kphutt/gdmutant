@@ -27,7 +27,7 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
 
 - **G-1 — Ship a real v0.1 fast.** A working tool that mutates one real GDScript module and prints its
   survivors beats a perfect framework. Depth on one language over breadth.
-- **G-2 — Standalone, no AI required.** A normal CLI a developer installs and runs, exactly like Stryker.
+- **G-2 — Standalone, no AI required.** A normal CLI a developer installs and runs.
   Usable from the README alone; AI is never a dependency.
 - **G-3 — Generic engine, per-language adapters.** The loop (mutate → run → tally → report) is
   language-neutral; only two things are language-specific — mutating the AST and running the tests. Build
@@ -80,9 +80,9 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
   (killed + timeout + survived), and totals. Timeouts count as detected (Stryker convention).
 
 ### FG-5 — Reporting
-- **FG-5.1** The system shall emit a report in Stryker's
+- **FG-5.1** The system shall emit a report in the
   [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) JSON schema,
-  so it renders in that ecosystem's existing HTML viewer.
+  so it renders in the existing HTML viewer for that schema.
 - **FG-5.2** The system shall print a concise console summary: score, counts per verdict, and each
   survivor's `file:line` + operator.
 
