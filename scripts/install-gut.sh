@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Install the GUT (Godot Unit Test) addon into the corpus fixture for the live self-test.
 #
-# SPIKE ARTIFACT (spike/gut-runner): seeds a first-class GUT runner. GUT is intentionally NOT
-# vendored (same policy as GdUnit4 — see corpus/project.godot, CREDITS.md). It is downloaded at a
-# pinned commit and verified by a hash of the extracted addon *tree* — not the release tag (tags can
-# be re-pointed) and not the GitHub source tarball (its gzip bytes can change under you). The tree
-# hash is immune to both.
+# GUT is intentionally NOT vendored (same policy as GdUnit4 — see corpus/project.godot, CREDITS.md).
+# It is downloaded at a pinned commit and verified by a hash of the extracted addon *tree* — not the
+# release tag (tags can be re-pointed) and not the GitHub source tarball (its gzip bytes can change
+# under you). The tree hash is immune to both.
 #
 # Bumping GUT is a deliberate act: update PIN_SHA + PIN_TREE_HASH together, and the self-test then
 # re-validates the new version end-to-end. Dependabot cannot bump this (by design).
@@ -16,22 +15,43 @@ set -euo pipefail
 # --- the single pin -----------------------------------------------------------------------------
 PIN_VERSION="v9.7.1"
 PIN_SHA="aeb5d4f3f7f0a6c9b5e178876d6c99b791fda605"
-PIN_TREE_HASH="70db9b9adb89c4c7c5bb42a06bd639d5cd25cc05fd9fb704f50af2d057674a2c"
+PIN_TREE_HASH="f867f8a8e6e685e4f796c002b27be2265627d037a4ec23b1370aa7a080e3a523"
 # ------------------------------------------------------------------------------------------------
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/corpus/addons/gut"
 URL="https://github.com/bitwes/Gut/archive/${PIN_SHA}.tar.gz"
 
-# Portable sha256 command NAME (Linux CI has sha256sum; macOS has shasum) — same output format on
-# both. It must be a command, not a shell function: xargs execs it and cannot see functions.
-if command -v sha256sum >/dev/null 2>&1; then SHA256="sha256sum"; else SHA256="shasum -a 256"; fi
+# Portable Python interpreter (both CI and the operator's machines pin Python via the toolchain).
+if command -v python3 >/dev/null 2>&1; then PYTHON="python3"; else PYTHON="python"; fi
 
-# Deterministic hash of a directory's contents: sha256 of the LC_ALL=C-sorted "sha256  relpath"
-# lines. Independent of archive format, timestamps, and extraction order. $SHA256 is intentionally
-# unquoted so "shasum -a 256" word-splits into command + args for xargs.
-# shellcheck disable=SC2086
-tree_hash() { ( cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 $SHA256 | $SHA256 | awk '{print $1}' ); }
+# Deterministic, CROSS-PLATFORM hash of a directory's contents: sha256 over the sorted
+# "relpath\0sha256(file-bytes)" lines, computed in PYTHON. This deliberately does NOT use the shell's
+# sha256sum (as install-gdunit4.sh still does): GUT's addon ships binary font files that contain CR
+# bytes, and Git Bash's sha256sum defaults to TEXT mode on Windows — stripping CR before hashing — so
+# the shell method yields a DIFFERENT digest on the operator's Windows machine than on Linux CI (the
+# exact failure this replaces). Python reads bytes identically on every platform, so one pin verifies
+# on Windows and Linux alike — the operator's "Python for logic, never bash" rule, applied to precisely
+# the Git Bash gap it exists for. Independent of archive format, timestamps, and extraction order.
+tree_hash() {
+  "$PYTHON" - "$1" <<'PY'
+import hashlib
+import os
+import sys
+
+root = sys.argv[1]
+entries = []
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames.sort()  # deterministic walk (entries are sorted again below regardless)
+    for name in filenames:
+        full = os.path.join(dirpath, name)
+        rel = os.path.relpath(full, root).replace(os.sep, "/")
+        with open(full, "rb") as handle:
+            entries.append(rel + "\0" + hashlib.sha256(handle.read()).hexdigest())
+entries.sort()
+print(hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest())
+PY
+}
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
