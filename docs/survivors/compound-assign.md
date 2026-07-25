@@ -1,3 +1,8 @@
+---
+type: reference
+status: active
+---
+
 # compound-assign survivor
 
 **The change:** gdmutant swapped a compound-assignment operator (e.g. `+=` → `-=`).

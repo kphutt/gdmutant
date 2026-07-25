@@ -11,7 +11,7 @@ with, e.g.::
     GDMUTANT_GODOT=godot uv run pytest tests/test_selftest_live.py -v
 
 The CommandRunner test needs only Godot. The GdUnit4 test additionally skips if the addon is not
-installed (run ``scripts/install-gdunit4.sh`` first).
+installed (run ``python scripts/install_gdunit4.py`` first).
 
 The pinned expectations below are the *observed* result of running gdmutant against the corpus on a
 real Godot — the three outcome classes the fixture is designed to show:
@@ -156,7 +156,7 @@ def test_gdunit4_against_real_godot(tmp_path: Path) -> None:
     """The GdUnit4 path — the real-Godot close: exercises the real ``-s GdUnitCmdTool.gd -a res://test
     -rc 1 --ignoreHeadlessMode`` flags and reads the actual ``reports/report_1/results.xml``."""
     if not ADDON.is_dir():
-        pytest.skip("GdUnit4 addon not installed — run scripts/install-gdunit4.sh")
+        pytest.skip("GdUnit4 addon not installed — run python scripts/install_gdunit4.py")
     project = _corpus_copy(tmp_path)
     report = _run_gdmutant(
         project,
@@ -173,7 +173,7 @@ def test_gut_against_real_godot(tmp_path: Path) -> None:
     outcome (18/11/7 with the identical survivor set) — mutant-for-mutant agreement across the two
     frameworks is the proof the seam is genuinely runner-agnostic, not GdUnit4-shaped."""
     if not GUT_ADDON.is_dir():
-        pytest.skip("GUT addon not installed — run scripts/install-gut.sh")
+        pytest.skip("GUT addon not installed — run python scripts/install_gut.py")
     project = _corpus_copy(tmp_path)
     report = _run_gdmutant(
         project,
@@ -212,7 +212,7 @@ def test_gut_crash_safety_never_reports_a_false_survivor_at_n_gt_1(tmp_path: Pat
     surfaces it as an error (see `GutRunner`).
     """
     if not GUT_ADDON.is_dir():
-        pytest.skip("GUT addon not installed — run scripts/install-gut.sh")
+        pytest.skip("GUT addon not installed — run python scripts/install_gut.py")
     from gdmutant.adapters.gdscript.runner import GutRunner
     from gdmutant.engine.runner import SuiteResult
 

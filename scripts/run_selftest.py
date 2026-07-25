@@ -9,7 +9,7 @@ import sys
 
 
 def main() -> int:
-    install = subprocess.run(["sh", "scripts/install-gdunit4.sh"])
+    install = subprocess.run([sys.executable, "scripts/install_gdunit4.py"])
     if install.returncode != 0:
         return install.returncode
     env = os.environ.copy()

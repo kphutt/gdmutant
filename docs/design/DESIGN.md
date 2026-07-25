@@ -1,5 +1,5 @@
 ---
-type: design
+type: explanation
 status: active
 created: 2026-07-10
 ---
@@ -12,8 +12,10 @@ requirements), and the *shape* of the code that delivers it. Product rationale i
 [`README.md`](../../README.md); the stack decision is [`docs/decisions/0001`](../decisions/0001-write-the-engine-in-python-not-gdscript.md).
 
 Scope note: this document covers **v0.1 — the deterministic operator core + the GDScript adapter, run
-against a bundled fixture**. Deferred work (coverage-gating, HTML report, incremental mode, the
-LLM-semantic mode, further language adapters) is named in §5, not designed here.
+against a bundled fixture**. Some work the plan first deferred has since shipped (the HTML report,
+the `--since` incremental/diff-scoped mode, and `--jobs` parallel evaluation); §5 marks what landed.
+Work still deferred (coverage-gated mutant selection, the LLM-semantic mode, further language
+adapters) is named in §5, not designed here.
 
 ---
 
@@ -25,7 +27,7 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
 
 - **G-1 — Ship a real v0.1 fast.** A working tool that mutates one real GDScript module and prints its
   survivors beats a perfect framework. Depth on one language over breadth.
-- **G-2 — Standalone, no AI required.** A normal CLI a developer installs and runs, exactly like Stryker.
+- **G-2 — Standalone, no AI required.** A normal CLI a developer installs and runs.
   Usable from the README alone; AI is never a dependency.
 - **G-3 — Generic engine, per-language adapters.** The loop (mutate → run → tally → report) is
   language-neutral; only two things are language-specific — mutating the AST and running the tests. Build
@@ -78,9 +80,9 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
   (killed + timeout + survived), and totals. Timeouts count as detected (Stryker convention).
 
 ### FG-5 — Reporting
-- **FG-5.1** The system shall emit a report in Stryker's
+- **FG-5.1** The system shall emit a report in the
   [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) JSON schema,
-  so it renders in that ecosystem's existing HTML viewer.
+  so it renders in the existing HTML viewer for that schema.
 - **FG-5.2** The system shall print a concise console summary: score, counts per verdict, and each
   survivor's `file:line` + operator.
 
@@ -99,7 +101,8 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
   mutants → same verdicts. This is what lets a report be trusted and diffed over time. (Any future
   LLM-semantic mode is nondeterministic and stays out of this core.)
 - **NF-2 — Standalone / no AI.** No runtime dependency on any AI service. Prerequisites are exactly
-  *Godot (already installed by a Godot dev) + `pipx install gdmutant`*.
+  *Godot (already installed by a Godot dev) + the gdmutant CLI*, installed today from a pinned git
+  commit with uv (a `pipx`/PyPI install lands with the first tagged release; see the README).
 - **NF-3 — Engine ⊥ adapter decoupling.** `engine/` contains no GDScript-specific assumptions; everything
   language-specific lives in `adapters/<lang>/`. A new language must not require touching the engine.
 - **NF-4 — Language-neutral operators.** The operator catalog is expressed against an abstract notion of
@@ -116,8 +119,11 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
   would surface as `error`, failing the assertion). A dedicated `godot --check-only` parse-agreement
   probe over arbitrary mutants is a fast-follow.
 - **NF-6 — Performance headroom.** v0.1 runs the full suite per mutant (simple, correct). Booting Godot
-  per mutant is slow, so the design must leave a clean seam for the deferred **coverage-gated selection**
-  (only run tests that cover the mutated line) without reshaping the engine.
+  per mutant is slow, so the design leaves clean seams for two speedups. Both have since shipped:
+  **`--jobs N`** evaluates mutants in parallel, each on its own copy of the project, and **`--since
+  <ref>`** mutates only the lines a diff changed. The remaining, still-deferred lever is
+  **coverage-gated selection** (only run tests that cover the mutated line), which the seam preserves
+  without reshaping the engine.
 
 ---
 
@@ -184,6 +190,7 @@ either choice safe. This is the only piece deliberately left for the spike; ever
    JUnit adapters.
 5. `mutation-testing-elements` JSON + console reporter (FG-5).
 
-**Tier B — deferred, designed for but not built in v0.1:**
-Coverage-gated mutant selection (NF-6 seam), the HTML report, incremental/diff-scoped mode, the optional
-LLM-semantic mutant mode, and additional language adapters.
+**Tier B — designed for but not built in v0.1.** Since shipped: the HTML report (`--html`), the
+incremental/diff-scoped mode (`--since`), and parallel evaluation (`--jobs`). Still deferred:
+coverage-gated mutant selection (the NF-6 seam), the optional LLM-semantic mutant mode, and additional
+language adapters.

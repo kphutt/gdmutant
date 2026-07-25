@@ -1,3 +1,8 @@
+---
+type: reference
+status: active
+---
+
 # logical-not survivor
 
 **The change:** gdmutant removed a `not`, inverting a condition.
