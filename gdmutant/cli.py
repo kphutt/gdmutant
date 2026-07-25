@@ -69,6 +69,28 @@ def _load_gdscript(source_path: str) -> str | None:
     return source
 
 
+#: Location vars git exports into a hook's environment (e.g. pre-push/pre-commit). If gdmutant is
+#: invoked from such a hook (or any process git already set these for), inheriting them makes every
+#: git call below operate on the *hook's* repo/worktree/index instead of the target file's own
+#: repo — silently pointing --since / --require-clean at the wrong tree. Mirrors
+#: tests/conftest.py's `_GIT_ENV_LEAKS` (kept separate: production code must not import from tests).
+_GIT_ENV_LEAKS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+)
+
+
+def _clean_git_env() -> dict[str, str]:
+    """A copy of the current environment with `_GIT_ENV_LEAKS` removed, for every git subprocess
+    gdmutant runs — so an inherited GIT_DIR/etc. (e.g. from a hook) can never redirect a git call
+    away from the file/ref the user actually asked about."""
+    return {key: value for key, value in os.environ.items() if key not in _GIT_ENV_LEAKS}
+
+
 def _has_uncommitted_changes(source_path: str) -> bool:
     """True only if `source_path` is inside a git work tree and has uncommitted changes (tracked
     and modified, or untracked). False when it is clean, not under git, or git isn't available.
@@ -87,6 +109,7 @@ def _has_uncommitted_changes(source_path: str) -> bool:
             cwd=path.parent,
             capture_output=True,
             text=True,
+            env=_clean_git_env(),
         )
     except OSError:
         return False  # git not installed, or the working directory is gone
@@ -356,6 +379,7 @@ def _changed_lines(ref: str, files: list[str]) -> dict[str, set[int]] | None:
                 cwd=str(path.parent),
                 capture_output=True,
                 text=True,
+                env=_clean_git_env(),
             )
         except OSError as error:
             print(f"error: could not run git for --since {ref}: {error}", file=sys.stderr)
@@ -380,6 +404,7 @@ def _changed_lines(ref: str, files: list[str]) -> dict[str, set[int]] | None:
                 cwd=str(path.parent),
                 capture_output=True,
                 text=True,
+                env=_clean_git_env(),
             )
             if tracked.returncode != 0:  # untracked
                 touched = set(range(1, len(path.read_text(encoding="utf-8").splitlines()) + 1))
