@@ -54,7 +54,7 @@ jobs:
       # The action assumes the runner addon is already present (addon-version: installed), so install
       # it into the corpus first — the same pinned, hash-verified GdUnit4 the live self-test uses.
       - name: Install the GdUnit4 addon into the corpus
-        run: scripts/install-gdunit4.sh
+        run: python scripts/install_gdunit4.py
 
       - name: Run gdmutant via the action
         id: gdmutant
