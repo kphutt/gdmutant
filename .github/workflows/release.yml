@@ -1,0 +1,56 @@
+name: Release
+
+# Tag-triggered release. Pushing a version tag (vX.Y.Z) creates a GitHub Release with
+# auto-generated notes, and that Release firing `release: published` is what triggers the existing
+# publish.yml -> PyPI. The maintainer controls *when* by pushing the tag; everything after is
+# automatic, so there is no manual "draft a release" step to forget or get wrong.
+#
+# This workflow deliberately adds NO second publish path. It only creates the Release that
+# publish.yml already listens for — the OIDC/Trusted-Publishing flow stays exactly where it is.
+#
+# It also never creates or moves a tag. `gh release create --verify-tag` fails if the tag does not
+# already exist, so the workflow can only ever react to a tag the maintainer pushed — which is what
+# keeps it compatible with the tag-protection ruleset that blocks deletion and re-pointing.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+# Least privilege at the workflow level; the one job below opts into the write it needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false # never cancel an in-flight release
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so a runner-image migration can't silently break us
+    timeout-minutes: 10
+    permissions:
+      contents: write # the only elevation: creating a Release is a write to the repo
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # the release is created via gh + GITHUB_TOKEN, not git creds
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # Guard BEFORE the Release exists. Creating it fires publish.yml, which uploads to PyPI —
+      # and a PyPI version number can never be reused. A tag that disagrees with the packaged
+      # version must fail here, while failing is still free.
+      - name: Verify the tag matches the packaged version
+        run: python3 scripts/check_release_tag.py "$GITHUB_REF_NAME"
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
+      # `gh` ships on the runner, so this needs no third-party action and adds no supply-chain
+      # surface. --verify-tag: fail if the tag is missing rather than creating one.
+      - name: Create the Release with generated notes
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
