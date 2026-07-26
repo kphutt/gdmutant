@@ -195,8 +195,8 @@ def test_console_summary_survivor_block_has_all_slots_and_the_doc_link() -> None
     out = console_summary(_run())
     for label in ("  gap    ", "  risk   ", "  start  ", "  more   "):
         assert label in out, f"missing slot {label!r}"
-    # the `more` link is the stable per-operator docs URL (ShellCheck model)
-    assert "docs/survivors/boolean.md" in out
+    # the `more` link is the stable per-operator docs anchor (ShellCheck model)
+    assert "docs/survivors/README.md#boolean" in out
     # f.gd is not readable here, so there is no code line or caret
     assert "2 | " not in out and "^" not in out
 

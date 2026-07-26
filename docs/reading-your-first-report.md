@@ -52,7 +52,7 @@ Survivors (4):
          value compared to itself) and assert the result you expect. Only
          you know that result — gdmutant reports the gap, not it.
 
-  more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/comparison.md
+  more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#comparison
 ──────────────────────────────────────────────────────────────────────────
 ```
 
@@ -61,16 +61,16 @@ Survivors (4):
   *error* mutants are excluded from the score entirely.
 - Each survivor is a block: the **code line** with a caret on the changed token, then **`gap`** (what
   your tests don't check), **`risk`** (why that matters), **`start`** (the input to add — gdmutant
-  names the gap, never the expected answer), and **`more`** (a per-operator explainer page). One
-  block per survivor; the four here are shown as one for brevity.
+  names the gap, never the expected answer), and **`more`** (a deep-link to the per-operator section
+  of the survivor reference). One block per survivor; the four here are shown as one for brevity.
 
 ## Killing a survivor
 
 Write (or strengthen) a test that **fails** under the survivor's change, then re-run — it should flip
 to `killed`. The `start` line gives the shape; the rule is *pin the exact behaviour the edit moves*
 (for a comparison flip, test the equal-inputs boundary; for `and`/`or`, the case where the operands
-disagree). Each operator's `more` link opens a page in [`docs/survivors/`](survivors/README.md) with
-the exact test to add for that mutation.
+disagree). Each operator's `more` link opens that operator's section in the
+[survivor reference](survivors/README.md) with the exact test to add for that mutation.
 
 ## Equivalent mutants (not every survivor is killable)
 

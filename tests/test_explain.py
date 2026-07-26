@@ -41,7 +41,7 @@ _GOLDEN_COMPARISON = """\
          value compared to itself) and assert the result you expect. Only
          you know that result — gdmutant reports the gap, not it.
 
-  more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/comparison.md
+  more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#comparison
 ──────────────────────────────────────────────────────────────────────────"""
 
 
@@ -63,7 +63,7 @@ def test_full_block_shows_code_caret_and_enclosing_func() -> None:
     assert "risk   Passing here is false confidence" in out
     assert "start  Add a test that reaches this line with two equal operands" in out
     assert "reports the gap, not it" in out  # declines to assert the oracle
-    assert "docs/survivors/comparison.md" in out
+    assert "docs/survivors/README.md#comparison" in out
 
 
 def test_caret_lands_under_the_token_across_tabs() -> None:
@@ -81,7 +81,7 @@ def test_no_source_degrades_gracefully_but_keeps_the_narrative() -> None:
     out = "\n".join(lines)
     assert "boolean ─" in out
     assert "gap    Your tests pass whether this needs both sides" in out
-    assert "start" in out and "docs/survivors/boolean.md" in out
+    assert "start" in out and "docs/survivors/README.md#boolean" in out
     # no code line, no caret, no enclosing-func when the source is unavailable
     assert "|" not in out and "^" not in out and "func " not in out
     # the path line is exactly the location — no trailing junk from the missing-func branch
@@ -113,7 +113,7 @@ def test_unknown_operator_uses_the_safe_fallback() -> None:
     out = "\n".join(render_survivor(_mutant("custom-op", "x", "y"), None))
     assert "gap    Your tests pass with this change applied" in out
     assert "start  Add a test that fails under this exact change" in out
-    assert "docs/survivors/custom-op.md" in out
+    assert "docs/survivors/README.md#custom-op" in out
 
 
 def test_enclosing_func_handles_static_func_and_none() -> None:
@@ -171,18 +171,34 @@ def test_survivor_report_fields_use_the_fallback_for_an_unknown_operator() -> No
     )
 
 
-def test_doc_url_is_the_stable_per_operator_page() -> None:
-    assert doc_url("comparison").endswith("/docs/survivors/comparison.md")
+def test_doc_url_is_the_stable_per_operator_anchor() -> None:
+    # The `more` link is a section anchor into the merged survivor reference: the operator id is the
+    # heading slug verbatim, so the URL ends in README.md#<operator>.
+    assert doc_url("comparison").endswith("/docs/survivors/README.md#comparison")
     assert doc_url("comparison").startswith("https://")
 
 
-def test_every_operator_has_a_docs_page_so_the_more_link_is_never_dead() -> None:
-    # The `more` link points at docs/survivors/<operator>.md — a new operator must ship its page,
-    # or the link 404s. Guards that drift.
+def _readme_slugs() -> set[str]:
+    """The GitHub heading-anchor slugs of every ``## …`` section in the merged survivor reference —
+    lowercase, spaces → hyphens (the subset of GitHub's slug rules these headings exercise)."""
     from pathlib import Path
 
+    readme = Path(__file__).resolve().parent.parent / "docs" / "survivors" / "README.md"
+    slugs = set()
+    for line in readme.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            slugs.add(line[3:].strip().lower().replace(" ", "-"))
+    return slugs
+
+
+def test_every_operator_more_link_resolves_to_a_real_anchor_in_the_merged_page() -> None:
+    # The `more` link deep-links into docs/survivors/README.md#<operator>. Every operator's anchor
+    # must exist as a heading in that merged page, or the link 404s. Guards that drift — a new
+    # operator must add its section (with a heading that slugifies to the operator id).
     from gdmutant.engine.explain import _EXPLAIN
 
-    survivors_dir = Path(__file__).resolve().parent.parent / "docs" / "survivors"
+    slugs = _readme_slugs()
     for op in _EXPLAIN:
-        assert (survivors_dir / f"{op}.md").is_file(), f"missing docs page for {op}"
+        anchor = doc_url(op).rsplit("#", 1)[1]
+        assert anchor == op  # the operator id is the anchor verbatim
+        assert anchor in slugs, f"no `## …` section slugifies to #{anchor} in the merged page"
