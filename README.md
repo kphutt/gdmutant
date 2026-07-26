@@ -91,8 +91,8 @@ start a test. [Reading your first report →](docs/reading-your-first-report.md)
 
 **Interoperates.** `--json` emits the
 [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema
-and `--html` a self-contained viewer page; both render in the standard viewer for that schema, and
-the JSON can post a score badge to a dashboard that reads it.
+and `--html` a viewer page with that data inlined; the viewer script loads from a pinned CDN, so the
+page needs network to render. The JSON can post a score badge to a dashboard that reads it.
 
 **Fits real projects.** Test suites auto-skipped; `--exclude` globs; `.gdmutant.toml` for per-project
 defaults; `--jobs N` evaluates mutants in parallel; `--since <ref>` mutates only the lines a PR
