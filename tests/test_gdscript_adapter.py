@@ -1,5 +1,7 @@
 """Tests for the GDScript adapter's mutation half."""
 
+import pytest
+
 from gdmutant.adapters.gdscript import (
     apply_mutant,
     find_sites,
@@ -289,12 +291,50 @@ def test_modulo_on_a_parenthesised_expression_ending_in_a_string_is_still_a_site
     assert any(s.token == "%" for s in find_sites(src))
 
 
-def test_computed_string_before_percent_is_a_known_scope_limitation() -> None:
-    # DOCUMENTED SCOPE: only a bare string *literal* left operand is recognised as string-format.
-    # A computed string (concatenation) is NOT — distinguishing it needs type inference — so its
-    # `%` is (rarely) still mutated as modulo. That's the NF-5-safe noise direction; pinned here as
-    # intentional, tracked as a follow-up. If this starts skipping, the follow-up landed.
+def test_computed_string_before_percent_is_string_format() -> None:
+    # A computed string counts as string-format: `+` beside a string literal can only be
+    # concatenation (GDScript has no `int + String`), so the result is a string and the `%` is
+    # formatting, not modulo. No type system needed for that much.
     src = 'func f(name, x):\n\treturn ("Hi " + name) % x\n'
+    assert not any(s.token == "%" for s in find_sites(src))
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        'func f(n, x):\n\treturn (n + " hi") % x\n',  # string on the right of the +
+        'func f(a, b, x):\n\treturn (("a" + b) + a) % x\n',  # nested concatenation
+    ],
+)
+def test_other_concatenation_shapes_are_string_format(src: str) -> None:
+    assert not any(s.token == "%" for s in find_sites(src))
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "func f(a, b):\n\treturn a % b\n",  # plain modulo
+        'func f(d, x):\n\treturn d["k"] % x\n',  # subscript: holds a string, isn't one
+        'func f(c, x):\n\treturn (x if c else "b") % 2\n',  # ternary: same
+        "func f(a, b, x):\n\treturn (a + b) % x\n",  # + with no string operand
+        "func f(a, b, c, x):\n\treturn ((a + b) + c) % x\n",  # nested, still no string
+        "func f(a, x):\n\treturn (a) % x\n",  # parenthesised name
+        'func f(x):\n\treturn len("ab") % x\n',  # call result, string only as an argument
+        # Subtraction, not concatenation. This one pins the `has_plus` guard: gdtoolkit parses
+        # rather than type-checks, so `("a" - a)` reaches the adapter even though it is invalid
+        # GDScript. Drop the guard and this `%` is wrongly read as string-format. Found by
+        # hand-mutating `_yields_string` — the guard's mutant survived until this case existed.
+        'func f(a, x):\n\treturn ("a" - a) % x\n',
+    ],
+)
+def test_genuine_modulo_sites_are_never_suppressed(src: str) -> None:
+    """The asymmetry that sets the risk budget for `_yields_string`.
+
+    Wrongly mutating a format `%` is noise — it errors at runtime, an ERROR verdict, never a
+    silently-wrong survivor. Wrongly *skipping* a real modulo silently drops a mutation site and
+    hides a test gap. So widening the string-format check must never cost a genuine site, and every
+    case here contains a string or a `+` without evaluating to a string.
+    """
     assert any(s.token == "%" for s in find_sites(src))
 
 

@@ -109,26 +109,57 @@ def _string_format_percents(tree: Tree[Token]) -> set[tuple[int | None, int | No
     it. Here each ``%`` in an ``mdr_expr`` (mul/div/remainder) node is skipped only when the node
     child *directly* to its left is a ``string`` node.
 
-    Scope (deliberate): only a **bare string-literal** left operand is recognised. A *computed*
-    string — concatenation like ``("Hi " + name) % x`` — is not, so its ``%`` is still mutated as
-    modulo. Distinguishing that needs type inference (``(a + "b") % x`` is formatting or a type
-    error depending on ``a``'s runtime type), which is out of scope for v0.1. This is the *noise*
-    direction (a format ``%`` mutated to ``*``/``/`` errors at runtime — an ERROR verdict, never a
-    silently-wrong survivor), unlike dropping a genuine modulo site. Tracked as a follow-up.
+    A **computed** string counts too: ``("Hi " + name) % x`` is formatting, because ``+`` with a
+    string operand is concatenation and so yields a string. That inference is sound without a type
+    system — GDScript has no ``int + String``, so a ``+`` beside a string literal can only be
+    building a string. `_yields_string` does the walk, and stays deliberately narrow: it descends
+    only through parentheses and ``+`` arithmetic, so an expression that merely *contains* a string
+    somewhere is untouched. ``(x if c else "b") % 2`` and ``d["k"] % x`` both hold a string literal
+    and both remain genuine modulo sites.
+
+    The asymmetry that sets the risk budget: wrongly mutating a format ``%`` is *noise* (it errors
+    at runtime — an ERROR verdict, never a silently-wrong survivor), while wrongly skipping a real
+    modulo drops a mutation site and hides a test gap. So this widens only where the inference is
+    sound, and treats anything it cannot prove as modulo.
     """
     skip: set[tuple[int | None, int | None]] = set()
     for node in tree.iter_subtrees():
         if node.data != "mdr_expr":
             continue
         for prev, cur in pairwise(node.children):
-            if (
-                isinstance(cur, Token)
-                and cur.value == "%"
-                and isinstance(prev, Tree)
-                and prev.data == "string"
-            ):
+            if isinstance(cur, Token) and cur.value == "%" and _yields_string(prev):
                 skip.add((cur.line, cur.column))
     return skip
+
+
+def _yields_string(node: Tree[Token] | Token) -> bool:
+    """True when `node` provably evaluates to a string, for the string-format ``%`` check.
+
+    Conservative by design — an unprovable node is reported False, which keeps its ``%`` a modulo
+    site (see `_string_format_percents` on why that direction is the safe one). Only three cases
+    are recognised:
+
+    * a ``string`` literal;
+    * a parenthesised expression, unwrapped (``("Hi " + n) % x``);
+    * a ``+`` arithmetic expression with at least one string-yielding operand, checked recursively
+      so ``(("a" + b) + c) % x`` is still seen as concatenation.
+
+    Everything else is False, including nodes that *contain* a string literal without evaluating to
+    one — a ternary (``test_expr``) or a subscript (``subscr_expr``). A bare ``Token`` (a name, a
+    number) is never provably a string.
+    """
+    if not isinstance(node, Tree):
+        return False
+    if node.data == "string":
+        return True
+    if node.data == "par_expr":
+        return any(_yields_string(child) for child in node.children)
+    if node.data == "arith_expr":
+        # `arith_expr` covers + and -. Require a literal `+`: concatenation is the only one that
+        # builds a string, and `String - x` is not valid GDScript in the first place.
+        has_plus = any(isinstance(c, Token) and c.value == "+" for c in node.children)
+        return has_plus and any(_yields_string(child) for child in node.children)
+    return False
 
 
 def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[MutationSite]:
