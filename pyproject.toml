@@ -134,8 +134,11 @@ fail_under = 100
 # Mutation-test gdmutant's own library with mutmut (dogfood).
 source_paths = ["gdmutant"]
 # mutmut runs the suite from a copied "mutants/" tree; tests read the corpus (end-to-end),
-# docs/ (the guide-consistency test), and AGENTS.md (the guide links to ../AGENTS.md and the
-# link-resolution test checks it exists), so all three must be copied in. Skip coverage — it is
+# docs/ (the guide-consistency test), AGENTS.md (the guide links to ../AGENTS.md and the
+# link-resolution test checks it exists), and scripts/ (the license and release-tag guards are
+# loaded from there by their tests), so all of them must be copied in. Anything the suite reads
+# and this list omits fails *collection*, which aborts the baseline — mutmut then evaluates zero
+# mutants, and the advisory job is red with no score rather than wrong. Skip coverage — it is
 # pure overhead per mutant run.
-also_copy = ["corpus", "docs", "AGENTS.md", "README.md"]
+also_copy = ["corpus", "docs", "AGENTS.md", "README.md", "scripts"]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
