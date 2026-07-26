@@ -52,6 +52,7 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.11",
   "pip-audit>=2.7",
+  "pip-licenses>=5",
   "mutmut>=3.6.0",
   "pre-commit>=4",
 ]
