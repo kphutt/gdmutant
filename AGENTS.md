@@ -57,6 +57,12 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   ourselves to it.
 - **CI gate:** `ruff` + `mypy` + `pytest` + `pip-audit`, plus a gitleaks secret scan. GitHub Actions
   are SHA-pinned (Dependabot bumps them).
+- **Windows is a deployment target here, not just a dev machine** — gdmutant is a cross-platform
+  Python CLI *shipped* to people who run it on Windows, so the Windows `verify` leg **applies** the
+  "CI matches the deployment target" rule rather than contradicting it. Two Windows-only bugs
+  reached the CLI before that leg existed: console output crashing under the legacy cp1252 code
+  page, and `python3` resolving to a *different* interpreter than `python` (see
+  `.pre-commit-config.yaml`'s header).
 - **Keep the engine language-neutral:** no GDScript-specific assumptions in `gdmutant/engine/`;
   language specifics live only in `gdmutant/adapters/<lang>/`.
 - **The mutation-operator core is deterministic** — the reproducible mode a CI check can trust; any
