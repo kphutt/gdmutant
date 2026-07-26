@@ -21,10 +21,13 @@ import textwrap
 
 from gdmutant.engine.mutants import Mutant
 
-#: One stable docs page per operator (the ShellCheck "one explainer per rule" model). A single base
-#: so the launch swap to a short vanity URL is one line; the repo is private pre-launch, so this
-#: 404s for non-collaborators until the flip — fine while only first-party users see it.
-DOC_BASE_URL = "https://github.com/kphutt/gdmutant/blob/main/docs/survivors"
+#: One stable explainer per operator (the ShellCheck "one explainer per rule" model), each a section
+#: anchor in the merged survivor reference. A single base URL so the launch swap to a short vanity
+#: URL is one line; the repo is private pre-launch, so this 404s for non-collaborators until the
+#: flip — fine while only first-party users see it. The anchor is the operator id verbatim: every
+#: ``## …`` heading in that page slugifies to its operator id (spaces → hyphens), so ``doc_url``
+#: needs no slug transform — keep the two in lockstep when adding an operator.
+DOC_BASE_URL = "https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md"
 
 _WIDTH = 74  # rule width + prose wrap target
 
@@ -103,8 +106,10 @@ _FALLBACK = (
 
 
 def doc_url(operator_id: str) -> str:
-    """The stable explainer-page URL for an operator (clickable anywhere; ShellCheck model)."""
-    return f"{DOC_BASE_URL}/{operator_id}.md"
+    """The stable explainer URL for an operator (clickable anywhere; ShellCheck model) — a section
+    anchor into the merged survivor reference. The operator id is already the heading slug, so it is
+    the anchor verbatim."""
+    return f"{DOC_BASE_URL}#{operator_id}"
 
 
 def _narrative(mutant: Mutant) -> tuple[str, str, str]:

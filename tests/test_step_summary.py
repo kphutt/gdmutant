@@ -14,7 +14,7 @@ from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.report import job_summary_markdown
 from gdmutant.engine.spans import Span
 
-_BOOLEAN_DOC = "https://github.com/kphutt/gdmutant/blob/main/docs/survivors/boolean.md"
+_BOOLEAN_DOC = "https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#boolean"
 
 
 def _boolean_survivor(path: str = "f.gd") -> MutantOutcome:
