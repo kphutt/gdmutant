@@ -8,6 +8,9 @@ mismatch logic is pinned here, where it fails fast and locally.
 from __future__ import annotations
 
 import importlib.util
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -67,3 +70,156 @@ def test_main_fails_on_a_mismatched_tag() -> None:
 def test_main_succeeds_on_the_packaged_version() -> None:
     version = check_release_tag.packaged_version()
     assert check_release_tag.main(["check_release_tag.py", f"v{version}"]) == 0
+
+
+# --- The "is this commit on main?" guard in the release workflow --------------------------------
+# This guard lives in YAML, not Python, so nothing else in the suite would notice it being dropped,
+# reordered, or defanged. It is pinned here because the failure it prevents is unrecoverable: once
+# the Release is created, publish.yml uploads to PyPI, and a PyPI version number can never be
+# reused. The ordering assertion is the load-bearing one -- a guard that runs after the Release is
+# created is not a guard.
+
+_RELEASE_WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "release.yml"
+
+
+def _workflow() -> str:
+    return _RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+
+def test_release_workflow_checks_the_tag_is_an_ancestor_of_main() -> None:
+    assert "merge-base --is-ancestor" in _workflow(), (
+        "release.yml must refuse a tag whose commit is not an ancestor of main"
+    )
+
+
+def _ancestor_check_line() -> str:
+    """The single line that runs the ancestor comparison."""
+    lines = [ln for ln in _workflow().splitlines() if "merge-base --is-ancestor" in ln]
+    assert len(lines) == 1, f"expected exactly one ancestor check, found {len(lines)}"
+    return lines[0]
+
+
+def test_the_ancestor_check_resolves_main_from_the_remote() -> None:
+    """A local `main` may not exist on the runner; the check must compare against the remote.
+
+    Asserted on the comparison line itself, not the whole file: `origin/main` also appears in the
+    fetch refspec above it, so a file-wide substring check still passes if the comparison is
+    quietly retargeted at a bare `main` that may not exist on the runner — where `merge-base`
+    would fail open or error out instead of answering the question.
+    """
+    assert "origin/main" in _ancestor_check_line()
+
+
+def test_the_ancestor_check_has_full_history_to_walk() -> None:
+    """`git merge-base` needs main's history — a shallow clone has none of it."""
+    assert "fetch-depth: 0" in _workflow()
+
+
+def test_both_guards_run_before_the_release_is_created() -> None:
+    """Creating the Release fires the PyPI upload, so every guard must precede it.
+
+    Anchored on `run: gh release create`, not the bare command name: the workflow's header comment
+    also mentions `gh release create --verify-tag` when it explains the design, and matching that
+    prose instead of the step would make this test pass no matter where the guards actually sit.
+    """
+    workflow = _workflow()
+    creates_release = workflow.index("run: gh release create")
+    for guard in ("scripts/check_release_tag.py", "merge-base --is-ancestor"):
+        assert workflow.index(guard) < creates_release, (
+            f"{guard!r} must run before the Release is created — afterwards the upload has already "
+            "happened and a PyPI version number can never be reused"
+        )
+
+
+# --- Executing the guard for real ---------------------------------------------------------------
+# Everything above reads the workflow as text, which pins that the guard is present and correctly
+# ordered but not that it is correctly *wired*: an inverted condition (`if` where `if !` belongs)
+# passes every substring assertion while doing the exact opposite — publishing off-main commits and
+# blocking the legitimate ones. So the step's shell body is lifted out of the YAML and run against a
+# throwaway repo, once for a commit on main and once for a commit off it.
+
+
+def _guard_script() -> str:
+    """The shell body of the `Verify the tagged commit is on main` step, dedented."""
+    lines = _workflow().splitlines()
+    anchor = next(i for i, ln in enumerate(lines) if "merge-base --is-ancestor" in ln)
+    start = max(i for i in range(anchor) if lines[i].strip() == "run: |")
+    indent = len(lines[start + 1]) - len(lines[start + 1].lstrip())
+    body = []
+    for line in lines[start + 1 :]:
+        if line.strip() and len(line) - len(line.lstrip()) < indent:
+            break
+        body.append(line[indent:] if line.strip() else "")
+    return "\n".join(body)
+
+
+def _git(*args: str, cwd: Path) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _scratch_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    """A clone whose `origin` has one commit on main, plus a second commit that never reached it.
+
+    Returns the working clone and the two commit SHAs (on-main, off-main).
+    """
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(origin)], check=True, capture_output=True
+    )
+
+    work = tmp_path / "work"
+    subprocess.run(["git", "init", "-b", "main", str(work)], check=True, capture_output=True)
+    _git("config", "user.email", "t@example.invalid", cwd=work)
+    _git("config", "user.name", "test", cwd=work)
+    _git("remote", "add", "origin", str(origin), cwd=work)
+
+    (work / "f.txt").write_text("on main\n", encoding="utf-8")
+    _git("add", "f.txt", cwd=work)
+    _git("commit", "-m", "on main", cwd=work)
+    _git("push", "origin", "main", cwd=work)
+    on_main = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    # A commit that exists only on a side branch — exactly the shape of a tag pushed at an
+    # unreviewed commit, which is what the guard has to refuse.
+    _git("checkout", "-b", "side", cwd=work)
+    (work / "f.txt").write_text("off main\n", encoding="utf-8")
+    _git("commit", "-am", "off main", cwd=work)
+    off_main = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    return work, on_main, off_main
+
+
+def _run_guard(work: Path, commit: str) -> subprocess.CompletedProcess[str]:
+    _git("checkout", "--detach", commit, cwd=work)
+    return subprocess.run(
+        # GitHub's default shell for a `run:` block on Linux, so the step behaves here as it does
+        # on the runner. The script arrives on stdin to keep Windows path translation out of it.
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-s"],
+        input=_guard_script(),
+        cwd=work,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "GITHUB_REF_NAME": "v9.9.9"},
+    )
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="the guard is a bash step")
+def test_the_guard_accepts_a_commit_that_is_on_main(tmp_path: Path) -> None:
+    work, on_main, _ = _scratch_repo(tmp_path)
+    result = _run_guard(work, on_main)
+    assert result.returncode == 0, f"a commit on main must be releasable:\n{result.stderr}"
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="the guard is a bash step")
+def test_the_guard_refuses_a_commit_that_never_reached_main(tmp_path: Path) -> None:
+    """The whole point: a version tag pushed at an unreviewed commit must not reach PyPI."""
+    work, _, off_main = _scratch_repo(tmp_path)
+    result = _run_guard(work, off_main)
+    assert result.returncode != 0, "a commit that is not an ancestor of main must be refused"
+    assert "not an ancestor" in result.stdout + result.stderr, (
+        "the failure must say why, so the maintainer can act on it"
+    )
