@@ -1,11 +1,12 @@
 name: Release
 
-# Tag-triggered release. Pushing a version tag (vX.Y.Z) creates a GitHub Release with
-# auto-generated notes, and that Release firing `release: published` is what triggers the existing
-# publish.yml -> PyPI. The maintainer controls *when* by pushing the tag; everything after is
-# automatic, so there is no manual "draft a release" step to forget or get wrong.
+# Tag-triggered release. Pushing a version tag (vX.Y.Z) creates a DRAFT GitHub Release with
+# auto-generated notes. publish.yml listens for `release: published`, which a draft does not fire —
+# so pushing the tag only stages the release; a maintainer must open it on GitHub and click Publish
+# before publish.yml -> PyPI runs. That's the human, auditable act ADR-0010 calls for: the tag alone
+# gets everything reviewed and staged, but a real PyPI upload still needs a second, deliberate click.
 #
-# This workflow deliberately adds NO second publish path. It only creates the Release that
+# This workflow deliberately adds NO second publish path. It only creates the (draft) Release that
 # publish.yml already listens for — the OIDC/Trusted-Publishing flow stays exactly where it is.
 #
 # It also never creates or moves a tag. `gh release create --verify-tag` fails if the tag does not
@@ -79,9 +80,11 @@ jobs:
           GITHUB_REF_NAME: ${{ github.ref_name }}
 
       # `gh` ships on the runner, so this needs no third-party action and adds no supply-chain
-      # surface. --verify-tag: fail if the tag is missing rather than creating one.
-      - name: Create the Release with generated notes
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+      # surface. --verify-tag: fail if the tag is missing rather than creating one. --draft: stage
+      # the release without firing `release: published` (see docs/decisions/0010), so publish.yml
+      # -> PyPI waits for a maintainer to open it on GitHub and click Publish.
+      - name: Create the Release with generated notes (as a draft)
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag --draft
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
