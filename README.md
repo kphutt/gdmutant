@@ -10,6 +10,8 @@
   <a href="https://github.com/kphutt/gdmutant/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
 </p>
 
+<p align="center"><sub>A community tool — not affiliated with or endorsed by the Godot Foundation.</sub></p>
+
 ## What it is
 
 gdmutant mutates your GDScript — flips `>`↔`>=`, `and`↔`or`, bumps a number, deletes a statement —
@@ -77,11 +79,11 @@ compound-assignment, modulo, unary-not, and statement-deletion operators — eac
 invalid mutants never run. One file, many, or a whole directory in one pass, with a per-file
 breakdown and one aggregate score.
 
-**Runs your existing tests, framework-agnostically** — **gdUnit4** and **GUT** are first-class peer
-runners (each reads its framework's JUnit XML for per-test detail, over one shared runner contract —
-neither privileged), plus the universal **exit-code** runner (`--runner command`) for any headless
-`godot` command that exits non-zero on failure, no addon required. Any future JUnit-emitting framework
-is first-class by adding one small adapter. [How the runner seam works →](docs/decisions/0011-runner-agnostic-adapter-seam.md)
+**Runs your existing tests, framework-agnostically** — **gdUnit4** and **GUT** via their JUnit-XML
+adapters (per-test detail, neither privileged), plus a universal **exit-code** runner
+(`--runner command`) for any headless `godot` command that exits non-zero on failure, no addon
+required. A new JUnit-emitting framework is one small adapter.
+[How the runner seam works →](docs/decisions/0011-runner-agnostic-adapter-seam.md)
 
 **Explains every survivor.** The console report doesn't just give a location — for each survivor it
 shows the source line with a caret on the exact token, what's untested, why it matters, and where to
@@ -166,8 +168,8 @@ language-specific pieces behind an adapter: mutating the AST (via
 [gdtoolkit](https://github.com/Scony/godot-gdscript-toolkit)) and running the tests. A new language is
 one small adapter. Full design: [`docs/design/DESIGN.md`](docs/design/DESIGN.md).
 
-**Safety:** gdmutant edits source **in place** and restores it after each mutant and on exit (or
-Ctrl-C). Commit or stash before a run; `--require-clean` refuses to start with uncommitted changes.
+**Safety:** gdmutant edits source **in place** and restores it after every mutant and on exit — commit
+or stash first, or pass `--require-clean`. [Full guarantee →](docs/agent-guide.md#safety-guarantee)
 
 ## Documentation
 
