@@ -132,6 +132,19 @@ def test_both_guards_run_before_the_release_is_created() -> None:
         )
 
 
+def test_the_release_is_created_as_a_draft() -> None:
+    """ADR-0010: a real PyPI upload needs a human, auditable act, not just a tag push.
+
+    publish.yml only fires on `release: published`, which a draft does not. Anchored on the actual
+    `run:` line, not a whole-file substring: the header comment above also explains `--draft` in
+    prose, so a file-wide check would still pass if the flag were dropped from the real command.
+    """
+    run_line = next(
+        ln for ln in _workflow().splitlines() if ln.strip().startswith("run: gh release create")
+    )
+    assert "--draft" in run_line, "the Release must be created as a draft, not published outright"
+
+
 # --- Executing the guard for real ---------------------------------------------------------------
 # Everything above reads the workflow as text, which pins that the guard is present and correctly
 # ordered but not that it is correctly *wired*: an inverted condition (`if` where `if !` belongs)
