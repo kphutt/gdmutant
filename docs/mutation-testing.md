@@ -50,37 +50,12 @@ behavioral mutant mutmut generates is killed," over the module-level surface.
 
 ### The 18 equivalent mutants
 
-**1. `encoding="utf-8"` → `encoding=None` / omitted / `"UTF-8"`  (11 mutants)**
-In `engine/loop.py` (`_run_one`, writing and restoring the mutated file) and `cli.py`
-(`_load_gdscript` reading the source, `run_mutation` writing the JSON report).
-- `"UTF-8"` is a codec *alias* of `"utf-8"` — byte-for-byte identical.
-- `encoding=None` / omitting the argument falls back to the platform's default text encoding, which
-  on a UTF-8 locale — the CI runner and every environment gdmutant is used in — is itself UTF-8, so
-  the bytes are identical.
+| # | Mutation | Where | Why no black-box test can catch it |
+|---|---|---|---|
+| 11 | `encoding="utf-8"` → `None` / omitted / `"UTF-8"` | `engine/loop.py` `_run_one` (writing + restoring the mutated file); `cli.py` `_load_gdscript` (reading source), `run_mutation` (writing the JSON report) | `"UTF-8"` is a codec *alias* of `"utf-8"` — byte-identical. `None` / omitted falls back to the platform default text encoding, which on a UTF-8 locale (the CI runner and every environment gdmutant is used in) is itself UTF-8. Same bytes either way. The explicit `encoding="utf-8"` is still correct — it *guarantees* the equivalence across platforms instead of relying on the ambient locale. |
+| 3 | `gather_metadata=True` → `False` / omitted | `adapters/gdscript/_parse` | `gather_metadata` attaches source spans to *Tree nodes*; the token line/column positions the adapter reads are set by lark's lexer regardless of the flag (verified directly). Toggling it changes no value the adapter uses. |
+| 3 | defensive `assert` `and` → `or` | `adapters/gdscript/_span_of`: `assert line and col and end_line and end_col` | A type-narrowing guard for the `Optional[int]` token positions. lark always populates them (each `>= 1`, i.e. truthy), so every `and`/`or` re-association of always-truthy operands evaluates identically — the guard never trips, and no test can observe a difference. |
+| 1 | `"git"` → `"GIT"` | `cli._has_uncommitted_changes` (shells out to `git status --porcelain`) | *Environment*-equivalent, not universal. On a case-insensitive filesystem (the macOS default, where this dogfood runs) the OS resolves `GIT` to the same `git` binary, so no test can catch it. On case-sensitive Linux CI, `GIT` isn't found, the helper returns `False`, and the dirty-tree test kills it. The other mutations of that argument list — `status`, `--porcelain`, and the `--` separator (the last pinned by a dash-prefixed-filename test) — are all killed. |
 
-  No black-box test can distinguish these from `"utf-8"`. Specifying `encoding="utf-8"` explicitly is
-  nonetheless correct — it is the guarantee that keeps the equivalence true across platforms, rather
-  than relying on the ambient locale.
-
-**2. `gather_metadata=True` → `False` / omitted  (3 mutants)**
-In `adapters/gdscript/_parse`. `gather_metadata` attaches source spans to *Tree nodes*; the token
-line/column positions the adapter actually reads are set by lark's lexer regardless of this flag
-(verified directly). So toggling it does not change any value the adapter uses.
-
-**3. Defensive `assert` `and` → `or`  (3 mutants)**
-In `adapters/gdscript/_span_of`: `assert line and col and end_line and end_col`. This is a
-type-narrowing guard for the `Optional[int]` token-position types. Because lark always populates
-those positions (each is `>= 1`, i.e. truthy), every `and`/`or` re-association of always-truthy
-operands evaluates identically — the guard never trips, so no test can observe a difference.
-
-**4. `"git"` → `"GIT"` in the uncommitted-changes check  (1 mutant)**
-In `cli._has_uncommitted_changes`, which shells out to `git status --porcelain`. On a
-**case-insensitive filesystem** — the macOS default, where this dogfood runs — the OS resolves
-`GIT` to the same `git` binary, so the mutant behaves identically and no test can catch it. On a
-case-sensitive filesystem (Linux CI) `GIT` is not found, the helper returns `False`, and the
-dirty-tree test kills it. So this is *environment-equivalent*, not universally so; the other
-mutations of that argument list (`status`, `--porcelain`, and the `--` separator — the last pinned
-by a dash-prefixed-filename test) are all killed.
-
-If any of these stops being equivalent (e.g. a future code path reads `Tree` node metadata, making
-mutant group 2 observable), it will resurface as a survivor and get a real test.
+If any of these stops being equivalent — e.g. a future code path reads `Tree` node metadata, making
+row 2 observable — it resurfaces as a survivor and gets a real test.
