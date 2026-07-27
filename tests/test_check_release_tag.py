@@ -11,6 +11,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -193,12 +194,53 @@ def _scratch_repo(tmp_path: Path) -> tuple[Path, str, str]:
     return work, on_main, off_main
 
 
+def _usable_bash() -> str | None:
+    """The path to a bash that can actually run a script, or None.
+
+    ``shutil.which("bash")`` alone is not proof. On GitHub's windows-2025 runners it resolves to the
+    WSL launcher stub at ``C:\\Windows\\System32\\bash.exe``, which exists but has no distribution
+    installed: it prints a UTF-16 "install a distro" notice and exits 1 — a failure that looks just
+    like the guard rejecting a commit, which would turn these tests into noise. So probe the
+    candidate rather than trusting its name. A Windows machine with Git Bash on PATH still runs
+    these tests; one with only the WSL stub skips them.
+    """
+    bash = shutil.which("bash")
+    if bash is None:  # pragma: no cover - platform-dependent
+        return None
+    try:
+        probe = subprocess.run(
+            [bash, "--noprofile", "--norc", "-c", "printf ok"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - platform-dependent
+        return None
+    return bash if probe.stdout.strip() == "ok" else None
+
+
+_BASH = _usable_bash()
+_NEEDS_BASH = pytest.mark.skipif(_BASH is None, reason="no usable bash to run the guard's shell")
+
+
+def test_a_posix_platform_always_has_a_usable_bash() -> None:
+    """The two tests below are the guard's only behavioural coverage.
+
+    A silent skip on Linux — where the release job actually runs (`runs-on: ubuntu-24.04`) — would
+    be indistinguishable from them passing, so pin that the probe finds bash there. Windows is
+    exempt: the guard never executes on a Windows runner.
+    """
+    if sys.platform != "win32":
+        assert _BASH is not None, "bash must be usable here; the guard's real tests need it"
+
+
 def _run_guard(work: Path, commit: str) -> subprocess.CompletedProcess[str]:
+    assert _BASH is not None
     _git("checkout", "--detach", commit, cwd=work)
     return subprocess.run(
         # GitHub's default shell for a `run:` block on Linux, so the step behaves here as it does
         # on the runner. The script arrives on stdin to keep Windows path translation out of it.
-        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-s"],
+        [_BASH, "--noprofile", "--norc", "-eo", "pipefail", "-s"],
         input=_guard_script(),
         cwd=work,
         capture_output=True,
@@ -207,33 +249,14 @@ def _run_guard(work: Path, commit: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _has_working_bash() -> bool:
-    """Whether a real, executable bash is on PATH.
-
-    ``shutil.which("bash")`` alone isn't proof: on GitHub's windows-2025 runners it resolves to the
-    WSL launcher stub at ``C:\\Windows\\System32\\bash.exe``, which exists but only prints a message
-    to install a WSL distro and exits non-zero instead of running anything.
-    """
-    bash = shutil.which("bash")
-    if bash is None:
-        return False
-    try:
-        result = subprocess.run(
-            [bash, "--noprofile", "--norc", "-c", "exit 0"], capture_output=True, timeout=5
-        )
-    except OSError:
-        return False
-    return result.returncode == 0
-
-
-@pytest.mark.skipif(not _has_working_bash(), reason="the guard is a bash step")
+@_NEEDS_BASH
 def test_the_guard_accepts_a_commit_that_is_on_main(tmp_path: Path) -> None:
     work, on_main, _ = _scratch_repo(tmp_path)
     result = _run_guard(work, on_main)
     assert result.returncode == 0, f"a commit on main must be releasable:\n{result.stderr}"
 
 
-@pytest.mark.skipif(not _has_working_bash(), reason="the guard is a bash step")
+@_NEEDS_BASH
 def test_the_guard_refuses_a_commit_that_never_reached_main(tmp_path: Path) -> None:
     """The whole point: a version tag pushed at an unreviewed commit must not reach PyPI."""
     work, _, off_main = _scratch_repo(tmp_path)
