@@ -94,6 +94,39 @@ jobs:
       - name: Supply-chain audit (pip-audit)
         run: uv run pip-audit
 
+  # --- License compliance: what we SHIP must stay redistributable under MIT ---
+  # Its own job, not a `verify` step, because the gate must see only the *shipped* dependency
+  # closure and so installs with `--no-dev`. Doing that inside verify would tear out the very dev
+  # tools that job needs. Linux-only and unmatrixed: a package's license does not vary by platform.
+  license-check:
+    name: License compliance
+    runs-on: ubuntu-24.04 # pinned (not -latest) so a runner-image migration can't silently break us
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # this job never uses git creds — don't leave them on the runner
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      # --no-dev: a copyleft *dev* tool is perfectly legal to use and must not fail this gate.
+      # Only what a user installs alongside gdmutant affects distribution compliance.
+      - name: Install shipped dependencies only (no dev group)
+        run: uv sync --frozen --no-dev
+
+      # --with pip-licenses layers the scanner on top without adding it to the locked runtime set;
+      # the script excludes it (and its two deps) from the report so the output stays honest about
+      # what actually ships.
+      - name: License gate
+        run: uv run --no-sync --with pip-licenses python scripts/check_licenses.py
+
   # --- Path filter: does this PR touch anything the real-Godot self-tests could care about? -------
   # Shared by both self-test gates below. "Godot-relevant" = source, tests, the corpus fixture, the
   # addon-install scripts the worker jobs run, locked deps, or this workflow file itself. A docs-only
