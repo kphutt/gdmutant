@@ -207,14 +207,33 @@ def _run_guard(work: Path, commit: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="the guard is a bash step")
+def _has_working_bash() -> bool:
+    """Whether a real, executable bash is on PATH.
+
+    ``shutil.which("bash")`` alone isn't proof: on GitHub's windows-2025 runners it resolves to the
+    WSL launcher stub at ``C:\\Windows\\System32\\bash.exe``, which exists but only prints a message
+    to install a WSL distro and exits non-zero instead of running anything.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        return False
+    try:
+        result = subprocess.run(
+            [bash, "--noprofile", "--norc", "-c", "exit 0"], capture_output=True, timeout=5
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+@pytest.mark.skipif(not _has_working_bash(), reason="the guard is a bash step")
 def test_the_guard_accepts_a_commit_that_is_on_main(tmp_path: Path) -> None:
     work, on_main, _ = _scratch_repo(tmp_path)
     result = _run_guard(work, on_main)
     assert result.returncode == 0, f"a commit on main must be releasable:\n{result.stderr}"
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="the guard is a bash step")
+@pytest.mark.skipif(not _has_working_bash(), reason="the guard is a bash step")
 def test_the_guard_refuses_a_commit_that_never_reached_main(tmp_path: Path) -> None:
     """The whole point: a version tag pushed at an unreviewed commit must not reach PyPI."""
     work, _, off_main = _scratch_repo(tmp_path)
