@@ -40,7 +40,7 @@ def _git(repo: Path, *args: str) -> None:
 def _leak_decoy_env(decoy_repo: Path) -> dict[str, str]:
     """GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE pointing at `decoy_repo` — the shape git itself sets in
     a hook's environment, but aimed at some *other* repo than the one a test is exercising. Used by
-    the [ticket] regression tests to simulate gdmutant being invoked from inside a git hook."""
+    the regression tests below to simulate gdmutant being invoked from inside a git hook."""
     return {
         "GIT_DIR": str(decoy_repo / ".git"),
         "GIT_WORK_TREE": str(decoy_repo),
@@ -1317,7 +1317,7 @@ def test_git_helper_isolated_from_hook_env(tmp_path: Path, monkeypatch: pytest.M
 def test_has_uncommitted_changes_ignores_leaked_hook_git_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regression for [ticket]: production `_has_uncommitted_changes` (the ``git status
+    """Regression test: production `_has_uncommitted_changes` (the ``git status
     --porcelain`` call) must scrub GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE itself — it must not lean on
     conftest's autouse `_isolate_git_env` fixture, which would re-mask the very leak this test is
     meant to pin. `monkeypatch.setenv` below runs inside the test body, i.e. *after* that fixture's
@@ -1868,7 +1868,7 @@ def test_changed_lines_maps_the_modified_line(tmp_path: Path) -> None:
 def test_changed_lines_ignores_leaked_hook_git_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regression for [ticket]: production `_changed_lines` (``git diff --unified=0`` /
+    """Regression test: production `_changed_lines` (``git diff --unified=0`` /
     ``git ls-files --error-unmatch``) must scrub GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE itself — it
     must not lean on conftest's autouse `_isolate_git_env` fixture, which would re-mask the very
     leak this test is meant to pin. `monkeypatch.setenv` below runs inside the test body, i.e.
@@ -1898,7 +1898,7 @@ def test_changed_lines_ignores_leaked_hook_git_env(
 def test_all_git_subprocess_calls_scrub_leaked_hook_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regression for [ticket], direct unit-level pin: every git subprocess.run call gdmutant makes
+    """Direct unit-level pin: every git subprocess.run call gdmutant makes
     (``git status``, ``git diff``, ``git ls-files``) must pass ``env=`` with all six inherited
     GIT_* location vars removed — checked directly against the live env kwarg, independent of any
     particular git version's real-repo error behavior. Spies on `cli.subprocess.run` (never
