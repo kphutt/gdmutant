@@ -1,3 +1,9 @@
+---
+type: decision
+status: active
+created: 2026-07-10
+---
+
 # Mutate by AST-guided source-span editing, not tree unparsing
 
 ## Status

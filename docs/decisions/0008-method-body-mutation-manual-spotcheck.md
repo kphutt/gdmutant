@@ -1,3 +1,9 @@
+---
+type: decision
+status: active
+created: 2026-07-19
+---
+
 # Method-body mutation coverage: a manual cosmic-ray spot-check, not a second CI job
 
 ## Status

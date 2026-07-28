@@ -1,3 +1,9 @@
+---
+type: decision
+status: active
+created: 2026-07-11
+---
+
 # Apply mutants on disk, one at a time, with restore
 
 ## Status

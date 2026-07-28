@@ -1,3 +1,9 @@
+---
+type: decision
+status: active
+created: 2026-07-18
+---
+
 # Operator-scoped `# gdmutant: ignore` + an `Ignored` report status
 
 ## Status

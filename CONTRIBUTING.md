@@ -1,3 +1,9 @@
+---
+type: how-to
+status: active
+created: 2026-07-10
+---
+
 # Contributing to gdmutant
 
 gdmutant is early (pre-v0.1): the engine, GDScript adapter, runners, reporter, and CLI are built and

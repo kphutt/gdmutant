@@ -1,3 +1,9 @@
+---
+type: record
+status: active
+created: 2026-07-10
+---
+
 # Credits & third-party licenses
 
 Every third-party library shipped or adapted here is logged with its license, verified
