@@ -1,3 +1,9 @@
+---
+type: decision
+status: active
+created: 2026-07-18
+---
+
 # Statement-deletion via a generation-time return-path guard
 
 ## Status

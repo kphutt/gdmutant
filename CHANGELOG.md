@@ -1,3 +1,9 @@
+---
+type: record
+status: active
+created: 2026-07-18
+---
+
 # Changelog
 
 All notable changes to gdmutant are recorded here. The format follows

@@ -1,3 +1,9 @@
+---
+type: how-to
+status: active
+created: 2026-07-10
+---
+
 # Security Policy
 
 ## Reporting a vulnerability

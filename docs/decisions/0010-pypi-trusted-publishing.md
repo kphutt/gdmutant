@@ -1,3 +1,9 @@
+---
+type: decision
+status: active
+created: 2026-07-23
+---
+
 # PyPI publishing via Trusted Publishing (OIDC), not a stored API token
 
 ## Status

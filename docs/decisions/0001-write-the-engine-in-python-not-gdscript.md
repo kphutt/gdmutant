@@ -1,3 +1,9 @@
+---
+type: decision
+status: active
+created: 2026-07-10
+---
+
 # Write the engine (and GDScript adapter) in Python, not GDScript
 
 ## Status

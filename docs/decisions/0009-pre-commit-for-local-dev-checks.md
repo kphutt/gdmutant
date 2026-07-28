@@ -1,3 +1,9 @@
+---
+type: decision
+status: active
+created: 2026-07-23
+---
+
 # Standard pre-commit for local dev checks, replacing scripts/local-verify
 
 ## Status

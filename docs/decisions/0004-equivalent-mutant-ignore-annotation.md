@@ -1,3 +1,9 @@
+---
+type: decision
+status: active
+created: 2026-07-11
+---
+
 # Suppress equivalent mutants with an inline `# gdmutant: ignore` annotation
 
 ## Status
