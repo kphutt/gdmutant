@@ -292,8 +292,7 @@ def test_modulo_on_a_parenthesised_expression_ending_in_a_string_is_still_a_site
 def test_computed_string_before_percent_is_a_known_scope_limitation() -> None:
     # A computed string (parenthesised `+`-concatenation with a string-literal operand) is now
     # recognised as string-format, closing the scope limitation this test used to pin: its `%` is
-    # skipped rather than mutated as modulo (LOD-136, describes "modulo: skip computed string-format
-    # operands").
+    # skipped rather than mutated as modulo.
     src = 'func f(name, x):\n\treturn ("Hi " + name) % x\n'
     assert not any(s.token == "%" for s in find_sites(src))
 

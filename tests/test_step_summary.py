@@ -136,8 +136,7 @@ def test_job_summary_markdown_score_is_na_when_no_killable_mutants() -> None:
 def test_emit_step_summary_writes_markdown_to_the_github_step_summary_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The falsifiable check (LOD-215): with $GITHUB_STEP_SUMMARY set, the reporter writes the
-    # survivor Markdown to that file. Fails today — no such reporter existed.
+    # With $GITHUB_STEP_SUMMARY set, the reporter writes the survivor Markdown to that file.
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     _emit_step_summary(MutationRun((_boolean_survivor(),)))
