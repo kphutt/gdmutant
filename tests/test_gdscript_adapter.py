@@ -329,6 +329,205 @@ def test_single_element_array_with_a_concatenation_is_still_a_genuine_site() -> 
     assert any(s.token == "%" for s in find_sites(src)), "genuine modulo site was skipped"
 
 
+def test_string_concatenation_plus_is_not_a_mutation_site() -> None:
+    # GDScript's String defines no `-`, so `+`->`-` on concatenation can only error or sit unrun —
+    # never measure a test gap. It must be skipped at generation time rather than reported.
+    src = 'func greet(name: String) -> String:\n\treturn "Hello, " + name\n'
+    assert not any(s.token == "+" for s in find_sites(src))
+    assert not any(m.operator_id == "arithmetic" for m in generate_mutants("f.gd", src))
+
+
+def test_numeric_addition_is_still_a_mutation_site() -> None:
+    # The positive direction: genuine numeric `+` must keep producing its arithmetic mutant.
+    src = "func total(a: int, b: int) -> int:\n\treturn a + b\n"
+    assert any(s.token == "+" for s in find_sites(src))
+    assert any(m.operator_id == "arithmetic" for m in generate_mutants("f.gd", src))
+
+
+def test_every_plus_in_a_multi_operand_concatenation_is_skipped() -> None:
+    # `a + "\n" + b` is one flat arith_expr with TWO `+` tokens; both are concatenation (this is
+    # GUT's version_numbers.gd:123, which produced two survivors that were never real mutants).
+    src = 'func f(a, b):\n\treturn a + "\\n" + b\n'
+    assert not any(s.token == "+" for s in find_sites(src))
+
+
+def test_a_minus_in_the_expression_keeps_the_pluses_as_genuine_sites() -> None:
+    # A `-` anywhere means arithmetic, not string-building, so nothing in the expression is skipped
+    # even though a string literal appears — the "never suppress a real gap" direction.
+    src = 'func f(a, b, c):\n\treturn a + b - c + len("s")\n'
+    assert any(s.token == "+" for s in find_sites(src))
+
+
+def test_a_string_in_a_numeric_position_keeps_the_plus_as_a_genuine_site() -> None:
+    # A string literal that has been *converted* or *indexed* is a numeric operand, and the parse
+    # tree says so: `"5".to_int()` is a getattr_call, `d["k"]` a subscr_expr, `len("s")` a
+    # standalone_call — none is a bare `string` node, so all three stay arithmetic sites.
+    for src in (
+        'func f():\n\treturn "5".to_int() + 3\n',
+        'func f(d):\n\treturn d["k"] + 1\n',
+        'func f(s):\n\treturn len("ab") + 1\n',
+    ):
+        assert any(site.token == "+" for site in find_sites(src)), src
+
+
+def test_concatenation_skip_does_not_reach_the_string_format_percent_case() -> None:
+    # The two skips are independent: `("Hi " + name) % x` has its `%` skipped as string-format AND
+    # its `+` skipped as concatenation, and neither exclusion is what suppresses the other.
+    src = 'func f(name, x):\n\treturn ("Hi " + name) % x\n'
+    assert {s.token for s in find_sites(src)} == set()
+
+
+def test_property_declaration_initializer_is_not_a_mutation_site() -> None:
+    # GDScript skips the setter at initialization, so this initializer writes the backing field
+    # directly — and the custom getter routes every read elsewhere, leaving the value unreadable.
+    # The backing field one line up is ordinary code and must still be mutated (GUT's
+    # compare_result.gd:15-16, where exactly that split showed up as killed vs survived).
+    src = (
+        "extends Node\n"
+        "var _health: int = 100\n"
+        "var health: int = 100:\n"
+        "\tset(value):\n"
+        "\t\t_health = value\n"
+        "\tget:\n"
+        "\t\treturn _health\n"
+    )
+    lines = {s.span.line for s in find_sites(src)}
+    assert 2 in lines  # the backing field's initializer is still mutated
+    assert 3 not in lines  # the property declaration's is not
+
+
+def test_a_plain_variable_declaration_is_still_a_mutation_site() -> None:
+    # No inline accessors at all: nothing about the store is dead, so every form keeps its site.
+    for src in (
+        "var health: int = 100\n",
+        "var health = 100\n",
+        "var health := 100\n",
+    ):
+        assert any(site.token == "100" for site in find_sites(src)), src
+
+
+def test_a_setter_only_property_keeps_its_initializer_site() -> None:
+    # The boundary the naive rule gets wrong: with no custom `get`, reads return the backing field
+    # the initializer wrote, so mutating it IS observable — a real gap that must not be suppressed.
+    src = "var health: int = 100:\n\tset(value):\n\t\t_other = value\n"
+    assert any(s.token == "100" for s in find_sites(src))
+
+
+def test_a_getter_naming_the_property_keeps_its_initializer_site() -> None:
+    # Inside its own accessors the property name means the backing field, so `get: return health`
+    # reads exactly what the initializer wrote — observable, and a site.
+    src = (
+        "var health: int = 100:\n\tset(value):\n\t\thealth = value * 2\n\tget:\n\t\treturn health\n"
+    )
+    assert any(s.token == "100" for s in find_sites(src))
+
+
+def test_a_getter_only_property_with_an_unread_field_still_skips_its_initializer() -> None:
+    # A custom `get` alone is enough for the store to be dead: reads route through the getter, and
+    # no accessor names the property. The rule keys on readability, not on the setter existing.
+    src = "var health: int = 100:\n\tget:\n\t\treturn _other\n"
+    assert not any(s.token == "100" for s in find_sites(src))
+
+
+def test_an_effectful_property_initializer_keeps_its_sites() -> None:
+    # The store is dead, but *evaluating* the initializer is not, so mutating a token inside one is
+    # still observable. One case per node the guard names: a plain call, a method call, a subscript
+    # (which can index out of range), and an `await` (which suspends). The `await sig + 1` form is
+    # the one that isolates `await_expr` — every other await initializer also contains a call.
+    for src in (
+        "var health = compute(3):\n\tget:\n\t\treturn _other\n",
+        "var health = obj.compute(3):\n\tget:\n\t\treturn _other\n",
+        "var health = TABLE[3]:\n\tget:\n\t\treturn _other\n",
+        "var health = await sig + 3:\n\tget:\n\t\treturn _other\n",
+    ):
+        assert any(site.token == "3" for site in find_sites(src)), src
+
+
+def test_an_inferred_type_property_initializer_is_skipped_too() -> None:
+    # `var x := 100:` parses as `class_var_inf`, a different grammar rule from the `=` and
+    # `: int =` forms — all three declare an initial value, so all three are skipped alike.
+    src = "var health := 100:\n\tget:\n\t\treturn _other\n"
+    assert not any(s.token == "100" for s in find_sites(src))
+
+
+def test_a_whole_property_initializer_expression_is_skipped_not_just_its_literal() -> None:
+    # Every token of the dead initializer goes, not only the first literal: the `+` and both
+    # numbers in `2 + 3` are equally unreadable.
+    src = "var health = 2 + 3:\n\tget:\n\t\treturn _other\n"
+    assert find_sites(src) == []
+
+
+def test_property_initializer_skip_applies_inside_an_inner_class() -> None:
+    # gdtoolkit nests the declaration and its property_body_def inside `class_def`, so the
+    # sibling-adjacency pairing has to hold at every tree level, not just the top one.
+    src = (
+        "class Inner:\n"
+        "\tvar _a = 5\n"
+        "\tvar a = 5:\n"
+        "\t\tget:\n"
+        "\t\t\treturn _a\n"
+        "\t\tset(v):\n"
+        "\t\t\t_a = v\n"
+    )
+    lines = {s.span.line for s in find_sites(src)}
+    assert lines == {2}  # the backing field only
+
+
+def test_consecutive_properties_are_each_paired_with_their_own_body() -> None:
+    # Two properties in a row: the adjacency pairing must not let the first declaration claim the
+    # second's body (or vice versa), and both backing fields must survive the skip.
+    src = (
+        "var _a = false\n"
+        "var a = false:\n"
+        "\tget:\n"
+        "\t\treturn _a\n"
+        "\tset(val):\n"
+        "\t\t_a = val\n"
+        "var _b = 30\n"
+        "var b = 30:\n"
+        "\tget:\n"
+        "\t\treturn _b\n"
+        "\tset(val):\n"
+        "\t\t_b = val\n"
+    )
+    assert {s.span.line for s in find_sites(src)} == {1, 7}  # both backing fields, neither property
+
+
+def test_a_static_property_declaration_is_read_like_an_ordinary_one() -> None:
+    # `static var` nests the declaration inside an extra `static_class_var_stmt`, so the pairing
+    # has to unwrap it — otherwise a static property's dead initializer would still be mutated.
+    src = "static var health = 100:\n\tget:\n\t\treturn _other\n"
+    assert not any(s.token == "100" for s in find_sites(src))
+
+
+def test_a_property_with_no_initializer_is_left_alone() -> None:
+    # `var differences :` (GUT's compare_result.gd:23) declares accessors but no initial value —
+    # there is nothing to skip, and the accessor bodies are ordinary code that stays mutated.
+    src = (
+        "var differences:\n"
+        "\tget:\n"
+        "\t\treturn _differences\n"
+        "\tset(val):\n"
+        "\t\tif val > 0:\n"
+        "\t\t\tpass\n"
+    )
+    assert any(s.token == ">" for s in find_sites(src))
+
+
+def test_property_accessor_bodies_are_still_mutated() -> None:
+    # Only the initializer is skipped. The `set`/`get` bodies are ordinary code and must keep every
+    # site they have, or the skip would hide real gaps in the accessors themselves.
+    src = (
+        "var health: int = 100:\n"
+        "\tset(value):\n"
+        "\t\tif value > 0:\n"
+        "\t\t\t_other = value + 1\n"
+        "\tget:\n"
+        "\t\treturn _other\n"
+    )
+    assert {s.token for s in find_sites(src)} == {">", "0", "+", "1"}  # not the `100`
+
+
 def test_not_deletion_removes_the_keyword_and_stays_valid() -> None:
     # Pin the exact deletion: `if not alive:` -> `if  alive:` (the `not` token gone), still valid.
     src = "func f(alive):\n\tif not alive:\n\t\treturn 0\n\treturn 1\n"

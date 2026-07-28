@@ -12,6 +12,7 @@ operator. The Godot test runner is a separate concern (Slice 4).
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from itertools import pairwise
 
@@ -160,24 +161,144 @@ def _is_string_concatenation(node: Tree[Token]) -> bool:
     return any(_is_string_format_operand(operand) for operand in operands)
 
 
+def _string_concatenation_pluses(tree: Tree[Token]) -> set[tuple[int | None, int | None]]:
+    """Positions ``(line, column)`` of ``+`` tokens that are **string concatenation**, which the
+    arithmetic operator must not mutate.
+
+    The catalog's only replacement for ``+`` is ``-`` (`engine.operators.ARITHMETIC`), and
+    GDScript's ``String`` defines no ``-``. So the mutant can never measure a test gap: it either
+    errors at runtime or sits on a line no test reaches, and in both cases it is reported as a
+    survivor that was never a real mutant. Skipping it at generation time is the fix.
+
+    Recognition reuses `_is_string_concatenation` (the same operand typing `_string_format_percents`
+    applies to ``%``): an ``arith_expr`` joined only by ``+`` — a ``-`` anywhere means genuine
+    arithmetic — with at least one bare-string operand. A string in a *numeric* position is not one,
+    because the check reads the parse tree rather than the token stream: ``"5".to_int() + 3`` has a
+    ``getattr_call`` operand and ``d["k"] + 1`` a ``subscr_expr``, neither of which is a ``string``
+    node, so both stay ordinary arithmetic sites.
+    """
+    skip: set[tuple[int | None, int | None]] = set()
+    for node in tree.iter_subtrees():
+        if not _is_string_concatenation(node):
+            continue
+        skip.update(
+            (child.line, child.column)
+            for child in node.children
+            if isinstance(child, Token) and child.type == "PLUS"
+        )
+    return skip
+
+
+#: gdtoolkit's ``class_var_*`` rules that carry an initializer ``expr``. ``class_var_empty`` and
+#: ``class_var_typed`` declare no initial value, so there is nothing to skip in them.
+_INITIALIZED_CLASS_VAR_NODES = frozenset(
+    {"class_var_assigned", "class_var_typed_assgnd", "class_var_inf"}
+)
+#: Nodes whose *evaluation* is observable independently of the value they produce, so a dead store
+#: does not make a mutation inside them inert: a call can have side effects, a subscript can index
+#: out of range, an ``await`` suspends. An initializer containing one keeps all its sites.
+_EFFECTFUL_NODES = frozenset({"standalone_call", "getattr_call", "subscr_expr", "await_expr"})
+
+
+def _inline_properties(node: Tree[Token]) -> Iterator[tuple[Tree[Token], Tree[Token]]]:
+    """``(declaration, body)`` for each property declared with inline accessors among `node`'s
+    direct children.
+
+    gdtoolkit leaves the declaration's own ``inline_property_body`` node **empty** and hangs the
+    accessors off a ``property_body_def`` that is the declaration's *next sibling*, not its child —
+    so the two are paired by adjacency. ``static var`` wraps the declaration in an extra
+    ``static_class_var_stmt``, which is unwrapped here so a static property is treated the same.
+    """
+    for current, following in pairwise(node.children):
+        if not (isinstance(current, Tree) and isinstance(following, Tree)):
+            continue
+        if following.data != "property_body_def":
+            continue
+        # `static var` nests the declaration one level deeper (`static_class_var_stmt`); unwrap it
+        # so a static property is read exactly like an ordinary one.
+        statement = current.children[0] if current.data == "static_class_var_stmt" else current
+        assert isinstance(statement, Tree)  # pragma: no cover — grammar: always a class_var_stmt
+        declaration = statement.children[0]
+        assert isinstance(declaration, Tree)  # pragma: no cover — grammar: always a class_var_*
+        if declaration.data in _INITIALIZED_CLASS_VAR_NODES:
+            yield declaration, following  # anything else declares no initial value to skip
+
+
+def _dead_property_initializers(tree: Tree[Token]) -> set[tuple[int | None, int | None]]:
+    """Positions ``(line, column)`` of every token in a property declaration's initializer whose
+    stored value can never be read back — so no mutation of it can change observable behavior.
+
+    GDScript runs a property's ``set`` on assignment but **not** on the initializer in the
+    declaration itself, so that initializer writes the backing field directly. When the property
+    also declares a custom ``get``, every read from outside routes through the getter instead, and
+    the backing field is reachable only by naming the property *inside* its own accessors (where the
+    name means the field, not the getter). So when neither accessor body mentions the property's own
+    name, the initial value is written and never read — dead storage, and every mutant on it is
+    inert by language rule rather than by any property of the test suite.
+
+    Shown by the GUT v9.7.1 measurement rather than argued: in ``compare_result.gd`` the numeric
+    mutants on the backing field ``var _max_differences = 30`` (line 15) were killed, while the ones
+    on ``var max_differences = 30 :`` (line 16) — same literal, the next line — survived.
+
+    Deliberately narrower than "the property has a custom setter", which would suppress genuine test
+    gaps in three shapes that keep all their sites here: a **setter-only** property (no getter, so
+    reads still return the initial value), a getter that **names the property itself**
+    (``get: return health`` reads exactly the field the initializer wrote), and an initializer
+    containing a call, subscript or ``await`` (the stored value is dead, but evaluating the
+    expression is not — see `_EFFECTFUL_NODES`).
+    """
+    skip: set[tuple[int | None, int | None]] = set()
+    for parent in tree.iter_subtrees():
+        for declaration, body in _inline_properties(parent):
+            name = declaration.children[0]  # every `class_var_*` rule opens with the NAME token
+            assert isinstance(name, Token)  # pragma: no cover — grammar: always a NAME
+            (initializer,) = [
+                c for c in declaration.children if isinstance(c, Tree) and c.data == "expr"
+            ]
+            if not any(
+                isinstance(c, Tree) and c.data == "property_custom_getter" for c in body.children
+            ):
+                continue  # no getter: reads still return the backing field the initializer wrote
+            if any(tok == name.value for tok in body.scan_values(lambda v: isinstance(v, Token))):
+                continue  # an accessor names the property, so it can read the backing field
+            if any(sub.data in _EFFECTFUL_NODES for sub in initializer.iter_subtrees()):
+                continue  # evaluating the initializer is observable even though its store is dead
+            skip.update(
+                (tok.line, tok.column)
+                for tok in initializer.scan_values(lambda v: isinstance(v, Token))
+            )
+    return skip
+
+
 def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[MutationSite]:
     """Every token in `source` that `catalog` can mutate, located via gdtoolkit.
 
     Filtering by "does the catalog mutate this value" is sufficient: gdtoolkit never surfaces
     tokens from inside string literals or comments, so this never edits within one. `catalog` is
     threaded through so site selection matches generation (a custom catalog finds its own sites).
-    A ``%`` used as the string-format operator is skipped (see `_string_format_percents`).
+
+    Three syntactic exclusions drop tokens that cannot yield a meaningful mutant — each one a shape
+    the language rules out, never a shape that merely tends to survive:
+
+    * a ``%`` used as the string-format operator (`_string_format_percents`);
+    * a ``+`` that is string concatenation (`_string_concatenation_pluses`);
+    * a property declaration's initializer whose stored value is unreadable
+      (`_dead_property_initializers`).
 
     ``# gdmutant: ignore`` annotations are **not** filtered here: a suppressed mutant is still
     *generated*, then marked ``ignore_reason`` in `generate_mutants` so it surfaces in the report as
     ``Ignored`` (excluded from the score) rather than vanishing (see docs/decisions/0004, 0006).
     """
     tree = _parse(source)
-    format_percents = _string_format_percents(tree)
+    skipped = (
+        _string_format_percents(tree)
+        | _string_concatenation_pluses(tree)
+        | _dead_property_initializers(tree)
+    )
     return [
         MutationSite(tok.value, _span_of(tok))
         for tok in tree.scan_values(lambda v: isinstance(v, Token))
-        if all_replacements(tok.value, catalog) and (tok.line, tok.column) not in format_percents
+        if all_replacements(tok.value, catalog) and (tok.line, tok.column) not in skipped
     ]
 
 

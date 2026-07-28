@@ -94,6 +94,10 @@ COMPARISON = TableOperator(
     },
 )
 BOOLEAN = TableOperator("boolean", {"and": ("or",), "or": ("and",)})
+#: Arithmetic. GDScript overloads ``+`` for string concatenation, and its ``String`` defines no
+#: ``-``, so the GDScript adapter's `find_sites` skips a ``+`` whose expression has a string-literal
+#: operand — the same operand typing it applies to ``%`` (see `MODULO`). Catalogs carry no
+#: operand-type information, so that judgment belongs to the adapter, not this table.
 ARITHMETIC = TableOperator("arithmetic", {"+": ("-",), "-": ("+",), "*": ("/",), "/": ("*",)})
 CONSTANT = TableOperator("constant", {"true": ("false",), "false": ("true",)})
 NUMERIC = NumericBumpOperator()
