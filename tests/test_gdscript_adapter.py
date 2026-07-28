@@ -493,6 +493,30 @@ def test_consecutive_properties_are_each_paired_with_their_own_body() -> None:
     assert {s.span.line for s in find_sites(src)} == {1, 7}  # both backing fields, neither property
 
 
+def test_a_property_that_keeps_its_sites_does_not_stop_the_scan() -> None:
+    # Each reason to keep a property's sites must skip THAT property and keep going, not abandon the
+    # rest of the scope. Three keepers in a row -- setter-only, a self-naming getter, an effectful
+    # initializer -- then a genuinely dead one whose `4` must still be skipped. If any of the three
+    # ended the scan instead of continuing it, that `4` would come back as a site.
+    src = (
+        "var a: int = 1:\n"
+        "\tset(v):\n"
+        "\t\t_x = v\n"
+        "var b: int = 2:\n"
+        "\tset(v):\n"
+        "\t\tb = v\n"
+        "\tget:\n"
+        "\t\treturn b\n"
+        "var c = compute(3):\n"
+        "\tget:\n"
+        "\t\treturn _x\n"
+        "var d = 4:\n"
+        "\tget:\n"
+        "\t\treturn _x\n"
+    )
+    assert {s.token for s in find_sites(src)} == {"1", "2", "3"}  # every keeper, and not `4`
+
+
 def test_a_static_property_declaration_is_read_like_an_ordinary_one() -> None:
     # `static var` nests the declaration inside an extra `static_class_var_stmt`, so the pairing
     # has to unwrap it — otherwise a static property's dead initializer would still be mutated.
