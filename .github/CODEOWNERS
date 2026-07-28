@@ -1,6 +1,17 @@
-# Code owners. With "require Code Owners review" branch protection, these paths
-# cannot merge without @kphutt review. Sensitive surfaces = the places where
-# tests can't save you (config, CI, secrets, self-executing code).
+# Code owners — who OWNS each surface. This file is documentation, not a merge gate.
+#
+# "Require review from Code Owners" is deliberately OFF on this repo, and the required
+# approving review count is 0 (see scripts/harden_github.py, which sets both and explains
+# why: a sole code owner cannot approve their own pull request, so any nonzero count would
+# deadlock every merge). A code-owner rule cannot fire under those settings, so nothing
+# below blocks a merge on its own.
+#
+# What actually gates a merge here: a pull request is required, the CI status checks are
+# required and must pass, and force-push/deletion on main are blocked. Treat the list below
+# as "read this carefully before approving your own merge", not as an automatic stop.
+#
+# Sensitive surfaces = the places where tests can't save you (config, CI, secrets,
+# self-executing code).
 
 # Default owner for everything.
 * @kphutt

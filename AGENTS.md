@@ -68,8 +68,11 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
 - **The mutation-operator core is deterministic** — the reproducible mode a CI check can trust; any
   future LLM-semantic mode stays out of it.
 - **Sensitive paths** (CI, scripts, toolchain, the mutation-operator catalog, and the GDScript
-  adapter) are in `CODEOWNERS` and stay human-reviewed. The adapter is the real
-  technical risk: a wrong mutant means a silently wrong survivor report.
+  adapter) are listed in `CODEOWNERS`, which **documents** who owns them — it does not enforce a
+  review. Code-owner review is off and the required approving review count is 0, because a sole
+  owner cannot approve their own pull request; the enforced gate is the required CI checks. Treat
+  a change to those paths as one to read carefully before merging, not one something will stop.
+  The adapter is the real technical risk: a wrong mutant means a silently wrong survivor report.
 
 ## Design goals (keep these in mind)
 
