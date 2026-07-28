@@ -35,3 +35,7 @@ corpus/reports/
 Thumbs.db
 .idea/
 *.swp
+
+# Agent scratch output — never commit ad-hoc dumps or agent-local config
+*_dump.txt
+.claude/
