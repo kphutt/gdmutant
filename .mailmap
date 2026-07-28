@@ -1,0 +1,25 @@
+# Canonical author identity for this repository.
+#
+# Seven commits were authored with a local machine identity instead of the
+# GitHub noreply address used by the other 110. This file maps them onto the
+# canonical identity so `git log`, `git shortlog`, `git blame` and `git log
+# --format=%aN/%aE` all show one contributor instead of three.
+#
+# Format: Canonical Name <canonical-email> <email-as-recorded-in-the-commit>
+# Email matching is case-insensitive, so the single line below also covers the
+# capitalised variant of the same address that two of the commits carry.
+#
+# What this does NOT do, stated plainly:
+#
+#   1. It does not change stored history. The commit objects still carry the
+#      original address. `git cat-file -p <sha>` and `git log --format=%ae`
+#      (lower-case %ae bypasses mailmap) both still return it.
+#   2. It does not change what GitHub serves. GitHub does not apply .mailmap
+#      to its commit views, blame, or contributor graph, and the REST commit
+#      API returns the raw recorded author address regardless of this file.
+#
+# So this is a canonicalisation for local git tooling, not a scrub. Removing
+# the address from stored history would require rewriting commits, which is
+# out of scope here.
+
+Karsten Huttelmaier <5349377+kphutt@users.noreply.github.com> <5349377+kphutt@users.noreply.github.com>
