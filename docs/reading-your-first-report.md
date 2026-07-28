@@ -98,7 +98,8 @@ chasing a mutant forever. A perfect score isn't the goal — *understanding each
 
 ## Viewing the report
 
-`--html report.html` writes a self-contained, source-highlighted page you can open directly — the
-easiest survivor-by-survivor view. `--json` emits the standard
+`--html report.html` writes a source-highlighted page with the report data inlined — the easiest
+survivor-by-survivor view. Its viewer script loads from a pinned CDN, so open it with network
+available; offline the page renders blank. `--json` emits the standard
 [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema, so
 the same report also renders in the Stryker Dashboard or any host of that viewer.
