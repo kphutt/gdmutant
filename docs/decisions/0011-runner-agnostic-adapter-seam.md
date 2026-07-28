@@ -1,3 +1,9 @@
+---
+type: decision
+status: active
+created: 2026-07-24
+---
+
 # A runner-agnostic adapter seam: GdUnit4 and GUT as peer JUnit adapters
 
 ## Status

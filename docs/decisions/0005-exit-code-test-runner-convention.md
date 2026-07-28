@@ -1,3 +1,9 @@
+---
+type: decision
+status: active
+created: 2026-07-11
+---
+
 # A framework-agnostic test runner via the exit-code convention
 
 ## Status
