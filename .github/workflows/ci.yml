@@ -143,7 +143,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false # this job never uses git creds — don't leave them on the runner
+          persist-credentials: true # paths-filter needs the credential helper for its own base-commit fetch on shallow checkouts
 
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         id: filter
