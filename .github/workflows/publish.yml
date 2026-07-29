@@ -14,17 +14,37 @@ name: Publish
 # `id-token: write`, and each is gated behind a protection-capable GitHub Environment
 # (`testpypi` / `pypi`). This keeps the OIDC-token job doing nothing but download+upload.
 #
-# THIS FILE HOLDS THE AUTHORITATIVE RELEASE GATE — see the `ci-gate` job. It is authoritative
-# because `release: published` is reachable WITHOUT release.yml: a maintainer can create and
-# publish a GitHub Release straight from the web UI, and this workflow runs while release.yml
-# never does. release.yml runs the same three guards earlier, on the tag push, where failing is
-# still free — but a gate that lived only there would guard the convenient path and leave the
-# irreversible one open. Both call the same scripts, so the two copies cannot drift.
+# THIS FILE HOLDS THE AUTHORITATIVE RELEASE GATE (ADR-0012) — see `provenance` and the five
+# verification jobs below it. It is authoritative because `release: published` is reachable
+# WITHOUT release.yml: a maintainer can create and publish a GitHub Release straight from the web
+# UI, and this workflow runs while release.yml never does. release.yml runs the two provenance
+# guards again, earlier, on the tag push, where failing is still free — but a gate that lived only
+# there would guard the convenient path and leave the irreversible one open.
 #
-# The three guards, all fail-closed, all before `publish-pypi` gets `id-token: write`:
-#   1. the tag matches the version in pyproject.toml   (scripts/check_release_tag.py)
-#   2. the released commit is an ancestor of main      (git merge-base --is-ancestor)
-#   3. ci.yml concluded `success` on that exact commit (scripts/require_ci_success.py)
+# WHY THIS RUNS THE FULL VERIFY SUITE LIVE, NOT A LOOKUP. `ci.yml` used to run automatically on
+# every push and PR; publish.yml's gate just asked the Actions API "did that pass for this exact
+# commit?" ADR-0012 turned `ci.yml`'s auto-triggers off (private-repo Actions cost — every push
+# billed five jobs' worth of 1-minute-minimums, and it doesn't gate anything that ships: merging
+# isn't publishing here, only a tag + a human "Publish" click is). Once `ci.yml` stops running
+# automatically, an API lookup for its history finds nothing and this gate would fail closed on
+# every release forever — not just the risky ones. So the gate below doesn't look anything up: it
+# RUNS `ci.yml`'s jobs itself, live, on the exact commit being published, right here. Each job
+# below reuses `ci.yml`'s own steps (via `scripts/verify_local.py --job <name>`, which reads them
+# out of `ci.yml` rather than restating them — same mechanism `verify_local.py` already used for
+# the Windows leg) or, for the Godot self-tests, the existing manual-hook scripts. One definition
+# of what each check does either way; only WHERE and WHEN it executes changed.
+#
+# This also closes a gap `ci.yml`'s own comments already admitted: Windows `verify` coverage was
+# "a discipline, not a gate — nothing enforces that mechanically." It's mechanical now, for every
+# real release, on both Linux and Windows.
+#
+# Six guards, all fail-closed, all before `publish-pypi` gets `id-token: write`:
+#   1. the tag matches the version in pyproject.toml      (scripts/check_release_tag.py)
+#   2. the released commit is an ancestor of main          (git merge-base --is-ancestor)
+#   3. verify passes on Linux                              (scripts/verify_local.py --job verify)
+#   4. verify passes on Windows                             (same script, windows-2025 runner)
+#   5. license compliance                     (scripts/verify_local.py --job license-check)
+#   6. both Godot self-tests, real Godot        (scripts/run_selftest.py / run_selftest_gut.py)
 on:
   workflow_dispatch: # deliberate TestPyPI dry-run, fired by hand
   release:
@@ -94,30 +114,25 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
 
-  # --- THE GATE ON THE IRREVERSIBLE PATH -------------------------------------
-  # WHY THIS EXISTS HERE AND NOT ONLY IN release.yml. release.yml runs the same three guards when a
-  # version tag is pushed, and it is the convenient path -- but it is not the only one. `publish-pypi`
-  # below is triggered by `release: published`, and a maintainer can create AND publish a GitHub
-  # Release straight from the web UI, which fires that event without release.yml ever running. A gate
-  # that lives only in release.yml therefore guards the staging step and leaves the upload unguarded.
-  # This job is the authoritative one, because it sits between the event and the OIDC credential.
-  #
-  # A PyPI version can never be reused or overwritten, so every guard here fails CLOSED, and all
-  # three run before `publish-pypi` gets its `id-token: write`. This job holds NO publishing
-  # privilege of its own -- the worst a bug in it can do is refuse to publish.
-  #
+  # --- Provenance: the right version, the right commit ------------------------
   # WHICH COMMIT: the release's tag, resolved to a commit by actions/checkout + `git rev-parse HEAD`.
   # Not `github.sha`, which is ambiguous for an ANNOTATED tag (the ref can resolve to the tag object
   # rather than the commit it points at), and not `target_commitish`, which is often just the branch
   # name "main" and would check main's CURRENT tip instead of the commit being released.
-  ci-gate:
-    name: Gate - the released commit is releasable
+  #
+  # This job holds NO publishing privilege and no elevated Actions API access — the worst a bug in
+  # it can do is refuse to publish. Its `sha` output feeds every verification job below, so they
+  # all check out and verify the SAME commit this job resolved, not whatever `main` happens to be
+  # by the time they run.
+  provenance:
+    name: Gate - the right version, the right commit
     if: github.event_name == 'release'
     runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so a runner-image migration can't silently break us
     timeout-minutes: 10
     permissions:
       contents: read # checkout only
-      actions: read # query the Actions API for ci.yml's conclusion
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -128,10 +143,6 @@ jobs:
           # clone has no main history for git to walk.
           fetch-depth: 0
           persist-credentials: false # this job only reads; it never pushes
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
 
       - name: Resolve the released commit
         id: resolve
@@ -166,15 +177,6 @@ jobs:
           fi
           echo "tag $TAG_NAME is on main ($commit)"
 
-      # Guard 3 - CI actually PASSED on it. The other two guards check provenance; this one checks
-      # the verdict. Values reach the script through `env:`, never string-interpolated into `run:`.
-      - name: Verify CI passed for this exact commit (fail closed)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ steps.resolve.outputs.sha }}
-        run: python3 scripts/require_ci_success.py --repo "$REPO" --sha "$SHA"
-
       - name: Summarize the gate decision
         if: always()
         env:
@@ -190,14 +192,175 @@ jobs:
             echo "| Tag | \`${TAG_NAME}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # --- Guards 3-4: the whole `verify` job, live, on both OSes -----------------
+  # Reuses ci.yml's `verify` job steps via scripts/verify_local.py (reads them out of ci.yml rather
+  # than restating them — one definition, so this and ci.yml cannot drift). This is also what closes
+  # the Windows gap ci.yml's own comments already flagged: local-only Windows verify was "a
+  # discipline, not a gate." It's a real gate now, once a year or two, at release time — not on
+  # every push, which is what made it too expensive to run there.
+  verify-ubuntu:
+    name: Verify (ubuntu-24.04, release-time)
+    needs: provenance
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.provenance.outputs.sha }} # the exact commit provenance resolved, not main's tip
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Run ci.yml's verify job
+        run: uv run python scripts/verify_local.py
+
+  verify-windows:
+    name: Verify (windows-2025, release-time)
+    needs: provenance
+    if: github.event_name == 'release'
+    runs-on: windows-2025 # pinned (not -latest) — same reasoning as every other runner in this repo
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.provenance.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Run ci.yml's verify job
+        run: uv run python scripts/verify_local.py
+
+  # --- Guard 5: license compliance, live ---------------------------------------
+  license-check:
+    name: License compliance (release-time)
+    needs: provenance
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.provenance.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      # Unlike the local pre-commit hook (scripts/license_check_local.py), no isolated venv is
+      # needed — this runner is thrown away, not a shared dev machine, so `uv sync --no-dev`
+      # stripping dev deps out of it is fine, not a self-locking conflict.
+      - name: Run ci.yml's license-check job
+        run: uv run python scripts/verify_local.py --job license-check
+
+  # --- Guard 6: both Godot self-tests, live -------------------------------------
+  # Mirrors ci.yml's selftest-godot-run / selftest-gut-run steps, minus the path filter (release
+  # time always runs the full suite — there is no "docs-only tag" worth optimizing for) and minus
+  # the report-upload artifact (nothing downstream reads it here; pass/fail is all that matters).
+  selftest-godot:
+    name: Self-test (real Godot, release-time)
+    needs: provenance
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.provenance.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install deps (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Set up Godot
+        uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2.4.1
+        with:
+          version: 4.7.0
+          use-dotnet: false
+          cache: true
+
+      - name: Godot smoke check
+        run: godot --version
+
+      - name: Live self-test (real Godot)
+        run: python scripts/run_selftest.py
+
+  selftest-gut:
+    name: Self-test (real Godot + GUT, release-time)
+    needs: provenance
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.provenance.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install deps (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Set up Godot
+        uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2.4.1
+        with:
+          version: 4.7.0
+          use-dotnet: false
+          cache: true
+
+      - name: Godot smoke check
+        run: godot --version
+
+      - name: Live self-test (real Godot + GUT)
+        run: python scripts/run_selftest_gut.py
+
   # --- Release path: PyPI via a published GitHub Release ---------------------
   publish-pypi:
     name: Publish to PyPI
-    # `ci-gate` is a hard dependency: GitHub skips a job whose `needs:` failed OR was skipped, and
-    # there is no `if: always()` here to override that -- so a failed gate cannot be bypassed. On
-    # workflow_dispatch (the TestPyPI dry-run) `ci-gate` skips, and this job's own `if:` already
+    # Every guard is a hard dependency: GitHub skips a job whose `needs:` failed OR was skipped, and
+    # there is no `if: always()` here to override that -- so a failed guard cannot be bypassed. On
+    # workflow_dispatch (the TestPyPI dry-run) all of these skip, and this job's own `if:` already
     # excludes it, so the skip changes nothing on that path.
-    needs: [build, ci-gate]
+    needs:
+      [build, provenance, verify-ubuntu, verify-windows, license-check, selftest-godot, selftest-gut]
     if: github.event_name == 'release'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""Run CI's `verify` job locally, on this machine's OS.
+"""Run one of ci.yml's jobs locally, on this machine's OS, by reading its steps out of the
+workflow file rather than restating them.
 
-Windows is no longer part of the CI matrix (Actions cost). The Windows half of that
-gate now runs here instead — and since the maintainer's primary machine *is* Windows,
-running this script there reproduces exactly what `Verify (windows-2025)` used to do.
+`files/global-conventions.md` requires local checks to mirror CI 1:1, "the same commands,
+never a reimplementation, so the two cannot drift." A hand-copied list of commands drifts
+the first time someone edits ci.yml and forgets to update this file; a list parsed from
+ci.yml cannot.
 
-**This does not restate CI's steps — it reads them out of the workflow and runs them.**
-`files/global-conventions.md` requires local checks to mirror the CI verify job 1:1,
-"the same commands, never a reimplementation, so the two cannot drift." A hand-copied
-list of commands drifts the first time someone edits ci.yml and forgets this file; a
-list parsed from ci.yml cannot.
+Originally written for `verify` alone (Windows is no longer part of the CI matrix — Actions
+cost — so the maintainer's Windows machine runs this instead, reproducing what
+`Verify (windows-2025)` used to do in CI). Generalized to `--job` so the same mechanism also
+backs `publish.yml`'s release-time gate, which runs `verify` and `license-check` live rather
+than trusting a separate `ci.yml` run happened in the cloud — see ADR-0012.
 
 Usage, from the repo root:
 
-    uv run python scripts/verify_local.py          # run every step
-    uv run python scripts/verify_local.py --list   # show the steps, run nothing
+    uv run python scripts/verify_local.py                        # run `verify`
+    uv run python scripts/verify_local.py --job license-check     # run a different job
+    uv run python scripts/verify_local.py --list                  # show the steps, run nothing
 
 Exit code is 0 only if every step passed.
 """
@@ -30,11 +33,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
-JOB = "verify"
 
 
-def load_steps() -> list[dict]:
-    """Return the verify job's shell steps, in order, straight from ci.yml."""
+def load_steps(job: str) -> list[dict]:
+    """Return `job`'s shell steps, in order, straight from ci.yml."""
     try:
         import yaml
     except ImportError:
@@ -48,11 +50,11 @@ def load_steps() -> list[dict]:
 
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     try:
-        raw_steps = workflow["jobs"][JOB]["steps"]
+        raw_steps = workflow["jobs"][job]["steps"]
     except (KeyError, TypeError):
         sys.exit(
-            f"Could not find jobs.{JOB}.steps in {WORKFLOW.name}. "
-            "If the job was renamed, update JOB in this script — do not copy its commands here."
+            f"Could not find jobs.{job}.steps in {WORKFLOW.name}. "
+            "If the job was renamed, pass the new name via --job — do not copy its commands here."
         )
 
     # Only `run:` steps are reproducible locally. `uses:` steps (checkout, setup-python,
@@ -69,7 +71,7 @@ def load_steps() -> list[dict]:
             }
         )
     if not steps:
-        sys.exit(f"No `run:` steps found in jobs.{JOB} — refusing to report success on nothing.")
+        sys.exit(f"No `run:` steps found in jobs.{job} — refusing to report success on nothing.")
     return steps
 
 
@@ -99,13 +101,14 @@ def run_step(step: dict) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--job", default="verify", help="the ci.yml job to run (default: verify)")
     parser.add_argument("--list", action="store_true", help="print the steps and exit")
     args = parser.parse_args()
 
-    steps = load_steps()
+    steps = load_steps(args.job)
 
-    print(f"verify — {platform.system()} {platform.release()} ({platform.machine()})")
-    print(f"steps read from {WORKFLOW.relative_to(REPO_ROOT).as_posix()} :: jobs.{JOB}\n")
+    print(f"{args.job} — {platform.system()} {platform.release()} ({platform.machine()})")
+    print(f"steps read from {WORKFLOW.relative_to(REPO_ROOT).as_posix()} :: jobs.{args.job}\n")
 
     if args.list:
         for i, step in enumerate(steps, 1):
@@ -130,10 +133,10 @@ def main() -> int:
             print(f"  - {name}")
         return 1
 
-    print(f"All {len(steps)} steps passed on {platform.system()}.")
-    if platform.system() == "Windows":
+    print(f"All {len(steps)} steps of jobs.{args.job} passed on {platform.system()}.")
+    if args.job == "verify" and platform.system() == "Windows":
         print("This is the coverage that `Verify (windows-2025)` used to provide in CI.")
-    else:
+    elif args.job == "verify":
         print(
             "Note: CI already runs these on Linux. "
             "Run this on Windows for the coverage CI no longer has."

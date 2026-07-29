@@ -63,24 +63,31 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   reached the CLI before that coverage existed: console output crashing under the legacy cp1252 code
   page, and `python3` resolving to a *different* interpreter than `python` (see
   `.pre-commit-config.yaml`'s header).
-- **Windows `verify` runs locally now, not in CI — run it before a release.**
+- **Windows `verify` is a real gate again — just not in `ci.yml`, and not on every push.**
+  `ci.yml` doesn't run automatically at all right now (ADR-0012 — private-repo Actions cost, and
+  merging here doesn't ship anything). `publish.yml`'s release-time gate runs `verify` live on both
+  Linux *and* Windows, unconditionally, before every real release. This replaced an earlier,
+  narrower state where Windows coverage ran only by hand
+  (`uv run python scripts/verify_local.py`) as an unenforced discipline — see ADR-0012 for why that
+  wasn't good enough once merge-time CI stopped running in the cloud at all.
+
+  You can still run it by hand, any time, the same way:
 
   ```
   uv run python scripts/verify_local.py
+  uv run python scripts/verify_local.py --job license-check   # or any other ci.yml job
   ```
 
-  Windows runners bill at 2× Linux and were the largest line in a month that hit 100% of the
-  Actions budget; once that cap is reached Actions simply stops running, which disarms every gate
-  silently. So the Windows leg moved to the maintainer's machine, which *is* Windows.
-
   **The script does not restate CI's commands — it reads them out of `ci.yml` and runs them**, so
-  local and CI cannot drift. `--list` shows what it would run. It is an explicit command, not a
-  pre-commit hook: it takes minutes, and a slow push-time gate gets skipped with `--no-verify`.
+  local, CI, and `publish.yml`'s release-time gate all run the identical thing and cannot drift.
+  `--list` shows what a given job would run without running it.
 
-  **Definition of done for a release: this passes on Windows.** Nothing enforces that
-  mechanically — CI cannot see your machine — so it is a discipline, not a gate. Restoring the CI
-  leg means putting `windows-2025` back in `ci.yml`'s matrix **and** re-adding
-  `Verify (windows-2025)` to branch protection's required checks. Both, or the gate is theatre.
+  **To restore `ci.yml` running automatically** (worth doing once gdmutant is public — Actions is
+  free there, and contributor-facing PR checks are worth having): put the `pull_request`/`push`
+  triggers back (`ci.yml`'s own header comment has the exact block) and re-add the four job names
+  to branch protection's required checks. `publish.yml`'s release-time gate stays regardless —
+  it isn't something to revert, only something `ci.yml` running again would duplicate on the
+  cheap, frequent path.
 
   **If every tool suddenly fails with `uv trampoline failed to canonicalize script path`,** the
   venv's launcher shims are stale — usually after a `uv` version bump. Fix with
