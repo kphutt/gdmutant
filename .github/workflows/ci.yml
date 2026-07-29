@@ -48,7 +48,13 @@ jobs:
     strategy:
       fail-fast: false # a failure on one OS must not cancel the other — we want both signals
       matrix:
-        os: [ubuntu-24.04, windows-2025]
+        # Windows runs on pushes to main, NOT on every PR. Windows runners bill at 2x the Linux
+        # rate and this matrix was the single largest line in the Actions bill. The encoding/path
+        # bug class above is still guarded — it is caught on merge, before any release, rather
+        # than on each PR. `Verify (windows-2025)` was removed from branch protection's required
+        # checks in the same change: a required check that cannot report on a PR blocks every PR
+        # forever.
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04","windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
