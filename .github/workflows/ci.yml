@@ -17,14 +17,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # --- Security spine: secret scanning from commit #1 -----------------------
+  # --- Security spine: secret scanning from commit #1, + the Godot path filter ----------------------
+  # Two action-only workloads share one job because GitHub bills every job rounded UP to a full
+  # minute: gitleaks and the paths-filter each do seconds of work, so running them as separate jobs
+  # cost two billed minutes to do well under one. They are merged here not because they are related,
+  # but because neither fills a minute on its own.
+  #
+  # This job's `name:` is a branch-protection required check and MUST stay exactly
+  # "Secret scan (gitleaks)" — the paths-filter was merged INTO this job (not the reverse) precisely
+  # so the required check name never changes. `changes` was not a required check, so it can vanish.
+  #
+  # The two steps' checkout needs turned out to be compatible, and in the safer direction:
+  # `fetch-depth: 0` (which gitleaks already required) leaves the full local history on the runner,
+  # so dorny/paths-filter finds every ref it needs locally and never runs the authenticated
+  # `git fetch` that forced the old `changes` job to keep credentials on disk. See the step comment.
   secret-scan:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so a runner-image migration can't silently break us
     timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: read # gitleaks-action reads the PR's commit range on pull_request runs
+      # Needed by BOTH steps now: gitleaks-action reads the PR's commit range, and dorny/paths-filter
+      # reads the PR's changed-files list via the REST API on pull_request runs. (Keep this comment on
+      # the same line — zizmor's pedantic `undocumented-permissions` only sees a trailing comment.)
+      pull-requests: read # gitleaks reads the PR's commit range; paths-filter reads its changed-files list
+    outputs:
+      godot: ${{ steps.filter.outputs.godot }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -32,10 +50,41 @@ jobs:
           # gitleaks scans the already-fetched local history and authenticates to the API via the
           # GITHUB_TOKEN env below — it never runs authenticated git ops, so don't persist the token
           # into .git/config where it could be packed into an artifact (zizmor: artipacked).
+          #
+          # paths-filter is fine with this too, and that is a strict improvement on the old `changes`
+          # job, which needed `persist-credentials: true` only because its shallow (depth-1) checkout
+          # forced an authenticated base-commit fetch on this private repo (#119). With the full
+          # history here, no fetch happens at all:
+          #   - pull_request runs: the action uses the REST API (its `token` input defaults to
+          #     github.token) and never touches git.
+          #   - push-to-main runs: it diffs the event's `before` SHA against `main`. `fetch-depth: 0`
+          #     puts that commit AND refs/remotes/origin/main on disk, so the action's
+          #     `ensureRefAvailable` resolves both locally and skips its fetch fallback.
           persist-credentials: false
+
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Path filter: does this PR touch anything the real-Godot self-tests could care about? ----
+      # Consumed by both self-test worker jobs below via `needs.secret-scan.outputs.godot`.
+      # "Godot-relevant" = source, tests, the corpus fixture, the addon-install scripts the worker
+      # jobs run, locked deps, or this workflow file itself. A docs-only PR (README, ROADMAP,
+      # decisions/) changes none of these, so the heavy jobs can be skipped. The filter list is
+      # byte-for-byte the one from the standalone `changes` job this replaces.
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        id: filter
+        with:
+          filters: |
+            godot:
+              - "gdmutant/**"
+              - "tests/**"
+              - "corpus/**"
+              - "scripts/install_gdunit4.py"
+              - "scripts/install_gut.py"
+              - "pyproject.toml"
+              - "uv.lock"
+              - ".github/workflows/ci.yml"
 
   # --- Verify: lint + typecheck + tests + supply-chain audit ----------------
   verify:
@@ -147,38 +196,6 @@ jobs:
       - name: License gate
         run: uv run --no-sync --with pip-licenses python scripts/check_licenses.py
 
-  # --- Path filter: does this PR touch anything the real-Godot self-tests could care about? -------
-  # Shared by both self-test gates below. "Godot-relevant" = source, tests, the corpus fixture, the
-  # addon-install scripts the worker jobs run, locked deps, or this workflow file itself. A docs-only
-  # PR (README, ROADMAP, decisions/) changes none of these, so the heavy jobs can be skipped.
-  changes:
-    name: Detect Godot-relevant changes
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read # dorny/paths-filter reads the PR's changed-files list on pull_request runs
-    outputs:
-      godot: ${{ steps.filter.outputs.godot }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: true # paths-filter needs the credential helper for its own base-commit fetch on shallow checkouts
-
-      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
-        id: filter
-        with:
-          filters: |
-            godot:
-              - "gdmutant/**"
-              - "tests/**"
-              - "corpus/**"
-              - "scripts/install_gdunit4.py"
-              - "scripts/install_gut.py"
-              - "pyproject.toml"
-              - "uv.lock"
-              - ".github/workflows/ci.yml"
-
   # --- Required gate: "Self-test (real Godot)" ----------------------------------------------------
   # CRITICAL ([ticket]): branch protection requires the check name "Self-test (real Godot)" — this
   # job's `name:` — so it MUST keep reporting on every PR, or every PR hangs pending forever (GitHub
@@ -217,8 +234,10 @@ jobs:
   # is the required one and always reports.
   selftest-godot-run:
     name: Self-test (real Godot) [worker]
-    needs: changes
-    if: needs.changes.outputs.godot == 'true'
+    # The Godot path filter lives in the `secret-scan` job (merged there to save a billed minute);
+    # this depends on it for the filter output only.
+    needs: secret-scan
+    if: needs.secret-scan.outputs.godot == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -328,8 +347,9 @@ jobs:
   # NOT a required check itself ([ticket]) — path-filtered, gated behind `selftest-gut` above.
   selftest-gut-run:
     name: Self-test (real Godot + GUT) [worker]
-    needs: changes
-    if: needs.changes.outputs.godot == 'true'
+    # Same as selftest-godot-run above: the path filter now lives in `secret-scan`.
+    needs: secret-scan
+    if: needs.secret-scan.outputs.godot == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
