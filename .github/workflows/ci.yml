@@ -94,10 +94,30 @@ jobs:
     # both Linux and Windows to catch that bug class (encoding + path). Both runners are pinned
     # (never `-latest`) so a runner-image migration can't silently break us. macOS is intentionally
     # out — there is no macOS-specific code path to guard, and it would only add cost.
+    # Linux only. Windows was removed from this matrix to control Actions cost — Windows
+    # runners bill at 2x the Linux rate and this matrix was the largest line in a month that
+    # hit 100% of the budget (at which point Actions stops running and the gates go quiet).
+    #
+    # The Windows coverage is NOT abandoned. The encoding/path bug class it guards — a cp1252
+    # console bug shipped once because CI was Linux-only — is now covered by running the same
+    # steps on the maintainer's Windows machine: `uv run python scripts/verify_local.py`.
+    # That script READS these steps out of this file rather than restating them, so the local
+    # and CI checks cannot drift apart. See AGENTS.md, "Before a release".
+    #
+    # `Verify (windows-2025)` was removed from branch protection's required checks in the same
+    # change — a required check that can never report blocks every PR forever.
+    #
+    # To restore Windows in CI: put `windows-2025` back in the matrix below AND re-add
+    # `Verify (windows-2025)` to the required checks. Both, or the gate is theatre.
+    #
+    # The single-entry matrix is deliberate: it keeps this job's check name
+    # `Verify (ubuntu-24.04)`, which is a required status check on main. Dropping the matrix
+    # would rename the check to `Verify`, and the required one would then never report —
+    # blocking every PR forever. It also makes restoring Windows a one-word edit.
     strategy:
-      fail-fast: false # a failure on one OS must not cancel the other — we want both signals
+      fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025]
+        os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
