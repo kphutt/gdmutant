@@ -29,6 +29,16 @@ DEFAULT_REPO = "kphutt/gdmutant"
 
 WORKFLOWS = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows"
 
+
+def _workflows_dir(workflows: pathlib.Path | None) -> pathlib.Path:
+    """Resolve the workflow directory at CALL time.
+
+    `def f(workflows=WORKFLOWS)` would freeze the module global at import, which makes the
+    default silently unoverridable and hides a whole class of test from ever running.
+    """
+    return WORKFLOWS if workflows is None else workflows
+
+
 # The jobs that must block a merge, named by their **job id** (the stable YAML key) rather than by
 # the status-check context string GitHub reports. The context is derived from the workflow at run
 # time — see `required_contexts()` — because a job's reported context is not simply its `name:`:
@@ -42,12 +52,23 @@ WORKFLOWS = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workfl
 # is idempotent config-as-code, so a stale literal list does not merely go out of date — re-running
 # it actively overwrites a correct live setting with the broken one.
 #
-# Only jobs that report on EVERY pull request belong here. A path-filtered workflow
-# (`action-smoke.yml`, `mutation.yml`) and an `if:`-gated job (`selftest-godot-run`,
-# `selftest-gut-run`) do not report at all when they are filtered out, so requiring one would hang
-# every PR that misses its paths. That is why `ci.yml` carries the always-running `selftest-godot`
-# and `selftest-gut` gate jobs: those are the required names, and the heavy path-filtered workers
-# sit behind them.
+# Only jobs that report on EVERY pull request belong here. Four things disqualify a job, and
+# `required_contexts()` raises on each rather than producing a context nothing can report:
+#
+#   * its workflow has no `pull_request` trigger at all - it cannot run on a PR, so it cannot
+#     report on one. A workflow reduced to `workflow_dispatch` (checks moved to the local
+#     pre-commit gate) puts every job in it here;
+#   * its workflow's `pull_request` trigger is path-filtered (`action-smoke.yml`, `mutation.yml`),
+#     so it stays pending on any PR that misses those paths;
+#   * the job is `if:`-gated (`selftest-godot-run`, `selftest-gut-run`) - a skipped job never
+#     reports. That is why `ci.yml` carries the always-running `selftest-godot` / `selftest-gut`
+#     gate jobs, with the heavy path-filtered workers behind them;
+#   * the id is defined in two workflows that both run on every PR, so which one reports is
+#     ambiguous.
+#
+# If this list should be empty - because no check gates a merge in the cloud any more - empty it
+# deliberately. Leaving ids here that nothing can report is the same failure as hardcoding a
+# stale context string, just one step further back.
 REQUIRED_JOBS = (
     "verify",
     "secret-scan",
@@ -83,6 +104,26 @@ def _gh(args: list[str], *, stdin: str | None = None) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class Triggers:
+    """The slice of a workflow's `on:` block this script needs: can it run on a pull request?"""
+
+    events: frozenset[str] = frozenset()
+    pull_request_filtered: bool = False
+
+    @property
+    def on_pull_request(self) -> bool:
+        return "pull_request" in self.events or "pull_request_target" in self.events
+
+    @property
+    def on_every_pull_request(self) -> bool:
+        """True only if every pull request triggers this workflow — no `paths:` filter."""
+        return self.on_pull_request and not self.pull_request_filtered
+
+    def describe(self) -> str:
+        return ", ".join(sorted(self.events)) or "no events at all"
+
+
 @dataclass
 class Job:
     """The slice of a workflow job this script needs: what GitHub will call its status check."""
@@ -92,6 +133,17 @@ class Job:
     name: str
     conditional: bool = False
     matrix: dict[str, list[str]] = field(default_factory=dict)
+    triggers: Triggers = field(default_factory=Triggers)
+
+    @property
+    def reports_on_every_pull_request(self) -> bool:
+        """Whether this job produces a status check on EVERY pull request.
+
+        Only such a job can be a required check: GitHub waits for a required context forever, and
+        a job that is filtered out, skipped, or simply never triggered by a pull request never
+        reports one.
+        """
+        return self.triggers.on_every_pull_request and not self.conditional
 
     def contexts(self) -> list[str]:
         """The status-check context(s) GitHub reports for this job.
@@ -167,6 +219,47 @@ def _parse_matrix(block: list[str]) -> dict[str, list[str]]:
     return matrix
 
 
+_ON = re.compile(r"^on:\s*(.*)$")
+
+
+def parse_triggers(lines: list[str]) -> Triggers:
+    """The events in a workflow's `on:` block, and whether its pull_request trigger is filtered.
+
+    Handles the three forms GitHub accepts: `on: push`, `on: [push, pull_request]`, and the block
+    mapping. A `paths:` / `paths-ignore:` under `pull_request:` means the workflow does not fire on
+    every pull request, which disqualifies its jobs from being required checks.
+    """
+    events: set[str] = set()
+    filtered = False
+    index = 0
+    while index < len(lines):
+        match = _ON.match(lines[index])
+        if not match:
+            index += 1
+            continue
+        rest = _scalar(match.group(1))
+        if rest.startswith("[") and rest.endswith("]"):
+            return Triggers(frozenset(_scalar(v) for v in rest[1:-1].split(",") if v.strip()))
+        if rest:
+            return Triggers(frozenset({rest}))
+        event: str | None = None
+        for line in lines[index + 1 :]:
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if re.match(r"^\S", line):
+                break  # dedented back out of on:
+            key = _KEY_AT.match(line)
+            if key and key.group(1) == "  ":
+                event = key.group(2)
+                events.add(event)
+            elif key and key.group(1) == "    " and event == "pull_request":
+                filtered = filtered or key.group(2) in ("paths", "paths-ignore")
+            elif line.startswith("  - "):
+                events.add(_scalar(line[4:]))  # on:\n  - push
+        return Triggers(frozenset(events), filtered)
+    return Triggers()
+
+
 def parse_workflow(path: pathlib.Path) -> dict[str, Job]:
     """Every job a workflow file defines, keyed by job id."""
     blocks: dict[str, list[str]] = {}
@@ -174,7 +267,10 @@ def parse_workflow(path: pathlib.Path) -> dict[str, Job]:
     current: str | None = None
     block: list[str] = []
 
-    for line in path.read_text(encoding="utf-8").splitlines():
+    lines = path.read_text(encoding="utf-8").splitlines()
+    triggers = parse_triggers(lines)
+
+    for line in lines:
         if re.match(r"^jobs:\s*$", line):
             in_jobs = True
             continue
@@ -214,40 +310,101 @@ def parse_workflow(path: pathlib.Path) -> dict[str, Job]:
             name=name,
             conditional=conditional,
             matrix=_parse_matrix(job_block),
+            triggers=triggers,
         )
     return jobs
 
 
-def all_jobs(workflows: pathlib.Path = WORKFLOWS) -> dict[str, Job]:
-    """Every job defined across every workflow file, keyed by job id."""
-    jobs: dict[str, Job] = {}
+def all_jobs(workflows: pathlib.Path | None = None) -> dict[str, list[Job]]:
+    """Every job defined across every workflow file, grouped by job id.
+
+    A job id is unique within one workflow but NOT across workflows: this repo defines
+    `secret-scan`, `selftest-godot` and `selftest-gut` in both `ci.yml` (the merge gate) and
+    `publish.yml` (the release gate re-running them live on the released commit). Keeping every
+    definition, rather than letting the last file parsed win, is what lets `required_contexts()`
+    pick the one that can actually report on a pull request instead of silently reading a
+    release-only job's triggers.
+    """
+    workflows = _workflows_dir(workflows)
+    jobs: dict[str, list[Job]] = {}
     for wf in sorted(workflows.glob("*.yml")) + sorted(workflows.glob("*.yaml")):
-        jobs.update(parse_workflow(wf))
+        for job_id, job in parse_workflow(wf).items():
+            jobs.setdefault(job_id, []).append(job)
     return jobs
 
 
-def required_contexts(workflows: pathlib.Path = WORKFLOWS) -> list[str]:
+def _cannot_be_required(job: Job) -> str | None:
+    """Why this job can never report a status check on every PR, or None if it can."""
+    if not job.triggers.on_pull_request:
+        return (
+            f"in {job.workflow}, which no pull request triggers "
+            f"(it runs on: {job.triggers.describe()})"
+        )
+    if job.triggers.pull_request_filtered:
+        return (
+            f"in {job.workflow}, whose `pull_request` trigger is path-filtered, "
+            "so it skips some pull requests"
+        )
+    if job.conditional:
+        return f"in {job.workflow}, but the job is if:-gated, and a skipped job never reports"
+    return None
+
+
+def required_contexts(workflows: pathlib.Path | None = None) -> list[str]:
     """The status-check contexts for `REQUIRED_JOBS`, derived from the workflow files.
 
-    Raises if a required job id is missing or is `if:`-gated: both would require a context that
+    Raises if a required job id is missing, lives in a workflow no pull request triggers, sits
+    behind a `paths:` filter, or is `if:`-gated. Every one of those would require a context that
     nothing reports, which blocks every PR on the branch forever.
     """
+    workflows = _workflows_dir(workflows)
     jobs = all_jobs(workflows)
     contexts: list[str] = []
     for job_id in REQUIRED_JOBS:
-        job = jobs.get(job_id)
-        if job is None:
+        candidates = jobs.get(job_id) or []
+        if not candidates:
             raise ValueError(
                 f"required job id {job_id!r} is defined in no workflow under {workflows}. "
-                "It was renamed or removed, so update REQUIRED_JOBS — requiring a check that "
+                "It was renamed or removed, so update REQUIRED_JOBS - requiring a check that "
                 "nothing reports blocks every PR."
             )
-        if job.conditional:
+        eligible = [job for job in candidates if _cannot_be_required(job) is None]
+        if not eligible:
+            reasons = "; ".join(str(_cannot_be_required(job)) for job in candidates)
             raise ValueError(
-                f"required job {job_id!r} in {job.workflow} is if:-gated, so it can be skipped, "
-                "and a skipped job never reports. Require an always-running gate job instead."
+                f"required job {job_id!r} can never report a status check on a pull request "
+                f"({reasons}). GitHub waits for a required context forever, so requiring it "
+                "leaves every PR on the branch pending. Either give the workflow a "
+                "`pull_request` trigger, or drop the id from REQUIRED_JOBS - a check that runs "
+                "locally instead of in CI is not a required check."
             )
-        contexts.extend(job.contexts())
+        if len(eligible) > 1:
+            where = ", ".join(job.workflow for job in eligible)
+            raise ValueError(
+                f"job id {job_id!r} is defined in more than one workflow that runs on every pull "
+                f"request ({where}), so which job reports the required context is ambiguous. "
+                "Rename one of them."
+            )
+        contexts.extend(eligible[0].contexts())
+    return contexts
+
+
+def producible_contexts(workflows: pathlib.Path | None = None) -> set[str]:
+    """Every status-check context some job actually reports on EVERY pull request.
+
+    This is the universe a required check may be drawn from. A job whose name cannot be predicted
+    (a templated `name:`) is left out rather than guessed: it cannot vouch for a required context,
+    and leaving it out can only cause a refusal to write, never a bad write.
+    """
+    contexts: set[str] = set()
+    for definitions in all_jobs(workflows).values():
+        for job in definitions:
+            if not job.reports_on_every_pull_request:
+                continue
+            try:
+                contexts.update(job.contexts())
+            except ValueError:
+                continue
     return contexts
 
 
@@ -256,16 +413,58 @@ def required_contexts(workflows: pathlib.Path = WORKFLOWS) -> list[str]:
 # ---------------------------------------------------------------------------------------------
 
 
-def live_required_contexts(repo: str) -> list[str] | None:
-    """The contexts branch protection requires on `main` today, or None if it is unreadable."""
+@dataclass(frozen=True)
+class LiveRequiredChecks:
+    """What branch protection requires on `main` today — as three states, not one list.
+
+    "The branch requires no checks at all" and "the branch requires exactly these checks" are
+    different facts with opposite consequences, and collapsing both to an empty list is how a
+    report ends up reading as a match when nothing is gating anything. `configured` keeps them
+    apart; `readable` keeps "we could not ask" apart from both.
+    """
+
+    readable: bool
+    configured: bool
+    contexts: tuple[str, ...] = ()
+
+    def describe(self) -> str:
+        # ASCII only: this string is printed, and a Windows console in cp1252 mangles anything else.
+        if not self.readable:
+            return "UNREADABLE: the protection endpoint did not answer"
+        if not self.configured:
+            return "ABSENT: protection carries no `required_status_checks` at all"
+        if not self.contexts:
+            return "EMPTY: `required_status_checks` is present but lists no contexts"
+        return f"{len(self.contexts)} context(s) required"
+
+    @property
+    def gates_nothing(self) -> bool:
+        return self.readable and not self.contexts
+
+
+def required_checks_of(protection: dict) -> LiveRequiredChecks:
+    """Read the required-check state out of an already-fetched protection payload."""
+    block = protection.get("required_status_checks")
+    if not isinstance(block, dict):
+        return LiveRequiredChecks(readable=True, configured=False)
+    return LiveRequiredChecks(
+        readable=True, configured=True, contexts=tuple(block.get("contexts") or [])
+    )
+
+
+def live_required_checks(repo: str) -> LiveRequiredChecks:
+    """The required-check state of `main` today, fetched read-only."""
     succeeded, out = _gh(["api", f"repos/{repo}/branches/main/protection"])
     if not succeeded:
-        return None
-    checks = json.loads(out).get("required_status_checks") or {}
-    return list(checks.get("contexts") or [])
+        return LiveRequiredChecks(readable=False, configured=False)
+    return required_checks_of(json.loads(out))
 
 
-def report_state(repo: str) -> None:
+def report_state(
+    repo: str,
+    contexts: list[str] | None = None,
+    derivation_error: ValueError | None = None,
+) -> None:
     """Print live settings plus a two-way comparison against what this script would require."""
     succeeded, out = _gh(["api", f"repos/{repo}"])
     if succeeded:
@@ -288,19 +487,38 @@ def report_state(repo: str) -> None:
 
     succeeded, out = _gh(["api", f"repos/{repo}/branches/main/protection"])
     print(f"    {'branch protection (main)':34} {'ENABLED' if succeeded else 'not set'}")
-    live: set[str] = set()
+    checks = LiveRequiredChecks(readable=False, configured=False)
     if succeeded:
         protection = json.loads(out)
-        live = set((protection.get("required_status_checks") or {}).get("contexts") or [])
+        checks = required_checks_of(protection)
         for key in ("enforce_admins", "required_conversation_resolution"):
             print(f"    {key:34} {(protection.get(key) or {}).get('enabled')}")
+    print(f"    {'required status checks':34} {checks.describe()}")
 
-    computed = set(required_contexts())
+    live = set(checks.contexts)
+    computed = set(contexts or [])
+
     _log("Required status checks  [live/spec]:")
+    if derivation_error is not None:
+        _warn(f"This spec cannot be derived from the workflow files: {derivation_error}")
+        print("         The spec column below is therefore empty: nothing is proposed.")
+    # The live column says ABSENT rather than "----" when protection carries no required-check
+    # object at all, so an empty live set can never be read as a row of confirmed checks.
+    absent = checks.readable and not checks.configured
+    live_miss = "ABSENT" if absent else ("none" if checks.readable else "?")
+    if not (live | computed):
+        print(f"    (no contexts on either side. live: {checks.describe()})")
     for context in sorted(live | computed):
-        left = "live" if context in live else "----"
+        left = "live" if context in live else live_miss
         right = "spec" if context in computed else "----"
-        print(f"    [{left}/{right}] {context}")
+        print(f"    [{left:>6}/{right}] {context}")
+
+    if checks.gates_nothing:
+        _warn(f"'main' requires NO status checks at all. Live state: {checks.describe()}.")
+        print("         No CI result gates a merge on this branch today. If that is deliberate,")
+        print(
+            "         REQUIRED_JOBS must be empty: every id left in it would be ADDED by a write."
+        )
 
     dropped = live - computed
     if dropped:
@@ -310,14 +528,18 @@ def report_state(repo: str) -> None:
     if added:
         _warn(f"Checks this spec would ADD: {sorted(added)}")
 
-    advisory = sorted(
-        {c for job in all_jobs().values() if not job.conditional for c in job.contexts()} - computed
-    )
+    if computed:
+        unproducible = sorted(computed - producible_contexts())
+        if unproducible:
+            _warn(f"Required contexts that NO job can report on a pull request: {unproducible}")
+            print("         GitHub waits for a required context forever, so writing this spec")
+            print("         would block every PR on 'main' permanently. Fix REQUIRED_JOBS first.")
+
+    advisory = sorted(producible_contexts() - computed)
     if advisory:
-        _log("Jobs that are not required checks (they run, but cannot block a merge):")
+        _log("Jobs that report on every PR but are not required checks (they cannot block):")
         for context in advisory:
             print(f"    {context}")
-        print("    Some only fire on their own trigger or path filter and must stay advisory.")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -344,7 +566,7 @@ def _apply(desc: str, args: list[str], payload: dict | None, on_fail: str, dry_r
             print(f"         gh: {out.splitlines()[0][:140]}")
 
 
-def protection_payload(workflows: pathlib.Path = WORKFLOWS) -> dict:
+def protection_payload(workflows: pathlib.Path | None = None) -> dict:
     """The branch-protection spec for `main`.
 
     Solo repo => required approving reviews = 0 (self-approval is impossible, so a nonzero count
@@ -379,15 +601,25 @@ def main(argv: list[str] | None = None) -> int:
         print("[error] gh CLI not found. Install it, then `gh auth login`.", file=sys.stderr)
         return 1
 
+    contexts: list[str] | None = None
+    derivation_error: ValueError | None = None
     try:
         contexts = required_contexts()
     except ValueError as exc:
-        print(f"[error] cannot derive the required status checks: {exc}", file=sys.stderr)
-        return 1
+        derivation_error = exc
 
+    # `--check` is the diagnostic, so it reports even when the spec cannot be derived — that
+    # failure is exactly what the operator needs to see, and hiding the live state behind it
+    # would leave them guessing at what protection actually looks like.
     if args.check:
-        report_state(args.repo)
-        return 0
+        report_state(args.repo, contexts, derivation_error)
+        return 1 if derivation_error is not None else 0
+
+    if derivation_error is not None or contexts is None:
+        print(
+            f"[error] cannot derive the required status checks: {derivation_error}", file=sys.stderr
+        )
+        return 1
 
     _log(f"Hardening {args.repo}{' (dry run)' if args.dry_run else ''}")
     _log(f"Required status checks, derived from the workflows: {contexts}")
@@ -445,16 +677,36 @@ def main(argv: list[str] | None = None) -> int:
         args.dry_run,
     )
 
-    # Ratchet: never trade a live required check away for a derived one. If protection already
-    # requires something this spec does not, the spec is behind, and writing would REDUCE the gate.
-    live = live_required_contexts(args.repo)
-    if live is not None:
-        dropped = set(live) - set(contexts)
-        if dropped:
-            _warn(f"Branch protection NOT written: this spec would drop {sorted(dropped)}.")
-            print("         Add the matching job ids to REQUIRED_JOBS, then re-run.")
-            print("         Review with:  python scripts/harden_github.py --check")
-            return 1
+    # The ratchet, in both directions. Removing a live check and adding a check nothing reports are
+    # equally destructive, and only one of them used to be caught.
+    #
+    # DROP direction: never trade a live required check away for a derived one. If protection
+    # already requires something this spec does not, the spec is behind, and writing REDUCES
+    # the gate.
+    live = live_required_checks(args.repo)
+    dropped = set(live.contexts) - set(contexts)
+    if dropped:
+        _warn(f"Branch protection NOT written: this spec would drop {sorted(dropped)}.")
+        print("         Add the matching job ids to REQUIRED_JOBS, then re-run.")
+        print("         Review with:  python scripts/harden_github.py --check")
+        return 1
+
+    # ADD direction: never require a context no job can report. The write is a whole-object PUT
+    # with `strict: True`, so one unreportable context leaves every PR on `main` pending forever —
+    # and the same PUT sets `enforce_admins: True`, which closes the escape hatch that would let
+    # an admin merge past it. This is the failure that follows removing a workflow's pull_request
+    # trigger: the required list stops matching anything CI can produce.
+    unproducible = sorted(set(contexts) - producible_contexts())
+    if unproducible:
+        _warn(f"Branch protection NOT written: no job reports {unproducible} on a pull request.")
+        print("         With strict: True that would block every PR on 'main' permanently, and")
+        print("         the same write sets enforce_admins: True, removing the way back out.")
+        print("         Fix REQUIRED_JOBS (or the workflow triggers), then re-run.")
+        print("         Review with:  python scripts/harden_github.py --check")
+        return 1
+
+    if live.gates_nothing and contexts:
+        _log(f"'main' currently requires no status checks; this write adds {len(contexts)}.")
 
     _apply(
         "Branch protection on 'main': PR required, CI checks required, no force-push.",
@@ -473,7 +725,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.dry_run:
         print()
-        report_state(args.repo)
+        report_state(args.repo, contexts)
     return 0
 
 

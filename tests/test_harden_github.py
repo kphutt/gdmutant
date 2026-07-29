@@ -18,6 +18,7 @@ file adds no coverage obligation; the logic earns a test on its own.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -34,9 +35,14 @@ sys.modules["harden_github"] = harden_github
 _spec.loader.exec_module(harden_github)
 
 
-# The exact contexts GitHub reports for the required jobs, as read back from the live branch
-# protection on `main`. Written out in full so a workflow rename that changes a context has to be
+# The exact contexts GitHub would report for the required jobs, derived from THIS branch's
+# workflow files. Written out in full so a workflow rename that changes a context has to be
 # reflected here deliberately, not absorbed silently.
+#
+# These are deliberately NOT compared against live branch protection any more. `main` requires no
+# status checks at all: the merge-time checks moved to the local pre-commit gate and `ci.yml` was
+# reduced to `workflow_dispatch`. A test that asserted "derived == live" would now be asserting
+# that the spec is empty, which says nothing about whether the derivation is correct.
 EXPECTED_CONTEXTS = [
     "Verify (ubuntu-24.04)",
     "Verify (windows-2025)",
@@ -46,8 +52,8 @@ EXPECTED_CONTEXTS = [
 ]
 
 
-def test_required_contexts_match_the_live_protection_set() -> None:
-    """The derived list is exactly what branch protection requires on `main` today."""
+def test_required_contexts_are_derived_from_this_branch_workflows() -> None:
+    """The derived list is exactly what this branch's workflows would make GitHub report."""
     assert harden_github.required_contexts() == EXPECTED_CONTEXTS
 
 
@@ -65,16 +71,16 @@ def test_every_required_job_id_exists_and_always_runs() -> None:
     jobs = harden_github.all_jobs()
     for job_id in harden_github.REQUIRED_JOBS:
         assert job_id in jobs, f"{job_id!r} is required but defined in no workflow"
-        assert not jobs[job_id].conditional, f"{job_id!r} is if:-gated, so it can skip and hang PRs"
+        assert not jobs[job_id][0].conditional, f"{job_id!r} is if:-gated: it can skip and hang PRs"
 
 
 def test_path_filtered_workers_are_not_required() -> None:
     """The heavy Godot workers are `if:`-gated, so they must stay out of the required set."""
     jobs = harden_github.all_jobs()
     for worker in ("selftest-godot-run", "selftest-gut-run"):
-        assert jobs[worker].conditional
+        assert jobs[worker][0].conditional
         assert worker not in harden_github.REQUIRED_JOBS
-        for context in jobs[worker].contexts():
+        for context in jobs[worker][0].contexts():
             assert context not in harden_github.required_contexts()
 
 
@@ -157,13 +163,13 @@ jobs:
 @pytest.mark.parametrize("body", [INLINE_MATRIX, BLOCK_MATRIX])
 def test_matrix_expands_for_both_yaml_list_styles(tmp_path: Path, body: str) -> None:
     jobs = harden_github.all_jobs(_workflow(tmp_path, body))
-    assert jobs["verify"].contexts() == ["Verify (ubuntu-24.04)", "Verify (windows-2025)"]
+    assert jobs["verify"][0].contexts() == ["Verify (ubuntu-24.04)", "Verify (windows-2025)"]
 
 
 def test_two_matrix_dimensions_expand_in_declaration_order(tmp_path: Path) -> None:
     """GitHub joins the values in the order the dimensions are declared, not alphabetically."""
     jobs = harden_github.all_jobs(_workflow(tmp_path, TWO_DIMENSIONS))
-    assert jobs["verify"].contexts() == [
+    assert jobs["verify"][0].contexts() == [
         "Verify (ubuntu-24.04, 3.12)",
         "Verify (ubuntu-24.04, 3.13)",
         "Verify (windows-2025, 3.12)",
@@ -174,13 +180,13 @@ def test_two_matrix_dimensions_expand_in_declaration_order(tmp_path: Path) -> No
 def test_a_step_name_is_not_mistaken_for_the_job_name(tmp_path: Path) -> None:
     """`name:` inside a step sits deeper than the job's own key; only the job's own counts."""
     jobs = harden_github.all_jobs(_workflow(tmp_path, INLINE_MATRIX))
-    assert jobs["verify"].name == "Verify"
+    assert jobs["verify"][0].name == "Verify"
 
 
 def test_job_without_a_name_reports_under_its_job_id(tmp_path: Path) -> None:
     body = "name: CI\non:\n  pull_request:\njobs:\n  lint:\n    runs-on: ubuntu-24.04\n"
     jobs = harden_github.all_jobs(_workflow(tmp_path, body))
-    assert jobs["lint"].contexts() == ["lint"]
+    assert jobs["lint"][0].contexts() == ["lint"]
 
 
 def test_trailing_comment_is_stripped_from_a_job_name(tmp_path: Path) -> None:
@@ -189,7 +195,7 @@ def test_trailing_comment_is_stripped_from_a_job_name(tmp_path: Path) -> None:
         "  verify:\n    name: Verify # the fast gate\n    runs-on: ubuntu-24.04\n"
     )
     jobs = harden_github.all_jobs(_workflow(tmp_path, body))
-    assert jobs["verify"].contexts() == ["Verify"]
+    assert jobs["verify"][0].contexts() == ["Verify"]
 
 
 def test_matrix_include_is_rejected_rather_than_guessed(tmp_path: Path) -> None:
@@ -210,7 +216,7 @@ def test_templated_job_name_is_rejected(tmp_path: Path) -> None:
     )
     jobs = harden_github.all_jobs(_workflow(tmp_path, body))
     with pytest.raises(ValueError, match="templated name"):
-        jobs["verify"].contexts()
+        jobs["verify"][0].contexts()
 
 
 def test_if_always_still_counts_as_always_running(tmp_path: Path) -> None:
@@ -221,8 +227,8 @@ def test_if_always_still_counts_as_always_running(tmp_path: Path) -> None:
         "    runs-on: ubuntu-24.04\n"
     )
     jobs = harden_github.all_jobs(_workflow(tmp_path, body))
-    assert jobs["gate"].conditional is False
-    assert jobs["worker"].conditional is True
+    assert jobs["gate"][0].conditional is False
+    assert jobs["worker"][0].conditional is True
 
 
 def test_a_missing_required_job_raises_instead_of_dropping_the_check(tmp_path: Path) -> None:
@@ -247,9 +253,13 @@ def test_an_if_gated_required_job_raises(tmp_path: Path) -> None:
 
 
 class _FakeGh:
-    """Stands in for the `gh` CLI: records every call, answers the protection read."""
+    """Stands in for the `gh` CLI: records every call, answers the protection read.
 
-    def __init__(self, live_contexts: list[str]) -> None:
+    `live_contexts=None` reproduces the state that matters most: branch protection is enabled but
+    carries no `required_status_checks` key at all, so nothing gates a merge.
+    """
+
+    def __init__(self, live_contexts: list[str] | None) -> None:
         self.live_contexts = live_contexts
         self.calls: list[list[str]] = []
 
@@ -257,10 +267,10 @@ class _FakeGh:
         self.calls.append(args)
         joined = " ".join(args)
         if "branches/main/protection" in joined and "-X" not in args:
-            return True, (
-                '{"required_status_checks": {"strict": true, "contexts": '
-                f"{self.live_contexts!r}".replace("'", '"')
-                + "}}"
+            if self.live_contexts is None:
+                return True, '{"enforce_admins": {"enabled": false}}'
+            return True, json.dumps(
+                {"required_status_checks": {"strict": True, "contexts": self.live_contexts}}
             )
         if joined.startswith("api repos/") and "-X" not in args:
             return True, "{}"
@@ -315,3 +325,289 @@ def test_check_mode_sends_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert harden_github.main(["kphutt/gdmutant", "--check"]) == 0
     assert all("-X" not in call for call in fake.calls), "--check must not send a write"
+
+
+# --------------------------------------------------------------------------------------------
+# Triggers: a job that cannot run on a pull request cannot be a required check
+# --------------------------------------------------------------------------------------------
+
+
+NO_PR_TRIGGER = """\
+name: CI
+on:
+  workflow_dispatch: # manual only
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-24.04
+"""
+
+PATH_FILTERED_PR = """\
+name: CI
+on:
+  pull_request:
+    paths:
+      - "src/**"
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-24.04
+"""
+
+
+@pytest.mark.parametrize(
+    ("body", "events", "filtered"),
+    [
+        ("on:\n  pull_request:\n  push:\n    branches: [main]\n", {"pull_request", "push"}, False),
+        ("on: [push, pull_request]\n", {"push", "pull_request"}, False),
+        ("on: push\n", {"push"}, False),
+        ("on:\n  - push\n  - pull_request\n", {"push", "pull_request"}, False),
+        (NO_PR_TRIGGER, {"workflow_dispatch"}, False),
+        (PATH_FILTERED_PR, {"pull_request"}, True),
+        ("on:\n  pull_request:\n    paths-ignore:\n      - docs/**\n", {"pull_request"}, True),
+    ],
+)
+def test_trigger_parsing_covers_every_on_form(body: str, events: set[str], filtered: bool) -> None:
+    triggers = harden_github.parse_triggers(body.splitlines())
+    assert set(triggers.events) == events
+    assert triggers.pull_request_filtered is filtered
+
+
+def test_a_workflow_with_no_on_block_reports_no_events() -> None:
+    triggers = harden_github.parse_triggers(["name: CI", "jobs:"])
+    assert not triggers.events
+    assert triggers.on_pull_request is False
+    assert "no events at all" in triggers.describe()
+
+
+def _all_required(tmp_path: Path, on_block: str, filename: str = "a-ci.yml") -> Path:
+    """A workflow defining every REQUIRED_JOBS id under `on_block`.
+
+    Every id is present and unconditional, so the only thing left to fail is the trigger - which
+    keeps each trigger test pinned to the reason it is testing.
+    """
+    lines = ["name: CI", *on_block.splitlines(), "jobs:"]
+    for job_id in harden_github.REQUIRED_JOBS:
+        lines += [f"  {job_id}:", f"    name: {job_id}", "    runs-on: ubuntu-24.04"]
+    return _workflow(tmp_path, "\n".join(lines) + "\n", filename=filename)
+
+
+DISPATCH_ONLY = "on:\n  workflow_dispatch: # manual only"
+FILTERED_ONLY = 'on:\n  pull_request:\n    paths:\n      - "src/**"'
+
+
+def test_a_required_job_whose_workflow_no_pull_request_triggers_raises(tmp_path: Path) -> None:
+    """The migration case: a `ci.yml` reduced to `workflow_dispatch` can gate nothing."""
+    with pytest.raises(ValueError, match="no pull request triggers"):
+        harden_github.required_contexts(_all_required(tmp_path, DISPATCH_ONLY))
+
+
+def test_a_required_job_behind_a_paths_filter_raises(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="path-filtered"):
+        harden_github.required_contexts(_all_required(tmp_path, FILTERED_ONLY))
+
+
+def test_a_job_id_defined_in_two_pull_request_workflows_is_ambiguous(tmp_path: Path) -> None:
+    """This repo shares job ids between `ci.yml` and `publish.yml`.
+
+    Letting the last file parsed win would read the wrong workflow's triggers, which is exactly
+    what the trigger check above exists to catch.
+    """
+    directory = _all_required(tmp_path, "on:\n  pull_request:")
+    (directory / "b-other.yml").write_text(
+        "name: Other\non:\n  pull_request:\njobs:\n"
+        "  verify:\n    name: Verify elsewhere\n    runs-on: ubuntu-24.04\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="more than one workflow"):
+        harden_github.required_contexts(directory)
+
+
+def test_a_release_only_twin_does_not_shadow_the_pull_request_job(tmp_path: Path) -> None:
+    """The real shape: an id in both `ci.yml` and a release-only workflow resolves to `ci.yml`."""
+    directory = _all_required(tmp_path, "on:\n  pull_request:")
+    (directory / "z-publish.yml").write_text(
+        "name: Publish\non:\n  release:\n    types: [published]\njobs:\n"
+        "  verify:\n    name: Verify on the released commit\n    runs-on: ubuntu-24.04\n",
+        encoding="utf-8",
+    )
+    assert [job.workflow for job in harden_github.all_jobs(directory)["verify"]] == [
+        "a-ci.yml",
+        "z-publish.yml",
+    ]
+    assert "verify" in harden_github.required_contexts(directory)
+    assert "Verify on the released commit" not in harden_github.required_contexts(directory)
+
+
+def test_producible_contexts_excludes_anything_that_misses_a_pull_request(tmp_path: Path) -> None:
+    directory = _workflow(
+        tmp_path,
+        "name: CI\non:\n  pull_request:\njobs:\n"
+        "  gate:\n    name: Gate\n    runs-on: ubuntu-24.04\n"
+        "  gated:\n    name: Gated\n    if: needs.changes.outputs.x == 'true'\n",
+        filename="a-ci.yml",
+    )
+    (directory / "b-filtered.yml").write_text(PATH_FILTERED_PR, encoding="utf-8")
+    (directory / "c-dispatch.yml").write_text(NO_PR_TRIGGER, encoding="utf-8")
+    assert harden_github.producible_contexts(directory) == {"Gate"}
+
+
+def test_a_templated_name_cannot_vouch_for_a_required_context(tmp_path: Path) -> None:
+    """An underivable name is left out rather than guessed: that can only cause a refusal."""
+    body = (
+        "name: CI\non:\n  pull_request:\njobs:\n"
+        "  verify:\n    name: Verify ${{ matrix.os }}\n    strategy:\n      matrix:\n"
+        "        os: [ubuntu-24.04]\n"
+    )
+    assert harden_github.producible_contexts(_workflow(tmp_path, body)) == set()
+
+
+# --------------------------------------------------------------------------------------------
+# The live read is three states, not one list
+# --------------------------------------------------------------------------------------------
+
+
+def test_absent_required_checks_are_not_collapsed_into_an_empty_match() -> None:
+    """The swallowed-key bug, pinned.
+
+    `(payload.get("required_status_checks") or {}).get("contexts") or []` gives the same empty
+    list for "the branch requires nothing" and "the branch requires exactly these", which is how
+    a report ends up reading as a match while nothing gates anything.
+    """
+    absent = harden_github.required_checks_of({"enforce_admins": {"enabled": False}})
+    assert absent.configured is False
+    assert absent.contexts == ()
+    assert "ABSENT" in absent.describe()
+
+    empty = harden_github.required_checks_of({"required_status_checks": {"contexts": []}})
+    assert empty.configured is True
+    assert "EMPTY" in empty.describe()
+
+    populated = harden_github.required_checks_of(
+        {"required_status_checks": {"contexts": ["Verify (ubuntu-24.04)"]}}
+    )
+    assert populated.contexts == ("Verify (ubuntu-24.04)",)
+    assert "1 context(s) required" in populated.describe()
+
+    assert len({absent.describe(), empty.describe(), populated.describe()}) == 3
+    assert absent.gates_nothing and empty.gates_nothing and not populated.gates_nothing
+
+
+def test_an_unreadable_protection_endpoint_is_its_own_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(harden_github, "_gh", lambda args, stdin=None: (False, "404"))
+    checks = harden_github.live_required_checks("kphutt/gdmutant")
+    assert checks.readable is False
+    assert "UNREADABLE" in checks.describe()
+    assert not checks.gates_nothing, "we do not know that it gates nothing; we could not ask"
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_check_says_absent_loudly_instead_of_printing_a_row_of_matches(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The live gdmutant state: protection is enabled, but no required check exists at all."""
+    monkeypatch.setattr(harden_github, "_gh", _FakeGh(None))
+
+    assert harden_github.main(["kphutt/gdmutant", "--check"]) == 0
+    out = capsys.readouterr().out
+
+    assert "requires NO status checks at all" in out
+    for context in EXPECTED_CONTEXTS:
+        assert f"[ABSENT/spec] {context}" in out, "an absent live check must never read as a match"
+        assert f"[  live/spec] {context}" not in out
+    assert "would ADD" in out
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_check_reports_a_true_match_differently_from_an_absent_set(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(harden_github, "_gh", _FakeGh(list(EXPECTED_CONTEXTS)))
+
+    assert harden_github.main(["kphutt/gdmutant", "--check"]) == 0
+    out = capsys.readouterr().out
+
+    assert "requires NO status checks at all" not in out
+    assert "ABSENT" not in out
+    assert "would ADD" not in out
+    for context in EXPECTED_CONTEXTS:
+        assert f"[  live/spec] {context}" in out
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_check_still_reports_when_the_spec_cannot_be_derived(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--check` is the diagnostic, so a derivation failure is reported, not hidden behind."""
+
+    def _boom(*_args: object, **_kwargs: object) -> list[str]:
+        raise ValueError("no pull request triggers ci.yml")
+
+    monkeypatch.setattr(harden_github, "required_contexts", _boom)
+    fake = _FakeGh(None)
+    monkeypatch.setattr(harden_github, "_gh", fake)
+
+    assert harden_github.main(["kphutt/gdmutant", "--check"]) == 1
+    out = capsys.readouterr().out
+    assert "cannot be derived" in out
+    assert "no pull request triggers ci.yml" in out
+    assert "no contexts on either side" in out
+    assert all("-X" not in call for call in fake.calls), "--check must not send a write"
+
+
+# --------------------------------------------------------------------------------------------
+# The ratchet guards BOTH directions
+# --------------------------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_write_is_refused_when_a_required_context_can_never_report(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The add direction.
+
+    Dropping a live check was already refused; adding a context nothing can report was not, and
+    that is precisely what a `workflow_dispatch`-only workflow leaves behind.
+    """
+    monkeypatch.setattr(
+        harden_github, "required_contexts", lambda *a, **k: ["Verify", *EXPECTED_CONTEXTS]
+    )
+    fake = _FakeGh(None)
+    monkeypatch.setattr(harden_github, "_gh", fake)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 1
+    assert not fake.wrote_protection()
+    out = capsys.readouterr().out
+    assert "no job reports ['Verify'] on a pull request" in out
+    assert "enforce_admins" in out, "the refusal must name the escape hatch the same write closes"
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_write_is_refused_when_no_required_job_can_run_on_a_pull_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """End to end: workflows with no pull_request trigger refuse the run before any write."""
+    monkeypatch.setattr(harden_github, "WORKFLOWS", _all_required(tmp_path, DISPATCH_ONLY))
+    fake = _FakeGh(None)
+    monkeypatch.setattr(harden_github, "_gh", fake)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 1
+    assert not fake.wrote_protection()
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_write_proceeds_onto_a_branch_that_requires_nothing_when_the_checks_are_real(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adding checks to an unguarded branch is the script's job.
+
+    Only unreportable ones are refused, so the add-direction ratchet must not become a blanket
+    refusal to ever raise the gate.
+    """
+    fake = _FakeGh(None)
+    monkeypatch.setattr(harden_github, "_gh", fake)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 0
+    assert fake.wrote_protection()
