@@ -37,9 +37,10 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      # Read by BOTH steps: gitleaks-action reads the PR's commit range, and dorny/paths-filter reads
-      # the PR's changed-files list through the REST API on pull_request runs.
-      pull-requests: read
+      # Needed by BOTH steps now: gitleaks-action reads the PR's commit range, and dorny/paths-filter
+      # reads the PR's changed-files list via the REST API on pull_request runs. (Keep this comment on
+      # the same line — zizmor's pedantic `undocumented-permissions` only sees a trailing comment.)
+      pull-requests: read # gitleaks reads the PR's commit range; paths-filter reads its changed-files list
     outputs:
       godot: ${{ steps.filter.outputs.godot }}
     steps:
