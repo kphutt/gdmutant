@@ -1,7 +1,14 @@
 # Standard pre-commit config (https://pre-commit.com) — self-contained, so any clone (yours or a
 # contributor's) gets the same checks with `pre-commit install --hook-type pre-commit --hook-type
-# pre-push`. These hooks are OPTIONAL: GitHub Actions is the authoritative gate, and this config only
-# mirrors that CI locally as a convenience — installing it never changes what a merge requires.
+# pre-push`.
+#
+# NOT JUST A CONVENIENCE ANYMORE (ADR-0012). ci.yml is `workflow_dispatch`-only while this repo is
+# private — these hooks are the ONLY merge-time gate there is; nothing mechanical stops a bad
+# commit from reaching `main` if they're skipped or not installed. The authoritative, unbypassable
+# check is publish.yml's release-time gate (runs live, in the cloud, on the exact commit, every
+# real release) — not GitHub Actions running on every push, which is what this comment used to say
+# and is no longer true. If ci.yml's automatic triggers come back (e.g. once this repo is public),
+# these hooks return to being a convenience mirror rather than the only gate.
 # Two stages, matching the tradeoff CI already makes:
 #   - pre-commit (every commit): gitleaks only — cheap, catches a secret before it's even committed.
 #   - pre-push (before it leaves the machine): the full Verify job, mirrored 1:1 from ci.yml so
