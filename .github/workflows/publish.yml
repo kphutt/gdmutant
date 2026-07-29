@@ -8,11 +8,23 @@ name: Publish
 #
 # Two paths:
 #   - workflow_dispatch  -> build + publish to TestPyPI  (the deliberate dry-run)
-#   - release: published -> build + publish to PyPI      (a real release)
+#   - release: published -> build + gate + publish to PyPI  (a real release)
 #
 # The build runs in its own job with NO elevated permissions; only the publish jobs get
 # `id-token: write`, and each is gated behind a protection-capable GitHub Environment
 # (`testpypi` / `pypi`). This keeps the OIDC-token job doing nothing but download+upload.
+#
+# THIS FILE HOLDS THE AUTHORITATIVE RELEASE GATE — see the `ci-gate` job. It is authoritative
+# because `release: published` is reachable WITHOUT release.yml: a maintainer can create and
+# publish a GitHub Release straight from the web UI, and this workflow runs while release.yml
+# never does. release.yml runs the same three guards earlier, on the tag push, where failing is
+# still free — but a gate that lived only there would guard the convenient path and leave the
+# irreversible one open. Both call the same scripts, so the two copies cannot drift.
+#
+# The three guards, all fail-closed, all before `publish-pypi` gets `id-token: write`:
+#   1. the tag matches the version in pyproject.toml   (scripts/check_release_tag.py)
+#   2. the released commit is an ancestor of main      (git merge-base --is-ancestor)
+#   3. ci.yml concluded `success` on that exact commit (scripts/require_ci_success.py)
 on:
   workflow_dispatch: # deliberate TestPyPI dry-run, fired by hand
   release:
@@ -82,10 +94,110 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
 
+  # --- THE GATE ON THE IRREVERSIBLE PATH -------------------------------------
+  # WHY THIS EXISTS HERE AND NOT ONLY IN release.yml. release.yml runs the same three guards when a
+  # version tag is pushed, and it is the convenient path -- but it is not the only one. `publish-pypi`
+  # below is triggered by `release: published`, and a maintainer can create AND publish a GitHub
+  # Release straight from the web UI, which fires that event without release.yml ever running. A gate
+  # that lives only in release.yml therefore guards the staging step and leaves the upload unguarded.
+  # This job is the authoritative one, because it sits between the event and the OIDC credential.
+  #
+  # A PyPI version can never be reused or overwritten, so every guard here fails CLOSED, and all
+  # three run before `publish-pypi` gets its `id-token: write`. This job holds NO publishing
+  # privilege of its own -- the worst a bug in it can do is refuse to publish.
+  #
+  # WHICH COMMIT: the release's tag, resolved to a commit by actions/checkout + `git rev-parse HEAD`.
+  # Not `github.sha`, which is ambiguous for an ANNOTATED tag (the ref can resolve to the tag object
+  # rather than the commit it points at), and not `target_commitish`, which is often just the branch
+  # name "main" and would check main's CURRENT tip instead of the commit being released.
+  ci-gate:
+    name: Gate - the released commit is releasable
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so a runner-image migration can't silently break us
+    timeout-minutes: 10
+    permissions:
+      contents: read # checkout only
+      actions: read # query the Actions API for ci.yml's conclusion
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The RELEASED tag, not the default ref. Without this the job would happily verify main's
+          # tip and report success for a commit that is not the one being published.
+          ref: ${{ github.event.release.tag_name }}
+          # Full history: the ancestry guard walks back to the merge base with main, and a shallow
+          # clone has no main history for git to walk.
+          fetch-depth: 0
+          persist-credentials: false # this job only reads; it never pushes
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Resolve the released commit
+        id: resolve
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Released commit: $sha"
+
+      # Guard 1 - the right VERSION NUMBER. A tag of v0.2.0 against a pyproject.toml still saying
+      # 0.1.0 would upload 0.1.0 under a release labelled 0.2.0, and the only remedy is yanking and
+      # burning a version number.
+      - name: Verify the tag matches the packaged version
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: python3 scripts/check_release_tag.py "$TAG_NAME"
+
+      # Guard 2 - the right COMMIT. Tag protection stops a tag being deleted or re-pointed, but
+      # nothing stops a version tag from being CREATED at an arbitrary commit, and branch protection
+      # on main cannot see a tag push at all. This is what ties a release to reviewed history.
+      - name: Verify the released commit is on main
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          commit="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            # ASCII only: gdmutant already shipped a Windows bug where console output crashed under
+            # the legacy cp1252 code page, and a guard that crashes instead of reporting the problem
+            # is worse than no guard.
+            echo "::error::tag $TAG_NAME points at $commit, which is not an ancestor of origin/main. Refusing to publish a commit that is not on main."
+            exit 1
+          fi
+          echo "tag $TAG_NAME is on main ($commit)"
+
+      # Guard 3 - CI actually PASSED on it. The other two guards check provenance; this one checks
+      # the verdict. Values reach the script through `env:`, never string-interpolated into `run:`.
+      - name: Verify CI passed for this exact commit (fail closed)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: python3 scripts/require_ci_success.py --repo "$REPO" --sha "$SHA"
+
+      - name: Summarize the gate decision
+        if: always()
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          {
+            echo "### PyPI publish gate"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Released commit | \`${SHA:-unresolved}\` |"
+            echo "| Tag | \`${TAG_NAME}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # --- Release path: PyPI via a published GitHub Release ---------------------
   publish-pypi:
     name: Publish to PyPI
-    needs: build
+    # `ci-gate` is a hard dependency: GitHub skips a job whose `needs:` failed OR was skipped, and
+    # there is no `if: always()` here to override that -- so a failed gate cannot be bypassed. On
+    # workflow_dispatch (the TestPyPI dry-run) `ci-gate` skips, and this job's own `if:` already
+    # excludes it, so the skip changes nothing on that path.
+    needs: [build, ci-gate]
     if: github.event_name == 'release'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
