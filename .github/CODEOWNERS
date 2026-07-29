@@ -1,11 +1,33 @@
-# Code owners. With "require Code Owners review" branch protection, these paths
-# cannot merge without @kphutt review. Sensitive surfaces = the places where
-# tests can't save you (config, CI, secrets, self-executing code).
+# Code owners — who OWNS each surface. This file is documentation, not a merge gate.
+#
+# "Require review from Code Owners" is deliberately OFF on this repo, so no rule below can
+# fire and nothing here blocks a merge on its own. The required approving review count is
+# separately set to 0, for a related but distinct reason: a sole code owner cannot approve
+# their own pull request, so any nonzero count would deadlock every merge.
+#
+# What main's protection actually enforces: a pull request is required, and force-push and
+# deletion are blocked. That is the whole list. There are NO required status checks, and
+# admin enforcement is off — so an owner with admin rights can push straight to main and
+# bypass even the pull-request requirement.
+#
+# Merge-time checks are not mechanical here. ci.yml is workflow_dispatch-only while this
+# repo is private (docs/decisions/0012-merge-time-local-ship-time-cloud.md), so the checks
+# run on the machine making the change, from .pre-commit-config.yaml's pre-push stage. Those
+# hooks must be installed per clone (`pre-commit install --hook-type pre-commit --hook-type
+# pre-push`); a clone where that has not run has no automated gate at all.
+#
+# The one gate nothing local can skip is publish.yml's release-time job, which re-runs verify
+# on Linux and Windows, the license check, and both Godot self-tests live, on the exact commit
+# being shipped. Merging is discipline; shipping is enforced.
+#
+# So read the list below as "read this carefully before merging it yourself", not as an
+# automatic stop. Sensitive surfaces = the places where tests can't save you (config, CI,
+# secrets, self-executing code).
 
 # Default owner for everything.
 * @kphutt
 
-# --- Sensitive paths: always human-reviewed --------------------------------
+# --- Sensitive paths: read carefully before merging ------------------------
 # CI / automation / anything self-executing on a runner.
 /.github/        @kphutt
 /scripts/        @kphutt
@@ -16,7 +38,8 @@
 
 # --- Engine surfaces (land with the v0.1 milestone) ------------------------
 # The mutation-operator catalog + the GDScript adapter are the tool's real
-# technical risk (a wrong mutant = a silently wrong survivor report). Keep reviewed.
+# technical risk (a wrong mutant = a silently wrong survivor report). Read every
+# change here carefully before merging.
 /gdmutant/engine/            @kphutt
 /gdmutant/engine/operators/  @kphutt
 /gdmutant/adapters/          @kphutt
