@@ -136,10 +136,13 @@ source_paths = ["gdmutant"]
 # mutmut runs the suite from a copied "mutants/" tree; tests read the corpus (end-to-end),
 # docs/ (the guide-consistency test), AGENTS.md (the guide links to ../AGENTS.md and the
 # link-resolution test checks it exists), scripts/ (the license and release-tag guards are loaded
-# from there by their tests), and .github/ (the release workflow's on-main guard is read, and
-# executed, straight out of its YAML), so all of them must be copied in. Anything the suite reads
-# and this list omits fails *collection*, which aborts the baseline — mutmut then evaluates zero
-# mutants, and the advisory job is red with no score rather than wrong. Skip coverage — it is
-# pure overhead per mutant run.
-also_copy = ["corpus", "docs", "AGENTS.md", "README.md", "scripts", ".github"]
+# from there by their tests), .github/ (the release workflow's on-main guard is read, and
+# executed, straight out of its YAML), and .pre-commit-config.yaml (test_local_check_parity.py
+# diffs its hook entries against ci.yml's verify job — found live: omitting it here doesn't
+# survive-a-mutant-wrongly, it aborts collection for the WHOLE suite, so mutmut evaluates zero
+# mutants and the advisory job goes red with no score at all). Anything the suite reads and this
+# list omits fails *collection*, which aborts the baseline — mutmut then evaluates zero mutants,
+# and the advisory job is red with no score rather than wrong. Skip coverage — it is pure
+# overhead per mutant run.
+also_copy = ["corpus", "docs", "AGENTS.md", "README.md", "scripts", ".github", ".pre-commit-config.yaml"]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]

@@ -38,13 +38,23 @@ name: Publish
 # "a discipline, not a gate — nothing enforces that mechanically." It's mechanical now, for every
 # real release, on both Linux and Windows.
 #
-# Six guards, all fail-closed, all before `publish-pypi` gets `id-token: write`:
+# SECRET SCAN, ADDED HERE (was missing entirely on this path). `ci.yml`'s `secret-scan` job is
+# dormant along with everything else on that trigger, and the local pre-commit hook
+# (scripts/run_gitleaks.py) is commit-stage only, scans only the staged diff, is skippable with
+# `--no-verify`, and SILENTLY exits 0 if the `gitleaks` binary isn't on PATH — found while fixing
+# this: there was no point on the actual release path, cloud or local, where a leaked secret was
+# guaranteed to be caught. `secret-scan` below scans full history (`fetch-depth: 0`, same
+# `gitleaks/gitleaks-action` pin `ci.yml` already uses) reachable from the released commit —
+# the question that matters right before code goes public and a package ships from it.
+#
+# Seven guards, all fail-closed, all before `publish-pypi` gets `id-token: write`:
 #   1. the tag matches the version in pyproject.toml      (scripts/check_release_tag.py)
 #   2. the released commit is an ancestor of main          (git merge-base --is-ancestor)
-#   3. verify passes on Linux                              (scripts/verify_local.py --job verify)
-#   4. verify passes on Windows                             (same script, windows-2025 runner)
-#   5. license compliance                     (scripts/verify_local.py --job license-check)
-#   6. both Godot self-tests, real Godot        (scripts/run_selftest.py / run_selftest_gut.py)
+#   3. no secret in history reachable from this commit     (gitleaks/gitleaks-action, full history)
+#   4. verify passes on Linux                              (scripts/verify_local.py --job verify)
+#   5. verify passes on Windows                             (same script, windows-2025 runner)
+#   6. license compliance                     (scripts/verify_local.py --job license-check)
+#   7. both Godot self-tests, real Godot        (scripts/run_selftest.py / run_selftest_gut.py)
 on:
   workflow_dispatch: # deliberate TestPyPI dry-run, fired by hand
   release:
@@ -192,7 +202,33 @@ jobs:
             echo "| Tag | \`${TAG_NAME}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # --- Guards 3-4: the whole `verify` job, live, on both OSes -----------------
+  # --- Guard 3: no secret anywhere in history reachable from this commit --------
+  # ADDED because this repo's release path had no secret scan at all before this: ci.yml's
+  # secret-scan job is dormant with everything else on that trigger, and the local pre-commit
+  # hook (scripts/run_gitleaks.py) is commit-stage only, staged-diff only, skippable with
+  # `--no-verify`, and silently exits 0 if `gitleaks` isn't on PATH. Full history
+  # (`fetch-depth: 0`), same `gitleaks/gitleaks-action` pin ci.yml's own `secret-scan` job uses —
+  # scanning the exact commit being released, not just its own diff.
+  secret-scan:
+    name: Secret scan (gitleaks, full history)
+    needs: provenance
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.provenance.outputs.sha }}
+          fetch-depth: 0 # full history — the question here is "ever leaked", not "leaked in this diff"
+          persist-credentials: false
+
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # --- Guards 4-5: the whole `verify` job, live, on both OSes -----------------
   # Reuses ci.yml's `verify` job steps via scripts/verify_local.py (reads them out of ci.yml rather
   # than restating them — one definition, so this and ci.yml cannot drift). This is also what closes
   # the Windows gap ci.yml's own comments already flagged: local-only Windows verify was "a
@@ -360,7 +396,16 @@ jobs:
     # workflow_dispatch (the TestPyPI dry-run) all of these skip, and this job's own `if:` already
     # excludes it, so the skip changes nothing on that path.
     needs:
-      [build, provenance, verify-ubuntu, verify-windows, license-check, selftest-godot, selftest-gut]
+      [
+        build,
+        provenance,
+        secret-scan,
+        verify-ubuntu,
+        verify-windows,
+        license-check,
+        selftest-godot,
+        selftest-gut,
+      ]
     if: github.event_name == 'release'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
