@@ -16,6 +16,13 @@ name: Release
 # CI GATE — this workflow will not create a Release (draft or otherwise) for a commit whose CI did
 # not pass.
 #
+# THIS GATE IS NOT THE AUTHORITATIVE ONE. `release: published` -- the event that actually fires a
+# PyPI upload in publish.yml -- is reachable WITHOUT this workflow running at all: a maintainer can
+# create and publish a Release straight from the GitHub web UI. The authoritative copy of this same
+# check lives in publish.yml's own `ci-gate` job, immediately before the OIDC credential is minted.
+# This one exists to fail early and cheap, on the tag push, before a draft Release is even staged --
+# see publish.yml's header comment for the full reasoning on why both are needed.
+#
 # THE HOLE THIS CLOSES. Until now this workflow gated only on commit-ANCESTRY ("is the tagged commit
 # reachable from main?"), and publish.yml (`release: published` -> PyPI) had no dependency on ci.yml's
 # conclusion for the tagged commit at all. That was masked only while `Verify (windows-2025)` was a
@@ -96,79 +103,21 @@ jobs:
       # Fail-closed lookup: query ci.yml's `push`-triggered runs for this exact SHA and require the
       # most recent one to be a completed `success`. See the workflow-level comment above for why
       # this is the mechanism (not workflow_run) and why it is safe not to poll/wait.
+      #
+      # THE SAME SCRIPT RUNS AGAIN IN publish.yml, IMMEDIATELY BEFORE THE UPLOAD. This call is the
+      # early, cheap one: it stops a bad tag from ever producing a draft Release. It is NOT the
+      # authoritative one, because this workflow is not the only way to reach PyPI -- a maintainer
+      # can create and publish a Release straight from the GitHub UI, which fires publish.yml
+      # without this file running at all. Shared as a script (not an inline block in each) so the
+      # two calls cannot drift apart; unit-tested in tests/test_require_ci_success.py.
+      # Values reach the script through `env:`, never string-interpolated into the shell command --
+      # a `${{ }}` expansion inside `run:` is the classic Actions template-injection shape.
       - name: Verify CI passed for this exact commit (fail closed)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ steps.resolve.outputs.sha }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import subprocess
-          import sys
-
-          repo = os.environ["REPO"]
-          sha = os.environ["SHA"]
-
-          result = subprocess.run(
-              [
-                  # -X GET is load-bearing: `gh api` silently switches to POST whenever `-f`
-                  # params are present unless the method is pinned explicitly (verified locally —
-                  # omitting it 404s instead of listing runs, which would have made this gate
-                  # fail closed for the wrong reason: "API error" on every release, forever).
-                  "gh", "api", "-X", "GET",
-                  f"repos/{repo}/actions/workflows/ci.yml/runs",
-                  "-f", f"head_sha={sha}",
-                  "-f", "event=push",
-                  "-f", "per_page=10",
-              ],
-              capture_output=True,
-              text=True,
-          )
-          if result.returncode != 0:
-              print(f"::error::could not query the Actions API for ci.yml runs on {sha}: {result.stderr.strip()}")
-              sys.exit(1)
-
-          try:
-              runs = json.loads(result.stdout)["workflow_runs"]
-          except (json.JSONDecodeError, KeyError) as exc:
-              print(f"::error::unexpected Actions API response for ci.yml runs on {sha}: {exc!r}")
-              sys.exit(1)
-
-          # Defense in depth on top of the query's own head_sha/event filters — restated here so a
-          # future change to the query above can't silently widen what counts as a match.
-          runs = [
-              r for r in runs
-              if r.get("path") == ".github/workflows/ci.yml"
-              and r.get("head_sha") == sha
-              and r.get("event") == "push"
-              and r.get("repository", {}).get("full_name") == repo
-          ]
-
-          if not runs:
-              print(f"::error::no push-triggered ci.yml run found for commit {sha} "
-                    "— refusing to release a commit CI never verified")
-              sys.exit(1)
-
-          # The Actions API returns runs newest-first; a re-run after a failure produces a second run
-          # for the same SHA, and it is the MOST RECENT one that reflects the commit's true status —
-          # not "any run ever succeeded", which would let an old failure be shadowed incorrectly, and
-          # not "all runs succeeded", which would keep a since-fixed re-run from ever passing.
-          runs.sort(key=lambda r: r.get("run_started_at") or "", reverse=True)
-          latest = runs[0]
-          status, conclusion = latest.get("status"), latest.get("conclusion")
-
-          print(f"most recent push-triggered ci.yml run for {sha}: "
-                f"status={status!r} conclusion={conclusion!r} ({latest.get('html_url')})")
-
-          if status != "completed" or conclusion != "success":
-              print(f"::error::ci.yml has not concluded success for {sha} "
-                    f"(status={status!r}, conclusion={conclusion!r}) — refusing to release")
-              sys.exit(1)
-
-          print(f"ci.yml concluded success for {sha} — release may proceed")
-          PY
+        run: python3 scripts/require_ci_success.py --repo "$REPO" --sha "$SHA"
 
       - name: Summarize the gate decision
         if: always()
