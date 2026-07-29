@@ -12,11 +12,49 @@ name: Release
 # It also never creates or moves a tag. `gh release create --verify-tag` fails if the tag does not
 # already exist, so the workflow can only ever react to a tag the maintainer pushed — which is what
 # keeps it compatible with the tag-protection ruleset that blocks deletion and re-pointing.
+#
+# CI GATE — this workflow will not create a Release (draft or otherwise) for a commit whose CI did
+# not pass.
+#
+# THE HOLE THIS CLOSES. Until now this workflow gated only on commit-ANCESTRY ("is the tagged commit
+# reachable from main?"), and publish.yml (`release: published` -> PyPI) had no dependency on ci.yml's
+# conclusion for the tagged commit at all. That was masked only while `Verify (windows-2025)` was a
+# required check: a commit could not reach `main` unless Windows CI passed on it, so every ancestor of
+# `main` had implicitly passed CI. #126 moved Windows CI to a local, pre-release step (cost — Windows
+# runners bill 2x) and dropped it from required checks, so that implicit guarantee is gone: a
+# Windows-only regression (or any CI failure on a commit force-merged past a red check, or a commit
+# whose CI run was cancelled/never completed) can now reach `main` and be tagged with nothing
+# mechanical objecting.
+#
+# THE MECHANISM: a `ci-gate` job that queries the Actions API for ci.yml's most recent `push`-
+# triggered run AT THE EXACT TAGGED COMMIT and fails closed unless that run concluded `success`.
+# `workflow_run` (lodestar's deploy.yml pattern) does NOT fit here: it triggers a workflow when
+# ANOTHER workflow finishes, but this workflow is triggered by a tag push / (indirectly) a Release
+# publish — a different event class entirely, and there is no `ci.yml`-finishes-and-a-tag-exists
+# event to hook. Polling the API is the only mechanism available for a tag-triggered gate, and the
+# cost objection that rules out polling in lodestar (a runner idling while CI finishes) does not apply
+# here: by the time a maintainer tags a commit, that commit's CI (a `push`-to-main run) either already
+# finished minutes/days ago or never will — there is nothing to wait for, only a status to look up.
+#
+# WHICH COMMIT'S CI, AND HOW THAT'S GUARANTEED: the run looked up is ci.yml's `push` run for the exact
+# commit `git rev-parse HEAD` resolves to after checking out the tag (see "Resolve the tagged commit"
+# below) — never `main`'s current tip, and never `github.sha`, which the ancestry check's own comment
+# already flags as ambiguous for annotated tags. `main` is squash-merge-only (branch protection), so
+# every commit that ever became `main`'s tip produced exactly one `push`-triggered ci.yml run at that
+# SHA; `event=push` in the query additionally rules out a `pull_request` run (e.g. a fork PR whose
+# head shares this content) satisfying the gate, mirroring lodestar deploy.yml's `event == 'push'`
+# check and the same rationale.
+#
+# FAIL CLOSED. An API error, zero matching runs, a run still `in_progress`/`queued`, or a `cancelled`/
+# `failure`/`timed_out` conclusion all `exit 1` from the same script — there is no code path that
+# defaults to permitting a release. Only an explicit, completed `success` lets `release` (which
+# `needs: ci-gate`) proceed; GitHub Actions' default `needs:` behavior skips a dependent job whose
+# dependency failed, so there is no separate `if:` to get wrong.
 on:
   push:
     tags: ["v*.*.*"]
 
-# Least privilege at the workflow level; the one job below opts into the write it needs.
+# Least privilege at the workflow level; each job below opts into only the elevation it needs.
 permissions:
   contents: read
 
@@ -25,7 +63,130 @@ concurrency:
   cancel-in-progress: false # never cancel an in-flight release
 
 jobs:
+  # ── THE GATE ──────────────────────────────────────────────────────────────────────────────────
+  # Decides ONE thing: whether ci.yml concluded `success` for the exact commit this tag points at.
+  # It never authenticates to PyPI and never creates a Release — the worst a bug here can do is
+  # refuse to release. Kept as its own job (not a step in `release` below) so the privilege it
+  # needs (`actions: read`, to query the Actions API) never sits in the same job as `release`'s
+  # `contents: write` (creating the draft Release).
+  ci-gate:
+    name: Gate — CI passed for the tagged commit
+    runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so a runner-image migration can't silently break us
+    timeout-minutes: 5
+    permissions:
+      contents: read # checkout only, to resolve the tagged commit
+      actions: read # query the Actions API for ci.yml's conclusion
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1 # only HEAD is needed to resolve the tagged commit's SHA
+          persist-credentials: false # this job only reads; it never pushes
+
+      # Same trap the ancestry check below already documents: `github.sha` / `github.ref_name` are
+      # ambiguous for an ANNOTATED tag (the ref can resolve to the tag object, not the commit it
+      # points to). actions/checkout resolves the ref correctly; `git rev-parse HEAD` after checkout
+      # is the one source of truth for "which commit does this tag mean" used anywhere in this file.
+      - name: Resolve the tagged commit
+        id: resolve
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Tagged commit: $sha"
+
+      # Fail-closed lookup: query ci.yml's `push`-triggered runs for this exact SHA and require the
+      # most recent one to be a completed `success`. See the workflow-level comment above for why
+      # this is the mechanism (not workflow_run) and why it is safe not to poll/wait.
+      - name: Verify CI passed for this exact commit (fail closed)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          repo = os.environ["REPO"]
+          sha = os.environ["SHA"]
+
+          result = subprocess.run(
+              [
+                  # -X GET is load-bearing: `gh api` silently switches to POST whenever `-f`
+                  # params are present unless the method is pinned explicitly (verified locally —
+                  # omitting it 404s instead of listing runs, which would have made this gate
+                  # fail closed for the wrong reason: "API error" on every release, forever).
+                  "gh", "api", "-X", "GET",
+                  f"repos/{repo}/actions/workflows/ci.yml/runs",
+                  "-f", f"head_sha={sha}",
+                  "-f", "event=push",
+                  "-f", "per_page=10",
+              ],
+              capture_output=True,
+              text=True,
+          )
+          if result.returncode != 0:
+              print(f"::error::could not query the Actions API for ci.yml runs on {sha}: {result.stderr.strip()}")
+              sys.exit(1)
+
+          try:
+              runs = json.loads(result.stdout)["workflow_runs"]
+          except (json.JSONDecodeError, KeyError) as exc:
+              print(f"::error::unexpected Actions API response for ci.yml runs on {sha}: {exc!r}")
+              sys.exit(1)
+
+          # Defense in depth on top of the query's own head_sha/event filters — restated here so a
+          # future change to the query above can't silently widen what counts as a match.
+          runs = [
+              r for r in runs
+              if r.get("path") == ".github/workflows/ci.yml"
+              and r.get("head_sha") == sha
+              and r.get("event") == "push"
+              and r.get("repository", {}).get("full_name") == repo
+          ]
+
+          if not runs:
+              print(f"::error::no push-triggered ci.yml run found for commit {sha} "
+                    "— refusing to release a commit CI never verified")
+              sys.exit(1)
+
+          # The Actions API returns runs newest-first; a re-run after a failure produces a second run
+          # for the same SHA, and it is the MOST RECENT one that reflects the commit's true status —
+          # not "any run ever succeeded", which would let an old failure be shadowed incorrectly, and
+          # not "all runs succeeded", which would keep a since-fixed re-run from ever passing.
+          runs.sort(key=lambda r: r.get("run_started_at") or "", reverse=True)
+          latest = runs[0]
+          status, conclusion = latest.get("status"), latest.get("conclusion")
+
+          print(f"most recent push-triggered ci.yml run for {sha}: "
+                f"status={status!r} conclusion={conclusion!r} ({latest.get('html_url')})")
+
+          if status != "completed" or conclusion != "success":
+              print(f"::error::ci.yml has not concluded success for {sha} "
+                    f"(status={status!r}, conclusion={conclusion!r}) — refusing to release")
+              sys.exit(1)
+
+          print(f"ci.yml concluded success for {sha} — release may proceed")
+          PY
+
+      - name: Summarize the gate decision
+        if: always()
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          {
+            echo "### Release CI gate"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Tagged commit | \`${SHA:-unresolved}\` |"
+            echo "| Ref | \`${REF_NAME}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   release:
+    needs: ci-gate # fail closed: a failed/skipped gate skips this job too — no separate `if:` needed
     name: Create GitHub Release
     runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so a runner-image migration can't silently break us
     timeout-minutes: 10
