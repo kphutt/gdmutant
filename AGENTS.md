@@ -58,11 +58,34 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
 - **CI gate:** `ruff` + `mypy` + `pytest` + `pip-audit`, plus a gitleaks secret scan. GitHub Actions
   are SHA-pinned (Dependabot bumps them).
 - **Windows is a deployment target here, not just a dev machine** — gdmutant is a cross-platform
-  Python CLI *shipped* to people who run it on Windows, so the Windows `verify` leg **applies** the
+  Python CLI *shipped* to people who run it on Windows, so Windows coverage **applies** the
   "CI matches the deployment target" rule rather than contradicting it. Two Windows-only bugs
-  reached the CLI before that leg existed: console output crashing under the legacy cp1252 code
+  reached the CLI before that coverage existed: console output crashing under the legacy cp1252 code
   page, and `python3` resolving to a *different* interpreter than `python` (see
   `.pre-commit-config.yaml`'s header).
+- **Windows `verify` runs locally now, not in CI — run it before a release.**
+
+  ```
+  uv run python scripts/verify_local.py
+  ```
+
+  Windows runners bill at 2× Linux and were the largest line in a month that hit 100% of the
+  Actions budget; once that cap is reached Actions simply stops running, which disarms every gate
+  silently. So the Windows leg moved to the maintainer's machine, which *is* Windows.
+
+  **The script does not restate CI's commands — it reads them out of `ci.yml` and runs them**, so
+  local and CI cannot drift. `--list` shows what it would run. It is an explicit command, not a
+  pre-commit hook: it takes minutes, and a slow push-time gate gets skipped with `--no-verify`.
+
+  **Definition of done for a release: this passes on Windows.** Nothing enforces that
+  mechanically — CI cannot see your machine — so it is a discipline, not a gate. Restoring the CI
+  leg means putting `windows-2025` back in `ci.yml`'s matrix **and** re-adding
+  `Verify (windows-2025)` to branch protection's required checks. Both, or the gate is theatre.
+
+  **If every tool suddenly fails with `uv trampoline failed to canonicalize script path`,** the
+  venv's launcher shims are stale — usually after a `uv` version bump. Fix with
+  `uv sync --frozen --reinstall`. That is a local environment fault, not a code failure; hit on
+  2026-07-28 after uv 0.11.28 → 0.11.30.
 - **Keep the engine language-neutral:** no GDScript-specific assumptions in `gdmutant/engine/`;
   language specifics live only in `gdmutant/adapters/<lang>/`.
 - **The mutation-operator core is deterministic** — the reproducible mode a CI check can trust; any
