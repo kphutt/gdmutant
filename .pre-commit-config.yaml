@@ -86,6 +86,19 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # Mirrors ci.yml's license-check job (ADR-0012). That job's own first step is `uv sync
+      # --frozen --no-dev` — fine in CI (a throwaway runner), but running it against the SHARED
+      # `.venv` uninstalls pre-commit itself mid-hook, which fails outright on Windows ("failed to
+      # remove file ...pre-commit.exe: The process cannot access the file" — found live). The
+      # wrapper redirects to an isolated `.venv-license-check` (gitignored) instead, so the shared
+      # venv this hook chain is running out of is never touched.
+      - id: license-check
+        name: license compliance (mirrors ci.yml's license-check job)
+        entry: python scripts/license_check_local.py
+        language: python
+        pass_filenames: false
+        always_run: true
+
       # Opt-in, not run automatically (needs a real Godot binary) — mirrors ci.yml's
       # selftest-godot job. Run by hand: `pre-commit run --hook-stage manual gdmutant-selftest`
       - id: gdmutant-selftest
