@@ -12,16 +12,16 @@ Accepted
 ## Context
 gdmutant's only runner was `GdUnit4Runner`, which requires the GdUnit4 addon (`res://addons/gdUnit4/`)
 and reads GdUnit4's JUnit-XML output. That excludes every Godot project with a **hand-rolled test
-harness** — including the driver project, `project-rampart`, whose harness is
-`godot --headless --script res://tests/run_tests.gd`: it prints its own PASS/FAIL to stdout and exits
-non-zero on failure, with no JUnit XML. So gdmutant could not run against it at all — the single
-biggest blocker to real-world adoption.
+harness** — including the driver project (a private Godot game this tool was extracted from), whose
+harness is `godot --headless --script res://tests/run_tests.gd`: it prints its own PASS/FAIL to
+stdout and exits non-zero on failure, with no JUnit XML. So gdmutant could not run against it at all
+— the single biggest blocker to real-world adoption.
 
 The engine already drives a `Runner` protocol (`run(project_dir) -> SuiteResult`), so a second runner
 is the natural fit. The question is what convention it reads. Options:
 
 - **(a) Exit code.** Exit `0` = the suite passed; any non-zero = it failed. Universal — every test
-  harness and CI system already honours it, and rampart's does today with no changes.
+  harness and CI system already honours it, and the driver project's does today with no changes.
 - **(b) Parse stdout for a project-specific PASS/FAIL or count.** Richer (per-test counts), but every
   project prints differently, so it needs per-project configuration/regex and is brittle.
 - **(c) Require another standard report format (TAP, a second XML dialect).** Less brittle than (b),
@@ -40,7 +40,7 @@ The CLI selects it with `--runner command --command "<the test command>"` (defau
 
 ## Consequences
 - **gdmutant now runs against any Godot project (or any project at all) whose tests signal via the
-  exit code** — rampart included, with zero changes to its harness.
+  exit code** — the driver project included, with zero changes to its harness.
 - **Coarser than JUnit XML.** The exit code can't separate a *test failure* from the harness itself
   *erroring* (both are non-zero), so a mutant that makes the run crash counts as *killed*. This is an
   accepted trade-off:
