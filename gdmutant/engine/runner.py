@@ -15,6 +15,25 @@ from typing import Protocol, runtime_checkable
 from xml.etree import ElementTree
 
 
+def with_filename(error: FileNotFoundError, attempted: str) -> FileNotFoundError:
+    """`error`, guaranteed to carry a `.filename` the CLI's missing-executable hint can show the
+    user.
+
+    On POSIX, ``subprocess.run`` failing to exec a missing binary sets `.filename` to the attempted
+    path. On Windows, the underlying ``CreateProcess`` failure does not — `.filename` comes back
+    `None` — so the CLI's hint silently falls back to a generic "the test runner" placeholder and
+    never names the actual (wrong) executable path, on the one platform this project treats as a
+    deployment target (see AGENTS.md). Reusing `error`'s own errno/strerror when present keeps the
+    real OS message; only the filename is patched in when it's missing.
+
+    Lives here (language-neutral, `engine.runner`) rather than in the GDScript adapter because
+    every `Runner` that shells out via `subprocess.run` hits the same Windows quirk — the adapter's
+    two Godot call sites and the framework-neutral `CommandRunner` below all use it."""
+    if error.filename is not None:
+        return error
+    return FileNotFoundError(error.errno, error.strerror, attempted)
+
+
 class SuiteTimeout(Exception):
     """The test suite exceeded its time budget.
 
@@ -139,6 +158,12 @@ class CommandRunner:
             # engine tallies Timeout (killed), not error. subprocess.run has already killed the
             # child process by the time it raises.
             raise SuiteTimeout(f"test command exceeded {budget:g}s") from expired
+        except FileNotFoundError as error:
+            # On Windows this arrives with .filename == None (see `with_filename`), so the CLI's
+            # missing-executable hint would otherwise fall back to a generic placeholder instead of
+            # naming the actual bad command — the same Windows quirk the GdUnit4/GUT call sites
+            # patch around.
+            raise with_filename(error, self.command[0]) from error
         if completed.returncode == 0:
             return SuiteResult(tests=1, failures=0, errors=0)
         # One suite as a single pass/fail unit — per-test counts aren't available without a report.

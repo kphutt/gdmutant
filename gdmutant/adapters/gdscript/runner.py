@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
-from gdmutant.engine.runner import SuiteResult, SuiteTimeout, parse_junit_xml
+from gdmutant.engine.runner import SuiteResult, SuiteTimeout, parse_junit_xml, with_filename
 
 _GDUNIT_CMD_TOOL = "res://addons/gdUnit4/bin/GdUnitCmdTool.gd"
 _GUT_CMD_TOOL = "res://addons/gut/gut_cmdln.gd"
@@ -99,14 +99,23 @@ class _GodotJUnitRunner:
         # A pathologically slow import shouldn't itself abort the run; suppress its timeout and let
         # the real suite run (with its own timeout) surface a genuine problem as "wrote no report".
         with contextlib.suppress(subprocess.TimeoutExpired):
-            subprocess.run(
-                [self.godot, "--headless", "--path", str(Path(project_dir).resolve()), "--import"],
-                cwd=project_dir,
-                timeout=_IMPORT_TIMEOUT,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            try:
+                subprocess.run(
+                    [
+                        self.godot,
+                        "--headless",
+                        "--path",
+                        str(Path(project_dir).resolve()),
+                        "--import",
+                    ],
+                    cwd=project_dir,
+                    timeout=_IMPORT_TIMEOUT,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            except FileNotFoundError as error:
+                raise with_filename(error, self.godot) from error
         # Mark done only once the scan has completed — or a slow import was deliberately given up
         # on (a suppressed timeout falls through to here). A *non-timeout* failure (a transient
         # OSError, a permission error, Godot crashing) propagates out before this, leaving the
@@ -162,6 +171,8 @@ class _GodotJUnitRunner:
             # A mutation that makes the suite hang is a detection — surface it as a timeout so the
             # engine tallies Timeout (killed), not a no-report error.
             raise SuiteTimeout(f"{self._framework} run exceeded {budget:g}s") from expired
+        except FileNotFoundError as error:
+            raise with_filename(error, self.godot) from error
         if not report.exists():
             detail = (completed.stderr or completed.stdout or "").strip()
             raise RuntimeError(

@@ -7,7 +7,7 @@ import pytest
 
 import gdmutant.adapters.gdscript.runner as runner_mod
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner
-from gdmutant.engine.runner import Runner, SuiteTimeout
+from gdmutant.engine.runner import Runner, SuiteTimeout, with_filename
 
 
 def _report(tmp_path: Path) -> Path:
@@ -261,3 +261,56 @@ def test_prepare_retries_after_a_non_timeout_failure(
 
 def test_gdunit4_runner_satisfies_the_protocol() -> None:
     assert isinstance(GdUnit4Runner(), Runner)
+
+
+def test_with_filename_leaves_an_already_named_error_alone() -> None:
+    # POSIX already sets .filename on a missing-executable FileNotFoundError — don't touch it.
+    # (with_filename itself now lives in engine.runner — see test_runner.py for its own unit
+    # tests — this just confirms the gdscript adapter still imports and uses the shared helper.)
+    error = FileNotFoundError(2, "No such file or directory", "/already/set")
+    assert with_filename(error, "/attempted/godot") is error
+
+
+def test_with_filename_patches_a_filename_less_error() -> None:
+    # Windows' CreateProcess failure leaves .filename None (verified live) — the CLI's
+    # missing-executable hint (LOD-110) needs a name to show the user, so patch one in.
+    error = FileNotFoundError(2, "The system cannot find the file specified")
+    assert error.filename is None
+    patched = with_filename(error, "/attempted/godot")
+    assert patched.filename == "/attempted/godot"
+    assert patched.errno == 2
+
+
+def test_prepare_names_the_attempted_godot_path_when_the_os_omits_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Reproduces the Windows CreateProcess behavior: FileNotFoundError with no .filename. Without
+    # the fix, the CLI's missing-executable hint (LOD-110) falls back to a generic placeholder
+    # instead of naming the actual --godot path the user got wrong.
+    def boom(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError(2, "The system cannot find the file specified")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", boom)
+    runner = GdUnit4Runner(godot="/nonexistent/godot")
+    with pytest.raises(FileNotFoundError) as excinfo:
+        runner.run(str(tmp_path))
+    assert excinfo.value.filename == "/nonexistent/godot"
+
+
+def test_run_names_the_attempted_godot_path_when_the_os_omits_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Same as above, but for the suite invocation itself (after a successful warm-up) rather than
+    # the --import warm-up.
+    def flaky(*args: object, **kwargs: object) -> None:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" in command:
+            return
+        raise FileNotFoundError(2, "The system cannot find the file specified")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", flaky)
+    runner = GdUnit4Runner(godot="/nonexistent/godot")
+    with pytest.raises(FileNotFoundError) as excinfo:
+        runner.run(str(tmp_path))
+    assert excinfo.value.filename == "/nonexistent/godot"

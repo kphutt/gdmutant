@@ -13,6 +13,7 @@ from gdmutant.engine.runner import (
     SuiteResult,
     SuiteTimeout,
     parse_junit_xml,
+    with_filename,
 )
 
 
@@ -176,3 +177,39 @@ def test_command_runner_missing_executable_raises(tmp_path: Path) -> None:
     # surfaces the not-found hint) — it is never silently treated as a passing or failing suite.
     with pytest.raises(FileNotFoundError):
         CommandRunner(["gdmutant-no-such-binary-xyz"]).run(str(tmp_path))
+
+
+def test_command_runner_names_the_attempted_command_when_the_os_omits_the_filename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # CommandRunner is the third (framework-neutral, exit-code) call site into
+    # subprocess.run for a "godot"/test-runner binary. Like the two GdUnit4/GUT JUnit call
+    # sites, it must patch a Windows CreateProcess FileNotFoundError (.filename == None) back
+    # in with the attempted command, so the CLI's missing-executable hint
+    # (`_missing_executable` in cli.py) can name the actual bad path instead of falling back
+    # to a generic placeholder.
+    import gdmutant.engine.runner as runner_mod
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError(2, "The system cannot find the file specified")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", boom)
+    with pytest.raises(FileNotFoundError) as excinfo:
+        CommandRunner(["/nonexistent/bad-runner", "--flag"]).run(str(tmp_path))
+    assert excinfo.value.filename == "/nonexistent/bad-runner"
+
+
+def test_with_filename_leaves_an_already_named_error_alone() -> None:
+    # POSIX already sets .filename on a missing-executable FileNotFoundError — don't touch it.
+    error = FileNotFoundError(2, "No such file or directory", "/already/set")
+    assert with_filename(error, "/attempted/godot") is error
+
+
+def test_with_filename_patches_a_filename_less_error() -> None:
+    # Windows' CreateProcess failure leaves .filename None (verified live) — the CLI's
+    # missing-executable hint needs a name to show the user, so patch one in.
+    error = FileNotFoundError(2, "The system cannot find the file specified")
+    assert error.filename is None
+    patched = with_filename(error, "/attempted/godot")
+    assert patched.filename == "/attempted/godot"
+    assert patched.errno == 2
