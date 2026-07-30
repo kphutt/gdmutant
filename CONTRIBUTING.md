@@ -48,9 +48,10 @@ GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-
 ## Pull request guidelines
 
 - **One focused change per PR**, with a clear description of what and why.
-- **Lint, types, tests, audit, and secret scan all pass** — the pre-push hook enforces this
-  automatically if you installed it above; otherwise run the commands by hand before opening the
-  PR. There's no automated PR check today (see "Install the local checks" above).
+- **Lint, types, tests, audit, and secret scan all pass** — the pre-commit and pre-push hooks
+  enforce this automatically if you installed both above (the secret scan runs at commit time, the
+  rest before a push); otherwise run the commands by hand before opening the PR. There's no
+  automated PR check today (see "Install the local checks" above).
 - New behavior comes **with tests** — this is a testing tool; we hold ourselves to it.
 - Larger design changes are recorded as an **ADR** in `docs/decisions/` (append-only; see the
   existing records for the format) and, where relevant, reflected in `docs/design/`.
