@@ -144,12 +144,12 @@ source_paths = ["gdmutant"]
 # mutants and the advisory job goes red with no score at all), and poodle.toml
 # (test_poodle_config.py reads it by a REPO_ROOT computed from `Path(__file__).resolve()` --
 # robust against CWD, but still resolves *inside* the copied "mutants/" tree, since the test
-# module itself is a copy living there. Omitting the file it reads from this list is the same
-# collection-aborting failure as the others: FileNotFoundError on
-# ".../mutants/poodle.toml", 2026-07-30). Anything the suite reads and this
-# list omits fails *collection*, which aborts the baseline — mutmut then evaluates zero mutants,
-# and the advisory job is red with no score rather than wrong. Skip coverage — it is pure
-# overhead per mutant run.
+# module itself is a copy living there. This one does NOT abort collection: the read happens
+# per-test, not at import, so all 4 tests collect and 3 fail at runtime with FileNotFoundError
+# on ".../mutants/poodle.toml", 2026-07-30). Either way the baseline fails and mutmut evaluates
+# zero mutants, so the advisory job goes red with no score rather than wrong. Anything the suite
+# reads and this list omits fails one way or the other — check which before reasoning from this
+# comment. Skip coverage — it is pure overhead per mutant run.
 also_copy = [
     "corpus",
     "docs",
