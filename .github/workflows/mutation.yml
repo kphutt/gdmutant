@@ -1,12 +1,33 @@
 name: Mutation
 
-# Advisory mutation testing (dogfood) — gdmutant's own suite, run against mutmut.
+# Mutation testing (dogfood) — gdmutant's own suite, run against mutmut.
 #
-# Split out of ci.yml so it can be PATH-SCOPED: this is advisory (continue-on-error) and NOT a
-# required status check, so skipping it on changes that can't affect the mutation score (CI config,
-# licenses, changelog) is a free, safe cost cut — it never gates a merge. It still runs on every
-# push/PR that touches the source, tests, or anything the suite reads, exactly as before. This is
-# a path filter on *which files changed*, NOT a shift to merge-time or a label gate.
+# Split out of ci.yml so it can be PATH-SCOPED: this job is NOT a required status check on `main`
+# (verify live with `gh api repos/kphutt/gdmutant/branches/main/protection` — required-check
+# membership is a live branch-protection setting, not something this file or any script can
+# guarantee by itself), so skipping it on changes that can't affect the mutation score (CI config,
+# licenses, changelog) is a free, safe cost cut — it never gates a merge either way. It still runs
+# on every push/PR that touches the source, tests, or anything the suite reads, exactly as before.
+# This is a path filter on *which files changed*, NOT a shift to merge-time or a label gate.
+#
+# Two outcomes look similar (mutmut exits non-zero, the step could fail) but mean very different
+# things, and this workflow now reports them differently on purpose:
+#   - Survivors exist, or the score is low: genuinely advisory. Nobody should be blocked on a
+#     mutation score, so this can never fail the job — `mutmut run`'s own exit code is neutralized
+#     inline (`|| true`) before either of the checks below runs.
+#   - The baseline collection itself fails (the suite doesn't run cleanly unmutated — e.g. a file
+#     the tests read that `also_copy` in pyproject.toml doesn't copy into mutmut's `mutants/` tree):
+#     mutmut evaluates ZERO mutants. That's a real defect — the tool produced no signal at all — and
+#     is detected explicitly below, independent of survivor count.
+# The job intentionally has NO `continue-on-error: true` at the job level (it had one until
+# 2026-07-30). That setting doesn't just make survivor-driven failures advisory — it makes *every*
+# step failure in the job report a green run, including the baseline-failure `exit 1`s below that
+# exist specifically to be loud. That combination let a real baseline failure (missing `poodle.toml`
+# in `also_copy`) go unnoticed on `main` for hours: `gh run list` showed `success` because
+# continue-on-error suppresses a failing job from ever turning the *run* red, and nobody reads
+# individual job logs on a green run. Removing it doesn't add a required check (branch protection is
+# unchanged) — it just lets a real baseline failure show up as a failed run the way any other broken
+# CI job would, instead of hiding behind a workflow-level "everything's fine" checkmark.
 on:
   pull_request:
     paths: &mutation-paths
@@ -31,13 +52,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Reports gdmutant's own mutation score on the run summary. continue-on-error + NOT a required
-  # status check, so a surviving mutant never fails CI. See docs/mutation-testing.md.
+  # Reports gdmutant's own mutation score on the run summary. NOT a required status check, so a
+  # surviving mutant (or a low score) never blocks a merge — but a baseline that won't collect at
+  # all now fails this job for real, on purpose. See docs/mutation-testing.md.
   mutation:
-    name: Mutation testing (mutmut, advisory)
+    name: Mutation testing (mutmut) — baseline must succeed, score is advisory
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,13 +79,21 @@ jobs:
       - name: Run mutmut (report mode)
         # Surviving mutants make `mutmut run` exit non-zero — expected here (documented equivalents),
         # so that alone must not fail the step. But a *baseline* failure (the suite doesn't run
-        # cleanly unmutated) ALSO aborts mutmut, and a bare `|| true` would mask it as a green
-        # advisory run. Keep the run non-fatal, but re-raise the baseline signature.
+        # cleanly unmutated) ALSO aborts mutmut with a non-zero exit, and a bare `|| true` would mask
+        # it just the same as a real advisory-only run. Keep the run non-fatal here, but re-raise the
+        # one baseline-failure signature grep can catch cheaply.
         run: |
           uv run mutmut run > mutmut-run.log 2>&1 || true
           cat mutmut-run.log
-          # mutmut 3 prints "failed to collect stats" (two variants) and exits 1 when the baseline
-          # can't be established — the exact signature the `|| true` above would otherwise swallow.
+          # Verified against mutmut 3's own source (mutmut/__main__.py): a baseline that can't be
+          # established prints one of several distinct messages depending on *how* it fails —
+          # "failed to collect stats. runner returned ..." and "failed to collect stats, no active
+          # tests found" both contain this substring, but "Stopping early, because we could not find
+          # any test case..." and "Failed to run clean test" do not. This grep is a cheap, best-effort
+          # catch for the two common ones and is NOT a complete signal by itself — the "Summarize"
+          # step below is the authoritative, universal check (it looks at whether any mutant was
+          # actually evaluated, which is false for every baseline-failure variant, regardless of
+          # message wording) and is what actually re-raises here for real.
           if grep -qiF "failed to collect stats" mutmut-run.log; then
             echo "::error::mutmut baseline failed — could not collect stats (the suite does not run cleanly unmutated); any advisory score would be meaningless."
             exit 1
@@ -82,12 +111,19 @@ jobs:
           evaluated = killed + survived + d.get("timeout", 0) + d.get("suspicious", 0)
           # A baseline failure (or a missing/empty stats file) means mutmut evaluated ZERO mutants —
           # indistinguishable from "all killed" unless we check. Fail loudly instead of masking it
-          # as a green advisory run; a real run always evaluates >0 mutants.
+          # as a passing run; a real run always evaluates >0 mutants. Unlike the grep above, this
+          # check doesn't depend on mutmut's wording: no baseline collection means no mutant ever
+          # got tested, so `mutants/*.meta` stays empty and `mutmut export-cicd-stats` (run just
+          # above, non-fatally) never writes this file at all — `stats.exists()` is False for every
+          # baseline-failure variant. This job has no `continue-on-error`, so this exit really fails
+          # the job (and the run) — that's the point; see the top-of-file comment.
           if evaluated == 0:
-              print("## Mutation testing (mutmut) — BASELINE FAILED ⚠️")
+              print("## Mutation testing (mutmut) — BASELINE FAILED")
               print()
               print("mutmut evaluated **0 mutants** — the suite does not run cleanly unmutated, so "
-                    "no score exists. This advisory job is red on purpose.")
+                    "no score exists. This job fails for real here, on purpose: a baseline failure "
+                    "means the tool produced no signal at all, which is not something to average "
+                    "away as an advisory score.")
               sys.exit(1)
           scored = killed + survived
           score = f"{100 * killed / scored:.1f}%" if scored else "n/a"

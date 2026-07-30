@@ -24,10 +24,13 @@ Configuration lives in `pyproject.toml` under `[tool.mutmut]`. mutmut runs the s
 tests) are copied in via `also_copy`, and coverage is turned off for those runs (pure per-mutant
 overhead).
 
-CI runs mutmut in **report mode** as an **advisory, non-blocking** job (`continue-on-error`, and not
-a required status check): it surfaces the score on the run summary but never fails the build. It
-complements the coverage gate — coverage says a line *ran*, mutation says a bug there would be
-*caught*.
+CI runs mutmut in **report mode** as a **non-blocking** job (not a required status check): it
+surfaces the score on the run summary and never fails the build over survivors or a low score. But
+a *baseline* failure — the suite not running cleanly unmutated, so mutmut evaluates zero mutants —
+is a different thing entirely: that's a real defect, not an advisory signal, so it fails the job (and
+the run) for real. See `.github/workflows/mutation.yml`'s header comment for why that split exists
+and why the job deliberately has no job-level `continue-on-error`. It complements the coverage gate
+— coverage says a line *ran*, mutation says a bug there would be *caught*.
 
 The module-level-only scope below (see "Scope: what the 781 covers") is measured separately, locally:
 the manual pre-commit hook (`gdmutant-mutation`) runs [poodle](https://github.com/WiredNerd/poodle),
