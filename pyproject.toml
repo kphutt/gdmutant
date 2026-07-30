@@ -138,12 +138,26 @@ source_paths = ["gdmutant"]
 # docs/ (the guide-consistency test), AGENTS.md (the guide links to ../AGENTS.md and the
 # link-resolution test checks it exists), scripts/ (the license and release-tag guards are loaded
 # from there by their tests), .github/ (the release workflow's on-main guard is read, and
-# executed, straight out of its YAML), and .pre-commit-config.yaml (test_local_check_parity.py
+# executed, straight out of its YAML), .pre-commit-config.yaml (test_local_check_parity.py
 # diffs its hook entries against ci.yml's verify job — found live: omitting it here doesn't
 # survive-a-mutant-wrongly, it aborts collection for the WHOLE suite, so mutmut evaluates zero
-# mutants and the advisory job goes red with no score at all). Anything the suite reads and this
+# mutants and the advisory job goes red with no score at all), and poodle.toml
+# (test_poodle_config.py reads it by a REPO_ROOT computed from `Path(__file__).resolve()` --
+# robust against CWD, but still resolves *inside* the copied "mutants/" tree, since the test
+# module itself is a copy living there. Omitting the file it reads from this list is the same
+# collection-aborting failure as the others: FileNotFoundError on
+# ".../mutants/poodle.toml", 2026-07-30). Anything the suite reads and this
 # list omits fails *collection*, which aborts the baseline — mutmut then evaluates zero mutants,
 # and the advisory job is red with no score rather than wrong. Skip coverage — it is pure
 # overhead per mutant run.
-also_copy = ["corpus", "docs", "AGENTS.md", "README.md", "scripts", ".github", ".pre-commit-config.yaml"]
+also_copy = [
+    "corpus",
+    "docs",
+    "AGENTS.md",
+    "README.md",
+    "scripts",
+    ".github",
+    ".pre-commit-config.yaml",
+    "poodle.toml",
+]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
