@@ -135,9 +135,11 @@ jobs:
     # `Verify (windows-2025)` to the required checks. Both, or the gate is theatre.
     #
     # The single-entry matrix is deliberate: it keeps this job's check name
-    # `Verify (ubuntu-24.04)`, which is a required status check on main. Dropping the matrix
-    # would rename the check to `Verify`, and the required one would then never report —
-    # blocking every PR forever. It also makes restoring Windows a one-word edit.
+    # `Verify (ubuntu-24.04)`, which WAS a required status check on main until ADR-0012 removed
+    # required checks alongside this workflow's triggers (see the top of this file). Dropping the
+    # matrix would rename the check to `Verify` — if triggers and required checks are ever
+    # restored together, the renamed check would never match, blocking every PR forever. It also
+    # makes restoring Windows a one-word edit.
     strategy:
       fail-fast: false
       matrix:
@@ -257,8 +259,8 @@ jobs:
   # Godot is pinned to an exact patch (semver resolution is an API-rate-limit + silent-drift vector);
   # the mutation outcomes are Godot-version-independent for this pure-logic fixture.
   #
-  # NOT a required check itself ([ticket]) — path-filtered, gated behind `selftest-godot` above, which
-  # is the required one and always reports.
+  # NOT a required check itself — path-filtered, gated behind `selftest-godot` above, which always
+  # reports.
   selftest-godot-run:
     name: Self-test (real Godot) [worker]
     # The Godot path filter lives in the `secret-scan` job (merged there to save a billed minute);
@@ -371,7 +373,7 @@ jobs:
   # 18/11/7 per-mutant outcome as GdUnit4 — mutant-for-mutant agreement across the two frameworks is
   # the proof the runner seam is genuinely framework-agnostic. Same Godot pin/rationale as above.
   #
-  # NOT a required check itself ([ticket]) — path-filtered, gated behind `selftest-gut` above.
+  # NOT a required check itself — path-filtered, gated behind `selftest-gut` above.
   selftest-gut-run:
     name: Self-test (real Godot + GUT) [worker]
     # Same as selftest-godot-run above: the path filter now lives in `secret-scan`.
