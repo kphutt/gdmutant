@@ -50,6 +50,14 @@ GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-
 - Commits and PRs carry **no AI co-author trailer**.
 - Add any new third-party dependency to `CREDITS.md` with its license.
 
+## Automated review
+
+Opening a PR triggers an automated advisory review that posts comments directly on the PR. It's a
+second look for issues that lint, types, and tests don't catch. It's advisory only — it doesn't
+block merging, and you don't have to act on every comment. Because of how it authenticates, its
+comments appear under the maintainer's own GitHub account; each one is signed to make clear it's
+automated, not the maintainer reviewing by hand.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under the project's
