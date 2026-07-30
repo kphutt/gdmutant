@@ -122,16 +122,19 @@ exit-code runner (no addon).
 gdmutant only parses GDScript and shells out to your runner's headless CLI — both stable across Godot's
 4.x minors — so it is version-tolerant by design.
 
-| | CI-verified every push | Expected to work (best-effort) |
+| | Verified at every release | Expected to work (best-effort) |
 |---|---|---|
 | **Godot** | 4.7.x | 4.3+ |
 | **Runner** | GUT 9.7.1 + gdUnit4 6.1.3, each against real Godot | GUT 9.x, gdUnit4 6.x, any headless command |
 
-Only the left column is tested each push. **GUT and gdUnit4 are first-class CI peers** — a dedicated
-`selftest-gut` and `selftest-godot` job each install the pinned addon and drive the shipped CLI against
-real Godot on the same corpus, to the same per-mutant outcome, so neither runner is second-tier. The
-floor on the right is a claim, not a guarantee: gdmutant *should* run on Godot 4.3+ and current
-GUT/gdUnit4 because of how little it touches — but if it breaks on a version there, please report it.
+Only the left column is mechanically verified, and (while this repo is private, see
+[ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md)) that happens at release time
+rather than on every push: `publish.yml`'s release gate runs a dedicated `selftest-gut` and
+`selftest-godot` job, each installing the pinned addon and driving the shipped CLI against real
+Godot on the same corpus, to the same per-mutant outcome — so neither runner is second-tier. The
+same jobs also exist in `ci.yml` for an on-demand cloud run. The floor on the right is a claim, not
+a guarantee: gdmutant *should* run on Godot 4.3+ and current GUT/gdUnit4 because of how little it
+touches — but if it breaks on a version there, please report it.
 
 **Which runner.** GUT and gdUnit4 are peers; the exit-code runner covers everything else:
 
