@@ -1,0 +1,30 @@
+# Mutation-testing config for poodle (https://poodle.readthedocs.io) — the Windows-local
+# counterpart to mutmut (see docs/decisions/0013-windows-local-mutation-testing.md for why).
+#
+# poodle mutates a temp copy of the whole repo (never the real tree in place), so a killed run
+# can't leave a mutation on disk the way an in-place tool can. `only_files` is left unset here —
+# scripts/check_mutation_baseline.py passes `--only <file>` per file changed vs origin/main, so
+# a local run stays fast (seconds, not the ~100 minutes a full-package sweep would take).
+
+[poodle]
+source_folders = ["."]
+
+# wcmatch's default glob skips dotfiles/dot-dirs; without DOTGLOB, .github/ and
+# .pre-commit-config.yaml never make it into the temp copy, and any test that reads them (e.g.
+# test_check_release_tag.py) fails from a missing file, not from the mutation itself.
+file_copy_flags = 16704  # GLOBSTAR (256) | DOTGLOB (64) | NODIR (16384)
+file_copy_filters = [
+    "__pycache__/**",
+    ".venv/**",
+    ".venv-license-check/**",
+    ".git/**",
+    ".mypy_cache/**",
+    ".pytest_cache/**",
+    ".ruff_cache/**",
+    ".poodle-temp/**",
+    "mutants/**",
+    ".coverage",
+]
+
+[poodle.runner_opts]
+command_line = "pytest -x -q --no-cov -p no:cacheprovider -m \"not real_godot and not real_gdunit4 and not live\" -o pythonpath='{PYTHONPATH}'"

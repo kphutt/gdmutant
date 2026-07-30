@@ -29,6 +29,13 @@ a required status check): it surfaces the score on the run summary but never fai
 complements the coverage gate — coverage says a line *ran*, mutation says a bug there would be
 *caught*.
 
+mutmut has no native Windows support (it needs `os.fork()`). The local, manual pre-commit hook
+(`gdmutant-mutation`) uses [poodle](https://github.com/WiredNerd/poodle) instead, diff-scoped to
+files changed vs `origin/main` — see `docs/decisions/0013-windows-local-mutation-testing.md` for
+why, and `poodle.toml` / `scripts/check_mutation_baseline.py` for the config. The two tools will not
+report identical scores on the same file (different operator sets); the local run's job is "did this
+change just weaken coverage," not "match CI's number."
+
 ## Current result
 
 At the last run, **763 / 781 mutants were killed — the remaining 18 are equivalent mutants** (changes
