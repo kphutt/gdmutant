@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
-from gdmutant.engine.runner import SuiteResult, SuiteTimeout, parse_junit_xml
+from gdmutant.engine.runner import SuiteResult, SuiteTimeout, parse_junit_xml, with_filename
 
 _GDUNIT_CMD_TOOL = "res://addons/gdUnit4/bin/GdUnitCmdTool.gd"
 _GUT_CMD_TOOL = "res://addons/gut/gut_cmdln.gd"
@@ -41,21 +41,6 @@ DEFAULT_TIMEOUT = 600.0
 # The one-time import warm-up gets its own generous budget, independent of the per-suite timeout: on
 # a cold checkout Godot imports every asset, which can take much longer than a single test run.
 _IMPORT_TIMEOUT = 300.0
-
-
-def _with_filename(error: FileNotFoundError, attempted: str) -> FileNotFoundError:
-    """`error`, guaranteed to carry a `.filename` the CLI's missing-executable hint (LOD-110) can
-    show the user.
-
-    On POSIX, ``subprocess.run`` failing to exec a missing binary sets `.filename` to the attempted
-    path. On Windows, the underlying ``CreateProcess`` failure does not — `.filename` comes back
-    `None` — so the CLI's hint silently falls back to a generic "the test runner" placeholder and
-    never names the actual (wrong) `--godot` path, on the one platform this project treats as a
-    deployment target (see AGENTS.md). Reusing `error`'s own errno/strerror when present keeps the
-    real OS message; only the filename is patched in when it's missing."""
-    if error.filename is not None:
-        return error
-    return FileNotFoundError(error.errno, error.strerror, attempted)
 
 
 @dataclass
@@ -130,7 +115,7 @@ class _GodotJUnitRunner:
                     text=True,
                 )
             except FileNotFoundError as error:
-                raise _with_filename(error, self.godot) from error
+                raise with_filename(error, self.godot) from error
         # Mark done only once the scan has completed — or a slow import was deliberately given up
         # on (a suppressed timeout falls through to here). A *non-timeout* failure (a transient
         # OSError, a permission error, Godot crashing) propagates out before this, leaving the
@@ -187,7 +172,7 @@ class _GodotJUnitRunner:
             # engine tallies Timeout (killed), not a no-report error.
             raise SuiteTimeout(f"{self._framework} run exceeded {budget:g}s") from expired
         except FileNotFoundError as error:
-            raise _with_filename(error, self.godot) from error
+            raise with_filename(error, self.godot) from error
         if not report.exists():
             detail = (completed.stderr or completed.stdout or "").strip()
             raise RuntimeError(

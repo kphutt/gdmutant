@@ -7,7 +7,7 @@ import pytest
 
 import gdmutant.adapters.gdscript.runner as runner_mod
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner
-from gdmutant.engine.runner import Runner, SuiteTimeout
+from gdmutant.engine.runner import Runner, SuiteTimeout, with_filename
 
 
 def _report(tmp_path: Path) -> Path:
@@ -265,8 +265,10 @@ def test_gdunit4_runner_satisfies_the_protocol() -> None:
 
 def test_with_filename_leaves_an_already_named_error_alone() -> None:
     # POSIX already sets .filename on a missing-executable FileNotFoundError — don't touch it.
+    # (with_filename itself now lives in engine.runner — see test_runner.py for its own unit
+    # tests — this just confirms the gdscript adapter still imports and uses the shared helper.)
     error = FileNotFoundError(2, "No such file or directory", "/already/set")
-    assert runner_mod._with_filename(error, "/attempted/godot") is error
+    assert with_filename(error, "/attempted/godot") is error
 
 
 def test_with_filename_patches_a_filename_less_error() -> None:
@@ -274,7 +276,7 @@ def test_with_filename_patches_a_filename_less_error() -> None:
     # missing-executable hint (LOD-110) needs a name to show the user, so patch one in.
     error = FileNotFoundError(2, "The system cannot find the file specified")
     assert error.filename is None
-    patched = runner_mod._with_filename(error, "/attempted/godot")
+    patched = with_filename(error, "/attempted/godot")
     assert patched.filename == "/attempted/godot"
     assert patched.errno == 2
 
