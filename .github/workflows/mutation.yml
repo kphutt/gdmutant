@@ -108,16 +108,27 @@ jobs:
           stats = pathlib.Path("mutants/mutmut-cicd-stats.json")
           d = json.loads(stats.read_text()) if stats.exists() else {}
           killed, survived = d.get("killed", 0), d.get("survived", 0)
-          evaluated = killed + survived + d.get("timeout", 0) + d.get("suspicious", 0)
-          # A baseline failure (or a missing/empty stats file) means mutmut evaluated ZERO mutants —
-          # indistinguishable from "all killed" unless we check. Fail loudly instead of masking it
-          # as a passing run; a real run always evaluates >0 mutants. Unlike the grep above, this
-          # check doesn't depend on mutmut's wording: no baseline collection means no mutant ever
-          # got tested, so `mutants/*.meta` stays empty and `mutmut export-cicd-stats` (run just
-          # above, non-fatally) never writes this file at all — `stats.exists()` is False for every
-          # baseline-failure variant. This job has no `continue-on-error`, so this exit really fails
-          # the job (and the run) — that's the point; see the top-of-file comment.
-          if evaluated == 0:
+          total = d.get("total", 0)
+          # `total` is mutmut's OWN count of every mutant that got an exit code recorded at all —
+          # calculate_summary_stats in mutmut/__main__.py sums every bucket into it: killed,
+          # survived, no_tests, skipped, suspicious, timeout, segfault, and
+          # check_was_interrupted_by_user. That makes `total == 0` the right predicate for "did
+          # mutmut ever actually test a mutant" — not a hand-picked subset of buckets. An earlier
+          # version of this check summed only killed + survived + timeout + suspicious ("evaluated"),
+          # which is a strictly narrower set than `total` and was proven (in review, reproduced with a
+          # synthetic stats file: killed=0, survived=0, total=5, no_tests=5) to false-positive whenever
+          # every mutant lands in an excluded bucket like `no_tests` — a real, completed run with a
+          # real (if score-less) result, wrongly reported as a failed baseline.
+          # `stats.exists()` is False for every baseline-failure variant (export_cicd_stats requires
+          # at least one source file with a non-empty exit_code_by_key before it writes anything, and
+          # a failed baseline means no mutant ever reached that point — see mutmut/__main__.py's
+          # export_cicd_stats/run_stats_collection), so `d = {}` and `total` defaults to 0 exactly
+          # when no file was written. Conversely, whenever the file IS written, `total` is >= 1 by
+          # construction (export_cicd_stats only includes files with at least one recorded exit
+          # code), so `total == 0` cannot misfire on a real, completed run regardless of which
+          # buckets its mutants landed in. This job has no `continue-on-error`, so this exit really
+          # fails the job (and the run) — that's the point; see the top-of-file comment.
+          if total == 0:
               print("## Mutation testing (mutmut) — BASELINE FAILED")
               print()
               print("mutmut evaluated **0 mutants** — the suite does not run cleanly unmutated, so "
