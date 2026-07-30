@@ -13,13 +13,13 @@ Accepted — refines [0004](0004-equivalent-mutant-ignore-annotation.md).
 [ADR-0004](0004-equivalent-mutant-ignore-annotation.md) chose an inline `# gdmutant: ignore`
 annotation, scoped to the **physical line**, that made the adapter generate **no mutants** for that
 line (they vanished from the report). Two problems surfaced the first time gdmutant ran against a
-real project (project-rampart):
+real project (a private Godot game):
 
 1. **Line scope is too coarse.** A single line often holds mutants from *different* operators — e.g.
    `if value < 0:` yields a `comparison` mutant (`<`→`<=`) *and* two `numeric` mutants (`0`→`1`,
-   `0`→`-1`). On rampart's modules, **every** equivalent survivor shared its line with a *killed* or
-   *timeout* mutant, so line-scoped suppression would have hidden genuine coverage. The fixer loop
-   could not cleanly terminate.
+   `0`→`-1`). Across that project's modules, **every** equivalent survivor shared its line with a
+   *killed* or *timeout* mutant, so line-scoped suppression would have hidden genuine coverage. The
+   fixer loop could not cleanly terminate.
 2. **Dropping is invisible.** A suppressed mutant simply disappeared. There was no way to see *what*
    was suppressed or *why*, and 0004 had explicitly rejected the report-status option (c).
 

@@ -2,10 +2,9 @@
 """Run one of ci.yml's jobs locally, on this machine's OS, by reading its steps out of the
 workflow file rather than restating them.
 
-`files/global-conventions.md` requires local checks to mirror CI 1:1, "the same commands,
-never a reimplementation, so the two cannot drift." A hand-copied list of commands drifts
-the first time someone edits ci.yml and forgets to update this file; a list parsed from
-ci.yml cannot.
+Local checks should mirror CI 1:1 -- the same commands, never a reimplementation, so the two
+cannot drift. A hand-copied list of commands drifts the first time someone edits ci.yml and
+forgets to update this file; a list parsed from ci.yml cannot.
 
 Originally written for `verify` alone (Windows is no longer part of the CI matrix — Actions
 cost — so the maintainer's Windows machine runs this instead, reproducing what

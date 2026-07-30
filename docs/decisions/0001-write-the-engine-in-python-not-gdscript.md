@@ -41,8 +41,8 @@ Godot dev (they already have Godot), a native in-process test runner, and AssetL
 ## Decision
 - **Write the engine and the GDScript adapter in Python.** Mutation is a direct `gdtoolkit`
   library call. Stack: **Python 3.12**, **uv** (hash-pinned `uv.lock`, `uv sync --frozen`),
-  `pyproject.toml` (no executable `setup.py`); toolchain pinned via `mise.toml` — matching the
-  sister repo `project-rampart`.
+  `pyproject.toml` (no executable `setup.py`); toolchain pinned via `uv` (`uv.lock`,
+  `.python-version`).
 - **The adapter runs the tests as a subprocess** — `godot --headless` + GdUnit4 (the chosen
   first test-runner) — parsing its machine-readable output. Godot is an unavoidable prerequisite in *any* design,
   because it is what runs the tests; only the orchestration + mutation lives in Python.
@@ -63,5 +63,5 @@ Godot dev (they already have Godot), a native in-process test runner, and AssetL
 
 Supersede this record (do not edit it) if the trigger fires.
 This tool is the standalone realization of the "custom, gdtoolkit-AST-based mutation
-harness" idea first sketched while planning `project-rampart` — the Godot roguelike this
-project was extracted from (see README).
+harness" idea first sketched while planning a private Godot project — the game this
+project was extracted from.

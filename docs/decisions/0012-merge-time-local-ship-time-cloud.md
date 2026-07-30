@@ -12,10 +12,10 @@ Accepted
 ## Context
 `ci.yml` ran automatically on every `pull_request` and every push to `main`: five jobs
 (`secret-scan`, `verify`, `license-check`, `selftest-godot`, `selftest-gut`), each billed a minimum
-of 1 Actions minute regardless of how fast it actually ran. At roughly 12 runs/day this alone
-approached the whole account's 3,000-minute/month included allowance — on a repo where merging
-doesn't ship anything. Only a version tag followed by a human clicking "Publish" on the resulting
-draft Release ships a package; every other merge is just development.
+of 1 Actions minute regardless of how fast it actually ran. At roughly 12 runs/day, on a private
+repo's limited included Actions allowance, that adds up fast — on a repo where merging doesn't ship
+anything. Only a version tag followed by a human clicking "Publish" on the resulting draft Release
+ships a package; every other merge is just development.
 
 Meanwhile, `publish.yml`'s release-time gate (added to close a real hole — a maintainer can create
 and publish a Release straight from the GitHub web UI, bypassing `release.yml` entirely) proved
@@ -69,8 +69,8 @@ job names to required checks — no job logic changes, because none of it was re
 that point; it stays the authoritative check regardless of whether `ci.yml` also runs on every push.
 
 ## Consequences
-- **Cost:** `ci.yml`'s ~2,800 billed min/month (measured, this account, July 2026) drops to
-  whatever `workflow_dispatch` is manually invoked — effectively $0 while private. `publish.yml`'s
+- **Cost:** `ci.yml`'s ~2,800 billed min/month (measured, July 2026) drops to whatever
+  `workflow_dispatch` is manually invoked — effectively $0 while private. `publish.yml`'s
   gate now runs seven jobs including two Godot runners and a Windows runner, but only at release
   time, which happens on the order of once every few weeks, not ~12 times/day.
 - **A release is now MORE verified than a merge was**, not less — every release re-runs the full
@@ -79,8 +79,8 @@ that point; it stays the authoritative check regardless of whether `ci.yml` also
   now-changed branch-protection or dependency state; the new one can't, because it re-executes now).
 - **Merge-time correctness is no longer mechanically enforced** — a bad commit CAN reach `main` if
   a contributor skips or doesn't install the pre-commit hooks. Accepted: nothing ships on merge, and
-  the release gate catches it before anything does. This is the same trade the toolkit's other
-  private, nothing-ships repos already made (`ai-toolkit`, `prism`, `super-element`).
+  the release gate catches it before anything does. This is the same trade other private,
+  nothing-ships repos in this operator's fleet already made.
 - **A release now costs more Actions time than the old gate did** (six live jobs vs. one API call),
   but pays for itself immediately given how rare releases are relative to merges — the entire point
   of moving the expensive checks to the rare event instead of the frequent one.

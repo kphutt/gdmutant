@@ -181,4 +181,4 @@ or stash first, or pass `--require-clean`. [Full guarantee →](docs/agent-guide
 
 ## License
 
-[MIT](LICENSE) — © 2026 Karsten Huttelmaier.
+[MIT](LICENSE) — © 2026 kphutt.
