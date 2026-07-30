@@ -1,10 +1,12 @@
-# Mutation-testing config for poodle (https://poodle.readthedocs.io) — the Windows-local
-# counterpart to mutmut (see docs/decisions/0013-windows-local-mutation-testing.md for why).
+# Mutation-testing config for poodle (https://poodle.readthedocs.io) — measures mutants inside
+# class-method bodies that mutmut (CI's tool) structurally can't generate at all; see
+# docs/decisions/0013-windows-local-mutation-testing.md for why this exists and why it's poodle.
 #
 # poodle mutates a temp copy of the whole repo (never the real tree in place), so a killed run
 # can't leave a mutation on disk the way an in-place tool can. `only_files` is left unset here —
-# scripts/check_mutation_baseline.py passes `--only <file>` per file changed vs origin/main, so
-# a local run stays fast (seconds, not the ~100 minutes a full-package sweep would take).
+# scripts/check_mutation_baseline.py passes `--only <file>` per file changed vs origin/main, so a
+# local run stays to single-digit minutes for a typical change, not the ~100 minutes a full-package
+# sweep would take (~2,600 mutants at poodle's measured ~2.3s/mutant with 6 workers).
 
 [poodle]
 source_folders = ["."]

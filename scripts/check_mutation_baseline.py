@@ -37,19 +37,20 @@ def main() -> int:
     for f in files:
         only_args += ["--only", f]
 
-    log_path = Path("poodle-run.log")
-    with log_path.open("w", encoding="utf-8") as log:
-        subprocess.run(
-            ["uv", "run", "poodle", "-c", "poodle.toml", *only_args],
-            stdout=log,
-            stderr=subprocess.STDOUT,
-        )
-    log_text = log_path.read_text(encoding="utf-8")
-    print(log_text)
-    if "Clean Run Failed" in log_text:
+    result = subprocess.run(
+        ["uv", "run", "poodle", "-c", "poodle.toml", *only_args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    print(result.stdout)
+    if result.returncode != 0:
+        # poodle's own fail_under is unset, so a clean run with surviving mutants still exits 0 --
+        # any nonzero here means it didn't produce a meaningful score at all (clean-run failure, no
+        # mutants found, a usage error, ...), not just "some mutants survived."
         print(
-            "check_mutation_baseline: poodle baseline failed -- could not collect stats "
-            "(the suite does not run cleanly unmutated); any advisory score would be meaningless."
+            f"check_mutation_baseline: poodle exited {result.returncode} -- did not produce a "
+            "meaningful score (see output above)."
         )
         return 1
     return 0

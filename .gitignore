@@ -21,9 +21,10 @@ htmlcov/
 mutants/
 mutmut-results.db
 mutmut-run.log
-# poodle (Windows-local mutation testing, see docs/decisions/0013) writes its temp copies here
-.poodle-temp/
+# poodle (local mutation testing, see docs/decisions/0013) writes its temp copies here; the
+# trailing * also catches ad-hoc manual-testing dirs like .poodle-temp-manual/
 poodle-run.log
+.poodle-temp*/
 # Godot (test fixtures may include a small Godot project)
 .godot/
 # Godot self-test fixture (tests/test_selftest_live.py): the GdUnit4 addon is downloaded
