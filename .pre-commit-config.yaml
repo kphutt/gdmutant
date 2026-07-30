@@ -127,9 +127,10 @@ repos:
         stages: [manual]
 
       # Opt-in, advisory, not run automatically — mirrors mutation.yml's baseline-failure guard
-      # (a surviving mutant is fine; a baseline that won't run clean unmutated is not).
+      # (a surviving mutant is fine; a baseline that won't run clean unmutated is not). Local uses
+      # poodle, not mutmut (which has no native Windows support) — see docs/decisions/0013.
       - id: gdmutant-mutation
-        name: mutmut (advisory, manual)
+        name: poodle, diff-scoped vs origin/main (advisory, manual)
         entry: python scripts/check_mutation_baseline.py
         language: python
         pass_filenames: false

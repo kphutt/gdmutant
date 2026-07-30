@@ -29,6 +29,16 @@ a required status check): it surfaces the score on the run summary but never fai
 complements the coverage gate — coverage says a line *ran*, mutation says a bug there would be
 *caught*.
 
+The module-level-only scope below (see "Scope: what the 781 covers") is measured separately, locally:
+the manual pre-commit hook (`gdmutant-mutation`) runs [poodle](https://github.com/WiredNerd/poodle),
+diff-scoped to files changed vs `origin/main`, which does reach class-method bodies. It's local
+rather than a second CI job partly because mutmut can't run on the maintainer's Windows machine at
+all (`os.fork()`), and partly because it's a targeted, on-demand check rather than a standing cost —
+see `docs/decisions/0013-windows-local-mutation-testing.md` for the full reasoning, and `poodle.toml`
+/ `scripts/check_mutation_baseline.py` for the config. The two tools will not report identical scores
+on the same file (different operator sets, different scope); the local run's job is "did this change
+to a method body just go untested," not "match CI's number."
+
 ## Current result
 
 At the last run, **763 / 781 mutants were killed — the remaining 18 are equivalent mutants** (changes
