@@ -1,0 +1,16 @@
+name: Throwaway Zizmor Injection Test
+
+# TEMPORARY — added solely to empirically verify that a genuinely-failing zizmor finding blocks a
+# PR via the required status check "Workflow security (zizmor)". This workflow and its branch/PR
+# are throwaway verification artifacts and must NEVER be merged; they will be deleted immediately
+# after the observation is recorded.
+on:
+  pull_request:
+
+jobs:
+  unsafe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print PR title unsafely (deliberate template-injection sink for zizmor)
+        run: |
+          echo "PR title: ${{ github.event.pull_request.title }}"
