@@ -29,4 +29,11 @@ file_copy_filters = [
 ]
 
 [poodle.runner_opts]
-command_line = "pytest -x -q --no-cov -p no:cacheprovider -m \"not real_godot and not real_gdunit4 and not live\" -o pythonpath='{PYTHONPATH}'"
+# --ignore, not `-m "not ..."`: this repo registers no such marks (grep tests/ for
+# pytest.mark.real_godot / real_gdunit4 / live comes up empty), so an `-m` expression naming them
+# is a silent no-op -- pytest treats an unknown mark in a `-m` filter as matching nothing, which
+# excludes zero tests. The two live-Godot suites are gated by GDMUTANT_GODOT / GDMUTANT_GDUNIT4_CLONE
+# env-var skipif, not marks (see their own module docstrings), so excluding them by path is what
+# actually keeps a mutation sweep from shelling out to real Godot once per mutant on a machine
+# where those env vars happen to be set for other work -- exactly this PR's target persona.
+command_line = "pytest -x -q --no-cov -p no:cacheprovider --ignore=tests/test_selftest_live.py --ignore=tests/test_dogfood_gdunit4.py -o pythonpath='{PYTHONPATH}'"
