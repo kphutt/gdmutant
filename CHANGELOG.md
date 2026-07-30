@@ -21,6 +21,10 @@ CLI. `0.1.0` is the current in-development version; the first git tag is still p
   with a re-parse validity guard so invalid mutants are never run.
 - Operators: comparison, boolean, arithmetic, constant, numeric-literal, compound assignment,
   modulo, unary-not, and statement-deletion.
+- Generation-time exclusions for token positions the language itself rules out as meaningful
+  mutants, so they never reach the report as survivors: a `%` used for string formatting, a `+` that
+  is string concatenation (GDScript's `String` defines no `-`), and a property declaration's
+  initializer whose stored value no getter can read back.
 - Framework-agnostic test runners over one shared runner contract (a runner-agnostic adapter seam):
   **GdUnit4** and **GUT** as first-class peer JUnit-XML adapters (`--runner gdunit4` / `--runner gut`,
   neither privileged in the engine), plus an exit-code runner (`--runner command`) for any headless
