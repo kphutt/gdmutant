@@ -30,6 +30,24 @@ show in the summary but never enter that formula:
 - **error** — your test runner failed to execute this mutant (a crash, not a pass or a fail); tallied
   on its own so one bad run doesn't discard the whole pass.
 
+**What is never generated, and why that moves the score.** A few token positions produce a mutant
+that is not a *changed program* at all but an **invalid** one — code GDScript rejects, so no test
+could ever have disagreed with it. gdmutant does not generate those, which means they appear in no
+category above: they leave the denominator entirely, and the score is higher than it would be if
+they were counted as survivors. That is the honest number, not a flattering one — a mutant the
+language forbids measures nothing about your tests, and counting it as a gap would say your suite
+misses something it cannot possibly catch. The excluded shapes:
+
+- a `%` that is string formatting (`"%s" % name`), not modulo;
+- a `+` that concatenates strings — GDScript's `String` defines no `-`;
+- a `+=` that appends to a string, for the same reason;
+- a property declaration's initializer whose stored value no getter can read back.
+
+Each is decided from the parse tree, and only where the shape is certain — a `String`-typed
+*variable* is still mutated, because nothing in the source proves what it holds. The bias is
+deliberate: reporting noise is a smaller failure than hiding a real gap, so anything ambiguous stays
+in. Everything else your code does is mutated and counted.
+
 There's no universal "good" score — it depends on how gnarly the code under test is. Watch the
 direction it moves, not the absolute number: a rising score as you kill survivors is progress, and a
 low score on code you just wrote is more urgent than a stable score on code nobody's touched in
@@ -77,7 +95,7 @@ Not an operator: [Assert](#assert) · [Enum member](#enum-member)
 
 ## Compound assign
 
-**The change:** gdmutant swapped a compound-assignment operator (e.g. `+=` → `-=`).
+**The change:** gdmutant swapped a compound-assignment operator (e.g. `+=` → `-=`). A `+=` that appends a string literal is not mutated at all — `String` has no `-=`, so the swap would be invalid code rather than a test gap.
 
 **Why it survived:** nothing pins the accumulated value, so the two updates look the same to your tests.
 

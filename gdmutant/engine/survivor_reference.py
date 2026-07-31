@@ -87,7 +87,9 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
     "compound-assign": (
         (
             "The change",
-            "gdmutant swapped a compound-assignment operator (e.g. `+=` → `-=`).",
+            "gdmutant swapped a compound-assignment operator (e.g. `+=` → `-=`). A `+=` that "
+            "appends a string literal is not mutated at all — `String` has no `-=`, so the swap "
+            "would be invalid code rather than a test gap.",
         ),
         (
             "Why it survived",
