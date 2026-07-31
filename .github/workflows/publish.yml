@@ -47,7 +47,7 @@ name: Publish
 # `gitleaks/gitleaks-action` pin `ci.yml` already uses) reachable from the released commit —
 # the question that matters right before code goes public and a package ships from it.
 #
-# Seven guards, all fail-closed, all before `publish-pypi` gets `id-token: write`:
+# Eight guards, all fail-closed, all before `publish-pypi` gets `id-token: write`:
 #   1. the tag matches the version in pyproject.toml      (scripts/check_release_tag.py)
 #   2. the released commit is an ancestor of main          (git merge-base --is-ancestor)
 #   3. no secret in history reachable from this commit     (gitleaks/gitleaks-action, full history)
@@ -55,6 +55,12 @@ name: Publish
 #   5. verify passes on Windows                             (same script, windows-2025 runner)
 #   6. license compliance                     (scripts/verify_local.py --job license-check)
 #   7. both Godot self-tests, real Godot        (scripts/run_selftest.py / run_selftest_gut.py)
+#   8. every image in the BUILT long description resolves  (scripts/check_readme_images.py)
+#
+# ...and one check AFTER the upload, which is not a guard and does not pretend to be:
+#   `verify-published` installs the released version from PyPI into a clean environment and runs
+#   it. Nothing it finds can un-publish a version number, so it cannot gate anything; what it
+#   replaces is a maintainer remembering to try the package by hand after every release.
 on:
   workflow_dispatch: # deliberate TestPyPI dry-run, fired by hand
   release:
@@ -388,6 +394,66 @@ jobs:
       - name: Live self-test (real Godot + GUT)
         run: python scripts/run_selftest_gut.py
 
+  # --- Guard 8: every image in the long description actually resolves -----------
+  # THE DEFECT THIS EXISTS FOR. README.md is the PyPI long description, and PyPI does not resolve a
+  # repo-relative image path the way GitHub does -- it hands the literal string to a camo proxy,
+  # which hex-encodes it and 404s. So a banner that is perfect on the repo front page can be a
+  # broken image on the project page, and a long description is FROZEN AT UPLOAD: there is no
+  # edit-after, only a new version number. `twine check` (in `build` above) cannot see this at all;
+  # it validates that the metadata parses and renders, never that a URL resolves.
+  #
+  # IT READS THE BUILT ARTIFACT, NOT README.md. Those differ on purpose -- pyproject.toml's
+  # hatch-fancy-pypi-readme hook rewrites the banner's relative src into an absolute, tag-pinned
+  # raw.githubusercontent.com URL at build time. Checking the file on disk would check a string no
+  # user ever sees, so this downloads the same `dist` artifact `publish-pypi` will upload and reads
+  # the long description straight out of its metadata.
+  #
+  # WHY HERE AND NOWHERE EARLIER. The rewritten URL contains the release tag (`.../v0.1.0/...`), so
+  # it cannot resolve until that tag exists on GitHub. Anywhere before the tag -- a PR check, the
+  # `build` job, release.yml's tag-push guards -- it would fail on a URL that is not wrong, only
+  # early, and a gate that always fails gets deleted. `needs: [build, provenance]` puts it after
+  # the artifact exists and after provenance has proved the tag names this commit, and it sits in
+  # `publish-pypi`'s `needs:` so it runs before the OIDC token is minted. That is the last moment
+  # where failing is still free.
+  #
+  # The workflow_dispatch TestPyPI rehearsal deliberately skips this: it builds from an untagged
+  # commit, so the pinned URL 404s by design there (pyproject.toml says as much). `if:` excludes it
+  # rather than letting a known-false failure train anyone to ignore a red X.
+  #
+  # tests/test_packaging.py already catches the static half of this offline (a relative path
+  # surviving the substitution). This catches the half a static test cannot: absolute, well-formed,
+  # and still not there.
+  readme-images:
+    name: Gate - every image in the PyPI long description resolves
+    needs: [build, provenance]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # reads an artifact and makes outbound GETs; it has nothing to write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.provenance.outputs.sha }} # the released commit's copy of the check
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # The exact artifact publish-pypi will upload -- not a rebuild, which could differ.
+      - name: Download the built distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      # Stdlib only (urllib) -- no `uv sync`, no third-party HTTP client, nothing to resolve.
+      # Exit 1 means an image is genuinely broken; exit 3 means the network could not answer, and
+      # the script says which, so nobody re-cuts a version over a bad minute at a badge host.
+      - name: Check every image in the built long description
+        run: python3 scripts/check_readme_images.py --dist-dir dist
+
   # --- Release path: PyPI via a published GitHub Release ---------------------
   publish-pypi:
     name: Publish to PyPI
@@ -405,6 +471,7 @@ jobs:
         license-check,
         selftest-godot,
         selftest-gut,
+        readme-images,
       ]
     if: github.event_name == 'release'
     runs-on: ubuntu-24.04
@@ -424,3 +491,56 @@ jobs:
 
       - name: Publish to PyPI (Trusted Publishing / OIDC)
         uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+
+  # --- After the upload: prove the published package installs and runs ----------
+  # NOT A GATE, AND IT MUST NOT BE MISTAKEN FOR ONE. It runs after `publish-pypi`, so by the time
+  # it can answer anything the version number is already spent and unreusable. Putting it in
+  # `publish-pypi`'s `needs:` would deadlock the workflow, and no ordering exists that would let it
+  # prevent a bad upload -- the only way to check what the index serves is to publish first.
+  #
+  # What it replaces is a person. The release runbook's post-release step was "install it and try
+  # it", which is exactly the kind of step that gets skipped on the day it would have mattered.
+  # Now the release run itself goes red instead.
+  #
+  # WHY IT DOES MORE THAN `--version`. A version string proves an entry point exists and nothing
+  # else. So this also mutates a two-line scratch file with `--dry-run` (no Godot, no network),
+  # which only works if the console script resolved, `gdtoolkit` and `lark` installed and imported,
+  # and the GDScript parser loaded real source. Those are the failures a wheel actually ships. It
+  # costs one extra second.
+  #
+  # ISOLATION. The checkout goes into `release-gate/` and is only the source of the script; the
+  # install happens in a throwaway venv inside a temp directory outside the workspace, and every
+  # subprocess runs with its working directory set there. The script then asks the installed
+  # interpreter where `gdmutant` was imported from and fails unless the answer is inside that venv
+  # -- otherwise a checkout on the path could satisfy this check while the upload shipped nothing.
+  #
+  # NO PRIVILEGE. `contents: read`, no `id-token`, no environment. It installs from an index and
+  # runs a CLI on a file it wrote itself; it cannot publish, tag, or change any state.
+  verify-published:
+    name: Verify the published package installs and runs
+    needs: [provenance, publish-pypi]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.provenance.outputs.sha }}
+          path: release-gate # never the working directory of anything below
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # The tag, not a separate version input: check_release_tag.py (guard 1) has already refused
+      # this release unless the tag equals the packaged version, so the tag IS the version and
+      # there is no second place for the two to disagree. Exit 3 means the index has not propagated
+      # yet, which the script reports as propagation rather than as a broken package -- re-run the
+      # job rather than going looking for a defect that is not there.
+      - name: Install the published version from PyPI and run it
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: python3 release-gate/scripts/check_published_package.py --version "$TAG_NAME"
