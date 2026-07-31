@@ -8,7 +8,9 @@ version = "0.1.0"                       # the packaged version (see CHANGELOG.md
                                         # must declare the same number — scripts/check_release_tag.py
                                         # fails the release path otherwise.
 description = "An AST-based, language-agnostic mutation-testing tool for GDScript/Godot."
-readme = "README.md"
+# `readme` is dynamic, not a static path: the long description is README.md with its relative
+# image paths rewritten to absolute ones at build time. See the fancy-pypi-readme hook below.
+dynamic = ["readme"]
 requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -64,8 +66,52 @@ dev = [
 required-version = ">=0.11"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-fancy-pypi-readme>=24.1.0"]
 build-backend = "hatchling.build"
+
+# --- The README banner, on GitHub *and* PyPI, with no launch-day edit ---------------------------
+#
+# THE PROBLEM. README.md is both the repo's front page and the PyPI long description, and the two
+# surfaces resolve image paths differently:
+#
+#   - A RELATIVE path (`.github/assets/banner.svg`) renders on GitHub whether the repo is private
+#     or public, because GitHub resolves it against the repo using the *viewer's* session.
+#     `readme_renderer` does not resolve relative paths at all: it hands the literal string to
+#     PyPI's camo proxy, which hex-encodes it and 404s.
+#   - An ABSOLUTE raw.githubusercontent.com URL works on PyPI and on public GitHub, but 404s while
+#     the repo is private, because camo fetches with no credentials.
+#
+# So one literal string in the file cannot serve both. The fix is to stop making it one string:
+# the file on disk keeps the relative path (GitHub, private and public), and this hook rewrites it
+# to an absolute URL *only* in the built distribution's long description (PyPI). One source file,
+# config-as-code, and nothing to remember to change when the repo goes public.
+#
+# A data: URI was the obvious alternative and does NOT work: readme_renderer's sanitiser allows
+# only `url_schemes={"http", "https", "mailto"}`, so PyPI strips the image entirely.
+#
+# WHY THE URL IS PINNED TO THE TAG, not to `main`. `$HFPR_VERSION` is substituted with the packaged
+# version at build time, producing `.../v0.1.0/...` — matching the `vX.Y.Z` tag that
+# scripts/check_release_tag.py already forces to agree with the version above. A PyPI release is
+# immutable, so its page should keep showing the banner *that release shipped with*; pointing at
+# `main` would retroactively restyle every past release's page. The one cost: a
+# `workflow_dispatch` TestPyPI dry-run builds from an untagged commit, so the banner 404s on the
+# TestPyPI page until the tag exists. That is a rehearsal surface only.
+#
+# The asset itself deliberately does not ship in the sdist (see the allowlist above) — PyPI fetches
+# it from GitHub, never from the installed package.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+# Anchored to `src="` so this only ever rewrites an image/link target, never a prose or code-block
+# mention of the same path. tests/test_packaging.py asserts this pattern still matches what
+# README.md actually contains, so renaming the asset fails the suite instead of silently shipping
+# a relative path to PyPI again.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = 'src="\.github/assets/'
+replacement = 'src="https://raw.githubusercontent.com/kphutt/gdmutant/v$HFPR_VERSION/.github/assets/'
 
 [tool.hatch.build.targets.wheel]
 packages = ["gdmutant"]
