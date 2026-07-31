@@ -12,8 +12,9 @@ section-for-section — edit the page and the suite fails, pointing here.
 
 Each value is the ordered ``(label, body)`` pairs of one operator's ``## …`` section, keyed by the
 operator id (which is also that heading's GitHub slug, the anchor `explain.doc_url` builds). Bodies
-keep the page's two inline markers -- backticked code spans and doubled-asterisk bold -- which
-`htmlreport` turns into ``<code>`` and ``<strong>``.
+keep the page's inline markers, which `htmlreport` turns into real markup: backticked code spans
+become ``<code>``, and doubled-asterisk bold would become ``<strong>``. The page carries no bold
+today, so only the code spans appear below.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
         ),
         (
             "How to kill it",
-            "add a test with concrete inputs and assert the **exact** expected result.",
+            "add a test with concrete inputs and assert the exact expected result.",
         ),
         (
             "Equivalent mutant?",
@@ -48,13 +49,13 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
         ),
         (
             "Why it survived",
-            "`and` and `or` return the same result **except** when the two operands disagree (one "
+            "`and` and `or` return the same result except when the two operands disagree (one "
             "true, one false). No test exercised that case, so the connective is unchecked.",
         ),
         (
             "How to kill it",
-            "add a test where exactly one side is true and the other false, and assert the outcome "
-            "— that is the only input that distinguishes `and` from `or`.",
+            "add a test where exactly one side is true and the other false, and assert the "
+            "outcome. That is the only input that distinguishes `and` from `or`.",
         ),
         (
             "Equivalent mutant?",
@@ -69,8 +70,8 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
         ),
         (
             "Why it survived",
-            "`>` and `>=` (and their kin) differ on exactly one input — when the two sides are "
-            "**equal**. Your tests run this line but never with equal operands, so the boundary is "
+            "`>` and `>=` (and their kin) differ on exactly one input: when the two sides are "
+            "equal. Your tests run this line but never with equal operands, so the boundary is "
             "untested.",
         ),
         (
@@ -88,7 +89,7 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
         (
             "The change",
             "gdmutant swapped a compound-assignment operator (e.g. `+=` → `-=`). A `+=` that "
-            "appends a string literal is not mutated at all — `String` has no `-=`, so the swap "
+            "appends a string literal is not mutated at all: `String` has no `-=`, so the swap "
             "would be invalid code rather than a test gap.",
         ),
         (
@@ -123,7 +124,7 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
         (
             "Equivalent mutant?",
             "If the value never affects observable behavior (dead flag), the survivor is "
-            "legitimate — consider removing the constant.",
+            "legitimate. Consider removing the constant.",
         ),
     ),
     "logical-not": (
@@ -158,12 +159,12 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
         ),
         (
             "How to kill it",
-            "add a test with a **non-multiple** input (one that leaves a remainder) and assert the "
+            "add a test with a non-multiple input (one that leaves a remainder) and assert the "
             "exact result.",
         ),
         (
             "Equivalent mutant?",
-            "Rare; possible if the operand is always a multiple by construction.",
+            "Rare, but possible if the operand is always a multiple by construction.",
         ),
     ),
     "numeric": (
@@ -198,48 +199,48 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
         ),
         (
             "How to kill it",
-            "add a test that asserts the effect of this line — a signal emitted, a field set, a "
-            "call made — something that fails if the line is gone.",
+            "add a test that asserts the effect of this line (a signal emitted, a field set, a "
+            "call made), something that fails if the line is gone.",
         ),
         (
             "Equivalent mutant?",
-            "Legitimate if the statement genuinely has no observable effect (dead code) — consider "
-            "removing it. The commonest shape by far is a **redundant initializer**: `_cells = "
+            "Legitimate if the statement genuinely has no observable effect (dead code). Consider "
+            "removing it. The commonest shape by far is a redundant initializer: `_cells = "
             "PackedByteArray()` when the declaration `var _cells: PackedByteArray` already "
             "default-initialises it, or an assignment that just restates the declaration's own `=` "
             "value. Confirm one by checking that nothing can write to the variable before this "
-            "line — the same statement inside a `reset()` that runs repeatedly is **not** "
-            "redundant, and a test failing to catch its removal is a real gap.",
+            "line. The same statement inside a `reset()` that runs repeatedly is not redundant, "
+            "and a test failing to catch its removal is a real gap.",
         ),
     ),
     "assert": (
         (
             "The change",
-            "gdmutant changed a token inside an `assert(...)` call — a comparison, a connective, a "
-            "number — or removed the assert statement outright.",
+            "gdmutant changed a token inside an `assert(...)` call (a comparison, a connective, a "
+            "number) or removed the assert statement outright.",
         ),
         (
             "Why it survived",
             "a mutated assertion only behaves differently on an input the original would have "
-            "**rejected**, and a failed `assert` aborts the whole Godot process. A test running "
-            "inside that process cannot observe the abort as anything but its own death, so no "
-            "test can pass on the original and fail on the mutant. The survivor is structural — it "
-            "is not a gap in your suite.",
+            "rejected, and a failed `assert` aborts the whole Godot process. A test running inside "
+            "that process cannot observe the abort as anything but its own death, so no test can "
+            "pass on the original and fail on the mutant. The survivor is structural. It is not a "
+            "gap in your suite.",
         ),
         (
             "How to kill it",
             "from an in-process harness you cannot, and it is not worth trying. To take it out of "
-            "the report, mark the line `# gdmutant: ignore`; it stays visible as `ignored` and "
-            "leaves the score. gdmutant does **not** skip assert lines for you — a tool that "
-            "quietly drops code from its own report is telling you a smaller truth than it knows, "
-            "and which of your asserts are load-bearing is your call, not its.",
+            "the report, mark the line `# gdmutant: ignore`. It stays visible as `ignored` and "
+            "leaves the score. gdmutant does not skip assert lines for you. A tool that quietly "
+            "drops code from its own report is telling you a smaller truth than it knows, and "
+            "which of your asserts are load-bearing is your call, not its.",
         ),
         (
             "Equivalent mutant?",
             "Effectively yes, and it is the common case rather than the exception: on defensive "
             "code, assert lines can hold most of a file's survivors and leave a healthy-looking "
             "score with nothing actionable behind it. If the condition is one real callers can "
-            "actually violate, that is worth knowing — but the fix is to move the check into a "
+            "actually violate, that is worth knowing, but the fix is to move the check into a "
             "branch that returns or emits an error, where a test can reach it, not to write a test "
             "that expects a crash.",
         ),
@@ -257,19 +258,19 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
         ),
         (
             "How to kill it",
-            "only worth doing if the number is genuinely read **as a number**. Two cases where it "
-            "is: a **bitflag** enum (`1, 2, 4`, combined with `|` and `&`), and a value that "
-            "leaves the program — written to a save file, sent over a network, handed to a shader "
-            "or another tool. There a changed number is a real bug, and a test that pins the "
-            "concrete value (or round-trips it through whatever reads it) kills the mutant.",
+            "only worth doing if the number is genuinely read as a number. Two cases where it is: "
+            "a bitflag enum (`1, 2, 4`, combined with `|` and `&`), and a value that leaves the "
+            "program: written to a save file, sent over a network, handed to a shader or another "
+            "tool. There a changed number is a real bug, and a test that pins the concrete value "
+            "(or round-trips it through whatever reads it) kills the mutant.",
         ),
         (
             "Equivalent mutant?",
-            "Very often, and **gdmutant cannot tell**. It analyses one file at a time, so a "
-            "numeric use in another file, in a save format, or in engine code is outside what it "
-            "can see — and suppressing these by default would hide exactly the bitflag and "
-            "serialisation bugs that matter most. So they are reported and the call is yours: `# "
-            "gdmutant: ignore` on the line, with your reason, once you have checked.",
+            "Very often, and gdmutant cannot tell. It analyses one file at a time, so a numeric "
+            "use in another file, in a save format, or in engine code is outside what it can see, "
+            "and suppressing these by default would hide exactly the bitflag and serialisation "
+            "bugs that matter most. So they are reported and the call is yours: `# gdmutant: "
+            "ignore` on the line, with your reason, once you have checked.",
         ),
     ),
 }

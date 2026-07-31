@@ -46,8 +46,10 @@ def test_guide_documents_the_ignore_marker() -> None:
 
 def test_guide_states_the_full_exit_code_contract() -> None:
     # The 0/1/2 contract is the load-bearing promise for a scripting agent — spell out all three.
+    # Each must head its own entry in the exit-code list: a bare `0` also appears in the worked
+    # example, so matching the list marker is what pins the contract rather than a passing mention.
     text = _text()
-    for code in ("**`0`**", "**`1`**", "**`2`**"):
+    for code in ("- `0`:", "- `1`:", "- `2`:"):
         assert code in text
 
 
