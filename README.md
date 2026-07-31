@@ -52,6 +52,12 @@ Coverage tells you a line *ran*; mutation tells you a bug there would be *caught
 widens when an AI writes the tests, since models tend to pin code they just wrote. A standalone
 CLI, no AI required.
 
+**Validated against real code.** gdmutant has been run across 37 modules of
+[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) and [GUT](https://github.com/bitwes/Gut) —
+the two Godot test frameworks, neither written by its author — generating over 2,100 mutants. That
+work also surfaced six defects in the frameworks themselves, each confirmed by execution against the
+current releases: three in gdUnit4 v6.2.0, three in GUT v9.7.1. They are not yet reported upstream.
+
 ## Is this for you?
 
 - You write **GDScript** and test with **GUT**, **gdUnit4**, or any `godot --headless` command.
@@ -132,11 +138,7 @@ changed lines, for a fast, **advisory** check — never a hard gate. `--exclude`
 
 ## Example output
 
-The full run behind the block above — same fixture, all 7 survivors, one command:
-
-```sh
-uv run gdmutant run --project corpus --godot /path/to/godot corpus/turn_order.gd
-```
+The full run behind the block above — same fixture, all 7 survivors:
 
 ```
 Mutation score: 61.1%
@@ -155,7 +157,7 @@ Survivors (7):
 **Mutation score isn't a target — it's a direction.** There's no universal "good" number; watch it
 trend as you kill survivors, not the absolute value. `ignored`, `invalid`, and `error` are the other
 three result categories — see the [survivor reference](docs/survivors/README.md) for what each
-means, the exact formula, and every operator's kill/equivalent guidance.
+means.
 
 ## The workflow
 
@@ -166,7 +168,7 @@ means, the exact formula, and every operator's kill/equivalent guidance.
 3. **Kill or annotate every survivor.** Each block's `start` line says where to add a test. A
    proven equivalent — one that truly can't change behavior, like an unreachable clamp boundary —
    gets `# gdmutant: ignore` on that line (`ignore[comparison]` for one operator) plus a reason
-   instead; see the [survivor reference](docs/survivors/README.md) for each operator's cases.
+   instead.
 4. **Re-run to confirm**, then **move on** — done with a file at zero `survived`. No third state,
    so the loop always ends.
 
