@@ -2,11 +2,15 @@
 #
 # A consumer runs mutation testing on their Godot project in a few lines of YAML:
 #
-#     - uses: kphutt/gdmutant@v1
+#     - uses: kphutt/gdmutant@REPLACE_WITH_THE_RELEASE_COMMIT_SHA  # v0.1.0
 #       with:
 #         godot-version: 4.7.0
 #         project-path: ./
 #         paths: scripts            # the source to mutate (default: the whole project)
+#
+# Consumers pin the commit SHA (or a full version tag such as `@v0.1.0`). There is no floating `@v1`
+# or `@v0` tag: every published tag names a full version and is immutable, so this repo cannot
+# produce a moving major tag. See the README's "GitHub Action" section.
 #
 # The action sets up Godot, installs gdmutant, runs it, and writes the surviving mutants — WITH their
 # gap/risk/start explanations — to the GitHub Actions job summary ($GITHUB_STEP_SUMMARY), right where
