@@ -102,7 +102,10 @@ ARITHMETIC = TableOperator("arithmetic", {"+": ("-",), "-": ("+",), "*": ("/",),
 CONSTANT = TableOperator("constant", {"true": ("false",), "false": ("true",)})
 NUMERIC = NumericBumpOperator()
 #: Compound assignment — gdtoolkit tokenizes ``+=``/``-=``/``*=``/``/=`` atomically, so these are a
-#: plain involutive swap. Without it, ``energy += speed`` produces **zero** mutants.
+#: plain involutive swap. Without it, ``energy += speed`` produces **zero** mutants. GDScript
+#: overloads ``+=`` for string appending and its ``String`` defines no ``-``, so the GDScript
+#: adapter's `find_sites` skips a ``+=`` whose right operand is a string — the same operand typing
+#: it applies to ``+`` (see `ARITHMETIC`) and ``%`` (see `MODULO`).
 COMPOUND_ASSIGN = TableOperator(
     "compound-assign", {"+=": ("-=",), "-=": ("+=",), "*=": ("/=",), "/=": ("*=",)}
 )

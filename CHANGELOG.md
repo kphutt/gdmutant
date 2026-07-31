@@ -23,8 +23,15 @@ CLI.
   modulo, unary-not, and statement-deletion.
 - Generation-time exclusions for token positions the language itself rules out as meaningful
   mutants, so they never reach the report as survivors: a `%` used for string formatting, a `+` that
-  is string concatenation (GDScript's `String` defines no `-`), and a property declaration's
-  initializer whose stored value no getter can read back.
+  is string concatenation (GDScript's `String` defines no `-`), a `+=` that appends to a string (same
+  reason), and a property declaration's initializer whose stored value no getter can read back.
+  **These change the mutation score**, and upward: an excluded mutant leaves the denominator instead
+  of counting as a survivor. That is deliberate and is the honest direction — the excluded shapes are
+  invalid GDScript, not gaps a test could ever have closed — but it does mean a score is not
+  comparable across a version that added an exclusion. Each is recognised from the parse tree only
+  where the shape is certain (a `String`-typed *variable* is still mutated), because reporting noise
+  is a smaller failure than hiding a real gap. `docs/survivors/README.md` states the full list and
+  its effect on the score for users.
 - Framework-agnostic test runners over one shared runner contract (a runner-agnostic adapter seam):
   **GdUnit4** and **GUT** as first-class peer JUnit-XML adapters (`--runner gdunit4` / `--runner gut`,
   neither privileged in the engine), plus an exit-code runner (`--runner command`) for any headless

@@ -189,6 +189,62 @@ def _string_concatenation_pluses(tree: Tree[Token]) -> set[tuple[int | None, int
     return skip
 
 
+def _is_string_valued(node: Tree[Token]) -> bool:
+    """True if `node` is an expression the **parse tree alone** shows to be a string: a bare
+    literal, or a ``+``-only concatenation containing one (parenthesised or not).
+
+    This is the union of the two operand shapes already recognised in this file — the bare-literal
+    / parenthesised-concatenation pair `_is_string_format_operand` applies to ``%``, plus the
+    unbracketed `arith_expr` concatenation `_string_concatenation_pluses` applies to ``+``. No type
+    inference: a ``String``-typed *variable* is not recognised, because nothing in the tree says
+    it is one.
+    """
+    return _is_string_format_operand(node) or _is_string_concatenation(node)
+
+
+#: The one compound-assignment token that can appear with a string operand. `COMPOUND_ASSIGN` also
+#: swaps ``-=``/``*=``/``/=``, but GDScript's ``String`` defines none of those, so a source line
+#: spelling them on a string does not compile in the first place and can never reach this skip.
+_STRING_COMPOUND_ASSIGN = "+="
+
+
+def _string_compound_assigns(tree: Tree[Token]) -> set[tuple[int | None, int | None]]:
+    """Positions ``(line, column)`` of ``+=`` tokens that **append to a string**, which the
+    compound-assign operator must not mutate.
+
+    The catalog's only replacement for ``+=`` is ``-=`` (`engine.operators.COMPOUND_ASSIGN`), and
+    GDScript's ``String`` defines no ``-``. So the mutant is not a changed program whose behavior a
+    test could disagree with — it is an invalid one, exactly like the ``+``-concatenation case
+    `_string_concatenation_pluses` already skips. Leaving it in reports a survivor that was never a
+    real mutant, which is the one thing a survivor must never be.
+
+    This is NF-5's rule reaching a defect NF-5 cannot see. NF-5 drops a mutant whose source no
+    longer *parses*, but gdtoolkit's grammar carries no type information — ``s -= "b"`` parses
+    perfectly well and is rejected only by Godot, later. Recognising it from operand shape at
+    generation time is the same policy applied one level up, not a new one.
+
+    Recognition is `_is_string_valued` on the assignment's right-hand operand. It deliberately stops
+    at what the tree proves. A ``String``-typed variable (``s += other``), a ``StringName``
+    (``s += &"a"``) and a format expression (``s += "%s" % x``) are all string-valued at runtime and
+    are all left as ordinary sites, because suppressing a *genuine* gap is the costlier error and
+    only a literal makes the shape certain.
+    """
+    skip: set[tuple[int | None, int | None]] = set()
+    for node in tree.iter_subtrees():
+        if node.data != "assnmnt_expr":
+            continue
+        # `assnmnt_expr` is (target, operator token, value); pair the operator with what follows it.
+        for cur, following in pairwise(node.children):
+            if (
+                isinstance(cur, Token)
+                and cur.value == _STRING_COMPOUND_ASSIGN
+                and isinstance(following, Tree)
+                and _is_string_valued(following)
+            ):
+                skip.add((cur.line, cur.column))
+    return skip
+
+
 #: gdtoolkit's ``class_var_*`` rules that carry an initializer ``expr``. ``class_var_empty`` and
 #: ``class_var_typed`` declare no initial value, so there is nothing to skip in them.
 _INITIALIZED_CLASS_VAR_NODES = frozenset(
@@ -277,11 +333,12 @@ def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[Mut
     tokens from inside string literals or comments, so this never edits within one. `catalog` is
     threaded through so site selection matches generation (a custom catalog finds its own sites).
 
-    Three syntactic exclusions drop tokens that cannot yield a meaningful mutant — each one a shape
+    Four syntactic exclusions drop tokens that cannot yield a meaningful mutant — each one a shape
     the language rules out, never a shape that merely tends to survive:
 
     * a ``%`` used as the string-format operator (`_string_format_percents`);
     * a ``+`` that is string concatenation (`_string_concatenation_pluses`);
+    * a ``+=`` that appends to a string (`_string_compound_assigns`);
     * a property declaration's initializer whose stored value is unreadable
       (`_dead_property_initializers`).
 
@@ -293,6 +350,7 @@ def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[Mut
     skipped = (
         _string_format_percents(tree)
         | _string_concatenation_pluses(tree)
+        | _string_compound_assigns(tree)
         | _dead_property_initializers(tree)
     )
     return [

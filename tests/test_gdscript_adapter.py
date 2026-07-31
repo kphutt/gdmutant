@@ -1,6 +1,7 @@
 """Tests for the GDScript adapter's mutation half."""
 
 from gdmutant.adapters.gdscript import (
+    STATEMENT_DELETION_ID,
     apply_mutant,
     find_sites,
     generate_mutants,
@@ -375,6 +376,83 @@ def test_concatenation_skip_does_not_reach_the_string_format_percent_case() -> N
     # its `+` skipped as concatenation, and neither exclusion is what suppresses the other.
     src = 'func f(name, x):\n\treturn ("Hi " + name) % x\n'
     assert {s.token for s in find_sites(src)} == set()
+
+
+def test_string_append_compound_assign_is_not_a_mutation_site() -> None:
+    # `+=` -> `-=` on a string is not a changed program a test could disagree with — it is an
+    # invalid one, since GDScript's String defines no `-`. gdtoolkit's grammar has no types, so the
+    # NF-5 re-parse cannot see it: `s -= "b"` parses fine and only Godot rejects it. It must be
+    # skipped at generation time, exactly like the sibling `+`-concatenation case.
+    src = 'func f():\n\tvar s := "a"\n\ts += "b"\n'
+    assert not any(site.token == "+=" for site in find_sites(src))
+    assert not any(m.operator_id == "compound-assign" for m in generate_mutants("f.gd", src))
+
+
+def test_numeric_compound_assign_is_still_a_mutation_site() -> None:
+    # The positive direction: a genuine numeric `+=` must keep producing its compound-assign mutant.
+    src = "func f():\n\tvar n := 1\n\tn += 2\n"
+    assert any(site.token == "+=" for site in find_sites(src))
+    assert any(m.operator_id == "compound-assign" for m in generate_mutants("f.gd", src))
+
+
+def test_string_append_still_yields_its_statement_deletion_mutant() -> None:
+    # The skip is scoped to the one unkillable token swap. Deleting the whole append is a genuine,
+    # killable mutation of behavior, so it must survive the exclusion — the skip narrows noise, it
+    # does not stop measuring the line.
+    src = 'func f():\n\tvar s := "a"\n\ts += "b"\n'
+    # (the `var` declaration on line 2 is not deletable by design — see `_DELETABLE_STMT_NODES`)
+    deletions = [m for m in generate_mutants("f.gd", src) if m.operator_id == STATEMENT_DELETION_ID]
+    assert [m.span.line for m in deletions] == [3]
+
+
+def test_appending_a_concatenation_is_also_skipped() -> None:
+    # `s += "a" + name` is a bare arith_expr on the right: still string-building, so `-=` is still
+    # invalid. Both the inner `+` and the `+=` are skipped, and by the same operand typing.
+    src = 'func f(name):\n\tvar s := ""\n\ts += "a" + name\n'
+    assert {site.token for site in find_sites(src)} == set()
+
+
+def test_appending_a_parenthesised_concatenation_is_also_skipped() -> None:
+    # The parenthesised spelling reaches the skip through `_is_string_format_operand` rather than
+    # `_is_string_concatenation` — the other half of the `_is_string_valued` union.
+    src = 'func f(name):\n\tvar s := ""\n\ts += ("a" + name)\n'
+    assert not any(site.token == "+=" for site in find_sites(src))
+
+
+def test_appending_an_array_is_still_a_mutation_site() -> None:
+    # `parts += ["b"]` has a string *inside* an array literal, but the right operand is an `array`
+    # node, not a `string` one. Array defines `-` no better than String does, but recognition is
+    # specific to strings, so this stays a genuine site rather than being suppressed by accident.
+    src = 'func f(parts: Array):\n\tparts += ["b"]\n'
+    assert any(site.token == "+=" for site in find_sites(src))
+
+
+def test_appending_a_non_literal_is_still_a_mutation_site() -> None:
+    # The deliberate limit of the skip: these are all string-valued at runtime, but nothing in the
+    # parse tree proves it (a NAME, a StringName, a format expression, a call). Suppressing a real
+    # test gap is the costlier error, so all of them stay ordinary compound-assign sites.
+    for src in (
+        'func f(other):\n\tvar s := ""\n\ts += other\n',
+        'func f():\n\tvar s := ""\n\ts += &"a"\n',
+        'func f(x):\n\tvar s := ""\n\ts += "%s" % x\n',
+        'func f(x):\n\tvar s := ""\n\ts += str(x)\n',
+    ):
+        assert any(site.token == "+=" for site in find_sites(src)), src
+
+
+def test_other_compound_assign_operators_are_untouched() -> None:
+    # Only `+=` is ever skipped. `-=`/`*=`/`/=` on a string do not compile in the first place, so
+    # every occurrence of them in real source is numeric and must keep its mutant.
+    for token in ("-=", "*=", "/="):
+        src = f"func f():\n\tvar n := 4\n\tn {token} 2\n"
+        assert any(site.token == token for site in find_sites(src)), src
+
+
+def test_compound_assign_to_a_subscript_target_is_still_a_mutation_site() -> None:
+    # The assignment target can be a subtree rather than a bare name (`d["k"] += 1`), which puts a
+    # Tree where the operand pairing looks for the operator token. That must not confuse the scan.
+    src = 'func f(d: Dictionary):\n\td["k"] += 1\n'
+    assert any(site.token == "+=" for site in find_sites(src))
 
 
 def test_property_declaration_initializer_is_not_a_mutation_site() -> None:
