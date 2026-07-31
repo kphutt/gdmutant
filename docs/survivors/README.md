@@ -7,9 +7,28 @@ status: active
 
 A **surviving mutant** is a change gdmutant made to your source that every test still passed —
 proof that the behavior on that line isn't actually checked (coverage says the line *ran*; mutation
-says the result isn't *asserted*). Each section below explains one mutation operator: what the change
-is, why a survivor matters, how to kill it, and when it legitimately survives (an *equivalent
-mutant*). The `more` link in each survivor points to that operator's section here.
+says the result isn't *asserted*). A survivor isn't a bug in your code, and it isn't a bug in
+gdmutant — it's a **gap in your tests**, a specific, located "here's a change nothing caught."
+
+Each section below explains one mutation operator: what the change is, why a survivor matters, how
+to kill it, and when it legitimately survives (an *equivalent mutant*). The `more` link in each
+survivor points to that operator's section here.
+
+**The score.** Mutation score = detected ÷ (detected + survived), where detected = killed + timeouts
+(a mutation that hung the suite was caught, so a timeout counts as a kill). Three more categories
+show in the summary but never enter that formula:
+
+- **ignored** — suppressed by a `# gdmutant: ignore` annotation; generated for the report but never
+  run against your tests.
+- **invalid** — the mutant didn't parse; gdmutant's re-parse guard caught a broken mutation before it
+  ever reached your tests.
+- **error** — your test runner failed to execute this mutant (a crash, not a pass or a fail); tallied
+  on its own so one bad run doesn't discard the whole pass.
+
+There's no universal "good" score — it depends on how gnarly the code under test is. Watch the
+direction it moves, not the absolute number: a rising score as you kill survivors is progress, and a
+low score on code you just wrote is more urgent than a stable score on code nobody's touched in
+months.
 
 The rule of thumb for every operator: **your tests pass whether the code is the original or the
 mutant — so if the mutated behavior would be wrong, nothing guards against it.** Only you know the
