@@ -333,13 +333,14 @@ def test_all_survived_warning_ignores_unscored_verdicts() -> None:
     assert all_survived_warning(run) is not None
 
 
-def test_html_report_embeds_the_report_and_the_pinned_viewer() -> None:
-    # --html writes a ready-to-open page: the mutation-testing-elements viewer (pinned CDN) with the
-    # Stryker report inlined in a non-executable <script type="application/json"> block.
+def test_html_report_is_one_self_contained_file_carrying_the_report() -> None:
+    # --html writes a ready-to-open page that needs NOTHING else: no CDN, no fonts, no images. The
+    # Stryker report rides in a non-executable <script type="application/json"> block for tooling.
+    # (The page itself is covered in depth by tests/test_htmlreport.py.)
     report = stryker_report(_run(), "f.gd", _SRC, "gdscript")
     html = html_report(report)
-    assert "<mutation-test-report-app>" in html
-    assert "mutation-testing-elements@3.8.4" in html  # pinned version
+    assert "<html" in html
+    assert "unpkg" not in html and "<link" not in html
     block = html.split('id="mutation-test-report">', 1)[1].split("</script>", 1)[0]
     assert json.loads(block) == report  # the inlined JSON parses back to the exact report
 

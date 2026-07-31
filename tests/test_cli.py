@@ -177,7 +177,7 @@ def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFi
 def test_run_mutation_writes_html_report(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # --html writes a ready-to-open page with the mutation-testing-elements viewer.
+    # --html writes a ready-to-open page that needs no network to render.
     path = _gd(tmp_path)
     html_file = tmp_path / "report.html"
     rc = run_mutation(
@@ -185,7 +185,8 @@ def test_run_mutation_writes_html_report(
     )
     assert rc == 0
     html = html_file.read_text(encoding="utf-8")
-    assert "<mutation-test-report-app>" in html and "mutation-testing-elements@" in html
+    assert "<html" in html and "mutation score" in html
+    assert 'src="http' not in html
     assert "Wrote HTML report to" in capsys.readouterr().out
 
 

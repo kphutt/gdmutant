@@ -17,11 +17,11 @@ Locations are 1-based line + column with an exclusive end column, which is exact
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from gdmutant.engine.explain import doc_url, render_survivor, survivor_report_fields
+from gdmutant.engine.htmlreport import change_note, render_html
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
 from gdmutant.engine.mutants import Mutant
 
@@ -95,35 +95,15 @@ def stryker_report(run: MutationRun, path: str, source: str, language: str) -> d
     return stryker_report_multi({path: (run, source)}, language)
 
 
-#: The pinned mutation-testing-elements viewer version (kept in sync with the README recipe).
-_HTML_VIEWER_VERSION = "3.8.4"
-
-
 def html_report(report: dict[str, Any]) -> str:
-    """A ready-to-open HTML report: the standard mutation-testing-elements viewer with the
-    Stryker `report` dict inlined, so ``gdmutant run --html out.html`` yields **one file you
-    double-click** — no manual viewer wiring. This automates the ``view.html`` recipe the README
-    documents; the interactive viewer itself loads from a pinned CDN (needs network to *render*, not
-    to save). The JSON rides in a non-executable ``<script type="application/json">`` block with
-    ``</`` escaped to ``<\\/`` — valid JSON (``\\/`` escapes ``/``) that a ``</script>`` inside
-    GDScript source can't use to break out of the tag; the viewer reads it back at load."""
-    data = json.dumps(report).replace("</", "<\\/")
-    return (
-        "<!doctype html>\n"
-        '<html lang="en">\n'
-        '<head><meta charset="utf-8"><title>gdmutant mutation report</title></head>\n'
-        "<body>\n"
-        "<mutation-test-report-app></mutation-test-report-app>\n"
-        f'<script src="https://www.unpkg.com/mutation-testing-elements@{_HTML_VIEWER_VERSION}">'
-        "</script>\n"
-        f'<script type="application/json" id="mutation-test-report">{data}</script>\n'
-        "<script>\n"
-        '  document.querySelector("mutation-test-report-app").report =\n'
-        '    JSON.parse(document.getElementById("mutation-test-report").textContent);\n'
-        "</script>\n"
-        "</body>\n"
-        "</html>\n"
-    )
+    """A ready-to-open HTML report — **one self-contained file**, rendered by `htmlreport`.
+
+    Everything the page needs is inlined: styles, script, and the mascot. It opens with no network
+    at all, which is what makes it usable as a CI artifact, an email attachment, or an offline read.
+    The full Stryker `report` dict rides along in a non-executable
+    ``<script type="application/json">`` block so the file stays machine-readable for other tooling.
+    """
+    return render_html(report)
 
 
 #: Below this many surviving mutants the all-survived warning stays quiet: a 1-of-1 survivor is too
@@ -184,13 +164,14 @@ def console_summary(run: MutationRun) -> str:
 
 def _change_note(mutant: Mutant) -> str:
     """A plain-language, one-line rendering of what this survivor changed — the Markdown peer of the
-    caret note `render_survivor` draws. Deletion operators (a whole line, or a lone ``not`` token)
-    have no meaningful replacement, so they're phrased as a removal rather than an ``x -> ``."""
-    if mutant.operator_id == "statement-deletion":
-        return "This whole line was removed"
-    if mutant.replacement == "":
-        return f"Removed `{mutant.original}`"
-    return f"Changed `{mutant.original}` to `{mutant.replacement}`"
+    caret note `render_survivor` draws. The phrasing itself is `htmlreport.change_note`, shared so
+    the Markdown summary and the HTML report can't describe the same mutant two different ways;
+    only the backticks around the tokens are Markdown's own."""
+    return change_note(
+        mutant.operator_id,
+        f"`{mutant.original}`",
+        f"`{mutant.replacement}`" if mutant.replacement else "",
+    )
 
 
 def _survivor_markdown(mutant: Mutant, source_lines: list[str] | None) -> list[str]:

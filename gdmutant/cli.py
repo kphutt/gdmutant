@@ -868,8 +868,8 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     run_parser.add_argument(
         "--html",
         dest="html_path",
-        help="write a ready-to-open HTML report here (the mutation-testing-elements viewer, "
-        "report inlined; the viewer loads from a pinned CDN)",
+        help="write a ready-to-open HTML report here — one self-contained file (no network "
+        "needed) showing each survivor on its own source line, with the gap explained",
     )
     run_parser.add_argument(
         "--require-clean",

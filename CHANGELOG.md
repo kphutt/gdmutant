@@ -43,7 +43,13 @@ CLI. `0.1.0` is the current in-development version; the first git tag is still p
 - Reports: a console survivor summary that explains each gap (what's untested, why it matters, where
   to start a test), the
   [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) JSON
-  schema (`--json`), and a self-contained HTML report (`--html`).
+  schema (`--json`), and a genuinely self-contained HTML report (`--html`) — one file with every
+  style, script and image inlined, so it opens with no network at all and works as a CI artifact or
+  an email attachment. It marks the exact changed characters in your source, groups mutants into
+  **findings** (one spot, one operator — the unit of work a single test closes), and inlines the
+  per-operator survivor reference so an offline reader can still look up what an operator means. A
+  multi-file run opens on a file index ordered by survivors. Replaces an earlier page that inlined
+  the report JSON but loaded the generic viewer from a CDN, and so rendered blank offline.
 - `.gdmutant.toml` for persisted per-project flags; `--dry-run` to list mutants without running
   Godot.
 - Live self-test against real Godot in CI, pinning both runner paths to exact per-mutant outcomes.

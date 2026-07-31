@@ -130,7 +130,8 @@ to start a test.
 
 **Interoperates and fits CI.** `--json` emits the
 [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema
-for dashboards; `--html` renders a self-contained viewer. `--since <ref>` mutates only a PR's
+for dashboards; `--html` writes one self-contained page — no network, no CDN — that marks every
+survivor on its own source line and explains the gap beside it. `--since <ref>` mutates only a PR's
 changed lines, for a fast, **advisory** check — never a hard gate. `--exclude` globs;
 `.gdmutant.toml` holds per-project defaults.
 
