@@ -1403,7 +1403,8 @@ def _require_clean_error(source: str) -> str:
         f"error: --require-clean was given, but {source} has uncommitted changes.\n"
         "  gdmutant edits the file where it lies, so it will not start without a copy it "
         "could put back.\n"
-        "  Commit or stash your work, or re-run with --no-require-clean to accept the risk."
+        "  Commit or stash first to be safe. Or re-run with --no-require-clean to accept "
+        "the risk."
     )
 
 
@@ -1442,7 +1443,7 @@ def test_git_backup_is_unknown_outside_a_repo(tmp_path: Path) -> None:
     path = _gd(tmp_path)
     backup = _git_backup(str(path))
     assert backup.backed_up is None
-    assert "not inside a git working tree" in backup.reason
+    assert "not a git repository" in backup.reason
 
 
 def test_git_backup_is_unknown_when_git_is_unavailable(
@@ -2555,7 +2556,7 @@ def test_require_clean_refuses_when_the_file_is_not_in_a_repo(
 
     assert rc == 2
     err = capsys.readouterr().err
-    assert "not inside a git working tree" in err
+    assert "not a git repository" in err
     assert "--no-require-clean" in err, "the refusal must say how to proceed anyway"
 
 
@@ -2602,7 +2603,7 @@ def test_multi_file_require_clean_refuses_an_unjudgeable_tree(
     )
 
     assert rc == 2
-    assert "not inside a git working tree" in capsys.readouterr().err
+    assert "not a git repository" in capsys.readouterr().err
 
 
 # --- --jobs with a source outside --project exits cleanly, not with a traceback --------------
@@ -2645,3 +2646,222 @@ def test_multi_file_jobs_with_a_source_outside_the_project_exits_two(
 
     assert rc == 2
     assert "is not inside the project directory" in capsys.readouterr().err
+
+
+# --- The check has to describe the file whose bytes actually change -------------------------
+
+
+def test_a_symlinked_source_is_judged_by_the_file_it_points_at(tmp_path: Path) -> None:
+    # Git stores a symlink as the link string, not as the content it points at. So a committed,
+    # unmodified link read as safely backed up -- while the bytes gdmutant rewrites are the
+    # target's, which here live outside the repository entirely and have no copy anywhere. That is
+    # --require-clean handing back exactly the guarantee it exists to withhold.
+    (tmp_path / "repo").mkdir()
+    repo = _committed_repo(tmp_path / "repo")
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    target = outside / "real.gd"
+    target.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+    link = repo / "link.gd"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):  # pragma: no cover - unprivileged Windows
+        pytest.skip("this platform or account cannot create symlinks")
+    _git(repo, "add", "link.gd")
+    _git(repo, "commit", "-m", "commit the link itself")
+
+    backup = _git_backup(str(link))
+
+    assert backup.backed_up is not True, "the link's own cleanliness says nothing about the target"
+
+
+def test_a_symlink_to_a_tracked_file_in_the_same_repo_is_still_safe(tmp_path: Path) -> None:
+    # The other direction, so the fix is not just "refuse every symlink": a link whose target is
+    # committed and clean in the same repository really is recoverable, and must stay usable.
+    repo = _committed_repo(tmp_path)
+    link = repo / "alias.gd"
+    try:
+        link.symlink_to(repo / "f.gd")
+    except (OSError, NotImplementedError):  # pragma: no cover - unprivileged Windows
+        pytest.skip("this platform or account cannot create symlinks")
+
+    assert _git_backup(str(link)).backed_up is True
+
+
+# --- A git refusal keeps git's own explanation ------------------------------------------------
+
+
+def test_a_git_failure_that_is_not_a_missing_repo_keeps_gits_own_words(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Everything non-zero used to collapse into "not inside a git working tree". Dubious ownership
+    # is the case that matters: the repository is right there, git prints the exact command that
+    # fixes it, and the old message sent the user hunting for a repo they already have.
+    path = _gd(tmp_path)
+    real_run = subprocess.run
+
+    def dubious_ownership(argv: Sequence[str], **kwargs: object) -> object:
+        if list(argv)[:2] == ["git", "status"]:
+            return subprocess.CompletedProcess(
+                list(argv),
+                128,
+                stdout="",
+                stderr="fatal: detected dubious ownership in repository at '/repo'\n"
+                "To add an exception: git config --global --add safe.directory /repo\n",
+            )
+        return real_run(argv, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(cli.subprocess, "run", dubious_ownership)
+    backup = _git_backup(str(path))
+
+    assert backup.backed_up is None
+    assert "dubious ownership" in backup.reason
+    assert "safe.directory" in backup.reason, "git's own fix hint must survive"
+
+
+def test_a_silent_git_failure_still_says_something(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A non-zero exit with nothing on stderr must not produce a dangling "git could not check X — ".
+    path = _gd(tmp_path)
+    real_run = subprocess.run
+
+    def mute_failure(argv: Sequence[str], **kwargs: object) -> object:
+        if list(argv)[:2] == ["git", "status"]:
+            return subprocess.CompletedProcess(list(argv), 128, stdout="", stderr="   \n")
+        return real_run(argv, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(cli.subprocess, "run", mute_failure)
+    assert "said nothing about why" in _git_backup(str(path)).reason
+
+
+# --- Every message names the file git was actually asked about ---------------------------------
+
+
+def _link_to_a_file_outside_every_repo(tmp_path: Path) -> tuple[Path, Path]:
+    """A committed symlink inside a real repository, pointing at a file no repository covers."""
+    (tmp_path / "repo").mkdir()
+    repo = _committed_repo(tmp_path / "repo")
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    target = outside / "real.gd"
+    target.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+    link = repo / "link.gd"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):  # pragma: no cover - unprivileged Windows
+        pytest.skip("this platform or account cannot create symlinks")
+    _git(repo, "add", "link.gd")
+    _git(repo, "commit", "-m", "commit the link itself")
+    return link, target
+
+
+def test_a_git_failure_on_a_symlink_names_the_file_git_was_asked_about(tmp_path: Path) -> None:
+    # git runs in the resolved target's directory, which here has no repository above it. Reporting
+    # "not a git repository" against the link's own path describes a file that unambiguously IS in
+    # one, sitting right where the user can see it -- the same hunt for a repository they already
+    # have that keeping git's own words exists to end.
+    link, target = _link_to_a_file_outside_every_repo(tmp_path)
+
+    backup = _git_backup(str(link))
+
+    assert backup.backed_up is None
+    assert "not a git repository" in backup.reason
+    assert os.path.realpath(str(target)) in backup.reason
+
+
+def test_an_ignored_symlink_target_is_named_in_the_message(tmp_path: Path) -> None:
+    # The ignored and dirty messages judge the target too, so they need the same naming. Less
+    # misleading than the git-failure case, and wrong in the same way: the advice is about a file
+    # the message does not name.
+    (tmp_path / "repo").mkdir()
+    repo = _committed_repo(tmp_path / "repo")
+    other = tmp_path / "other"
+    other.mkdir()
+    _committed_repo(other)
+    (other / "generated.gd").write_text("var x := 1\n", encoding="utf-8")
+    (other / ".gitignore").write_text("generated.gd\n", encoding="utf-8")
+    _git(other, "add", ".gitignore")
+    _git(other, "commit", "-m", "ignore generated.gd")
+    link = repo / "link.gd"
+    try:
+        link.symlink_to(other / "generated.gd")
+    except (OSError, NotImplementedError):  # pragma: no cover - unprivileged Windows
+        pytest.skip("this platform or account cannot create symlinks")
+
+    backup = _git_backup(str(link))
+
+    assert backup.backed_up is False
+    assert "is ignored by git" in backup.reason
+    assert os.path.realpath(str(other / "generated.gd")) in backup.reason
+
+
+def test_a_dirty_symlink_target_is_named_in_the_message(tmp_path: Path) -> None:
+    # The third message, for completeness: "commit or stash first" is unfollowable advice when the
+    # file it names is the clean link rather than the dirty file the advice is really about.
+    (tmp_path / "repo").mkdir()
+    repo = _committed_repo(tmp_path / "repo")
+    other = tmp_path / "other"
+    other.mkdir()
+    _committed_repo(other)
+    (other / "f.gd").write_text("var changed := 2\n", encoding="utf-8")
+    link = repo / "link.gd"
+    try:
+        link.symlink_to(other / "f.gd")
+    except (OSError, NotImplementedError):  # pragma: no cover - unprivileged Windows
+        pytest.skip("this platform or account cannot create symlinks")
+
+    backup = _git_backup(str(link))
+
+    assert backup.backed_up is False
+    assert "has uncommitted changes" in backup.reason
+    assert os.path.realpath(str(other / "f.gd")) in backup.reason
+
+
+def test_an_ordinary_file_is_named_once_and_only_once(tmp_path: Path) -> None:
+    # The note is for a source whose bytes live somewhere else. A file that is its own target must
+    # not collect it: a message that says "(resolved to ...)" about a path the user typed reads as
+    # gdmutant having found something, when it found nothing. Asking `Path.absolute()` instead of
+    # `os.path.abspath` is what puts it there -- `absolute()` only prefixes the working directory
+    # and never follows a link, so every file under a symlinked DIRECTORY looks moved to it.
+    path = _gd(tmp_path)
+
+    assert cli._judged_path(str(path)) == str(path)
+    assert cli._judged_path(os.path.relpath(str(path))) == os.path.relpath(str(path))
+
+
+def test_a_path_typed_in_a_different_case_is_not_read_as_a_different_file(tmp_path: Path) -> None:
+    # Windows is a deployment target here, and `os.path.realpath` returns a name the way the
+    # filesystem spells it. So `c:\project\player.gd` resolves to `C:\Project\player.gd`, and a raw
+    # string comparison reads that as a move. `os.path.normcase` is what keeps the note off it, and
+    # is a no-op on the platforms where case really does distinguish two files.
+    path = _gd(tmp_path)
+    retyped = str(path).swapcase() if os.path.normcase("A") == os.path.normcase("a") else str(path)
+
+    assert cli._judged_path(retyped) == retyped
+
+
+# --- The advice has to be something the user can actually do ----------------------------------
+
+
+def test_a_gitignored_file_warns_by_default_with_advice_that_works(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # This IS a change to the default: the old check was silent here, because plain `git status`
+    # never mentions an ignored file. Warning is right -- it is the one case gdmutant can
+    # positively tell has no copy anywhere -- but "commit or stash first" is advice git will
+    # refuse to carry out on an ignored file, so it must not say that.
+    repo = _committed_repo(tmp_path)
+    (repo / ".gitignore").write_text("generated.gd\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-m", "ignore generated")
+    ignored = repo / "generated.gd"
+    ignored.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+
+    rc = run_mutation(str(ignored), str(repo), MarkerRunner(str(ignored), "a >= b"))
+
+    assert rc == 0, "the default mode warns, it does not refuse"
+    err = capsys.readouterr().err
+    assert "is ignored by git" in err
+    assert "Take it out of .gitignore" in err
+    assert "Commit or stash" not in err, "you cannot commit a file git is ignoring"

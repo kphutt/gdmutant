@@ -132,9 +132,16 @@ CLI.
 - Mutations are applied in place and restored after each mutant and on exit; gdmutant warns on
   uncommitted changes and `--require-clean` makes that a hard stop.
 - `--require-clean` refuses anything it could not confirm, not just changes it could see. A file
-  git ignores, a file outside any repository, and a machine with no git all used to pass the
-  check silently — the ignored file being the worst of them, since git has never held a copy of
-  it. Without the flag the default is unchanged: a file gdmutant cannot judge says nothing.
+  git ignores, a file outside any repository, a machine with no git, and a symlink whose target
+  is unbacked all used to pass the check silently — the ignored file and the symlink being the
+  worst of them, since git holds no copy of either. Without the flag, a file gdmutant cannot
+  judge still says nothing; a gitignored one now warns, which it did not before, because that is
+  the case gdmutant can positively tell has no copy anywhere.
+- A git command that fails for a reason other than "no repository here" — dubious ownership, a
+  corrupted repository — now reports what git actually said, including the fix it suggests,
+  instead of a generic "not inside a git working tree". When the source is a symlink, the message
+  names the file git was actually asked about, so a report about a target outside every repository
+  does not read as a report about the link.
 - A source file is never left half-written. Each rewrite is staged in a temporary file beside the
   target and renamed over it, so the path always holds one whole version or the other. If that
   cannot be done — no room for the temporary file, a failed flush, a lock that will not clear, or
