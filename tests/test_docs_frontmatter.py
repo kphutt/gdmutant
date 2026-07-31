@@ -16,6 +16,17 @@ title. Two of this repo's Markdown files are rendered somewhere else:
   invisible once rendered.)
 
 So this test pins both directions, and `AGENTS.md` records the same carve-out in prose.
+
+`type` and `status` were checked only for presence, not value, so a typo silently produces a new
+one-off category instead of an error. That is exactly how one ADR sat with `status: active` in its
+frontmatter while its own body said it had been superseded: nothing compared the field against a
+known vocabulary. `ALLOWED_TYPES` and `ALLOWED_STATUSES` below are read off the values this repo's
+docs actually use today, not invented, so extending either vocabulary is a one-line change made at
+the same time as the doc that first needs the new value.
+
+This is a closed-vocabulary check, not a build-inclusion check: it cannot tell a *correct* `status`
+from a *wrong but valid-looking* one (a doc marked `active` that should say `superseded` still
+passes), only a value outside the known set. That narrower claim is what it actually pins.
 """
 
 from pathlib import Path
@@ -37,6 +48,15 @@ RENDERED_ELSEWHERE = [
     REPO / "README.md",
     REPO / ".github" / "PULL_REQUEST_TEMPLATE.md",
 ]
+
+#: The `type` values in use across the live docs today: the Diataxis quartet (how-to, reference,
+#: explanation) plus the two kinds those don't cover, a changelog-style `record` and an ADR
+#: `decision`. Add a value here only once a real doc needs it.
+ALLOWED_TYPES = {"how-to", "reference", "explanation", "decision", "record"}
+
+#: The `status` values in use today. `active` builds. `superseded` marks a decision a later one
+#: replaced (see AGENTS.md's "build only from `status: active`").
+ALLOWED_STATUSES = {"active", "superseded"}
 
 
 def _frontmatter(path: Path) -> dict[str, str]:
@@ -65,6 +85,29 @@ def test_every_live_doc_declares_its_type_and_status(path: Path) -> None:
     assert fields, f"{path.relative_to(REPO)} has no YAML frontmatter"
     assert fields.get("type"), f"{path.relative_to(REPO)} declares no `type`"
     assert fields.get("status"), f"{path.relative_to(REPO)} declares no `status`"
+
+
+@pytest.mark.parametrize("path", LIVE_DOCS, ids=lambda p: p.name)
+def test_every_live_doc_uses_a_known_type_and_status(path: Path) -> None:
+    fields = _frontmatter(path)
+    doc_type, status = fields.get("type"), fields.get("status")
+    assert doc_type in ALLOWED_TYPES, (
+        f"{path.relative_to(REPO)} declares `type: {doc_type}`, outside the known vocabulary "
+        f"{sorted(ALLOWED_TYPES)}. A typo here silently invents a new one-off category instead "
+        "of failing."
+    )
+    assert status in ALLOWED_STATUSES, (
+        f"{path.relative_to(REPO)} declares `status: {status}`, outside the known vocabulary "
+        f"{sorted(ALLOWED_STATUSES)}. A typo here would silently drop the doc from the build with "
+        "no error."
+    )
+
+
+def test_the_vocabularies_are_not_silently_empty() -> None:
+    # A vocabulary that collapsed to the empty set would turn the check above into "no value is
+    # ever allowed": loud, but for the wrong reason. Pin both floors explicitly.
+    assert ALLOWED_TYPES
+    assert ALLOWED_STATUSES
 
 
 @pytest.mark.parametrize("path", RENDERED_ELSEWHERE, ids=lambda p: p.name)

@@ -68,8 +68,8 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
 
 - `main` is protected, and new behavior comes with tests: this is a testing tool, so we hold
   ourselves to it.
-- CI gate: `ruff` + `mypy` + `pytest` + `pip-audit`, plus a gitleaks secret scan. GitHub Actions
-  are SHA-pinned (Dependabot bumps them).
+- CI gate: `ruff` + `mypy` + `pytest` + `pip-audit`, plus a gitleaks secret scan and zizmor
+  (workflow security). GitHub Actions are SHA-pinned (Dependabot bumps them).
 - Windows is a deployment target, not just a dev machine. gdmutant is a cross-platform Python
   CLI people run on Windows, so test on Windows for real, not just Linux. Two concrete traps to
   watch for: console output can crash under the legacy `cp1252` code page, and `python3` can resolve
