@@ -39,6 +39,7 @@ from gdmutant.engine.loop import (
     BaselineFailed,
     MutationRun,
     ProgressStyle,
+    SourceOutsideProject,
     run,
     run_paths,
 )
@@ -735,6 +736,9 @@ def run_mutation(
             jobs=jobs,
             progress_style=progress_style,
         )
+    except SourceOutsideProject as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
     except BaselineFailed as error:
         return _report_baseline_failure(error, project_dir, runner)
     # With --json - the report goes to stdout, so keep the human summary on stderr — an agent
@@ -860,6 +864,9 @@ def run_mutation_paths(
             jobs=jobs,
             progress_style=progress_style,
         )
+    except SourceOutsideProject as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
     except BaselineFailed as error:
         return _report_baseline_failure(error, project_dir, runner)
     report_to_stdout = json_path == "-"

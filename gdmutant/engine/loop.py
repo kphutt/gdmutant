@@ -20,7 +20,6 @@ mutant is applied in isolation and the original restored in a ``finally`` — se
 from __future__ import annotations
 
 import math
-import os
 import queue
 import shutil
 import tempfile
@@ -50,6 +49,15 @@ def _derive_timeout(baseline_secs: float) -> float:
 
 class BaselineFailed(Exception):
     """The unmutated suite failed — mutation testing a red suite is meaningless (FG-3.3)."""
+
+
+class SourceOutsideProject(Exception):
+    """A file to mutate does not lie inside the project directory, so `jobs > 1` cannot isolate it.
+
+    Parallel evaluation works by giving each worker its own copy of the project and mutating the
+    file *inside that copy*. A file outside the project is in no copy, so there is nothing to
+    isolate and nothing sound to run — see `_project_relative`.
+    """
 
 
 class Verdict(Enum):
@@ -510,6 +518,39 @@ def _run_mutants_serial(
     return outcomes
 
 
+def _project_relative(path: str, project_dir: str) -> str:
+    """Where `path` sits inside `project_dir`, as a relative path. Raises if it sits outside.
+
+    Each parallel worker mutates ``<its copy of the project>/<this>``. That address is only inside
+    the copy while the file is genuinely under the project, and nothing used to check: the relative
+    path was taken as-is, so a source outside the project produced one starting with ``..`` and the
+    worker wrote *through* its own copy and out the other side.
+
+    What that cost was not a stray file so much as a wrong answer. The mutation never landed in the
+    copy the tests were about to run against, so every mutant came back SURVIVED — gdmutant's worst
+    failure mode, a survivor report that is quietly false. Every worker also computed the *same*
+    outside address, so they raced each other on one file. And the further out the file sat, the
+    further out the write went: enough ``..`` segments and it left the temporary directory
+    altogether, landing wherever that resolved to.
+
+    Refusing is the honest answer rather than a silent repair. There is no copy of this file for a
+    worker to mutate, so there is no isolated run to be had — only a serial one, against the real
+    file, which is what `jobs=1` already does.
+    """
+    source = Path(path).resolve()
+    project = Path(project_dir).resolve()
+    try:
+        return str(source.relative_to(project))
+    except ValueError:
+        # relative_to covers both "outside the project" and Windows' separate-drive case, which
+        # os.path.relpath used to raise on unhandled, taking the whole run down with a traceback.
+        raise SourceOutsideProject(
+            f"{path} is not inside the project directory {project_dir}, so --jobs cannot give it "
+            "an isolated copy to mutate. Point --project at a directory containing it, or drop "
+            "--jobs to run serially."
+        ) from None
+
+
 def _run_mutants_parallel(
     project_dir: str,
     path: str,
@@ -548,7 +589,7 @@ def _run_mutants_parallel(
     lottery (fail toward slower, never toward fewer — the prime directive).
     """
     total = len(mutants)
-    rel = os.path.relpath(Path(path).resolve(), Path(project_dir).resolve())
+    rel = _project_relative(path, project_dir)
     outcomes: dict[int, MutantOutcome] = {}
 
     # Serial pre-pass: resolve ignored/invalid without Godot, and apply (gdtoolkit) single-threaded.

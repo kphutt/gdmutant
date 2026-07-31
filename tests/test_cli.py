@@ -2593,3 +2593,45 @@ def test_multi_file_require_clean_refuses_an_unjudgeable_tree(
 
     assert rc == 2
     assert "not inside a git working tree" in capsys.readouterr().err
+
+
+# --- --jobs with a source outside --project exits cleanly, not with a traceback --------------
+
+
+def _outside_project(tmp_path: Path) -> tuple[Path, Path]:
+    """A project directory, and a .gd file that is its sibling rather than inside it."""
+    project = tmp_path / "godot-project"
+    project.mkdir()
+    outside = _gd(tmp_path)  # f.gd, next to the project rather than in it
+    return project, outside
+
+
+def test_jobs_with_a_source_outside_the_project_exits_two_with_an_explanation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The engine refuses to write outside a worker's copy. The CLI has to turn that into the same
+    # exit 2 every other setup mistake gets, with a message -- not a raw traceback.
+    project, outside = _outside_project(tmp_path)
+
+    rc = run_mutation(str(outside), str(project), MarkerRunner(str(outside), "zzz"), jobs=2)
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "is not inside the project directory" in err
+    assert "Traceback" not in err
+
+
+def test_multi_file_jobs_with_a_source_outside_the_project_exits_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The multi-file path builds its own run, so it needs the same guard proved separately.
+    project, outside = _outside_project(tmp_path)
+    second = tmp_path / "g.gd"
+    second.write_text(outside.read_text(encoding="utf-8"), encoding="utf-8")
+
+    rc = cli.run_mutation_paths(
+        [str(outside), str(second)], str(project), MarkerRunner(str(outside), "zzz"), jobs=2
+    )
+
+    assert rc == 2
+    assert "is not inside the project directory" in capsys.readouterr().err
