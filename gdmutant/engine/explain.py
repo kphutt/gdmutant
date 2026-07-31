@@ -17,7 +17,9 @@ code-aware domain guess and a drafted test are the opt-in LLM mode (L2), and liv
 
 from __future__ import annotations
 
+import re
 import textwrap
+from collections.abc import Sequence
 
 from gdmutant.engine.mutants import Mutant
 
@@ -104,30 +106,170 @@ _FALLBACK = (
     "Add a test that fails under this exact change.",
 )
 
+#: Reference sections that explain a survivor by **where it sits** rather than by which operator
+#: produced it. Any operator can land on an `assert` line or inside an `enum`, and in both places
+#: the operator's own advice is not merely unhelpful but impossible to follow — which is what makes
+#: a whole report read as noise. Neither is an operator, so each is keyed by its own heading slug on
+#: the reference page, exactly like the operator anchors.
+ASSERT_SECTION = "assert"
+ENUM_SECTION = "enum-member"
 
-def doc_url(operator_id: str) -> str:
-    """The stable explainer URL for an operator (clickable anywhere; ShellCheck model) — a section
-    anchor into the merged survivor reference. The operator id is already the heading slug, so it is
-    the anchor verbatim."""
-    return f"{DOC_BASE_URL}#{operator_id}"
+#: An `assert(` call opening on a source line. The `(?<![\w.])` lookbehind keeps it off `my_assert(`
+#: and `helper.assert(`.
+_ASSERT_CALL_RE = re.compile(r"(?<![\w.])assert\s*\(")
+#: An `enum` declaration opening. Anchored at the start of the line, so a string or a comment
+#: mentioning "enum" cannot match. `assert`, `enum` and `_enclosing_func`'s `func` are the only
+#: language tokens the explainer knows; everything else it says is derived from the mutant alone.
+_ENUM_START_RE = re.compile(r"^\s*enum\b")
+
+_ASSERT_EXPLAIN = (
+    "This mutant sits inside an `assert`, and your tests pass either way. A weakened assertion "
+    "only behaves differently on an input the original would have rejected — and a failed assert "
+    "aborts the whole Godot process, which a test running inside that process cannot observe as "
+    "anything but its own death. So no in-process test can kill this one.",
+    "Low, and it is not a gap in your tests. The assert guards a condition your callers are "
+    "supposed to already satisfy; the real risk is reading a score built from mutants like this "
+    "one as if every survivor were actionable.",
+    "Treat it as a legitimate survivor. If you want it out of the report, mark the line with "
+    "`# gdmutant: ignore` — it stays visible as `ignored` and drops out of the score. Only reach "
+    "for a test if the condition is one real callers can actually violate, in which case the "
+    "check belongs in a branch that returns or emits an error, not in an assert.",
+)
+_ENUM_EXPLAIN = (
+    "This mutant changes an `enum` member's value, and your tests pass either way. Code that "
+    "refers to the member by name moves with it — both sides of `cell == Cell.FLOOR` change "
+    "together — so nothing your tests observe reads the number itself.",
+    "Usually none: most enums are purely symbolic. It matters when the number is read AS a "
+    "number — a bitflag enum combined with `|` or `&`, or a value written to a save file, sent "
+    "over a network, or handed to a shader or another program. There this really is an uncaught "
+    "bug.",
+    "First decide whether the number matters at all. If it does, pin it — assert the concrete "
+    "value, or round-trip it through whatever reads it as a number. If every use is by name this "
+    "is an equivalent mutant: mark the line `# gdmutant: ignore` with your reason, or leave it. "
+    "gdmutant reads one file at a time, so it cannot make that call for you.",
+)
+
+#: Section -> narrative, for the contexts above. Looked up only when `context_section` names one,
+#: so an operator's own explanation is still the default for everything else.
+_CONTEXT_EXPLAIN: dict[str, tuple[str, str, str]] = {
+    ASSERT_SECTION: _ASSERT_EXPLAIN,
+    ENUM_SECTION: _ENUM_EXPLAIN,
+}
 
 
-def _narrative(mutant: Mutant) -> tuple[str, str, str]:
-    """The ``(gap, risk, start)`` sentences for `mutant`'s operator, token-substituted. This is the
-    single source of the survivor copy: both the console block (`render_survivor`) and the HTML
-    report fields (`survivor_report_fields`) read it, so the two outputs can never drift."""
+def doc_url(anchor: str) -> str:
+    """The stable explainer URL for a reference section (clickable anywhere; ShellCheck model) — a
+    section anchor into the merged survivor reference. Every ``## …`` heading on that page slugifies
+    to its key (an operator id, or `ASSERT_SECTION`), so the key is the anchor verbatim."""
+    return f"{DOC_BASE_URL}#{anchor}"
+
+
+def _on_assert(original: str, column: int, source_line: str) -> bool:
+    """True when a mutant changes something an `assert` call guards on `source_line`.
+
+    `original` is the text the mutant replaced and `column` its 1-based start column. Two shapes
+    count, and the column is what separates them from a false positive:
+
+    * a token **inside** the call — the assert's ``(`` closes at or before the mutated column, so a
+      trailing ``# assert(...)`` comment further along the line can never match;
+    * a **deletion of the assert statement itself**, whose original text is the whole call.
+
+    Anything else on a line that merely mentions "assert" is left alone.
+    """
+    if _ASSERT_CALL_RE.match(original):
+        return True
+    match = _ASSERT_CALL_RE.search(source_line)
+    return match is not None and match.end() <= column - 1
+
+
+def _in_enum(source_lines: Sequence[str], line_no: int) -> bool:
+    """True when 1-based `line_no` falls inside an ``enum … { … }`` declaration.
+
+    Whole-file, not per-line, because an enum body spans lines: the mutated line is usually just
+    ``FLOOR = 1,``, which says nothing about itself. So the scan runs from the top of the file to
+    `line_no`, tracking brace depth, and stops there.
+
+    Brace counting is textual, so a ``{`` or ``}`` inside a comment or a string on an enum line
+    would skew the depth. That only ever mis-scopes an *explanation* — it can never change a
+    verdict, a score, or which mutants run — and the alternative (an AST walk) would put a
+    GDScript parse behind every reporting surface.
+    """
+    depth = 0
+    for index, text in enumerate(source_lines[:line_no], start=1):
+        opening = depth == 0 and _ENUM_START_RE.match(text) is not None
+        if depth == 0 and not opening:
+            continue
+        if index == line_no:  # the declaration's own line, or a line in its body
+            return True
+        depth += text.count("{") - text.count("}")
+        depth = max(depth, 0)
+    return False
+
+
+def context_section(
+    original: str, line: int, column: int, source_lines: Sequence[str] | None
+) -> str | None:
+    """The reference section that explains this mutant by **where it sits**, or ``None`` when its
+    operator's own section is the right one.
+
+    Primitives rather than a `Mutant`, so the HTML report — which works from the report *dict*, not
+    the objects — asks the same question of the same rule instead of growing a second copy that can
+    drift. `source_lines` is the whole file; without it (an unreadable source) there is nothing to
+    read, and the operator narrative stands: accurate, just less specific.
+
+    This names a *location*, never an equivalence. Every one of these mutants is still generated,
+    still run, and still counted in the score exactly as before — what changes is only what
+    gdmutant says about the ones that survive.
+    """
+    if source_lines is None:
+        return None
+    if 1 <= line <= len(source_lines) and _on_assert(original, column, source_lines[line - 1]):
+        return ASSERT_SECTION
+    if _in_enum(source_lines, line):
+        return ENUM_SECTION
+    return None
+
+
+def reference_section(mutant: Mutant, source_lines: Sequence[str] | None) -> str:
+    """The survivor-reference section that explains `mutant` — a `context_section` when one applies,
+    else its operator id. The `more` link, the Markdown link and the HTML report's inline expansion
+    all resolve through this, so no surface can send a reader to the page that contradicts the
+    explanation printed beside it."""
+    return context_section(mutant.original, mutant.span.line, mutant.span.column, source_lines) or (
+        mutant.operator_id
+    )
+
+
+def _narrative(mutant: Mutant, source_lines: Sequence[str] | None = None) -> tuple[str, str, str]:
+    """The ``(gap, risk, start)`` sentences for `mutant`, token-substituted. This is the single
+    source of the survivor copy: the console block (`render_survivor`), the Markdown job summary and
+    the report fields (`survivor_report_fields`) all read it, so the surfaces can never drift.
+
+    `source_lines` is the mutated file when the caller has it. Given it, a mutant in one of the
+    `context_section` places gets that context's narrative instead of its operator's, because there
+    the operator's advice is impossible to follow: "add a test with two equal operands" for a check
+    whose failure kills the process, or "add a test at the boundary this number sets" for an enum
+    tag that has no boundary. Without the file (an unreadable source) the operator narrative still
+    stands — accurate, just less specific.
+    """
+    section = context_section(mutant.original, mutant.span.line, mutant.span.column, source_lines)
+    if section is not None:
+        return _CONTEXT_EXPLAIN[section]
     gap_t, risk_t, start_t = _EXPLAIN.get(mutant.operator_id, _FALLBACK)
     fmt = {"a": mutant.original, "b": mutant.replacement}
     return gap_t.format(**fmt), risk_t.format(**fmt), start_t.format(**fmt)
 
 
-def survivor_report_fields(mutant: Mutant) -> tuple[str, str]:
+def survivor_report_fields(
+    mutant: Mutant, source_lines: Sequence[str] | None = None
+) -> tuple[str, str]:
     """The survivor narrative trimmed for the HTML report's ``description`` and ``statusReason``
     fields — the same gap/risk/start copy `render_survivor` shows, minus the box-drawing, caret,
     and docs link the HTML viewer already draws for itself. ``description`` carries the gap (what
     the tests miss); ``statusReason`` carries the risk and the starting point (why it matters and
-    where to begin), blank-line separated. Both are non-empty for every survivor."""
-    gap, risk, start = _narrative(mutant)
+    where to begin), blank-line separated. Both are non-empty for every survivor. `source_lines` is
+    passed to `_narrative` (see there: it is what lets a survivor explain where it sits)."""
+    gap, risk, start = _narrative(mutant, source_lines)
     return gap, f"{risk}\n\n{start}"
 
 
@@ -164,7 +306,6 @@ def render_survivor(mutant: Mutant, source_lines: list[str] | None) -> list[str]
     op = mutant.operator_id
     a = mutant.original
     b = mutant.replacement  # only rendered for non-deletion operators (deletions use the code line)
-    gap, risk, start = _narrative(mutant)
 
     line_no, col = mutant.span.line, mutant.span.column
     func = None
@@ -172,6 +313,11 @@ def render_survivor(mutant: Mutant, source_lines: list[str] | None) -> list[str]
     if source_lines is not None and 1 <= line_no <= len(source_lines):
         src = source_lines[line_no - 1]
         func = _enclosing_func(source_lines, line_no)
+    gap, risk, start = _narrative(mutant, source_lines)
+    # An assert survivor's `more` link goes to the section that explains *that*, not to the
+    # operator's — the operator's page would send a reader off to write the test this one cannot be
+    # killed by. The header still names the operator: it is still what changed.
+    anchor = reference_section(mutant, source_lines)
 
     prefix, suffix = "──── survived ", f" {op} ────"
     # A negative repeat count is already "" in Python, so no clamp is needed for a long operator id.
@@ -196,6 +342,6 @@ def render_survivor(mutant: Mutant, source_lines: list[str] | None) -> list[str]
     out.append("")
     out += _block("start", start)
     out.append("")
-    out.append(f"  more   {doc_url(op)}")
+    out.append(f"  more   {doc_url(anchor)}")
     out.append("─" * _WIDTH)
     return out

@@ -45,7 +45,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from gdmutant.engine.explain import DOC_BASE_URL, _display_col
+from gdmutant.engine.explain import DOC_BASE_URL, _display_col, context_section
 from gdmutant.engine.survivor_reference import SURVIVOR_REFERENCE
 
 #: Statuses that count as *caught* — the same set `MutationRun.detected` counts (a mutation that
@@ -149,6 +149,12 @@ class Finding:
     colEnd: int  # noqa: N815 — matches the key the inlined renderer reads
     op: str
     func: str
+    #: The survivor-reference section this finding expands and links to — its operator, or
+    #: `explain.ASSERT_SECTION` when the mutated token sits inside an `assert`. Stored per finding
+    #: (unlike the doc URL, which the page builds) because only the generator can see the source
+    #: line the rule reads, and a page that showed "what a comparison survivor means" beside an
+    #: explanation about asserts would contradict itself.
+    ref: str = ""
     angles: list[Angle] = field(default_factory=list)
     gap: str = ""
     risk: str = ""
@@ -306,6 +312,10 @@ def _findings(
                 colEnd=col_end,
                 op=operator,
                 func=_enclosing_func(lines, line_no),
+                # The *raw* lines and the report's own (raw) start column, so the shared rule
+                # sees exactly what the console saw — the tab-expanded copies the page draws would
+                # shift every column past a tab.
+                ref=context_section(original, line_no, int(start["column"]), raw_lines) or operator,
             )
             by_key[key] = finding
             findings.append(finding)
@@ -390,7 +400,7 @@ def report_view(report: dict[str, Any]) -> ReportView:
     files.sort(key=lambda f: (-f.survived, f.path))
     detected = sum(v for k, v in counts.items() if k in _DETECTED)
     survived = counts.get("Survived", 0)
-    present = {f.op for file in files for f in file.findings}
+    present = {f.ref for file in files for f in file.findings}
     return ReportView(
         files=files,
         docBase=DOC_BASE_URL,
@@ -688,7 +698,7 @@ function esc(s){
 function plural(n, word){ return n + ' ' + word + (n === 1 ? '' : 's'); }
 // Built here rather than stored per finding: the same anchor `explain.doc_url` builds, and one
 // copy instead of one per finding (which cost ~240 KB on a 2851-mutant directory run).
-function docUrl(f){ return D.docBase + '#' + f.op; }
+function docUrl(f){ return D.docBase + '#' + f.ref; }
 
 // ---- the address bar -------------------------------------------------------------------------
 //
@@ -825,11 +835,11 @@ function doneHTML(f, state){
 // angle: "what a numeric survivor means" beside a CAUGHT tag contradicts the tag.
 function refHTML(f){
   if (!isSv(f)) return '';
-  const secs = D.refs[f.op];
-  if (!secs) return `<a href="${esc(docUrl(f))}">${esc(f.op)} reference &rarr;</a>`;
+  const secs = D.refs[f.ref];
+  if (!secs) return `<a href="${esc(docUrl(f))}">${esc(f.ref)} reference &rarr;</a>`;
   const open = refOpen === f.fid;
   return `<button class="refbtn" data-ref="${esc(f.fid)}" aria-expanded="${open}">`
-    + `${open ? '&#9662;' : '&#9656;'} what a ${esc(f.op)} survivor means</button>`
+    + `${open ? '&#9662;' : '&#9656;'} what this ${esc(f.ref)} survivor means</button>`
     + (open ? `<div class="ref">`
         + secs.map(([k, v]) => `<dl class="f"><dt>${esc(k)}</dt><dd>${v}</dd></dl>`).join('')
         + `<a href="${esc(docUrl(f))}">read it on GitHub &rarr;</a></div>` : '');

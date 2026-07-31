@@ -202,7 +202,72 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
         (
             "Equivalent mutant?",
             "Legitimate if the statement genuinely has no observable effect (dead code) — consider "
-            "removing it.",
+            "removing it. The commonest shape by far is a **redundant initializer**: `_cells = "
+            "PackedByteArray()` when the declaration `var _cells: PackedByteArray` already "
+            "default-initialises it, or an assignment that just restates the declaration's own `=` "
+            "value. Confirm one by checking that nothing can write to the variable before this "
+            "line — the same statement inside a `reset()` that runs repeatedly is **not** "
+            "redundant, and a test failing to catch its removal is a real gap.",
+        ),
+    ),
+    "assert": (
+        (
+            "The change",
+            "gdmutant changed a token inside an `assert(...)` call — a comparison, a connective, a "
+            "number — or removed the assert statement outright.",
+        ),
+        (
+            "Why it survived",
+            "a mutated assertion only behaves differently on an input the original would have "
+            "**rejected**, and a failed `assert` aborts the whole Godot process. A test running "
+            "inside that process cannot observe the abort as anything but its own death, so no "
+            "test can pass on the original and fail on the mutant. The survivor is structural — it "
+            "is not a gap in your suite.",
+        ),
+        (
+            "How to kill it",
+            "from an in-process harness you cannot, and it is not worth trying. To take it out of "
+            "the report, mark the line `# gdmutant: ignore`; it stays visible as `ignored` and "
+            "leaves the score. gdmutant does **not** skip assert lines for you — a tool that "
+            "quietly drops code from its own report is telling you a smaller truth than it knows, "
+            "and which of your asserts are load-bearing is your call, not its.",
+        ),
+        (
+            "Equivalent mutant?",
+            "Effectively yes, and it is the common case rather than the exception: on defensive "
+            "code, assert lines can hold most of a file's survivors and leave a healthy-looking "
+            "score with nothing actionable behind it. If the condition is one real callers can "
+            "actually violate, that is worth knowing — but the fix is to move the check into a "
+            "branch that returns or emits an error, where a test can reach it, not to write a test "
+            "that expects a crash.",
+        ),
+    ),
+    "enum-member": (
+        (
+            "The change",
+            "gdmutant changed the number assigned to a member of an `enum` declaration.",
+        ),
+        (
+            "Why it survived",
+            "most enums are used symbolically. `if cell == Cell.FLOOR` compares a name to a name, "
+            "and both sides move together when the number behind it changes, so nothing your tests "
+            "observe reads the number at all.",
+        ),
+        (
+            "How to kill it",
+            "only worth doing if the number is genuinely read **as a number**. Two cases where it "
+            "is: a **bitflag** enum (`1, 2, 4`, combined with `|` and `&`), and a value that "
+            "leaves the program — written to a save file, sent over a network, handed to a shader "
+            "or another tool. There a changed number is a real bug, and a test that pins the "
+            "concrete value (or round-trips it through whatever reads it) kills the mutant.",
+        ),
+        (
+            "Equivalent mutant?",
+            "Very often, and **gdmutant cannot tell**. It analyses one file at a time, so a "
+            "numeric use in another file, in a save format, or in engine code is outside what it "
+            "can see — and suppressing these by default would hide exactly the bitflag and "
+            "serialisation bugs that matter most. So they are reported and the call is yours: `# "
+            "gdmutant: ignore` on the line, with your reason, once you have checked.",
         ),
     ),
 }

@@ -65,6 +65,16 @@ CLI, no AI required.
 
 **Godot 4.3+**, the GUT or gdUnit4 addon installed, and a test suite that already passes.
 
+**A project Godot has already imported.** On a checkout Godot has never opened, it imports every
+asset before it will run anything — minutes of total silence on a real game, which is easy to read
+as a hung tool. `--runner gdunit4` and `--runner gut` do that warm-up for you and say so.
+`--runner command` cannot: it only knows the command you hand it. Do it once yourself, and every
+later run starts in seconds:
+
+```sh
+godot --headless --path path/to/your-game --import
+```
+
 **Python 3.12+** — and if you don't have Python, don't go install it. Install
 [uv](https://docs.astral.sh/uv/) instead: it fetches its own Python and runs gdmutant on it.
 
@@ -181,12 +191,19 @@ trend as you kill survivors. See the [survivor reference](docs/survivors/README.
 4. **Re-run to confirm**, then **move on** — done with a file at zero `survived`. No third state,
    so the loop always ends.
 
-**Runtime.** gdmutant boots Godot once per mutant, so time scales with mutant count — it says so up
-front, and `--jobs N` runs N at once:
+**Runtime.** gdmutant boots Godot once per mutant, so time scales with mutant count. It tells you
+what the run is before it starts, keeps you posted while it goes, and prints the wall-clock when it
+finishes — but it never predicts a finish time, because it cannot do that honestly (see
+[Troubleshooting](#troubleshooting)). `--jobs N` runs N at once:
 
 ```
-18 mutants; baseline ~1.4s each → estimated ≈ 24s
+18 mutants to run. Baseline suite 1.4s; each mutant is capped at 30s.
+… 7/18 done in 1m 12s — 2 survived, 1 timed out.
+Done in 6m 32s — 18 mutants, 8 timed out (4m 0s of that). Baseline suite 1.4s.
 ```
+
+The heartbeat lands every 30s on a terminal, and less often in a log or in CI. `--progress plain`
+forces the quieter cadence; `--progress none` turns it off.
 
 ## Compatibility
 
@@ -229,7 +246,25 @@ full path in that string yourself.
 `0` even on a harness that fails to *compile*, so gate a `--command` harness on `can_instantiate()`.
 
 **It's slow.** Godot boots once per mutant. Mutate one file at a time, and use `--jobs N` — real
-but sub-linear (~3× at `--jobs 4`), since every worker copies the project.
+but sub-linear (~3× at `--jobs 4`), since every worker copies the project. Watch the closing line
+for how much of the time was timeouts; a few hanging mutants can outweigh every other mutant
+combined, and `--timeout` caps each one.
+
+**How long will it take?** gdmutant will not guess, and no other mutation tester does either. Up
+front it tells you what the run *is* — how many mutants, and the cap on each, so you know how long
+silence is normal. A rate estimate was built and measured before being dropped: on an even workload
+it tracked the true finish to within 5%, but on a run whose hanging mutants arrived late it read
+3.2s at 25% done for a run that took 58s. A mutant that hangs costs its whole timeout, and nothing
+before it hints that it will.
+
+**The first run sits there for minutes and never starts.** The project has not been imported — see
+[Prerequisites](#prerequisites). Run `godot --headless --path <project> --import` once. Under
+`--runner command` gdmutant says so up front when the project has no `.godot/` directory.
+
+**Most survivors are on `assert` lines.** Expected, and not noise you have to fix: a failed `assert`
+kills the Godot process, so no in-process test can catch a weakened one. gdmutant explains each one
+and counts them under the survivor list rather than hiding them —
+[the full story](docs/survivors/README.md#assert).
 
 ## How it works
 

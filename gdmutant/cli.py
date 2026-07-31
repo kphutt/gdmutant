@@ -34,7 +34,13 @@ from gdmutant.adapters.gdscript.runner import (
     GutRunner,
 )
 from gdmutant.engine.adapter import Adapter
-from gdmutant.engine.loop import BaselineFailed, MutationRun, run, run_paths
+from gdmutant.engine.loop import (
+    BaselineFailed,
+    MutationRun,
+    ProgressStyle,
+    run,
+    run_paths,
+)
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import Operator
 from gdmutant.engine.report import (
@@ -47,10 +53,50 @@ from gdmutant.engine.report import (
 )
 from gdmutant.engine.runner import CommandRunner, Runner, RunWarning
 
+#: Where the Godot editor's own binary lives inside the macOS app bundle — the path a macOS user
+#: needs, whichever flag they end up putting it in.
+_MACOS_GODOT_BINARY = "/Applications/Godot.app/Contents/MacOS/Godot"
 _MISSING_GODOT_MACOS_HINT = (
     "  On macOS, Godot ships as an app bundle and is never on PATH — pass the binary directly:\n"
-    "    --godot /Applications/Godot.app/Contents/MacOS/Godot"
+    f"    --godot {_MACOS_GODOT_BINARY}"
 )
+#: The same fact for ``--runner command``, where the binary goes inside ``--command`` and naming
+#: ``--godot`` here would repeat the very mistake the hint above it is correcting.
+_MISSING_GODOT_MACOS_COMMAND_HINT = (
+    "  On macOS, Godot ships as an app bundle and is never on PATH — its binary is at\n"
+    f"    {_MACOS_GODOT_BINARY}"
+)
+
+
+#: Env vars whose value is exactly ``"true"`` when a job is running under CI. The pair (and the
+#: exact-string test rather than mere presence) is Infection's, which is the closest thing this
+#: corner has to a convention.
+_CI_ENV_VARS = ("CI", "CONTINUOUS_INTEGRATION")
+
+
+def _under_ci() -> bool:
+    return any(os.environ.get(name) == "true" for name in _CI_ENV_VARS)
+
+
+def _resolve_progress_style(choice: str) -> ProgressStyle:
+    """The heartbeat cadence for ``--progress`` `choice`.
+
+    ``auto`` asks two questions, and either one turning up false means nobody is watching a
+    terminal: is stderr a TTY, and are we in CI? A redirected log or a CI job gets the quieter
+    cadence, so a long run does not bury the build log in heartbeats. ``plain`` and ``none`` are
+    the explicit overrides, for a caller that knows better than the detection does.
+
+    Nothing here draws a progress bar or rewrites a line — every surface gdmutant prints is
+    append-only, so a non-TTY needs no separate rendering path, only a different rhythm.
+    """
+    if choice == "none":
+        return ProgressStyle.NONE
+    if choice == "plain":
+        return ProgressStyle.PLAIN
+    stderr_is_tty = getattr(sys.stderr, "isatty", None)
+    if _under_ci() or stderr_is_tty is None or not stderr_is_tty():
+        return ProgressStyle.PLAIN
+    return ProgressStyle.RICH
 
 
 def _load_gdscript(source_path: str) -> str | None:
@@ -133,18 +179,48 @@ def _missing_executable(error: BaselineFailed) -> str | None:
     return None
 
 
-def _missing_executable_hint(filename: str) -> str:
+def _command_argv(runner: Runner) -> Sequence[str] | None:
+    """The ``--command`` argv when `runner` is the exit-code `CommandRunner`, else ``None``.
+
+    The one thing an error message needs to know to give advice that works: the JUnit runners take
+    their executable from ``--godot``, and the exit-code runner takes it from the ``--command``
+    string. Reading it off the runner object keeps the two callers from threading a mode string
+    through every layer."""
+    return runner.command if isinstance(runner, CommandRunner) else None
+
+
+def _missing_executable_hint(filename: str, command: Sequence[str] | None = None) -> str:
     """A friendly, actionable message for a not-found test-runner executable named `filename`.
 
-    Generic by default (install it / pass its full path); adds the macOS Godot app-bundle path when
-    the missing binary looks like Godot — the single most common first-run failure, since most Godot
-    users are on macOS where Godot is never on PATH."""
-    lines = [
-        f"error: could not run the test suite — executable {filename!r} not found.",
-        "  Install it and put it on your PATH, or pass its full path with --godot.",
+    `command` is the ``--command`` argv when the run used ``--runner command``, and ``None`` for
+    the JUnit runners — it picks the advice, because **the two modes take their executable from
+    different places**. Telling a ``--runner command`` user to "pass its full path with --godot"
+    sends them to a flag that mode never reads: they set it, get the byte-identical error, and have
+    to find the caveat in the README to get unstuck. So under ``--runner command`` the message says
+    where the executable actually comes from, that ``--godot`` has no effect there, and shows their
+    own command back with the path slot marked.
+
+    Either way, a Godot-looking binary on macOS also gets the app-bundle path (the single most
+    common first-run failure — most Godot users are on macOS, where Godot is never on PATH), phrased
+    for the flag that mode actually uses."""
+    lines = [f"error: could not run the test suite — executable {filename!r} not found."]
+    if command is None:
+        lines.append("  Install it and put it on your PATH, or pass its full path with --godot.")
+        if sys.platform == "darwin" and "godot" in filename.lower():
+            lines.append(_MISSING_GODOT_MACOS_HINT)
+        return "\n".join(lines)
+    # main() rejects an empty --command before a runner is built, so command[0] always exists — and
+    # it is the authoritative name of what could not be executed, even if the OS error lost it.
+    executable = command[0]
+    rest = " ".join(command[1:])
+    lines += [
+        "  With --runner command the executable comes from the --command string itself. --godot",
+        "  is not read in this mode, so setting it changes nothing. Put the full path inside",
+        "  --command instead, quoted if it contains spaces:",
+        f'    --command "<full path to {executable}>{" " + rest if rest else ""}"',
     ]
-    if sys.platform == "darwin" and "godot" in filename.lower():
-        lines.append(_MISSING_GODOT_MACOS_HINT)
+    if sys.platform == "darwin" and "godot" in executable.lower():
+        lines.append(_MISSING_GODOT_MACOS_COMMAND_HINT)
     return "\n".join(lines)
 
 
@@ -210,13 +286,48 @@ def _gut_addon_hint(error: BaselineFailed, project_dir: str) -> str | None:
     )
 
 
-def _report_baseline_failure(error: BaselineFailed, project_dir: str) -> int:
+#: Godot writes its import cache here the first time it opens a project. Its absence is a *fact*
+#: about the checkout, not a guess about speed — which is why the notice below can be stated
+#: outright without ever accusing a merely-slow project of being broken.
+_GODOT_IMPORT_CACHE = ".godot"
+
+
+def _cold_import_notice(project_dir: str) -> str | None:
+    """A heads-up that `project_dir` has never been imported, or ``None`` when it has.
+
+    On a fresh checkout Godot imports every asset before it will run anything, which on a real game
+    is minutes of total silence — indistinguishable, to someone running gdmutant for the first time,
+    from a hung tool. The JUnit runners pay that cost inside `Preparable.prepare`, which the engine
+    announces. ``--runner command`` has no such hook and cannot grow one honestly: it is handed an
+    opaque command, so it does not know which Godot binary (if any) to warm the cache with, and
+    guessing one to run would be gdmutant executing a program the user never named. So it says so
+    instead, and names the one command that fixes it.
+
+    Reads only whether ``.godot/`` exists, so a project that is simply slow is never accused of
+    anything — and a project that has been imported gets no notice at all."""
+    if (Path(project_dir) / _GODOT_IMPORT_CACHE).is_dir():
+        return None
+    return (
+        f"note: {project_dir} has no Godot import cache ({_GODOT_IMPORT_CACHE}/ is not there), so "
+        "the first\n"
+        "  run of --command imports every asset in the project before a single test executes. On a "
+        "real\n"
+        "  game that is minutes of silence. --runner command cannot warm the cache for you — it "
+        "only\n"
+        "  knows the command you gave it. Run this once, then run gdmutant again:\n"
+        f"    godot --headless --path {project_dir} --import"
+    )
+
+
+def _report_baseline_failure(error: BaselineFailed, project_dir: str, runner: Runner) -> int:
     """Print the most actionable message for a `BaselineFailed` and return the exit code: 2 for a
     *setup* error (missing runner binary, or a GdUnit4 project with no addon), else 1 for a
-    genuinely red baseline. Shared by the single- and multi-file run paths."""
+    genuinely red baseline. Shared by the single- and multi-file run paths. `runner` is the one that
+    failed — the missing-executable hint reads the mode off it (`_command_argv`) so its advice names
+    the flag that mode actually uses."""
     missing = _missing_executable(error)
     if missing is not None:
-        print(_missing_executable_hint(missing), file=sys.stderr)
+        print(_missing_executable_hint(missing, _command_argv(runner)), file=sys.stderr)
         return 2
     # Try each JUnit adapter's addon hint. Each is gated on its own framework's error signature, so
     # at most one fires — no need to thread the runner kind through: a GUT "wrote no report" never
@@ -519,6 +630,7 @@ def run_mutation(
     changed: dict[str, set[int]] | None = None,
     jobs: int = 1,
     step_summary: bool = False,
+    progress_style: ProgressStyle = ProgressStyle.RICH,
 ) -> int:
     """Mutate `source_path`, run via `runner`, print the summary, optionally write a report file.
 
@@ -579,9 +691,10 @@ def run_mutation(
             timeout=timeout,
             progress=lambda line: print(line, file=sys.stderr),
             jobs=jobs,
+            progress_style=progress_style,
         )
     except BaselineFailed as error:
-        return _report_baseline_failure(error, project_dir)
+        return _report_baseline_failure(error, project_dir, runner)
     # With --json - the report goes to stdout, so keep the human summary on stderr — an agent
     # capturing stdout then gets pure JSON.
     report_to_stdout = json_path == "-"
@@ -664,6 +777,7 @@ def run_mutation_paths(
     changed: dict[str, set[int]] | None = None,
     jobs: int = 1,
     step_summary: bool = False,
+    progress_style: ProgressStyle = ProgressStyle.RICH,
 ) -> int:
     """Mutate several `.gd` files against one project in a single pass — the baseline runs **once**
     and the score is aggregated across every file, with one merged report. Same return
@@ -710,9 +824,10 @@ def run_mutation_paths(
             timeout=timeout,
             progress=lambda line: print(line, file=sys.stderr),
             jobs=jobs,
+            progress_style=progress_style,
         )
     except BaselineFailed as error:
-        return _report_baseline_failure(error, project_dir)
+        return _report_baseline_failure(error, project_dir, runner)
     report_to_stdout = json_path == "-"
     out = sys.stderr if report_to_stdout else sys.stdout
     print(f"\n{len(runs)} files:", file=out)
@@ -843,6 +958,14 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     )
     run_parser.add_argument(
         "--godot", default="godot", help="the Godot executable (default: godot)"
+    )
+    run_parser.add_argument(
+        "--progress",
+        choices=("auto", "plain", "none"),
+        default="auto",
+        dest="progress_style",
+        help="how often to print a progress heartbeat: auto (every 30s on a terminal, rarer in a "
+        "log or CI), plain (the rarer cadence always), or none (default: auto)",
     )
     run_parser.add_argument(
         "--tests",
@@ -1054,6 +1177,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--json", args.json_path, None),
                     ("--html", args.html_path, None),
                     ("--report", args.report, None),
+                    ("--progress", args.progress_style, "auto"),
                 )
                 if value != default
             ]
@@ -1092,6 +1216,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("error: --runner command requires a non-empty --command", file=sys.stderr)
                 return 2
             runner = CommandRunner(command=test_command, timeout=baseline_timeout)
+            # The JUnit runners warm Godot's import cache themselves (Preparable.prepare, which the
+            # engine announces). This mode can't, so an un-imported project gets told up front
+            # rather than looking hung for minutes on its very first run.
+            notice = _cold_import_notice(project_dir)
+            if notice is not None:
+                print(notice, file=sys.stderr)
         else:
             if args.test_command:
                 # --command only applies to --runner command; flag it rather than silently drop it.
@@ -1120,6 +1250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "changed": changed,
             "jobs": args.jobs,
             "step_summary": bool(args.report) and "step-summary" in args.report,
+            "progress_style": _resolve_progress_style(args.progress_style),
         }
         if len(files) == 1:
             return run_mutation(files[0], project_dir, runner, **common)

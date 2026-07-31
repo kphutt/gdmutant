@@ -51,6 +51,19 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
   `godot --headless --script res://tests/run_tests.gd`). See
   [`docs/decisions/0011`](decisions/0011-runner-agnostic-adapter-seam.md) (the runner seam) and
   [`docs/decisions/0005`](decisions/0005-exit-code-test-runner-convention.md) (the exit-code fallback).
+  Under `--runner command` the executable comes from the `--command` string itself — `--godot` is
+  not read in that mode, so put the full path inside `--command`.
+- **Import the project once before the first run.** On a checkout Godot has never opened, it imports
+  every asset before it runs anything, which on a real game is minutes with no output at all — long
+  enough to look like a hang and get killed. `--runner gdunit4` / `--runner gut` do this warm-up
+  themselves; `--runner command` cannot, and prints a note when the project has no `.godot/`
+  directory. Run `godot --headless --path <project> --import` once in setup.
+- **Nothing predicts a finish time.** Before the run gdmutant states the mutant count and the
+  per-mutant cap; during it, a heartbeat reports what has finished; after it, one line gives the
+  wall-clock with the timeout cost broken out. Parse the closing `Done in ...` line for the real
+  duration — do not try to reconstruct a schedule from the opening one. `--progress plain` (the
+  automatic choice off a TTY and under `CI=true`) heartbeats every 60s or 10% of mutants, whichever
+  is rarer; `--progress none` silences it while keeping the plan and closing lines.
 
 ## Exit codes (the contract)
 
@@ -129,6 +142,11 @@ console:
    Only suppress *proven* equivalents (or benign, brittle-to-kill mutants — with a reason). See
    [`docs/decisions/0004`](decisions/0004-equivalent-mutant-ignore-annotation.md) and
    [`0006`](decisions/0006-operator-scoped-ignore-and-ignored-status.md).
+5. A survivor **inside an `assert`** is step 4's commonest case, and it needs no analysis to
+   recognise: a failed `assert` aborts the Godot process, so no in-process test can pass on the
+   original and fail on the mutant. Its `description` says so, and `gdmutant` counts them under the
+   survivor list. Do not try to write a test for one — annotate the line or leave it. Full
+   reasoning: [the assert section](survivors/README.md#assert).
 
 ## Worked example (the bundled corpus)
 

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from gdmutant.engine.explain import (
+    ASSERT_SECTION,
+    ENUM_SECTION,
     _block,
     _display_col,
     _enclosing_func,
+    context_section,
     doc_url,
+    reference_section,
     render_survivor,
     survivor_report_fields,
 )
@@ -202,3 +206,124 @@ def test_every_operator_more_link_resolves_to_a_real_anchor_in_the_merged_page()
         anchor = doc_url(op).rsplit("#", 1)[1]
         assert anchor == op  # the operator id is the anchor verbatim
         assert anchor in slugs, f"no `## …` section slugifies to #{anchor} in the merged page"
+
+
+# --- survivors explained by WHERE they sit ------------------------------------------------------
+#
+# Some survivors are unkillable by construction, and their operator's advice is not merely unhelpful
+# but impossible to follow — which is what makes a whole report read as noise. `context_section`
+# names those places; it never claims a mutant is equivalent, and it never suppresses one. Every
+# mutant below is still generated, still run, and still counted in the score.
+
+_ASSERT_LINES = ["func f(value):", "\tassert(value > 0)", "\treturn value"]
+_ENUM_LINES = ["extends Node", "", "enum Cell { WALL = 0, FLOOR = 1 }", "", "func f():", "\tpass"]
+_ENUM_BLOCK = [
+    "enum Cell {",
+    "\tWALL = 0,",
+    "\tFLOOR = 1,",
+    "}",
+    "",
+    "var speed := 1",
+]
+
+
+def test_narrative_switches_to_the_assert_explanation_inside_an_assert() -> None:
+    # `>` at column 15 is inside `assert(`, which closes at index 8.
+    mutant = _mutant("comparison", ">", ">=", line=2, col=15)
+    gap, risk_start = survivor_report_fields(mutant, _ASSERT_LINES)
+    assert "sits inside an `assert`" in gap
+    assert "no in-process test can kill this one" in gap
+    # The operator copy — the advice that cannot be followed here — must be gone, not merely joined.
+    assert "equal operands" not in gap + risk_start
+    assert "# gdmutant: ignore" in risk_start  # the escape hatch that does apply
+
+
+def test_narrative_keeps_the_operator_explanation_off_an_assert() -> None:
+    mutant = _mutant("comparison", ">", ">=", line=1, col=12)
+    gap, _ = survivor_report_fields(mutant, ["\tif value > 0:"])
+    assert "equal operands" in gap and "assert" not in gap
+
+
+def test_deleting_an_assert_statement_is_an_assert_survivor() -> None:
+    # Statement deletion replaces the whole `assert(...)` with `pass`. Its token starts *before*
+    # the paren, so the column test alone would miss it — the mutant's own text carries the answer.
+    deletion = _mutant("statement-deletion", "assert(value > 0)", "pass", line=2, col=2)
+    assert reference_section(deletion, _ASSERT_LINES) == ASSERT_SECTION
+
+
+def test_a_token_before_the_assert_paren_is_not_an_assert_survivor() -> None:
+    # Column 5 is inside the leading `if`, ahead of the `assert(` that opens later on the line — so
+    # the rule must not claim it. This is what keeps a trailing `# assert(...)` comment harmless.
+    lines = ["\tif x > 0: assert(y > 0)"]
+    assert context_section(">", 1, 5, lines) is None
+    assert context_section(">", 1, 21, lines) == ASSERT_SECTION
+
+
+def test_an_assert_lookalike_identifier_is_not_an_assert() -> None:
+    # `my_assert(` and `helper.assert(` are ordinary calls; a failed one raises nothing special, so
+    # a mutant inside them is an ordinary, killable survivor.
+    assert context_section(">", 1, 16, ["\tmy_assert(a > b)"]) is None
+    assert context_section(">", 1, 20, ["\thelper.assert(a > b)"]) is None
+
+
+def test_narrative_switches_to_the_enum_explanation_on_an_enum_member() -> None:
+    # The generic numeric copy tells the reader to "add a test at the boundary this number sets".
+    # An enum tag has no boundary, so that advice is not just unhelpful, it is meaningless — and
+    # being confidently wrong is what teaches someone to stop reading the report.
+    mutant = _mutant("numeric", "0", "1", line=3, col=20)
+    gap, risk_start = survivor_report_fields(mutant, _ENUM_LINES)
+    assert "changes an `enum` member's value" in gap
+    assert "boundary" not in gap + risk_start
+    # It says what WOULD make it killable rather than pretending nothing could.
+    assert "bitflag" in risk_start and "save file" in risk_start
+
+
+def test_the_enum_explanation_reaches_a_member_on_its_own_line() -> None:
+    # The common shape: the mutated line is just `FLOOR = 1,`, which says nothing about itself. A
+    # per-line rule cannot see this one, which is why the scan reads the whole file.
+    mutant = _mutant("numeric", "1", "2", line=3, col=10)
+    assert reference_section(mutant, _ENUM_BLOCK) == ENUM_SECTION
+
+
+def test_a_line_after_a_closed_enum_block_is_not_an_enum_member() -> None:
+    # `var speed := 1` sits after the enum's `}`. Getting this wrong would silence real numeric
+    # advice on ordinary constants, which is the direction that costs a user a bug.
+    mutant = _mutant("numeric", "1", "2", line=6, col=15)
+    assert reference_section(mutant, _ENUM_BLOCK) == "numeric"
+
+
+def test_a_line_after_a_single_line_enum_is_not_an_enum_member() -> None:
+    mutant = _mutant("numeric", "0", "1", line=6, col=2)
+    assert reference_section(mutant, _ENUM_LINES) == "numeric"
+
+
+def test_the_word_enum_must_open_the_line_to_count() -> None:
+    # A string or a comment that merely mentions an enum is not a declaration.
+    lines = ['\tvar label = "enum Cell {"', "\tvar n = 1"]
+    assert context_section("1", 2, 10, lines) is None
+
+
+def test_an_unreadable_source_falls_back_to_the_operator_explanation() -> None:
+    # With no file there is nothing to read, so the narrative stays the operator's — still accurate,
+    # just less specific. It must never guess a context from the operator alone.
+    mutant = _mutant("comparison", ">", ">=", line=1, col=15)
+    assert context_section(mutant.original, 1, 15, None) is None
+    gap, _ = survivor_report_fields(mutant, None)
+    assert "equal operands" in gap
+
+
+def test_a_line_off_the_end_of_the_file_falls_back_too() -> None:
+    # A survivor whose file has since shrunk keeps its narrative; only the line-derived detail goes.
+    assert context_section(">", 9, 15, ["only one line"]) is None
+
+
+def test_rendered_survivors_link_to_the_section_that_explains_them() -> None:
+    # The `more` link is the one thing a reader clicks. Sending an assert survivor to #comparison
+    # would land them on "add a test with two equal operands" — the exact wrong instruction.
+    on_assert_mutant = _mutant("comparison", ">", ">=", line=2, col=15)
+    block = render_survivor(on_assert_mutant, _ASSERT_LINES)
+    assert block[-2] == f"  more   {doc_url(ASSERT_SECTION)}"
+    assert "comparison" in block[0]  # the header still names the operator: that IS what changed
+
+    on_enum_mutant = _mutant("numeric", "0", "1", line=3, col=20)
+    assert render_survivor(on_enum_mutant, _ENUM_LINES)[-2] == f"  more   {doc_url(ENUM_SECTION)}"
