@@ -20,7 +20,7 @@ body:
     attributes:
       label: gdmutant version
       description: Output of `gdmutant --version` (or `uv run gdmutant --version`)
-      placeholder: gdmutant 0.3.0
+      placeholder: gdmutant 0.1.0
     validations:
       required: true
 
@@ -29,7 +29,7 @@ body:
     attributes:
       label: Godot version
       description: Output of `godot --version`
-      placeholder: 4.4.0.stable.official [478e246c1]
+      placeholder: 4.7.stable.official.<hash>
     validations:
       required: true
 
@@ -52,7 +52,7 @@ body:
     attributes:
       label: Test runner version
       description: The GdUnit4 or GUT addon version (or "n/a" for a hand-rolled harness)
-      placeholder: GdUnit4 5.0.2
+      placeholder: GdUnit4 6.1.3
     validations:
       required: true
 

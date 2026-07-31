@@ -24,9 +24,8 @@ from collections.abc import Sequence
 from gdmutant.engine.mutants import Mutant
 
 #: One stable explainer per operator (the ShellCheck "one explainer per rule" model), each a section
-#: anchor in the merged survivor reference. A single base URL so the launch swap to a short vanity
-#: URL is one line; the repo is private pre-launch, so this 404s for non-collaborators until the
-#: flip — fine while only first-party users see it. The anchor is the operator id verbatim: every
+#: anchor in the merged survivor reference. A single base URL, so swapping in a short vanity URL is
+#: a one-line change. The anchor is the operator id verbatim: every
 #: ``## …`` heading in that page slugifies to its operator id (spaces → hyphens), so ``doc_url``
 #: needs no slug transform — keep the two in lockstep when adding an operator.
 DOC_BASE_URL = "https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md"

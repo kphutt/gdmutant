@@ -10,6 +10,9 @@ gdmutant's engine, GDScript adapter, runners, reporter, and CLI are built and te
 useful contributions are issues — bug reports, GDScript patterns that should be mutated, and
 real-world use cases.
 
+Taking part here — issues, pull requests, discussion — means agreeing to the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Development setup
 
 gdmutant is a [uv](https://docs.astral.sh/uv/) project. Follow [`AGENTS.md`](AGENTS.md) under

@@ -21,6 +21,10 @@ classifiers = [
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
+  # 3.13 is claimed because the full suite was run on it from this lockfile (all tests pass, the
+  # 100% line+branch floor holds), not because `requires-python` allows it. CI still gates on
+  # 3.12; add a version here only after running the suite on it.
+  "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Testing",
   "Typing :: Typed",
 ]
@@ -38,7 +42,9 @@ dependencies = [
 Homepage = "https://github.com/kphutt/gdmutant"
 Repository = "https://github.com/kphutt/gdmutant"
 Issues = "https://github.com/kphutt/gdmutant/issues"
-Changelog = "https://github.com/kphutt/gdmutant/releases"
+# CHANGELOG.md, not /releases: the file is written per version and reads top-to-bottom, which is
+# what someone following this link from PyPI wants.
+Changelog = "https://github.com/kphutt/gdmutant/blob/main/CHANGELOG.md"
 
 [project.scripts]
 # The standalone CLI a developer runs — usable without any AI.
@@ -91,6 +97,7 @@ include = [
   "/README.md",
   "/CHANGELOG.md",
   "/CONTRIBUTING.md",
+  "/CODE_OF_CONDUCT.md",
   "/AGENTS.md",
   "/LICENSE",
   "/pyproject.toml",

@@ -12,8 +12,7 @@ Accepted
 ## Context
 An earlier PR (#73) added `scripts/local-verify`, a hand-rolled script mirroring CI's Verify job,
 dispatched automatically via a global `core.hooksPath` wired into every repo on the maintainer's own
-machine (a shared convention living in a separate, private toolkit repo), gated by a hash-pinned
-"approve once, re-approve on edit" trust store.
+machine, gated by a hash-pinned "approve once, re-approve on edit" trust store.
 
 That mechanism only ever helps the maintainer: it lives in personal git config, not this repo, so it
 does nothing for anyone else who clones gdmutant. The maintainer's projects (public and private

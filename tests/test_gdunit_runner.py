@@ -273,7 +273,7 @@ def test_with_filename_leaves_an_already_named_error_alone() -> None:
 
 def test_with_filename_patches_a_filename_less_error() -> None:
     # Windows' CreateProcess failure leaves .filename None (verified live) — the CLI's
-    # missing-executable hint (LOD-110) needs a name to show the user, so patch one in.
+    # missing-executable hint needs a name to show the user, so patch one in.
     error = FileNotFoundError(2, "The system cannot find the file specified")
     assert error.filename is None
     patched = with_filename(error, "/attempted/godot")
@@ -285,7 +285,7 @@ def test_prepare_names_the_attempted_godot_path_when_the_os_omits_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Reproduces the Windows CreateProcess behavior: FileNotFoundError with no .filename. Without
-    # the fix, the CLI's missing-executable hint (LOD-110) falls back to a generic placeholder
+    # the fix, the CLI's missing-executable hint falls back to a generic placeholder
     # instead of naming the actual --godot path the user got wrong.
     def boom(*args: object, **kwargs: object) -> None:
         raise FileNotFoundError(2, "The system cannot find the file specified")

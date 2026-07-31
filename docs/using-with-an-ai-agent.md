@@ -40,7 +40,14 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
   tests — a fast, dependency-free preview.
 - `--require-clean` refuses to run if the source file has uncommitted git changes (exit 2).
   Without it, gdmutant only *warns* and proceeds (it never blocks on a prompt — safe for headless
-  agents).
+  agents). `--no-require-clean` is the other half of that switch: it turns the refusal back off for
+  one run, which is what you need when a `.gdmutant.toml` sets `require-clean = true` and this
+  particular run has to go ahead on a dirty tree anyway.
+- `--report step-summary` writes the surviving mutants and their explanations as Markdown to the
+  GitHub Actions job summary — the file named by `$GITHUB_STEP_SUMMARY` — so survivors show up in
+  the run summary a reviewer already opens. With that variable unset it prints the same Markdown to
+  **stdout**, so don't combine it with `--json -` unless you want both on one stream. The flag is
+  repeatable and advisory: a failed write warns and changes neither the score nor the exit code.
 - `--since <ref>` mutates only the lines changed since a git ref (e.g. `--since origin/main`) — the
   fast per-PR mode for CI; `--jobs N` evaluates mutants in parallel.
 - Other flags: `--tests res://test`, `--godot <path>`, `--report-path <rel>`, `--timeout <seconds>`.
