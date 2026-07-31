@@ -52,8 +52,8 @@ CLI, no AI required.
 ## Is this for you?
 
 - You write **GDScript** and test with **GUT**, **gdUnit4**, or any `godot --headless` command.
-- You already have a test suite and want to know which of it actually bites — gdmutant grades your
-  tests, it doesn't replace them.
+- You already have a Godot project with the addon installed and a test suite passing — gdmutant
+  grades those tests, it doesn't replace them. No project yet? Try `--dry-run` below first.
 
 ## Quickstart
 
@@ -69,17 +69,25 @@ uv init --python 3.12
 uv add gdmutant
 ```
 
-No Python in your game repo? Keep gdmutant in a tiny non-package uv project beside it
-(`[tool.uv] package = false`).
+**No Godot needed yet.** Save this as `scratch.gd`:
 
-**No Godot needed yet** — point `--dry-run` at your own file to list the mutants gdmutant would
-generate, with no test run and no Godot required:
-
-```sh
-uv run gdmutant run path/to/your/module.gd --dry-run
+```gdscript
+static func clamp_initiative(value: int, max_value: int) -> int:
+	if value < 0:
+		return 0
+	return value
 ```
 
-**For real, pick your runner.** [GUT](https://github.com/bitwes/Gut) and
+then list its mutants — no test run, no Godot:
+
+```sh
+uv run gdmutant run scratch.gd --dry-run
+```
+
+Point it at your own file instead once you have one.
+
+**For real, pick your runner.** Needs the addon already installed and Godot itself on PATH, or
+`--godot <path>`. [GUT](https://github.com/bitwes/Gut) and
 [gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) are peer JUnit-XML readers (gdUnit4 is the
 default):
 
@@ -89,7 +97,8 @@ uv run gdmutant run path/to/module.gd --project . --json report.json            
 ```
 
 **No JUnit XML?** Point the exit-code runner at any headless command that exits non-zero on
-failure:
+failure. `--godot` doesn't reach inside this string — put a resolvable or absolute Godot path
+directly in `--command`:
 
 ```sh
 uv run gdmutant run path/to/module.gd --project . \
