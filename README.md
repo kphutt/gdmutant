@@ -1,6 +1,6 @@
-<p align="center">
+<h1 align="center">
   <img src="https://raw.githubusercontent.com/kphutt/gdmutant/main/.github/assets/banner.svg" alt="gdmutant — Mutation testing for GDScript and Godot: find the bugs your green tests would miss." width="1200" height="320">
-</p>
+</h1>
 
 <p align="center">
   <a href="https://github.com/kphutt/gdmutant/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kphutt/gdmutant/actions/workflows/ci.yml/badge.svg"></a>
