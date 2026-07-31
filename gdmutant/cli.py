@@ -159,18 +159,47 @@ class _GitBackup:
     advice: str = ""
 
 
-def _git_failure_reason(source_path: str, stderr: str) -> str:
-    """Why git refused to answer for `source_path`, in git's own words where it gave any.
+def _judged_path(source_path: str) -> str:
+    """How a message names the source file, given that `_git_backup` asks git about the resolved
+    one.
+
+    `_git_backup` follows symlinks before it asks, because the bytes gdmutant rewrites are the
+    target's. Every message it produces therefore describes a check that ran somewhere else, and
+    naming only the link makes that check unreadable: a link into a directory with no repository
+    above it reports "not a git repository" against a path that sits inside a perfectly good one,
+    which sends the reader hunting for something they already have. So the resolved file gets named
+    too, and only when it is genuinely a different file.
+
+    The comparison is `os.path.realpath` against `os.path.abspath`, both put through
+    `os.path.normcase`. `Path.absolute()` cannot stand in for `abspath` here, because it only
+    prefixes the working directory and never follows a link, so it differs from the resolved path
+    for every file reached through a symlinked *directory* and the note would land on runs holding
+    no symlink at all. `normcase` covers the mirror trap on Windows: `realpath` returns a name the
+    way the filesystem spells it, so ``c:\\project\\player.gd`` comes back as
+    ``C:\\Project\\player.gd`` and a raw string comparison reads a difference in case as a
+    difference in file. It is a no-op on every other platform.
+    """
+    resolved = os.path.realpath(source_path)
+    if os.path.normcase(resolved) == os.path.normcase(os.path.abspath(source_path)):
+        return source_path
+    return f"{source_path} (resolved to {resolved})"
+
+
+def _git_failure_reason(judged_path: str, stderr: str) -> str:
+    """Why git refused to answer for `judged_path`, in git's own words where it gave any.
 
     Everything non-zero used to collapse into "not inside a git working tree". That is the common
     case but far from the only one: dubious ownership, a corrupted repository, an unreadable
     ``.git`` all land here too, and each prints a specific diagnosis — often with the exact command
     that fixes it. Discarding that sends the user to look for a missing repository they have.
+
+    `judged_path` comes from `_judged_path`, so a symlink's message names the file git was actually
+    asked about rather than the link that stands in front of it.
     """
     detail = [line.strip() for line in stderr.strip().splitlines() if line.strip()]
     if not detail:
-        return f"git could not check {source_path}, and said nothing about why"
-    return f"git could not check {source_path} — " + " ".join(detail)
+        return f"git could not check {judged_path}, and said nothing about why"
+    return f"git could not check {judged_path} — " + " ".join(detail)
 
 
 def _git_backup(source_path: str) -> _GitBackup:
@@ -186,7 +215,9 @@ def _git_backup(source_path: str) -> _GitBackup:
     Resolving symlinks: git stores a symlink as the *link string*, not as the content it points at,
     so a committed, unmodified link reads as safely backed up while the bytes gdmutant actually
     rewrites are the target's — which may sit outside the repository, or in no repository at all.
-    Asking about the resolved file is what makes the answer describe the thing being mutated.
+    Asking about the resolved file is what makes the answer describe the thing being mutated. Every
+    message below therefore names its file through `_judged_path`, so the answer and the file it is
+    about stay the same file.
     """
     path = Path(os.path.realpath(source_path))
     try:
@@ -201,8 +232,9 @@ def _git_backup(source_path: str) -> _GitBackup:
         )
     except OSError:
         return _GitBackup(None, "git could not be run here — it may not be installed")
+    judged = _judged_path(source_path)
     if completed.returncode != 0:
-        return _GitBackup(None, _git_failure_reason(source_path, completed.stderr))
+        return _GitBackup(None, _git_failure_reason(judged, completed.stderr))
     # `--porcelain` prints one line per path and nothing at all when there is nothing to report.
     # Comparing to "" (not bool()) also kills a `text=True`->False mutant: raw bytes never equal
     # the str "".
@@ -211,11 +243,11 @@ def _git_backup(source_path: str) -> _GitBackup:
     if completed.stdout.startswith("!!"):
         return _GitBackup(
             False,
-            f"{source_path} is ignored by git, so git holds no copy of it",
+            f"{judged} is ignored by git, so git holds no copy of it",
             "Take it out of .gitignore, or copy it somewhere safe first.",
         )
     return _GitBackup(
-        False, f"{source_path} has uncommitted changes", "Commit or stash first to be safe."
+        False, f"{judged} has uncommitted changes", "Commit or stash first to be safe."
     )
 
 
