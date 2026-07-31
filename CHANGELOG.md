@@ -7,13 +7,13 @@ created: 2026-07-18
 # Changelog
 
 All notable changes to gdmutant are recorded here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it tags its first release.
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.0] — unreleased
 
 gdmutant mutates real GDScript and reports survivors end-to-end via the standalone `gdmutant run`
-CLI. `0.1.0` is the current in-development version; the first git tag is still pending.
+CLI.
 
 ### Added
 
