@@ -19,14 +19,9 @@ gdmutant mutates your GDScript — flips `>`↔`>=`, `and`↔`or`, bumps a numbe
 reruns your tests once per change, and reports the **survivors**: lines a bug could live on that no
 test catches.
 
-**Coverage tells you a line *ran*. Mutation tells you a bug there would be *caught*.** That gap is
-gdmutant's whole job — and it widens when an AI writes the tests, since a model tends to pin the code
-it just wrote. Mutation is one of the few executable, model-independent signals that a test actually
-bites.
-
-It's a standalone CLI (no AI required), validated
-end-to-end against real Godot in CI. Reports use the `mutation-testing-elements` schema, so they
-render in the existing HTML viewer for it.
+Coverage tells you a line *ran*; mutation tells you a bug there would be *caught* — a gap that
+widens when an AI writes the tests, since models tend to pin code they just wrote. A standalone
+CLI, no AI required.
 
 ## Is this for you?
 
@@ -37,37 +32,34 @@ render in the existing HTML viewer for it.
 
 ## Quickstart
 
-Not on PyPI yet — install from git at a pinned commit (v0.1.0, in development; a PyPI release is
-planned). Starting from scratch (no `uv` project yet)? `uv init` first — gdmutant needs Python
-3.12+, and `uv init` picks its floor from whatever interpreter it finds, so name the version:
+Not on PyPI yet — install from git at a pinned commit. New `uv` project? Name the Python version
+explicitly — `uv init` alone floors on whatever interpreter it finds, and gdmutant needs 3.12+:
 
 ```sh
 uv init --python 3.12
 uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
 ```
 
-No Python in your game repo? Keep gdmutant in a tiny non-package uv project beside it (e.g. under
-`devtools/`, with `[tool.uv] package = false`) so it never touches shipped code.
+No Python in your game repo? Keep gdmutant in a tiny non-package uv project beside it
+(`[tool.uv] package = false`) so it never touches shipped code.
 
-**See it work with no Godot at all** — point `--dry-run` at any `.gd` file to list the mutants
-gdmutant would generate, with no test run and no verdicts:
+**No Godot needed yet** — `--dry-run` lists the mutants gdmutant would generate, with no test run:
 
 ```sh
 uv run gdmutant run corpus/turn_order.gd --dry-run
 ```
 
-**Run it for real on your project** — pick the runner for your framework.
-**[GUT](https://github.com/bitwes/Gut)** and **[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4)**
-are first-class peers: both read the framework's JUnit XML for per-test detail (gdUnit4 is the default
-runner; select GUT with `--runner gut`):
+**For real, pick your runner.** [GUT](https://github.com/bitwes/Gut) and
+[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) are peer JUnit-XML readers (gdUnit4 is the
+default):
 
 ```sh
 uv run gdmutant run path/to/module.gd --project . --runner gut --json report.json   # GUT
 uv run gdmutant run path/to/module.gd --project . --json report.json                # gdUnit4 (default)
 ```
 
-**No JUnit XML?** Point the universal exit-code runner at the same headless test command your CI runs
-— it only has to exit non-zero on failure (a hand-rolled `SceneTree` harness, a bespoke CLI):
+**No JUnit XML?** Point the exit-code runner at any headless command that exits non-zero on
+failure:
 
 ```sh
 uv run gdmutant run path/to/module.gd --project . \
@@ -76,30 +68,21 @@ uv run gdmutant run path/to/module.gd --project . \
 
 ## What it does
 
-**Mutates the AST, not text.** Comparison, boolean, arithmetic, constant, numeric-literal,
-compound-assignment, modulo, unary-not, and statement-deletion operators — each re-parse-guarded, so
-invalid mutants never run. One file, many, or a whole directory in one pass, with a per-file
-breakdown and one aggregate score.
+**Mutates the AST, not text** — nine re-parse-guarded operators
+([full list](docs/survivors/README.md)), so invalid mutants never run. One file, many, or a whole
+directory in one pass, with a per-file breakdown and one aggregate score.
 
-**Runs your existing tests, framework-agnostically** — **gdUnit4** and **GUT** via their JUnit-XML
-adapters (per-test detail, neither privileged), plus a universal **exit-code** runner
-(`--runner command`) for any headless `godot` command that exits non-zero on failure, no addon
-required. A new JUnit-emitting framework is one small adapter.
-[How the runner seam works →](docs/decisions/0011-runner-agnostic-adapter-seam.md)
+**Runs your existing tests** — gdUnit4 and GUT via JUnit-XML adapters, or a universal exit-code
+runner for any headless `godot` command. [Runner seam →](docs/decisions/0011-runner-agnostic-adapter-seam.md)
 
-**Explains every survivor.** The console report doesn't just give a location — for each survivor it
-shows the source line with a caret on the exact token, what's untested, why it matters, and where to
-start a test. See it in the [example output](#example-output) below, or look up any operator in the
-[survivor reference](docs/survivors/README.md).
+**Explains every survivor** — not just a location, but what's untested, why it matters, and where
+to start a test. See it below.
 
-**Interoperates.** `--json` emits the
+**Interoperates and fits CI.** `--json` emits the
 [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema
-and `--html` a viewer page with that data inlined; the viewer script loads from a pinned CDN, so the
-page needs network to render. The JSON can post a score badge to a dashboard that reads it.
-
-**Fits real projects.** Test suites auto-skipped; `--exclude` globs; `.gdmutant.toml` for per-project
-defaults; `--jobs N` evaluates mutants in parallel; `--since <ref>` mutates only the lines a PR
-changed (the fast, per-PR mode); `--dry-run` lists mutants without booting Godot.
+for dashboards; `--html` renders a self-contained viewer. `--since <ref>` mutates only a PR's
+changed lines, for a fast, **advisory** check — never a hard gate. `--jobs N` parallelizes;
+`--exclude` globs; `.gdmutant.toml` holds per-project defaults.
 
 ## Example output
 
@@ -142,8 +125,7 @@ Survivors (7):
   more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#comparison
 ──────────────────────────────────────────────────────────────────────────
 
-... 6 more survivors follow, one block each — comparison, numeric, boolean, logical-not, and
-constant, all on this one small file.
+... 6 more survivors follow, one block each, same format.
 ```
 
 **Mutation score isn't a target — it's a direction.** There's no universal "good" number; it depends
@@ -155,39 +137,14 @@ all live in the [survivor reference](docs/survivors/README.md).
 
 ## Compatibility
 
-You need **Python 3.12+** (managed with [uv](https://docs.astral.sh/uv/) — a dev tool, never shipped
-with your game), **Godot** for real runs (`--dry-run` needs none), and a **test runner** — GUT or
-gdUnit4 (each via its dedicated JUnit-XML runner + addon), or any `godot --headless` command via the
-exit-code runner (no addon).
-
-gdmutant only parses GDScript and shells out to your runner's headless CLI — both stable across Godot's
-4.x minors — so it is version-tolerant by design.
-
-| | Verified at every release | Expected to work (best-effort) |
+| | Verified at every release | Expected to work |
 |---|---|---|
 | **Godot** | 4.7.x | 4.3+ |
-| **Runner** | GUT 9.7.1 + gdUnit4 6.1.3, each against real Godot | GUT 9.x, gdUnit4 6.x, any headless command |
-
-Only the left column is mechanically verified, and (while this repo is private, see
-[ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md)) that happens at release time
-rather than on every push: `publish.yml`'s release gate runs a dedicated `selftest-gut` and
-`selftest-godot` job, each installing the pinned addon and driving the shipped CLI against real
-Godot on the same corpus, to the same per-mutant outcome — so neither runner is second-tier. The
-same jobs also exist in `ci.yml` for an on-demand cloud run. The floor on the right is a claim, not
-a guarantee: gdmutant *should* run on Godot 4.3+ and current GUT/gdUnit4 because of how little it
-touches — but if it breaks on a version there, please report it.
-
-**Which runner.** GUT and gdUnit4 are peers; the exit-code runner covers everything else:
-
-| Runner | Flag | Detail | Needs |
-|---|---|---|---|
-| **GUT** | `--runner gut` | per-test (JUnit XML) | the GUT addon |
-| **gdUnit4** | `--runner gdunit4` (default) | per-test (JUnit XML) | the gdUnit4 addon |
-| **exit-code command** | `--runner command --command "…"` | suite pass/fail | nothing (any headless `godot` command) |
+| **Runner** | GUT 9.7.1, gdUnit4 6.1.3 | GUT 9.x, gdUnit4 6.x, any headless command |
 
 ## Configuration
 
-Persist per-project defaults in a `.gdmutant.toml` (any explicit flag overrides it):
+Persist per-project defaults in `.gdmutant.toml` (any explicit flag overrides it):
 
 ```toml
 project = "."
@@ -196,21 +153,12 @@ command = "godot --headless --script res://tests/run_tests.gd"
 # exclude = ["*_generated.gd", "*/vendor/*"]
 ```
 
-Run `gdmutant run --help` for the full flag list.
-
-## Continuous integration
-
-gdmutant answers what a green build can't — *do the tests actually bite?* Run it **advisory**
-(report-mode, never a hard gate), complementary to coverage. Add `--since origin/main` to mutate only
-the lines a PR changed, turning an overnight batch into a per-PR check. The
-[agent guide](docs/agent-guide.md) has the CI invocation, JSON schema, and exit-code contract.
-
 ## How it works
 
-A language-neutral loop — select → mutate → run → tally killed/survived → score — with two
-language-specific pieces behind an adapter: mutating the AST (via
-[gdtoolkit](https://github.com/Scony/godot-gdscript-toolkit)) and running the tests. A new language is
-one small adapter. Full design: [`docs/design/DESIGN.md`](docs/design/DESIGN.md).
+A language-neutral loop — select → mutate → run → tally → score — with two language-specific
+pieces behind an adapter: mutating the AST (via
+[gdtoolkit](https://github.com/Scony/godot-gdscript-toolkit)) and running the tests. A new language
+is one small adapter. Full design: [`docs/design/DESIGN.md`](docs/design/DESIGN.md).
 
 **Safety:** gdmutant edits source **in place** and restores it after every mutant and on exit — commit
 or stash first, or pass `--require-clean`. [Full guarantee →](docs/agent-guide.md#safety-guarantee)
