@@ -13,16 +13,20 @@ how to run it.
 
 ## Install
 
-gdmutant is a Python CLI (**Python 3.12+**), not on PyPI yet — install from git at a pinned commit
-with uv:
+gdmutant is a Python CLI (**Python 3.12+**):
 
 ```sh
-uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
+pip install gdmutant
 ```
 
-For a Godot project with no Python of its own, put that in a tiny **non-package** uv project beside
-the game and pin the interpreter (a `.python-version`) so uv doesn't resolve to a newer system
-Python — full recipe in the README's [Quickstart](../README.md#quickstart). Then `uv run gdmutant …`.
+With uv, pin the interpreter explicitly — `uv init` alone floors on whatever it finds:
+
+```sh
+uv init --python 3.12
+uv add gdmutant
+```
+
+Then `uv run gdmutant …`. The README's [Quickstart](../README.md#quickstart) has the full setup.
 
 ## Invoke
 
