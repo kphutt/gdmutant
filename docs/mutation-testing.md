@@ -53,36 +53,39 @@ the run) for real. See `.github/workflows/mutation.yml`'s header comment for why
 and why the job deliberately has no job-level `continue-on-error`. It complements the coverage gate
 — coverage says a line *ran*, mutation says a bug there would be *caught*.
 
-The module-level-only scope below (see "Scope: what the 781 covers") is measured separately, locally:
-the manual pre-commit hook (`gdmutant-mutation`) runs [poodle](https://github.com/WiredNerd/poodle),
-diff-scoped to files changed vs `origin/main`, which does reach class-method bodies. It's local
-rather than a second CI job partly because mutmut can't run on the maintainer's Windows machine at
-all (`os.fork()`), and partly because it's a targeted, on-demand check rather than a standing cost —
-see `docs/decisions/0013-windows-local-mutation-testing.md` for the full reasoning, and `poodle.toml`
-/ `scripts/check_mutation_baseline.py` for the config. The two tools will not report identical scores
-on the same file (different operator sets, different scope); the local run's job is "did this change
-to a method body just go untested," not "match CI's number."
+A second, narrower mutation run happens locally: the manual pre-commit hook (`gdmutant-mutation`)
+runs [poodle](https://github.com/WiredNerd/poodle), diff-scoped to files changed vs `origin/main`.
+It's local rather than a second CI job partly because mutmut can't run on the maintainer's Windows
+machine at all (`os.fork()`), and partly because it's a targeted, on-demand check rather than a
+standing cost — see `docs/decisions/0013-windows-local-mutation-testing.md` for the full reasoning,
+and `poodle.toml` / `scripts/check_mutation_baseline.py` for the config. The two tools will not
+report identical scores on the same file (different operator sets); the local run's job is "did this
+change just go untested," not "match CI's number."
 
 ## Current result
 
-At the last run, **763 / 781 mutants were killed — the remaining 18 are equivalent mutants** (changes
-that cannot alter observable behavior, so no test *can* catch them; this is the well-known
-[equivalent mutant problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)).
-Rather than contort the suite to "kill" them — which would only pin implementation trivia — they are
-enumerated and justified below. Every behavioral mutant mutmut generates is killed (see the scope note
-for what that set covers).
+**3,088 of 3,560 mutants killed — 86.7%, with 472 survivors.** Measured on the first CI run after
+the baseline was repaired, so it is the first real number this project has had in a while: the
+baseline had been aborting, and an aborted baseline reports nothing rather than reporting badly.
 
-### Scope: what the 781 covers
+**Those 472 survivors are not triaged.** The 18 below are equivalent mutants — changes that cannot
+alter observable behavior, so no test *can* catch them (the well-known [equivalent mutant
+problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)) — and they are still
+equivalent. But they were enumerated against a run of 781 mutants over a much smaller codebase, and
+they do not account for the rest. Working through the remaining survivors, and deciding which are
+real gaps and which are equivalents, is outstanding work; until it is done, read the 86.7% as a
+measurement and not as a claim that every behavioral mutant is killed.
 
-mutmut 3.6 mutates **module-level functions only** — it does not generate mutants for class-method
-bodies. So the 781 spans the package's 28 module-level functions (the operator catalog, spans, mutant
-generation, the loop, JUnit parsing, the reporter, the CLI, the adapter), but **not** the method
-bodies: `GdUnit4Runner.run`/`command`, `CommandRunner.run`, the two `replacements` implementations,
-`MutationRun`'s properties, `Mutant.apply`, `Span.__post_init__`, and `SuiteResult.failed`/`passed`.
-Those are covered by unit tests but not *mutation-measured* here — so read the score as "every
-behavioral mutant mutmut generates is killed," over the module-level surface.
+### Scope: what the 3,560 covers
 
-### The 18 equivalent mutants
+mutmut 3.6.0 mutates class-method bodies as well as module-level functions (`file_mutation.py`
+walks into a `ClassDef` and emits per-method mutants), so the run spans the whole package. An
+earlier version of this page said mutmut generated nothing inside method bodies; that was true of
+the older mutmut this project started on, and `docs/decisions/0008` and `0013` still argue from it.
+Their conclusions may well stand on other grounds — poodle is there because mutmut cannot run on
+Windows at all — but the scope premise itself no longer holds.
+
+### The 18 known equivalent mutants
 
 | # | Mutation | Where | Why no black-box test can catch it |
 |---|---|---|---|
