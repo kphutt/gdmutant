@@ -259,6 +259,42 @@ def test_a_token_before_the_assert_paren_is_not_an_assert_survivor() -> None:
     assert context_section(">", 1, 21, lines) == ASSERT_SECTION
 
 
+def test_the_assert_rule_reaches_a_condition_on_its_own_line() -> None:
+    # The common shape once a condition grows: the mutated line is just `a == b`, which says nothing
+    # about itself, and the `assert(` is a line above. A per-line rule cannot see this one — and
+    # missing it is the costly direction: the reader is handed "add a test with two equal operands"
+    # for a check whose failure kills the whole process, i.e. advice that cannot be followed.
+    lines = ["func f(a, b):", "\tassert(", "\t\ta == b", "\t)"]
+    assert context_section("==", 3, 5, lines) == ASSERT_SECTION
+    mutant = _mutant("comparison", "==", "!=", line=3, col=5)
+    gap, _ = survivor_report_fields(mutant, lines)
+    assert "no in-process test can kill this one" in gap
+
+
+def test_a_token_after_the_assert_closes_is_not_an_assert_survivor() -> None:
+    # Ordinary, killable code sharing the physical line with an assert. Claiming it is the mistake
+    # that costs a user a bug: the reader is told "no in-process test can kill this one" about a
+    # line an ordinary test kills easily, so the test never gets written.
+    lines = ["\tassert(a > b); return c > d"]
+    assert context_section(">", 1, 11, lines) == ASSERT_SECTION  # inside the call
+    assert context_section(">", 1, 26, lines) is None  # after its closing paren
+
+
+def test_a_nested_call_inside_an_assert_does_not_end_it_early() -> None:
+    # The assert's own paren closes last, not first. Counting depth is what keeps `len(items)` from
+    # being read as the end of the call and dropping the rest of the condition out of the rule.
+    lines = ["\tassert(len(items) > 0)"]
+    assert context_section(">", 1, 20, lines) == ASSERT_SECTION
+
+
+def test_an_assert_whose_paren_never_closes_claims_nothing() -> None:
+    # A paren the scan cannot see — inside a string or a comment — makes it misread the file. The
+    # honest answer to "I misread this" is to say nothing and let the operator's own narrative
+    # stand, rather than declare every mutant below the misread unkillable.
+    lines = ['\tvar note = "assert("', "\tvar n = 1", "\treturn n > 0"]
+    assert context_section(">", 3, 11, lines) is None
+
+
 def test_an_assert_lookalike_identifier_is_not_an_assert() -> None:
     # `my_assert(` and `helper.assert(` are ordinary calls; a failed one raises nothing special, so
     # a mutant inside them is an ordinary, killable survivor.

@@ -163,22 +163,83 @@ def doc_url(anchor: str) -> str:
     return f"{DOC_BASE_URL}#{anchor}"
 
 
-def _on_assert(original: str, column: int, source_line: str) -> bool:
-    """True when a mutant changes something an `assert` call guards on `source_line`.
+def _closing_paren(
+    source_lines: Sequence[str], line_index: int, column_index: int
+) -> tuple[int, int] | None:
+    """The 1-based ``(line, column)`` of the ``)`` that closes the ``(`` at 0-based
+    `line_index`/`column_index`, or ``None`` when nothing in the rest of the file closes it.
 
-    `original` is the text the mutant replaced and `column` its 1-based start column. Two shapes
-    count, and the column is what separates them from a false positive:
+    Counting parens from the opening one is what gives a call a real *end*, and the walk runs to the
+    end of the file because a call may span as many lines as its author wants.
 
-    * a token **inside** the call — the assert's ``(`` closes at or before the mutated column, so a
-      trailing ``# assert(...)`` comment further along the line can never match;
-    * a **deletion of the assert statement itself**, whose original text is the whole call.
+    ``None`` means "this file does not read the way I assumed" — a paren inside a string or a
+    comment, which a textual scan cannot see. Returning it, rather than running the span to the end
+    of the file, keeps a misread from swallowing every mutant below it. In practice the source here
+    has already parsed (it is what the mutants were generated from), so parens balance everywhere
+    outside strings and comments; an unclosed one is therefore already the misread case.
+    """
+    depth = 0
+    for index in range(line_index, len(source_lines)):
+        text = source_lines[index]
+        for offset in range(column_index if index == line_index else 0, len(text)):
+            char = text[offset]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return index + 1, offset + 1
+    return None
 
-    Anything else on a line that merely mentions "assert" is left alone.
+
+def _assert_spans(source_lines: Sequence[str]) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """Every ``assert(…)`` call in the file, as ``(position of the "(", position of its matching
+    ")")`` — both 1-based ``(line, column)`` pairs.
+
+    Whole-file and paren-balanced, not per-line, for the same reason `_in_enum` scans the file: an
+    `assert` spans as many lines as its author writes, and the mutated line is then just the
+    condition (``a == b``), which says nothing about itself. A per-line rule misses every multi-line
+    assert — the expensive direction, because the reader is then handed the operator's advice ("add
+    a test at the boundary"), which is impossible to follow for a check whose failure kills the
+    whole process.
+
+    The closing paren carries as much weight as the opening one. Without it the rule has no upper
+    bound, so ordinary killable code *after* the call on the same physical line
+    (``assert(a > b); return c > d``) inherits the assert's "no test can kill this" narrative — the
+    opposite mistake, and the one that talks a reader out of a test they should write.
+
+    Textual rather than an AST walk, for `_in_enum`'s reason: it only ever mis-scopes an
+    *explanation* — it can never change a verdict, a score, or which mutants run — and an AST walk
+    would put a language parse behind every reporting surface. It also keeps this engine module
+    language-neutral, which an AST walk here would not.
+    """
+    spans: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    for index, text in enumerate(source_lines):
+        for match in _ASSERT_CALL_RE.finditer(text):
+            closing = _closing_paren(source_lines, index, match.end() - 1)
+            if closing is not None:
+                spans.append(((index + 1, match.end()), closing))
+    return spans
+
+
+def _on_assert(original: str, line: int, column: int, source_lines: Sequence[str]) -> bool:
+    """True when a mutant changes something an `assert` call guards.
+
+    `original` is the text the mutant replaced and `line`/`column` its 1-based start position. Two
+    shapes count:
+
+    * a token **strictly between** an assert call's parens — which is why the answer needs the whole
+      file and both ends of the call, not the mutated line and a lower bound (see `_assert_spans`);
+    * a **deletion of the assert statement itself**, whose original text is the whole call, and so
+      carries the answer without the file being consulted at all.
+
+    Anything else that merely mentions "assert" — a lookalike identifier, a comment, a token that
+    sits before the call opens or after it closes — is left alone.
     """
     if _ASSERT_CALL_RE.match(original):
         return True
-    match = _ASSERT_CALL_RE.search(source_line)
-    return match is not None and match.end() <= column - 1
+    at = (line, column)
+    return any(opened < at < closed for opened, closed in _assert_spans(source_lines))
 
 
 def _in_enum(source_lines: Sequence[str], line_no: int) -> bool:
@@ -222,7 +283,7 @@ def context_section(
     """
     if source_lines is None:
         return None
-    if 1 <= line <= len(source_lines) and _on_assert(original, column, source_lines[line - 1]):
+    if _on_assert(original, line, column, source_lines):
         return ASSERT_SECTION
     if _in_enum(source_lines, line):
         return ENUM_SECTION
