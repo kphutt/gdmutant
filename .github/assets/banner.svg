@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img"
+     aria-label="gdmutant — Mutation testing for GDScript and Godot: find the bugs your green tests would miss.">
+  <title>gdmutant — Mutation testing for GDScript and Godot: find the bugs your green tests would miss.</title>
+
+  <!-- canvas -->
+  <rect x="0" y="0" width="1200" height="320" fill="#20242b"/>
+
+  <!-- Frank the Mutant, scaled up from .github/assets/frank.svg (64x64 native) -->
+  <g transform="translate(70,60) scale(3.125)">
+    <!-- neck bolts -->
+    <rect x="4" y="33" width="8" height="9" rx="2" fill="#8d9199"/>
+    <rect x="52" y="33" width="8" height="9" rx="2" fill="#8d9199"/>
+
+    <!-- head -->
+    <rect x="11" y="12" width="42" height="42" rx="4" fill="#6fbf5e"/>
+
+    <!-- flat-top hair -->
+    <path d="M11 16 a4 4 0 0 1 4-4 h34 a4 4 0 0 1 4 4 v8 H11 Z" fill="#20242b"/>
+
+    <!-- forehead seam: full width, above both eyes, with four cross-stitches -->
+    <path d="M11 29 H53" stroke="#2f7a29" stroke-width="2.2" fill="none"/>
+    <path d="M17 25.5 v7 M26 25.5 v7 M35 25.5 v7 M44 25.5 v7"
+          stroke="#2f7a29" stroke-width="2.2" stroke-linecap="round"/>
+
+    <!-- mismatched eyes -->
+    <circle cx="24" cy="40" r="6.5" fill="#ffffff"/>
+    <circle cx="24" cy="40" r="3.2" fill="#20242b"/>
+    <circle cx="41" cy="41" r="4" fill="#ffffff"/>
+    <circle cx="41" cy="41" r="2" fill="#20242b"/>
+
+    <!-- lopsided grin -->
+    <path d="M23 49 q9 5 18 -1" stroke="#20242b" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  </g>
+
+  <!-- name + tagline -->
+  <g font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+    <text x="330" y="150" font-size="90" font-weight="700" fill="#f5f6f7">gdmutant</text>
+    <rect x="332" y="172" width="230" height="5" rx="2.5" fill="#6fbf5e"/>
+
+    <text x="330" y="222" font-size="34" font-weight="600" fill="#9fe092">Mutation testing for GDScript and Godot —</text>
+    <text x="330" y="264" font-size="34" font-weight="600" fill="#9fe092">find the bugs your green tests would miss.</text>
+  </g>
+</svg>
