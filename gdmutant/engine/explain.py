@@ -117,8 +117,9 @@ ENUM_SECTION = "enum-member"
 #: and `helper.assert(`.
 _ASSERT_CALL_RE = re.compile(r"(?<![\w.])assert\s*\(")
 #: An `enum` declaration opening. Anchored at the start of the line, so a string or a comment
-#: mentioning "enum" cannot match. `assert`, `enum` and `_enclosing_func`'s `func` are the only
-#: language tokens the explainer knows; everything else it says is derived from the mutant alone.
+#: mentioning "enum" cannot match. `assert`, `enum`, `_enclosing_func`'s `func` and the quote and
+#: comment syntax `_without_strings_and_comments` reads are the only language the explainer knows.
+#: Everything else it says is derived from the mutant alone.
 _ENUM_START_RE = re.compile(r"^\s*enum\b")
 
 _ASSERT_EXPLAIN = (
@@ -163,6 +164,48 @@ def doc_url(anchor: str) -> str:
     return f"{DOC_BASE_URL}#{anchor}"
 
 
+def _without_strings_and_comments(text: str) -> str:
+    """One source line with every string literal's body and every ``#`` comment tail replaced by
+    spaces, so the only ``(`` and ``)`` left are the ones the code really runs.
+
+    Blanking rather than deleting keeps every remaining character at its original column, so a
+    position measured on the raw line still points at the same token here.
+
+    This is the point where the module stops being language-neutral, and it says so rather than
+    assuming it quietly. ``gdmutant/engine/`` holds no language specifics as a rule, but this file
+    already hardcodes ``assert``, ``enum`` and ``func``, so quote and comment syntax is one more
+    GDScript assumption in a file that carries several. The alternative is a full language parse
+    behind every reporting surface, which costs more than an explanation rule is worth. The three
+    forms read here (``"…"``, ``'…'`` and ``#``) are also Python's and Ruby's, so the reading holds
+    beyond GDScript.
+
+    Two limits stay by design. A backslash hides the next character, which is GDScript's escape
+    rule, so a quote written as an escape does not end the string it sits in. A triple-quoted body
+    is out of reach, because the scan reads one line at a time and never carries a quote across a
+    newline. That case lands back on the pre-existing behaviour: an unbalanced count, which
+    `_closing_paren` reports as "this file does not read the way I assumed", and the caller answers
+    by saying nothing at all.
+    """
+    blanked = list(text)
+    quote = ""
+    escaped = False
+    for index, char in enumerate(text):
+        if quote:
+            blanked[index] = " "
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif char == "#":
+            return "".join(blanked[:index]) + " " * (len(text) - index)
+        elif char in "\"'":
+            quote = char
+            blanked[index] = " "
+    return "".join(blanked)
+
+
 def _closing_paren(
     source_lines: Sequence[str], line_index: int, column_index: int
 ) -> tuple[int, int] | None:
@@ -170,13 +213,15 @@ def _closing_paren(
     `line_index`/`column_index`, or ``None`` when nothing in the rest of the file closes it.
 
     Counting parens from the opening one is what gives a call a real *end*, and the walk runs to the
-    end of the file because a call may span as many lines as its author wants.
+    end of the file because a call may span as many lines as its author wants. `source_lines` here
+    is already masked by `_without_strings_and_comments`, so a paren written inside a string or a
+    comment is not in the count at all.
 
-    ``None`` means "this file does not read the way I assumed" — a paren inside a string or a
-    comment, which a textual scan cannot see. Returning it, rather than running the span to the end
-    of the file, keeps a misread from swallowing every mutant below it. In practice the source here
-    has already parsed (it is what the mutants were generated from), so parens balance everywhere
-    outside strings and comments; an unclosed one is therefore already the misread case.
+    ``None`` means "this file does not read the way I assumed". Returning it, rather than running
+    the span to the end of the file, keeps a misread from swallowing every mutant below it. In
+    practice the source has already parsed (it is what the mutants were generated from), so parens
+    balance once strings and comments are out of the way, and an unclosed one is therefore already
+    the misread case.
     """
     depth = 0
     for index in range(line_index, len(source_lines)):
@@ -210,13 +255,19 @@ def _assert_spans(source_lines: Sequence[str]) -> list[tuple[tuple[int, int], tu
 
     Textual rather than an AST walk, for `_in_enum`'s reason: it only ever mis-scopes an
     *explanation* — it can never change a verdict, a score, or which mutants run — and an AST walk
-    would put a language parse behind every reporting surface. It also keeps this engine module
-    language-neutral, which an AST walk here would not.
+    would put a language parse behind every reporting surface.
+
+    The scan reads `_without_strings_and_comments`'s masked copy of the file, not the raw lines, so
+    a paren or an `assert(` written inside a string or a comment counts for nothing. Both halves
+    need the same copy. Matching `assert(` on a raw line and counting parens on a masked one lets a
+    commented-out call open a span that a real ``)`` further down then closes, which puts ordinary
+    killable code inside an assert that is not there.
     """
+    masked = [_without_strings_and_comments(text) for text in source_lines]
     spans: list[tuple[tuple[int, int], tuple[int, int]]] = []
-    for index, text in enumerate(source_lines):
+    for index, text in enumerate(masked):
         for match in _ASSERT_CALL_RE.finditer(text):
-            closing = _closing_paren(source_lines, index, match.end() - 1)
+            closing = _closing_paren(masked, index, match.end() - 1)
             if closing is not None:
                 spans.append(((index + 1, match.end()), closing))
     return spans
