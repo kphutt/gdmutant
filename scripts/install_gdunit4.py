@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Install the GdUnit4 addon into the corpus fixture for the live self-test.
 
-GdUnit4 is intentionally NOT vendored (see corpus/project.godot, CREDITS.md). It is downloaded at a
-pinned commit and verified by a hash of the extracted addon *tree* — see scripts/_addon_install.py
-for why a tree hash (not the tag, not the source-tarball bytes) and how a deliberate bump works.
+GdUnit4 is intentionally NOT vendored (see corpus/project.godot, docs/credits.md). It is
+downloaded at a pinned commit and verified by a hash of the extracted addon *tree* — see
+scripts/_addon_install.py for why a tree hash (not the tag, not the source-tarball bytes) and how a
+deliberate bump works.
 
 Usage: python scripts/install_gdunit4.py  (installs into <repo>/corpus/addons/gdUnit4)
 """

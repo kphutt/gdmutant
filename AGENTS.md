@@ -108,7 +108,7 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
 - [`CHANGELOG.md`](CHANGELOG.md) — what's landed and in progress (scope / non-goals live in `DESIGN.md`).
 - `docs/mutation-testing.md` — the suite is mutation-tested against itself.
 - `docs/decisions/NNNN-*.md` — append-only ADRs (`ls` is the index).
-- [`CREDITS.md`](CREDITS.md) — third-party licenses.
+- [`docs/credits.md`](docs/credits.md) — third-party licenses.
 
 Live docs open with YAML frontmatter (`type` / `status` / `created`); build only from `status: active`.
 
