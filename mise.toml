@@ -1,0 +1,9 @@
+[tools]
+# Pins Godot for the env-gated live self-test suites (tests/test_selftest_live.py) — the only
+# checks that run gdmutant's real adapter against a real Godot binary. Matches the exact patch CI
+# pins via chickensoft-games/setup-godot (4.7.0); Godot's own release tagging calls that
+# "4.7-stable" (see `godot --version`: 4.7.stable.official.<hash>).
+#
+# mise owns Godot only — Python stays owned by uv (.python-version + uv.lock), never mise; see
+# AGENTS.md's tech-stack note.
+"aqua:godotengine/godot" = "4.7-stable"
