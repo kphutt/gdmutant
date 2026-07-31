@@ -3,6 +3,7 @@
 
 <p align="center">
   <a href="https://github.com/kphutt/gdmutant/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kphutt/gdmutant/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://pypi.org/project/gdmutant/"><img alt="PyPI" src="https://img.shields.io/pypi/v/gdmutant"></a>
   <a href="#compatibility"><img alt="Godot 4.3+" src="https://img.shields.io/badge/Godot-4.3%2B-478cbf?logo=godot-engine&logoColor=white"></a>
   <a href="https://github.com/bitwes/Gut"><img alt="GUT 9.x" src="https://img.shields.io/badge/GUT-9.x-478cbf"></a>
   <a href="https://github.com/godot-gdunit-labs/gdUnit4"><img alt="gdUnit4 6.x" src="https://img.shields.io/badge/gdUnit4-6.x-478cbf"></a>
@@ -37,9 +38,10 @@ render in the existing HTML viewer for it.
 ## Quickstart
 
 Not on PyPI yet — install from git at a pinned commit (v0.1.0, in development; a PyPI release is
-planned):
+planned). Starting from scratch (no `uv` project yet)? `uv init` first:
 
 ```sh
+uv init
 uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
 ```
 
