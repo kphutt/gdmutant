@@ -50,8 +50,7 @@ No Python in your game repo? Keep gdmutant in a tiny non-package uv project besi
 `devtools/`, with `[tool.uv] package = false`) so it never touches shipped code.
 
 **See it work with no Godot at all** — point `--dry-run` at any `.gd` file to list the mutants
-gdmutant would generate (from a clone of this repo, the bundled `corpus/` fixture prints the example
-below):
+gdmutant would generate, with no test run and no verdicts:
 
 ```sh
 uv run gdmutant run corpus/turn_order.gd --dry-run
@@ -90,7 +89,8 @@ required. A new JUnit-emitting framework is one small adapter.
 
 **Explains every survivor.** The console report doesn't just give a location — for each survivor it
 shows the source line with a caret on the exact token, what's untested, why it matters, and where to
-start a test. [Reading your first report →](docs/reading-your-first-report.md)
+start a test. See it in the [example output](#example-output) below, or look up any operator in the
+[survivor reference](docs/survivors/README.md).
 
 **Interoperates.** `--json` emits the
 [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema
@@ -103,17 +103,55 @@ changed (the fast, per-PR mode); `--dry-run` lists mutants without booting Godot
 
 ## Example output
 
-```
-18 mutants for corpus/turn_order.gd:
-  corpus/turn_order.gd:8:17   comparison   > -> >=
-  corpus/turn_order.gd:13:11  comparison   < -> <=
-  corpus/turn_order.gd:27:15  boolean      and -> or
-  corpus/turn_order.gd:32:9   constant     true -> false
-  ...
+A real run against the bundled `corpus/turn_order.gd` fixture (18 mutants, gdUnit4 runner):
+
+```sh
+uv run gdmutant run --project corpus --godot /path/to/godot corpus/turn_order.gd
 ```
 
-A real run adds a killed/survived verdict per mutant, a mutation score, and the plain-language
-survivor explanation described above.
+```
+Mutation score: 61.1%
+  killed:   11
+  timeout:  0  (counted as killed)
+  survived: 7
+  ignored:  0  (suppressed, excluded from score)
+  invalid:  0
+  error:    0
+
+Survivors (7):
+
+──── survived ──────────────────────────────────────────── comparison ────
+
+  corpus\turn_order.gd:13   func clamp_initiative
+
+     13 |     if value < 0:
+        |              ^  changed  <  to  <= — every test still passed
+
+  gap    Your tests pass whether this says `<` or `<=`. They run this
+         line, but never the one input where the two disagree — equal
+         operands. That case is untested.
+
+  risk   Passing here is false confidence, not proof. A later refactor or
+         merge that changes the equal case slips through green. If the
+         equal case has a right answer, no test guards it.
+
+  start  Add a test that reaches this line with two equal operands (a
+         value compared to itself) and assert the result you expect. Only
+         you know that result — gdmutant reports the gap, not it.
+
+  more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#comparison
+──────────────────────────────────────────────────────────────────────────
+
+... 6 more survivors follow, one block each — comparison, numeric, boolean, logical-not, and
+constant, all on this one small file.
+```
+
+**Mutation score isn't a target — it's a direction.** There's no universal "good" number; it depends
+on how gnarly the code under test is. Watch it trend, not the absolute value: a rising score as you
+kill survivors is progress, and a low score on code you just wrote is more urgent than a stable score
+on code nobody's touched in months. `ignored`, `invalid`, and `error` are the other three result
+categories — what each means, the exact score formula, and how to kill or justify each survivor above
+all live in the [survivor reference](docs/survivors/README.md).
 
 ## Compatibility
 
@@ -179,7 +217,7 @@ or stash first, or pass `--require-clean`. [Full guarantee →](docs/agent-guide
 
 ## Documentation
 
-- [Reading your first report](docs/reading-your-first-report.md) — verdicts, kill hints, equivalent mutants.
+- [Survivor reference](docs/survivors/README.md) — what a survivor is, the score formula, and how to kill or justify each mutation operator.
 - [Design & architecture](docs/design/DESIGN.md) — the engine and the "Saboteur & the Jury" design.
 - [Driving gdmutant from an AI agent](docs/agent-guide.md) — invocation, JSON schema, survivor→killing-test loop.
 - [Exit-code runner convention](docs/decisions/0005-exit-code-test-runner-convention.md) — the stdout/exit-code contract.

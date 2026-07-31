@@ -201,21 +201,23 @@ def test_console_summary_survivor_block_has_all_slots_and_the_doc_link() -> None
     assert "2 | " not in out and "^" not in out
 
 
-def test_docs_show_the_current_console_format_not_the_retired_one() -> None:
+def test_readme_shows_the_current_console_format_not_the_retired_one() -> None:
     # The old "→ kill it" one-liner format is retired; no shipping doc may still describe it, and
-    # the onboarding doc's sample survivor must match what render_survivor produces — reinstates the
-    # doc-sync guard removed with _kill_hint (flagged in review of the slice-1 PR).
+    # the README's sample survivor must match what render_survivor produces — reinstates the
+    # doc-sync guard removed with _kill_hint (flagged in review of the slice-1 PR). Retargeted from
+    # the now-deleted docs/reading-your-first-report.md to README.md, the annotated survivor's one
+    # remaining shipping home (its content moved into README's example output +
+    # docs/survivors/README.md's intro).
     repo = Path(__file__).resolve().parent.parent
-    onboarding = (repo / "docs" / "reading-your-first-report.md").read_text(encoding="utf-8")
     readme = (repo / "README.md").read_text(encoding="utf-8")
-    for doc in (onboarding, readme):
-        assert "→ kill it" not in doc
-    assert "──── survived" in onboarding  # shows the new block
-    # the doc's example survivor (turn_order.gd:13, `<` -> `<=`) must match the real renderer output
+    assert "→ kill it" not in readme
+    assert "──── survived" in readme  # shows the new block
+    # the README's example survivor (turn_order.gd:13, `<` -> `<=`) must match the renderer's real
+    # output
     src = (repo / "corpus" / "turn_order.gd").read_text(encoding="utf-8").splitlines()
     m = Mutant("turn_order.gd", Span(13, 11, 13, 12), "comparison", "<", "<=")
     caret = next(line for line in render_survivor(m, src) if "changed  <  to  <=" in line)
-    assert caret in onboarding
+    assert caret in readme
 
 
 def test_console_summary_wraps_each_survivor_block_exactly() -> None:
