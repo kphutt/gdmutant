@@ -826,8 +826,14 @@ def _write_source(target: Path, text: str, eol: str) -> None:
             shutil.copymode(dest, temp)
         _replace_with_retry(temp, dest)
     except OSError as error:
+        # Deliberately NOT "left exactly as it was": true of this write, but a reader takes it as a
+        # promise about their *original*, and this same helper is what puts the original back after
+        # a mutant. A restore that fails here leaves the mutant on disk, so say that plainly.
         raise SourceWriteFailed(
-            f"could not rewrite {dest} ({error}). It has been left exactly as it was."
+            f"could not rewrite {dest} ({error}). This write changed nothing, so the file still "
+            "holds whatever was in it a moment ago. If gdmutant had already put a mutant there, "
+            "the mutant is what is on disk now, not your original. Restore the file from git "
+            "before trusting it."
         ) from error
     finally:
         # A successful rename consumed the temporary file; this clears it after a failure.

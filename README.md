@@ -25,26 +25,24 @@ test catches. Here's a real one:
 ```
 Mutation score: 61.1%
 
-──── survived ──────────────────────────────────────────── comparison ────
+──── survived ─────────────────────────────────────────────── boolean ────
 
-  corpus\turn_order.gd:13   func clamp_initiative
+  corpus\turn_order.gd:27   func can_act
 
-     13 |     if value < 0:
-        |              ^  changed  <  to  <= — every test still passed
+     27 |     return alive and not stunned
+        |                  ^  changed  and  to  or — every test still passed
 
-  gap    Your tests pass whether this says `<` or `<=`. They run this
-         line, but never the one input where the two disagree — equal
-         operands. That case is untested.
+  gap    Your tests pass whether this needs both sides (`and`) or just one
+         (`or`). No test covers the case that tells them apart: the
+         operands disagreeing (one true, one false).
 
-  risk   Passing here is false confidence, not proof. A later refactor or
-         merge that changes the equal case slips through green. If the
-         equal case has a right answer, no test guards it.
+  risk   Your tests can't tell 'needs both' from 'needs either.' A change
+         that loosens or tightens this guard would pass every test.
 
-  start  Add a test that reaches this line with two equal operands (a
-         value compared to itself) and assert the result you expect. Only
-         you know that result — gdmutant reports the gap, not it.
+  start  Add a test where exactly one side is true and the other false,
+         and assert the outcome.
 
-  more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#comparison
+  more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#boolean
 ──────────────────────────────────────────────────────────────────────────
 ```
 
@@ -93,9 +91,9 @@ from every command below.
 ## Quickstart
 
 Make gdmutant a small uv project in a folder beside your game, never inside it: `uv init` drops
-`.git`, `main.py`, `pyproject.toml` and `.venv` wherever you run it, and none of that belongs in a
-game repo. Pin the interpreter: `uv init` alone floors on whatever it finds, and gdmutant needs
-3.12+.
+`.git`, `.gitignore`, `.python-version`, `main.py`, `pyproject.toml` and a `README.md` of its own
+wherever you run it, and none of that belongs in a game repo. Pin the interpreter: `uv init` alone
+floors on whatever it finds, and gdmutant needs 3.12+.
 
 ```sh
 uv init --python 3.12 gdmutant-workspace
@@ -125,11 +123,12 @@ Point it at your own file instead once you have one. The preview is not the payo
 reruns your tests once per mutant and reports the survivors: lines where a bug could live that
 no test catches. Finding those is what the tool is for.
 
-For a real run, pick your runner. Needs the addon already installed and Godot itself on PATH, or
-`--godot <path>`. [GUT](https://github.com/bitwes/Gut) and
+For a real run, pick your runner. [GUT](https://github.com/bitwes/Gut) and
 [gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) are peer JUnit-XML readers (gdUnit4 is the
-default). `--tests` names the one directory holding your suites. It defaults to `res://test`, but
-GUT's stock layout is `test/unit/` and GUT's `-gdir` does not search subdirectories:
+default). Both need their addon already installed and Godot itself on PATH, or `--godot <path>`.
+The exit-code runner further down needs neither. `--tests` names the one directory holding your
+suites. It defaults to `res://test`, but GUT's stock layout is `test/unit/` and GUT's `-gdir` does
+not search subdirectories:
 
 ```sh
 # GUT
@@ -165,7 +164,8 @@ uv run gdmutant run ../my-game/src/module.gd --project ../my-game \
   `.gdmutant.toml` holds per-project defaults. There's a [GitHub Action](#github-action) too.
 
 gdmutant scores every run. The counts behind the block above come from this repo's `corpus/`
-fixture, so reproducing it takes a checkout, and the package doesn't ship it:
+fixture. The wheel you `pip install` leaves it out, so reproducing this takes a checkout or the
+source distribution, which does carry it:
 
 ```
 Mutation score: 61.1%
@@ -196,7 +196,9 @@ it trend as you kill survivors. See the [survivor reference](docs/survivors/READ
 gdmutant boots Godot once per mutant, so time scales with mutant count. It tells you
 what the run is before it starts, keeps you posted while it goes, and prints the wall-clock when it
 finishes. But it never predicts a finish time, because it cannot do that honestly (see
-[Troubleshooting](#troubleshooting)). `--jobs N` runs N at once:
+[Troubleshooting](#troubleshooting)). `--jobs N` runs N at once. The run below passed
+`--timeout 30`. Left alone, gdmutant caps each mutant at ten times the baseline suite, with a
+floor of 10s and a ceiling of 600s:
 
 ```
 18 mutants to run. Baseline suite 1.4s; each mutant is capped at 30s.
@@ -211,7 +213,7 @@ forces the quieter cadence. `--progress none` turns it off.
 
 | | Verified at every release | Expected to work |
 |---|---|---|
-| Godot | 4.7.x | 4.3+ |
+| Godot | 4.7.0 | 4.3+ |
 | Runner | GUT 9.7.1, gdUnit4 6.1.3 | GUT 9.x, gdUnit4 6.x, any headless command |
 
 gdmutant is `0.x`, so anything can change between minor versions: flags, exit codes, console output.
@@ -233,16 +235,20 @@ command = "godot --headless --script res://tests/run_tests.gd"
 
 Two of those keys (`command` and `godot`) name a program gdmutant will run. gdmutant reads
 `.gdmutant.toml` from the directory you are in, so in a project you cloned that file was written
-by somebody else. It therefore ignores those two keys unless you say the file is trustworthy:
+by somebody else. It therefore refuses to act on those two keys unless you say the file is
+trustworthy:
 
 ```
 gdmutant run scripts --trust-config
 ```
 
-Without `--trust-config` gdmutant stops and tells you which keys it skipped. Passing the value as
-a flag (`--command ...`, `--godot ...`) also works and needs no trust, since then you named the
-program yourself. Every other key (`project`, `runner`, `tests`, `report-path`, `timeout`,
-`require-clean`, `exclude`) is read normally: none of them can decide what gets executed.
+Without `--trust-config` gdmutant names the keys the file decided, exits 2, and runs nothing. Not
+even a `--dry-run` preview gets through, because the refusal comes first. It fires only where the
+file actually decides the program: a key whose value matches gdmutant's own default, or one you
+also passed as a flag, decides nothing, so the run goes ahead without a word. Passing the value as
+a flag (`--command ...`, `--godot ...`) needs no trust, since then you named the program yourself.
+Every other key (`project`, `runner`, `tests`, `report-path`, `timeout`, `require-clean`,
+`exclude`) is read normally: none of them can decide what gets executed.
 
 ## GitHub Action
 
@@ -261,6 +267,10 @@ gdmutant itself:
     args: --jobs 4              # any extra gdmutant flags, verbatim
 ```
 
+`since` reads the base commit out of your clone, so the workflow's `actions/checkout` step needs
+`fetch-depth: 0`. Its default fetches one commit, the base commit is not among them, and the
+gdmutant step then fails on a git error rather than mutating anything.
+
 It sets up Python and Godot, installs gdmutant, runs it, and writes every survivor (with its
 `gap` / `risk` / `start` explanation) to the workflow's job summary, where reviewers already look
 (`job-summary: false` skips that). The `report-json` output holds the path to the
@@ -270,8 +280,9 @@ exits non-zero only on a real error, such as a red baseline suite. The project a
 already passes must be there, plus the GUT or gdUnit4 addon if you use either. The action installs
 none of that.
 
-If your project's `.gdmutant.toml` sets `command` or `godot`, add `args: --trust-config`. gdmutant
-skips those two keys otherwise, for the reason given under [Configuration](#configuration).
+If your project's `.gdmutant.toml` sets `command` or `godot`, add `args: --trust-config`. Without
+it gdmutant refuses to run at all and the step fails, for the reason given under
+[Configuration](#configuration).
 
 Pin the commit SHA. There is no `@v1` or `@v0`. Every published tag names a full version
 (`v0.1.0`) and never moves: a tag ruleset blocks deleting or re-pointing any tag, and the release
@@ -310,7 +321,7 @@ updates:
 - Everything survives. Usually the tests never ran: run your suite by hand first. Godot exits `0`
   even on a harness that fails to *compile*, so gate a `--command` harness on `can_instantiate()`.
 - It's slow. Godot boots once per mutant. Mutate one file at a time, and use `--jobs N`, real
-  but sub-linear (~3× at `--jobs 4`), since every worker copies the project. Watch the closing
+  but sub-linear (~3× at `--jobs 4`), since the workers contend for CPU and RAM. Watch the closing
   line for how much of the time was timeouts. A few hanging mutants can outweigh every other
   mutant combined, and `--timeout` caps each one.
 - How long will it take? gdmutant will not guess, and no other mutation tester does either. Up
@@ -333,9 +344,23 @@ A language-neutral loop (select → mutate → run → tally → score) with two
 pieces behind an adapter: mutating the AST (via
 [gdtoolkit](https://github.com/Scony/godot-gdscript-toolkit)) and running the tests.
 
-Safety: gdmutant edits your source file **in place**, then restores its exact original bytes
-after every mutant and on exit, including Ctrl-C. Only a hard kill (a crash, a power loss) can leave
-a swap in place. Commit or stash first, or pass `--require-clean` to refuse a dirty tree.
+Safety: in a serial run gdmutant edits your source file where it lies, then restores its exact
+original bytes after every mutant and on exit, including Ctrl-C. Under `--jobs N` with N above 1
+each worker mutates its own copy of the project, so your own file is never touched. Every write
+goes to a temporary file beside the source and is then renamed over it, so the path always holds
+one whole file or the other, never half of each.
+
+Two things can still leave the mutant sitting on disk. A hard kill (a crash, a power loss) stops
+the restore before it can run, and if it lands between the temporary write and the rename it also
+leaves a stray `.<name>.<random>.tmp` beside your source, which is safe to delete. And a write
+that cannot finish at all (a full disk, or an antivirus or editor lock that outlasts the retries)
+ends the run with an error rather than retrying unsafely, which leaves the mutant where your
+original was. That one needs no crash. Either way, put the file back from git.
+
+Commit or stash first, or pass `--require-clean`, which refuses to start unless git already holds
+a committed copy of every file it is about to mutate. That is stricter than a clean tree: a
+project not in git, a file git ignores, and git not being installed all fail it too, because none
+of them leave a copy to put back.
 
 ## Documentation
 

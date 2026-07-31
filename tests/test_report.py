@@ -214,12 +214,14 @@ def test_readme_shows_the_current_console_format_not_the_retired_one() -> None:
     readme = (repo / "README.md").read_text(encoding="utf-8")
     assert "→ kill it" not in readme
     assert "──── survived" in readme  # shows the new block
-    # the README's example survivor (turn_order.gd:13, `<` -> `<=`) must match the renderer's real
-    # output
+    # The README's example survivor (turn_order.gd:27, `and` -> `or`) must match the renderer's
+    # real output — the WHOLE block, not just the caret line, so no slot can drift unnoticed.
+    # It must also be a survivor the reader can act on: turn_order.gd:13's `<` -> `<=` used to be
+    # the example and is pinned EQUIVALENT by tests/test_selftest_live.py, so its `start` line sent
+    # readers to write a test that passes under the mutant. This one is a real coverage gap.
     src = (repo / "corpus" / "turn_order.gd").read_text(encoding="utf-8").splitlines()
-    m = Mutant("turn_order.gd", Span(13, 11, 13, 12), "comparison", "<", "<=")
-    caret = next(line for line in render_survivor(m, src) if "changed  <  to  <=" in line)
-    assert caret in readme
+    m = Mutant(r"corpus\turn_order.gd", Span(27, 15, 27, 18), "boolean", "and", "or")
+    assert "\n".join(render_survivor(m, src)) in readme
 
 
 def test_console_summary_wraps_each_survivor_block_exactly() -> None:
