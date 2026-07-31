@@ -949,6 +949,10 @@ def test_an_lf_file_stays_lf_after_a_run(tmp_path: Path) -> None:
 # were about to run against, and every mutant came back SURVIVED.
 
 
+#: A one-comparison source, so the parallel tests below produce a small, predictable mutant set.
+SAFE_SRC = "func f(a, b) -> bool:\n\treturn a > b\n"
+
+
 def _project_and_outside_source(tmp_path: Path) -> tuple[Path, Path]:
     """A project directory, and a .gd file that is its sibling rather than inside it."""
     project = tmp_path / "godot-project"
@@ -1042,3 +1046,23 @@ def test_a_source_outside_the_project_still_runs_serially(tmp_path: Path) -> Non
 
     assert result.killed == 1
     assert outside.read_text(encoding="utf-8") == src
+
+
+def test_a_deeply_nested_project_cannot_walk_back_onto_the_real_source_file(
+    tmp_path: Path,
+) -> None:
+    # The worst case, and the reason this is not merely untidy. The `..` chain is as long as the
+    # source's distance from the project, so a deeply nested --project produces more of them than
+    # the temporary directory has depth. The walk then clamps at the drive (or filesystem) root and
+    # the tail rebuilds the source's own absolute path -- so the write lands on the REAL file,
+    # every worker races on it at once, and "never leave the project mutated" is void.
+    real = tmp_path / "player.gd"
+    src = SAFE_SRC
+    real.write_text(src, encoding="utf-8")
+    deep = tmp_path / "a" / "b" / "c" / "d" / "e" / "f" / "g" / "h" / "project"
+    deep.mkdir(parents=True)
+
+    with pytest.raises(SourceOutsideProject):
+        run(str(deep), str(real), src, ProjectDirRecordingRunner(), jobs=4)
+
+    assert real.read_text(encoding="utf-8") == src
