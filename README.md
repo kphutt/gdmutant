@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/kphutt/gdmutant/main/.github/assets/frank.png" alt="Frank the Mutant" width="112" height="112">
+  <img src="https://raw.githubusercontent.com/kphutt/gdmutant/main/.github/assets/frank.svg" alt="Frank the Mutant" width="112" height="112">
 </p>
 <h1 align="center">gdmutant</h1>
 <p align="center"><strong>Mutation testing for GDScript and Godot — find the bugs your green tests would miss.</strong></p>
