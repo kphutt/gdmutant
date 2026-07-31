@@ -48,9 +48,9 @@ Mutation score: 61.1%
 ──────────────────────────────────────────────────────────────────────────
 ```
 
-Coverage tells you a line *ran*; mutation tells you a bug there would be *caught* — a gap that
-widens when an AI writes the tests, since models tend to pin code they just wrote. A standalone
-CLI, no AI required.
+Coverage tells you a line *ran*; mutation tells you a bug there would be *caught*. Those are not
+the same question, and the more code a project ships — whoever or whatever wrote it — the more of
+it rides on the answer. A standalone CLI, no AI required.
 
 ## Is this for you?
 
@@ -113,13 +113,16 @@ static func clamp_initiative(value: int, max_value: int) -> int:
 	return value
 ```
 
-then list its mutants — no test run, no Godot:
+then preview its mutants. `--dry-run` lists what *would* be mutated and stops there — no test run,
+no Godot:
 
 ```sh
 uv run gdmutant run scratch.gd --dry-run
 ```
 
-Point it at your own file instead once you have one.
+Point it at your own file instead once you have one. The preview is not the payoff. A real run
+reruns your tests once per mutant and reports the **survivors** — lines where a bug could live that
+no test catches. Finding those is what the tool is for.
 
 **For real, pick your runner.** Needs the addon already installed and Godot itself on PATH, or
 `--godot <path>`. [GUT](https://github.com/bitwes/Gut) and
@@ -160,7 +163,7 @@ to start a test.
 for dashboards; `--html` writes one self-contained page — no network, no CDN — that marks every
 survivor on its own source line and explains the gap beside it. `--since <ref>` mutates only a PR's
 changed lines, for a fast, **advisory** check — never a hard gate. `--exclude` globs;
-`.gdmutant.toml` holds per-project defaults.
+`.gdmutant.toml` holds per-project defaults. There's a [GitHub Action](#github-action) too.
 
 **Scores every run.** The counts behind the block above — from this repo's `corpus/` fixture, so
 reproducing it takes a checkout; the package doesn't ship it:
@@ -221,6 +224,51 @@ project = "."
 runner = "command"
 command = "godot --headless --script res://tests/run_tests.gd"
 # exclude = ["*_generated.gd", "*/vendor/*"]
+```
+
+## GitHub Action
+
+gdmutant ships as a GitHub Action, so a workflow can run it without installing Python, Godot or
+gdmutant itself:
+
+```yaml
+- uses: kphutt/gdmutant@REPLACE_WITH_THE_RELEASE_COMMIT_SHA  # v0.1.0
+  with:
+    godot-version: "4.7.0"      # the only required input
+    project-path: ./            # gdmutant's --project
+    paths: scripts              # what to mutate (default: the whole project)
+    runner: gdunit4             # gdunit4 | gut | command
+    tests: res://test/unit      # the one directory holding your suites
+    since: ${{ github.event.pull_request.base.sha }}   # mutate only this PR's changed lines
+    args: --jobs 4              # any extra gdmutant flags, verbatim
+```
+
+It sets up Python and Godot, installs gdmutant, runs it, and writes every survivor — with its
+`gap` / `risk` / `start` explanation — to the workflow's job summary, where reviewers already look
+(`job-summary: false` skips that). The `report-json` output holds the path to the
+`mutation-testing-elements` report, ready to hand to an upload-artifact step.
+`godot-use-dotnet: true` picks the .NET build of Godot. Survivors are output, not failure: the step
+exits non-zero only on a real error, such as a red baseline suite. Your GUT or gdUnit4 addon must
+already be in the project — the action installs neither.
+
+**Pin the commit SHA. There is no `@v1` or `@v0`.** Every published tag names a full version
+(`v0.1.0`) and never moves: a tag ruleset blocks deleting or re-pointing any tag, and the release
+guard rejects a tag that doesn't equal the packaged version, so a floating major tag is not
+something this repo can produce. Pinning `@v0.1.0` works and is just as stable, for the same
+reason. Replace the placeholder above with the 40-character commit SHA the release was cut from,
+and keep the version in the trailing comment so the line stays readable.
+
+The bumps a floating tag would have handed you come from Dependabot instead, as PRs you can read
+before taking:
+
+```yaml
+# .github/dependabot.yml
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
 ```
 
 ## Troubleshooting

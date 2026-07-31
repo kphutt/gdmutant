@@ -1,3 +1,9 @@
+---
+type: how-to
+status: active
+created: 2026-07-11
+---
+
 # gdmutant — contributor & AI-assistant guide
 
 A language-agnostic **mutation-testing** tool for GDScript/Godot. It
@@ -108,9 +114,14 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
 - [`CHANGELOG.md`](CHANGELOG.md) — what's landed and in progress (scope / non-goals live in `DESIGN.md`).
 - `docs/mutation-testing.md` — the suite is mutation-tested against itself.
 - `docs/decisions/NNNN-*.md` — append-only ADRs (`ls` is the index).
+- [`docs/releasing.md`](docs/releasing.md) — the maintainer runbook for cutting a release to PyPI.
 - [`docs/credits.md`](docs/credits.md) — third-party licenses.
 
-Live docs open with YAML frontmatter (`type` / `status` / `created`); build only from `status: active`.
+Live docs open with YAML frontmatter (`type` / `status` / `created`); build only from
+`status: active`. Two files are deliberately exempt, because they are rendered somewhere that has
+no frontmatter support and would print it as a visible heading: `README.md` (it is the package's
+PyPI description) and `.github/PULL_REQUEST_TEMPLATE.md` (it is pasted verbatim into every new pull
+request's body). `tests/test_docs_frontmatter.py` pins both halves of that rule.
 
 ## Non-goals (v0.1)
 
