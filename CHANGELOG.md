@@ -120,3 +120,7 @@ CLI.
 
 - Mutations are applied in place and restored after each mutant and on exit; gdmutant warns on
   uncommitted changes and `--require-clean` makes that a hard stop.
+- `.gdmutant.toml` cannot decide what gdmutant executes. Its `command` and `godot` keys name a
+  program to run, and the file is read from the project directory — so in a project you cloned,
+  somebody else wrote it. Both keys are skipped, with an explanation, unless you add
+  `--trust-config` or name the program on the command line yourself. Every other key is unaffected.

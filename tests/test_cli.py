@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 from conftest import MarkerRunner
 
 import gdmutant.cli as cli
+from gdmutant.adapters.gdscript.runner import GutRunner
 from gdmutant.cli import (
     _has_uncommitted_changes,
     _load_config,
@@ -2315,3 +2317,166 @@ def test_main_threads_the_resolved_progress_style_to_the_run(
 def test_progress_defaults_to_auto_in_the_parser() -> None:
     args = build_parser().parse_args(["run", "x.gd"])
     assert args.progress_style == "auto"
+
+
+# --- .gdmutant.toml may not decide what gets executed --------------------------------------
+#
+# The config file is read from the directory gdmutant is run in, so on a cloned project it is a
+# file somebody else wrote. Two of its keys name a program gdmutant then executes: `command` goes
+# straight to the operating system, and `godot` is the binary every JUnit runner launches. Acting
+# on either without being asked turns "point the mutation tester at this checkout" into "run
+# whatever this checkout says". They are refused unless the user adds --trust-config or names the
+# program on the command line themselves.
+
+
+def _record_launches(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Capture every program gdmutant tries to launch, minus its own git status checks.
+
+    `subprocess.run` still answers, so the surrounding code behaves normally: the stand-in reports
+    the exit code git uses outside a work tree, which is what these throwaway directories are.
+    """
+    launched: list[list[str]] = []
+
+    def spy(
+        argv: Sequence[str], *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if list(argv)[:1] != ["git"]:
+            launched.append(list(argv))
+        return subprocess.CompletedProcess(list(argv), returncode=128, stdout="", stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", spy)
+    return launched
+
+
+def _payload_config(tmp_path: Path, body: str) -> None:
+    (tmp_path / ".gdmutant.toml").write_text(body, encoding="utf-8")
+    (tmp_path / "player.gd").write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+
+
+def test_a_config_supplied_command_is_refused_and_never_reaches_a_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The plain local case: clone a project, run gdmutant in it, and its config file picks both
+    # the runner and the command string. Before this was refused, that command ran -- verified by
+    # a payload that wrote a file. Nothing may reach a subprocess here.
+    _payload_config(tmp_path, 'runner = "command"\ncommand = "touch pwned"\n')
+    monkeypatch.chdir(tmp_path)
+    launched = _record_launches(monkeypatch)
+
+    rc = cli.main(["run", "player.gd"])
+
+    # Asserted first: whether the payload ran is the whole point, and it must be what fails.
+    assert launched == [], "the config's command must never be executed"
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "names a program for gdmutant to run ('command')" in err
+    assert "--trust-config" in err
+
+
+def test_a_config_supplied_godot_binary_is_refused_even_behind_an_explicit_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The one that reaches CI. The published action always passes --runner explicitly, which
+    # overrides a config `runner` -- but it never passes --godot, so a config `godot` key survived
+    # and named the binary the JUnit runner launches. A repository could therefore choose what ran
+    # on the machine testing it. This mirrors the action's flag shape exactly.
+    _payload_config(tmp_path, 'godot = "./payload"\n')
+    monkeypatch.chdir(tmp_path)
+    launched = _record_launches(monkeypatch)
+
+    rc = cli.main(["run", "player.gd", "--project", str(tmp_path), "--runner", "gdunit4"])
+
+    assert launched == [], "the config's godot binary must never be launched"
+    assert rc == 2
+    assert "names a program for gdmutant to run ('godot')" in capsys.readouterr().err
+
+
+def test_the_refusal_names_every_program_key_the_file_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Both keys at once: the message has to list both, or fixing one leaves the user stuck on the
+    # other with no idea why.
+    _payload_config(tmp_path, 'command = "payload"\ngodot = "./payload"\n')
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["run", "player.gd"]) == 2
+
+    assert "('command' and 'godot')" in capsys.readouterr().err
+
+
+def test_trust_config_lets_a_project_use_its_own_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The legitimate use has to keep working: a project's own maintainers put `command` in the
+    # file precisely so they need not retype it. --trust-config is how they say the file is theirs.
+    _payload_config(tmp_path, 'runner = "command"\ncommand = "my-test-harness --headless"\n')
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, object] = {}
+
+    def record(source: str, project: str, runner: object, **kw: object) -> int:
+        captured["r"] = runner
+        return 0
+
+    monkeypatch.setattr(cli, "run_mutation", record)
+
+    assert cli.main(["run", "player.gd", "--trust-config"]) == 0
+
+    assert isinstance(captured["r"], CommandRunner)
+    assert list(captured["r"].command) == ["my-test-harness", "--headless"]
+
+
+def test_naming_the_program_on_the_command_line_needs_no_trust_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An explicit flag already beats the config value, so the file decided nothing and there is
+    # nothing to refuse. Refusing anyway would contradict the advice the refusal itself gives.
+    _payload_config(tmp_path, 'godot = "./payload"\n')
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, object] = {}
+
+    def record(source: str, project: str, runner: object, **kw: object) -> int:
+        captured["r"] = runner
+        return 0
+
+    monkeypatch.setattr(cli, "run_mutation", record)
+
+    assert cli.main(["run", "player.gd", "--godot", "/my/own/godot"]) == 0
+
+    assert captured["r"].godot == "/my/own/godot"
+
+
+def test_a_config_that_names_no_program_still_needs_no_trust_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The refusal is narrow on purpose. Every other key is inert -- a directory, a glob, a number,
+    # a res:// path -- and must keep working untouched, or the fix costs far more than it buys.
+    _payload_config(
+        tmp_path,
+        'runner = "gut"\ntests = "res://test/unit"\ntimeout = 30\nexclude = ["*_gen.gd"]\n',
+    )
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, object] = {}
+
+    def record(source: str, project: str, runner: object, **kw: object) -> int:
+        captured["r"] = runner
+        return 0
+
+    monkeypatch.setattr(cli, "run_mutation", record)
+
+    assert cli.main(["run", "player.gd"]) == 0
+
+    assert isinstance(captured["r"], GutRunner)
+    assert captured["r"].test_dir == "res://test/unit"
+
+
+def test_the_trust_flag_cannot_itself_come_from_the_config_file(tmp_path: Path) -> None:
+    # The obvious way to defeat all of this would be for the file to grant itself the trust. It
+    # cannot: `trust-config` is not a recognised key, so it warns like any other typo and is
+    # dropped, and the flag stays something only the command line can set.
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text('trust-config = true\ncommand = "payload"\n', encoding="utf-8")
+
+    settings = cli._load_config(cfg)
+
+    assert settings is not None
+    assert "trust_config" not in settings
