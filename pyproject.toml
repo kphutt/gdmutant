@@ -184,22 +184,16 @@ fail_under = 100
 [tool.mutmut]
 # Mutation-test gdmutant's own library with mutmut (dogfood).
 source_paths = ["gdmutant"]
-# mutmut runs the suite from a copied "mutants/" tree; tests read the corpus (end-to-end),
-# docs/ (the guide-consistency test), AGENTS.md (the guide links to ../AGENTS.md and the
-# link-resolution test checks it exists), scripts/ (the license and release-tag guards are loaded
-# from there by their tests), .github/ (the release workflow's on-main guard is read, and
-# executed, straight out of its YAML), .pre-commit-config.yaml (test_local_check_parity.py
-# diffs its hook entries against ci.yml's verify job — found live: omitting it here doesn't
-# survive-a-mutant-wrongly, it aborts collection for the WHOLE suite, so mutmut evaluates zero
-# mutants and the advisory job goes red with no score at all), and poodle.toml
-# (test_poodle_config.py reads it by a REPO_ROOT computed from `Path(__file__).resolve()` --
-# robust against CWD, but still resolves *inside* the copied "mutants/" tree, since the test
-# module itself is a copy living there. This one does NOT abort collection: the read happens
-# per-test, not at import, so all 4 tests collect and 3 fail at runtime with FileNotFoundError
-# on ".../mutants/poodle.toml", 2026-07-30). Either way the baseline fails and mutmut evaluates
-# zero mutants, so the advisory job goes red with no score rather than wrong. Anything the suite
-# reads and this list omits fails one way or the other — check which before reasoning from this
-# comment. Skip coverage — it is pure overhead per mutant run.
+# mutmut runs the suite from a copied "mutants/" tree, and copies into it only what this list
+# names (plus its own defaults: tests/, pyproject.toml, setup.cfg). A test that reads a file at the
+# repository root therefore passes a normal `pytest` run and raises FileNotFoundError under mutmut
+# -- which fails the BASELINE, so mutmut aborts and evaluates zero mutants. The score does not drop;
+# it stops existing. That has happened three times now (.pre-commit-config.yaml, poodle.toml,
+# action.yml), each time from an ordinary new test whose author had no reason to think about this
+# file. So the list is no longer maintained by memory: tests/test_mutation_baseline_inputs.py reads
+# every test module, works out which repository entries the suite reaches for, and fails naming the
+# missing one. Add an entry when that test says to. (Skip coverage below -- pure per-mutant
+# overhead.)
 also_copy = [
     "corpus",
     "docs",
@@ -209,5 +203,8 @@ also_copy = [
     ".github",
     ".pre-commit-config.yaml",
     "poodle.toml",
+    "action.yml",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
 ]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
