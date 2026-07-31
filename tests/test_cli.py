@@ -2356,9 +2356,22 @@ def _record_launches(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     return launched
 
 
-def _payload_config(tmp_path: Path, body: str) -> None:
-    (tmp_path / ".gdmutant.toml").write_text(body, encoding="utf-8")
-    (tmp_path / "player.gd").write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+def _payload_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> str:
+    """A project whose `.gdmutant.toml` carries `body`; returns the source path to run against.
+
+    Points `_CONFIG_FILENAME` at the file and hands back an absolute source path, rather than
+    chdir()-ing into the directory and naming `player.gd` relative to it. Same reason the two
+    config tests further up give: a global cwd change breaks mutmut's stats collection, which
+    resolves `source_paths=["gdmutant"]` against the working directory -- so the dogfood baseline
+    aborts and the mutation score stops existing rather than going down. What these tests are
+    about is the config file and the argv; neither cares where the process is standing.
+    """
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text(body, encoding="utf-8")
+    source = tmp_path / "player.gd"
+    source.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
+    return str(source)
 
 
 def test_a_config_supplied_command_is_refused_and_never_reaches_a_subprocess(
@@ -2367,11 +2380,10 @@ def test_a_config_supplied_command_is_refused_and_never_reaches_a_subprocess(
     # The plain local case: clone a project, run gdmutant in it, and its config file picks both
     # the runner and the command string. Before this was refused, that command ran -- verified by
     # a payload that wrote a file. Nothing may reach a subprocess here.
-    _payload_config(tmp_path, 'runner = "command"\ncommand = "touch pwned"\n')
-    monkeypatch.chdir(tmp_path)
+    source = _payload_config(tmp_path, monkeypatch, 'runner = "command"\ncommand = "touch pwned"\n')
     launched = _record_launches(monkeypatch)
 
-    rc = cli.main(["run", "player.gd"])
+    rc = cli.main(["run", source])
 
     # Asserted first: whether the payload ran is the whole point, and it must be what fails.
     assert launched == [], "the config's command must never be executed"
@@ -2388,11 +2400,10 @@ def test_a_config_supplied_godot_binary_is_refused_even_behind_an_explicit_runne
     # overrides a config `runner` -- but it never passes --godot, so a config `godot` key survived
     # and named the binary the JUnit runner launches. A repository could therefore choose what ran
     # on the machine testing it. This mirrors the action's flag shape exactly.
-    _payload_config(tmp_path, 'godot = "./payload"\n')
-    monkeypatch.chdir(tmp_path)
+    source = _payload_config(tmp_path, monkeypatch, 'godot = "./payload"\n')
     launched = _record_launches(monkeypatch)
 
-    rc = cli.main(["run", "player.gd", "--project", str(tmp_path), "--runner", "gdunit4"])
+    rc = cli.main(["run", source, "--project", str(tmp_path), "--runner", "gdunit4"])
 
     assert launched == [], "the config's godot binary must never be launched"
     assert rc == 2
@@ -2404,10 +2415,9 @@ def test_the_refusal_names_every_program_key_the_file_set(
 ) -> None:
     # Both keys at once: the message has to list both, or fixing one leaves the user stuck on the
     # other with no idea why.
-    _payload_config(tmp_path, 'command = "payload"\ngodot = "./payload"\n')
-    monkeypatch.chdir(tmp_path)
+    source = _payload_config(tmp_path, monkeypatch, 'command = "payload"\ngodot = "./payload"\n')
 
-    assert cli.main(["run", "player.gd"]) == 2
+    assert cli.main(["run", source]) == 2
 
     assert "('command' and 'godot')" in capsys.readouterr().err
 
@@ -2417,8 +2427,9 @@ def test_trust_config_lets_a_project_use_its_own_command(
 ) -> None:
     # The legitimate use has to keep working: a project's own maintainers put `command` in the
     # file precisely so they need not retype it. --trust-config is how they say the file is theirs.
-    _payload_config(tmp_path, 'runner = "command"\ncommand = "my-test-harness --headless"\n')
-    monkeypatch.chdir(tmp_path)
+    source = _payload_config(
+        tmp_path, monkeypatch, 'runner = "command"\ncommand = "my-test-harness --headless"\n'
+    )
     captured: dict[str, object] = {}
 
     def record(source: str, project: str, runner: object, **kw: object) -> int:
@@ -2427,7 +2438,7 @@ def test_trust_config_lets_a_project_use_its_own_command(
 
     monkeypatch.setattr(cli, "run_mutation", record)
 
-    assert cli.main(["run", "player.gd", "--trust-config"]) == 0
+    assert cli.main(["run", source, "--trust-config"]) == 0
 
     assert isinstance(captured["r"], CommandRunner)
     assert list(captured["r"].command) == ["my-test-harness", "--headless"]
@@ -2438,8 +2449,7 @@ def test_naming_the_program_on_the_command_line_needs_no_trust_flag(
 ) -> None:
     # An explicit flag already beats the config value, so the file decided nothing and there is
     # nothing to refuse. Refusing anyway would contradict the advice the refusal itself gives.
-    _payload_config(tmp_path, 'godot = "./payload"\n')
-    monkeypatch.chdir(tmp_path)
+    source = _payload_config(tmp_path, monkeypatch, 'godot = "./payload"\n')
     captured: dict[str, object] = {}
 
     def record(source: str, project: str, runner: object, **kw: object) -> int:
@@ -2448,7 +2458,7 @@ def test_naming_the_program_on_the_command_line_needs_no_trust_flag(
 
     monkeypatch.setattr(cli, "run_mutation", record)
 
-    assert cli.main(["run", "player.gd", "--godot", "/my/own/godot"]) == 0
+    assert cli.main(["run", source, "--godot", "/my/own/godot"]) == 0
 
     assert captured["r"].godot == "/my/own/godot"
 
@@ -2458,11 +2468,11 @@ def test_a_config_that_names_no_program_still_needs_no_trust_flag(
 ) -> None:
     # The refusal is narrow on purpose. Every other key is inert -- a directory, a glob, a number,
     # a res:// path -- and must keep working untouched, or the fix costs far more than it buys.
-    _payload_config(
+    source = _payload_config(
         tmp_path,
+        monkeypatch,
         'runner = "gut"\ntests = "res://test/unit"\ntimeout = 30\nexclude = ["*_gen.gd"]\n',
     )
-    monkeypatch.chdir(tmp_path)
     captured: dict[str, object] = {}
 
     def record(source: str, project: str, runner: object, **kw: object) -> int:
@@ -2471,7 +2481,7 @@ def test_a_config_that_names_no_program_still_needs_no_trust_flag(
 
     monkeypatch.setattr(cli, "run_mutation", record)
 
-    assert cli.main(["run", "player.gd"]) == 0
+    assert cli.main(["run", source]) == 0
 
     assert isinstance(captured["r"], GutRunner)
     assert captured["r"].test_dir == "res://test/unit"

@@ -24,16 +24,26 @@ Configuration lives in `pyproject.toml` under `[tool.mutmut]`. mutmut runs the s
 tests) are copied in via `also_copy`, and coverage is turned off for those runs (pure per-mutant
 overhead).
 
-`also_copy` is the one part of this that bites. A test that reads a file at the repository root
+Two ordinary-looking things a new test can do will abort that baseline, so mutmut evaluates **zero**
+mutants and the score stops existing rather than going down. `tests/test_mutation_baseline_inputs.py`
+catches both before a merge, on every platform — including Windows, where mutmut itself cannot run.
+
+The first is reading a repository file that `also_copy` does not name. A test that reads a file at the repository root
 passes a normal `pytest` run and raises `FileNotFoundError` inside the copied tree, which fails the
 baseline — so mutmut aborts and evaluates **zero** mutants, and the score stops existing rather than
 going down. Nothing about writing that test hints at it. `tests/test_mutation_baseline_inputs.py`
 closes the loop: it reads every test module, works out which repository entries the suite reaches
 for, and fails naming the one that is missing from `also_copy`. It is a plain test, so it runs in
 `verify` on every platform — including Windows, where mutmut itself cannot run — before a merge
-rather than after one. It only sees paths built from the suite's usual
-`Path(__file__).resolve().parent.parent` idiom; the zero-mutant check below is what catches
-everything else.
+rather than after one. The second is changing the working directory. mutmut resolves `source_paths` (the relative path
+`gdmutant`) against the live working directory every time a mutated module-level function runs, so a
+test that chdirs into a temporary directory and then calls into `gdmutant` fails inside mutmut's own
+trampoline. Point the code under test at an absolute path instead — for a `.gdmutant.toml` fixture,
+set `cli._CONFIG_FILENAME` to the file rather than standing in its directory.
+
+Neither scan is a proof: the first sees only paths built from the suite's usual
+`Path(__file__).resolve().parent.parent` idiom, and the second only the `chdir` spellings it lists.
+The zero-mutant check below is what catches everything else.
 
 CI runs mutmut in **report mode** as a **non-blocking** job (not a required status check): it
 surfaces the score on the run summary and never fails the build over survivors or a low score. But

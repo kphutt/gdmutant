@@ -1,31 +1,36 @@
-"""Every repository file this suite reads must be copied into mutmut's `mutants/` tree.
+"""Two ways an ordinary new test silently kills gdmutant's own mutation score, both closed here.
 
-mutmut runs the suite from a generated copy of the project (`mutants/`), and copies into it only
-`[tool.mutmut] also_copy` plus its own defaults. A test that reads a file at the repository root
-therefore passes in a normal `pytest` run and raises `FileNotFoundError` under mutmut — which
-fails the *baseline* (the unmutated run mutmut takes its timings and test mapping from), so mutmut
-aborts and evaluates **zero** mutants. The mutation score does not go down; it stops existing.
+mutmut runs the suite from a generated copy of the project (`mutants/`) and takes its timings and
+test mapping from one unmutated run of it — the *baseline*. If that run does not come out clean,
+mutmut aborts and evaluates **zero** mutants: the score does not go down, it stops existing, and
+nothing about the test that caused it looks wrong. It has happened four times now, from two
+distinct causes — one guard each below.
 
-That has now happened three times (`.pre-commit-config.yaml`, `poodle.toml`, `action.yml`), each
-time from an ordinary, correct-looking new test, and each time the connection between "I added a
-test" and "the mutation signal died" was invisible at the moment the test was written. CI does
-catch it — `.github/workflows/mutation.yml` fails the job outright when zero mutants were
-evaluated — but only *after* a merge, in a job that is not a required check, and never on the
-maintainer's Windows machine, where mutmut cannot run at all. This module is the earlier, local
-half of that pair: it is an ordinary test, so it runs in `verify` on every platform, before the
-merge, and it names the file and the fix instead of a `FileNotFoundError` deep in a CI log.
+**Cause one: reading a file that was never copied.** mutmut copies into `mutants/` only what
+`[tool.mutmut] also_copy` names, plus its own defaults. A test that reads a file at the repository
+root therefore passes a normal `pytest` run and raises `FileNotFoundError` under mutmut — first
+`.pre-commit-config.yaml`, then `poodle.toml`, then `action.yml`, and (found by this module, hidden
+behind pytest's `-x` until the one in front of them was fixed) `CONTRIBUTING.md` and `CHANGELOG.md`.
 
-**How it decides what the suite reads.** Every test here reaches the repository root through one
-expression, `Path(__file__).resolve().parent.parent`, so the scan below parses each test module and
-collects the first path segment of anything built from it — `REPO / "action.yml"`,
-`Path(__file__).resolve().parent.parent / "scripts" / "x.py"`, `REPO.glob("docs/**/*.md")`. It reads
-the code rather than running it, so an env-gated or skipped test is covered like any other.
+**Cause two: changing the working directory.** mutmut resolves `source_paths` — here the relative
+path `gdmutant` — against the live working directory every time a mutated module-level function is
+called. A test that chdirs into a temporary directory and then calls into `gdmutant` makes that
+resolution fail, raising `FileNotFoundError: 'gdmutant'` from inside mutmut's own trampoline: a
+traceback that names mutmut's internals and never mentions the test that moved the process.
 
-**What it cannot see**, stated plainly so nobody trusts it further than it goes: a path built some
-other way — `Path(__file__).parents[1]`, a root passed in as a fixture, a segment held in a
-variable rather than written as a literal. Those still reach CI's zero-mutant check, which is the
-universal backstop. This is a cheap early warning for the shape the suite actually uses, not a
-proof.
+Neither is visible while writing the test. CI does catch both — `.github/workflows/mutation.yml`
+fails the job outright when zero mutants were evaluated — but only *after* a merge, in a job that is
+not a required check, and never on a Windows machine, where mutmut cannot run at all. This module is
+the earlier, local half of that pair: ordinary tests, so they run in `verify` on every platform,
+before the merge, and they name the file and the fix instead of leaving a `FileNotFoundError` deep
+in a CI log.
+
+Both scans read the code rather than running it, so an env-gated or skipped test is covered like
+any other — and **neither is a proof.** The `also_copy` scan sees only paths built from the one
+repo-root idiom this suite uses (`Path(__file__).resolve().parent.parent`): not
+`Path(__file__).parents[1]`, not a root injected as a fixture, not a segment held in a variable.
+The working-directory scan sees only the two spellings named below. Anything else still reaches
+CI's zero-mutant check, which stays the universal backstop.
 """
 
 from __future__ import annotations
@@ -43,6 +48,16 @@ _PYPROJECT = REPO / "pyproject.toml"
 
 #: The one expression every test module in this suite uses to reach the repository root.
 _REPO_ROOT_EXPR = "Path(__file__).resolve().parent.parent"
+
+#: The spellings of "move this process" that a test could plausibly reach for.
+_CHDIR_CALLS = {"monkeypatch.chdir", "os.chdir", "chdir"}
+
+#: The one module allowed to move the working directory, and why it is safe.
+#: This module chdirs to the repository root — which, inside the copied tree, is the directory
+#: mutmut already put the process in. It therefore cannot move mutmut's `source_paths` resolution
+#: anywhere it was not already pointing. Any other exemption needs the same kind of argument
+#: written next to it.
+_MAY_CHANGE_THE_WORKING_DIRECTORY = {Path(__file__).name}
 
 
 def _test_modules() -> list[Path]:
@@ -110,8 +125,9 @@ def _entries_present_in_the_mutants_tree(monkeypatch: pytest.MonkeyPatch) -> set
     `_load_config` is the function that assembles the real list — the repo's `also_copy` plus
     mutmut's own implicit additions (`tests/`, `pyproject.toml`, …) — so reading it cannot drift
     from mutmut's behaviour the way a hand-maintained copy of those defaults would. It resolves
-    `pyproject.toml` against the working directory, hence the `chdir`. `source_paths` is copied by
-    a different step (`copy_src_dir`) but lands in the same tree, so it counts as present.
+    `pyproject.toml` against the working directory, hence the `chdir` (see the exemption above).
+    `source_paths` is copied by a different step (`copy_src_dir`) but lands in the same tree, so it
+    counts as present.
     """
     monkeypatch.chdir(REPO)
     config = _load_config()
@@ -153,3 +169,35 @@ def test_no_also_copy_entry_names_a_file_that_is_gone() -> None:
     declared = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))["tool"]["mutmut"]["also_copy"]
     gone = [entry for entry in declared if not (REPO / entry).exists()]
     assert not gone, f"`[tool.mutmut] also_copy` names paths that no longer exist: {gone}"
+
+
+def _chdir_lines(module: Path) -> list[int]:
+    """The 1-based lines on which `module` moves the process to another directory."""
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    return sorted(
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and ast.unparse(node.func) in _CHDIR_CALLS
+    )
+
+
+def test_no_test_moves_the_process_to_another_directory() -> None:
+    # Two comments in test_cli.py already said not to do this, and six new tests did it anyway in
+    # one pull request — a rule written in prose halfway down a 2,400-line file is not a rule. The
+    # replacement is always available and no harder to read: point `cli._CONFIG_FILENAME` at the
+    # config file and pass an absolute source path, instead of standing in the directory.
+    offenders = {
+        module.name: lines
+        for module in _test_modules()
+        if module.name not in _MAY_CHANGE_THE_WORKING_DIRECTORY
+        for lines in [_chdir_lines(module)]
+        if lines
+    }
+    assert not offenders, (
+        "these tests change the working directory, which breaks mutmut's stats collection (it "
+        "resolves `source_paths=['gdmutant']` against the cwd) and so aborts the mutation "
+        "baseline. Point the code under test at an absolute path instead:\n"
+        + "\n".join(
+            f"  {name}: line(s) {', '.join(map(str, lines))}" for name, lines in offenders.items()
+        )
+    )
