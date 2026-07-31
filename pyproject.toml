@@ -76,7 +76,7 @@ packages = ["gdmutant"]
 # robust fix for hatchling otherwise bundling local, untracked, or dot-prefixed state into the
 # distribution: only these paths ship (plus hatchling's own force-included `.gitignore`, a tracked,
 # harmless file), so no local agent/editor state leaks in and no tooling directory has to be named.
-# Contributor docs stay because `docs/agent-guide.md` links to AGENTS.md and the in-repo
+# Contributor docs stay because `docs/using-with-an-ai-agent.md` links to AGENTS.md and the in-repo
 # link-resolution test asserts it exists.
 include = [
   "/gdmutant",

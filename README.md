@@ -161,13 +161,13 @@ pieces behind an adapter: mutating the AST (via
 is one small adapter. Full design: [`docs/design/DESIGN.md`](docs/design/DESIGN.md).
 
 **Safety:** gdmutant edits source **in place** and restores it after every mutant and on exit — commit
-or stash first, or pass `--require-clean`. [Full guarantee →](docs/agent-guide.md#safety-guarantee)
+or stash first, or pass `--require-clean`. [Full guarantee →](docs/using-with-an-ai-agent.md#safety-guarantee)
 
 ## Documentation
 
 - [Survivor reference](docs/survivors/README.md) — what a survivor is, the score formula, and how to kill or justify each mutation operator.
 - [Design & architecture](docs/design/DESIGN.md) — the engine and the "Saboteur & the Jury" design.
-- [Driving gdmutant from an AI agent](docs/agent-guide.md) — invocation, JSON schema, survivor→killing-test loop.
+- [Driving gdmutant from an AI agent](docs/using-with-an-ai-agent.md) — invocation, JSON schema, survivor→killing-test loop.
 - [Exit-code runner convention](docs/decisions/0005-exit-code-test-runner-convention.md) — the stdout/exit-code contract.
 - [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Credits](CREDITS.md)
 

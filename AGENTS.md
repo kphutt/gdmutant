@@ -3,9 +3,11 @@
 A language-agnostic **mutation-testing** tool for GDScript/Godot. It
 mutates a project's source (flip `>`↔`>=`, `and`↔`or`, bump a number, …), reruns the tests per
 mutant, and reports **survivors** — lines a bug could live on that no test catches. This is the
-fast-orientation guide for anyone (human or AI) working on the code; the product rationale is in
-[`README.md`](README.md), and the authoritative design is in
-[`docs/design/DESIGN.md`](docs/design/DESIGN.md).
+fast-orientation guide for anyone (human or AI) *contributing to* gdmutant's own source; the
+product rationale is in [`README.md`](README.md), and the authoritative design is in
+[`docs/design/DESIGN.md`](docs/design/DESIGN.md). Driving gdmutant as a tool — invoking the CLI
+from an AI agent, not editing its code — is a different job: see
+[`docs/using-with-an-ai-agent.md`](docs/using-with-an-ai-agent.md) instead.
 
 ## Setup
 
@@ -62,56 +64,36 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   ourselves to it.
 - **CI gate:** `ruff` + `mypy` + `pytest` + `pip-audit`, plus a gitleaks secret scan. GitHub Actions
   are SHA-pinned (Dependabot bumps them).
-- **Windows is a deployment target here, not just a dev machine** — gdmutant is a cross-platform
-  Python CLI *shipped* to people who run it on Windows, so Windows coverage **applies** the
-  "CI matches the deployment target" rule rather than contradicting it. Two Windows-only bugs
-  reached the CLI before that coverage existed: console output crashing under the legacy cp1252 code
-  page, and `python3` resolving to a *different* interpreter than `python` (see
-  `.pre-commit-config.yaml`'s header).
-- **Windows `verify` is a real gate again — just not in `ci.yml`, and not on every push.**
-  `ci.yml` doesn't run automatically at all right now (ADR-0012 — private-repo Actions cost, and
-  merging here doesn't ship anything). `publish.yml`'s release-time gate runs `verify` live on both
-  Linux *and* Windows, unconditionally, before every real release. This replaced an earlier,
-  narrower state where Windows coverage ran only by hand
-  (`uv run python scripts/verify_local.py`) as an unenforced discipline — see ADR-0012 for why that
-  wasn't good enough once merge-time CI stopped running in the cloud at all.
-
-  You can still run it by hand, any time, the same way:
+- **Windows is a deployment target, not just a dev machine** — gdmutant is a cross-platform Python
+  CLI people run on Windows, so test on Windows for real, not just Linux. Two concrete traps to
+  watch for: console output can crash under the legacy `cp1252` code page, and `python3` can resolve
+  to a *different* interpreter than `python` (see `.pre-commit-config.yaml`'s header for the guard).
+- **`ci.yml` does not run automatically** (why: [ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md)).
+  The unbypassable gate is `publish.yml`'s release-time run of `verify` on both Linux and Windows,
+  before every real release. Run the same checks locally any time:
 
   ```
   uv run python scripts/verify_local.py
   uv run python scripts/verify_local.py --job license-check   # or any other ci.yml job
+  uv run python scripts/verify_local.py --list                # show a job's commands without running them
   ```
 
-  **The script does not restate CI's commands — it reads them out of `ci.yml` and runs them**, so
-  local, CI, and `publish.yml`'s release-time gate all run the identical thing and cannot drift.
-  `--list` shows what a given job would run without running it.
+  This script reads its commands out of `ci.yml` rather than restating them, so local, CI, and the
+  release gate can't drift apart. To restore `ci.yml` running automatically (worth doing once
+  gdmutant is public), see ADR-0012's Decision section for the exact steps.
 
-  **To restore `ci.yml` running automatically** (worth doing once gdmutant is public — Actions is
-  free there, and contributor-facing PR checks are worth having): put the `pull_request`/`push`
-  triggers back (`ci.yml`'s own header comment has the exact block) and re-add the four job names
-  to branch protection's required checks. `publish.yml`'s release-time gate stays regardless —
-  it isn't something to revert, only something `ci.yml` running again would duplicate on the
-  cheap, frequent path.
-
-  **If every tool suddenly fails with `uv trampoline failed to canonicalize script path`,** the
-  venv's launcher shims are stale — usually after a `uv` version bump. Fix with
-  `uv sync --frozen --reinstall`. That is a local environment fault, not a code failure; hit on
-  2026-07-28 after uv 0.11.28 → 0.11.30.
+  **If every tool fails with `uv trampoline failed to canonicalize script path`,** the venv's
+  launcher shims are stale — usually after a `uv` version bump. Fix: `uv sync --frozen --reinstall`.
 - **Keep the engine language-neutral:** no GDScript-specific assumptions in `gdmutant/engine/`;
   language specifics live only in `gdmutant/adapters/<lang>/`.
 - **The mutation-operator core is deterministic** — the reproducible mode a CI check can trust; any
   future LLM-semantic mode stays out of it.
-- **Sensitive paths** (CI, scripts, toolchain, the mutation-operator catalog, and the GDScript
-  adapter) are listed in `CODEOWNERS`, which **documents** who owns them — it does not enforce a
-  review. Code-owner review is off, and the required approving review count is separately 0 because
-  a sole owner cannot approve their own pull request. Nor does anything else stop such a change:
-  `main` requires a pull request and blocks force-push and deletion, but it requires **no** status
-  checks and admin enforcement is off. Merge-time checks run locally, from
-  `.pre-commit-config.yaml`'s pre-push stage (ADR-0012); the one unbypassable check is
-  `publish.yml`'s release-time gate. So treat a change to those paths as one to read carefully
-  before merging, not one something will stop. The adapter is the real technical risk: a wrong
-  mutant means a silently wrong survivor report.
+- **Sensitive paths** — CI, scripts, toolchain, the mutation-operator catalog, and the GDScript
+  adapter — are listed in `CODEOWNERS` for documentation only; it enforces no review (a sole
+  maintainer can't approve their own PR). Nothing else mechanically blocks a bad change to them
+  either: `main` requires a PR but no status checks, and merge-time checks are local discipline, not
+  a gate (ADR-0012). Read changes to these paths carefully before merging — the GDScript adapter is
+  the real technical risk, since a wrong mutant means a silently wrong survivor report.
 
 ## Design goals (keep these in mind)
 
