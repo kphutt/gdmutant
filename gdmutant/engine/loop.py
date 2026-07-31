@@ -20,6 +20,7 @@ mutant is applied in isolation and the original restored in a ``finally`` — se
 from __future__ import annotations
 
 import math
+import os
 import queue
 import shutil
 import tempfile
@@ -718,10 +719,103 @@ def _detect_eol(target: Path) -> str:
         return "\n"
 
 
-def _write_source(target: Path, text: str, eol: str) -> None:
-    """Write LF-normalised `text` using `eol`, with newline translation disabled."""
+#: How many times to retry the final rename before giving up on the crash-safe path. Windows
+#: refuses the rename while another process holds the file open (see `_write_source`), and those
+#: holders — a virus scanner, a search indexer, an editor reloading the file — let go in
+#: milliseconds, so a few short retries turn almost every one of them into a non-event.
+_REPLACE_ATTEMPTS = 5
+#: Seconds to wait after the first failed rename; each further wait grows by this much again.
+_REPLACE_BACKOFF = 0.05
+
+
+def _write_in_place(target: Path, body: str) -> None:
+    """Overwrite `target` with `body` directly, newline translation disabled.
+
+    This is the unsafe write the rest of this module exists to avoid: opening for ``"w"`` empties
+    the file *before* the first byte goes back, so anything that stops the process in between
+    leaves nothing behind. It survives only as `_write_source`'s last resort, for the case where
+    the crash-safe path cannot run at all.
+    """
     with open(target, "w", encoding="utf-8", newline="") as handle:
-        handle.write(text if eol == "\n" else text.replace("\n", eol))
+        handle.write(body)
+
+
+def _replace_with_retry(temp: Path, dest: Path) -> None:
+    """Move `temp` onto `dest`, retrying briefly while the destination is locked.
+
+    ``os.replace`` is the atomic step, but on Windows it raises ``PermissionError`` whenever
+    another process has the destination open — *even just for reading*, which an editor, an
+    antivirus scanner, or the test engine that gdmutant itself just launched all do routinely. On
+    POSIX the same call simply succeeds. The retries cover the transient Windows holders; the last
+    attempt deliberately lets its error escape, so the caller can fall back.
+    """
+    for attempt in range(_REPLACE_ATTEMPTS - 1):
+        try:
+            os.replace(temp, dest)
+            return
+        except PermissionError:
+            time.sleep(_REPLACE_BACKOFF * (attempt + 1))
+    os.replace(temp, dest)
+
+
+def _write_source(target: Path, text: str, eol: str) -> None:
+    """Write LF-normalised `text` to `target` using `eol`, without ever leaving it half-written.
+
+    `target` is the user's own source file, and a mutation run rewrites it twice per mutant. A
+    plain in-place write truncates the file to nothing before putting anything back, so a crash, a
+    power cut, or a hard kill landing in that window destroys the file outright — not "left
+    holding a mutant", which a reader can see and undo, but left empty or cut off mid-token. The
+    window is small and it is hit constantly: the run spends most of its time between those two
+    writes.
+
+    So the bytes go to a temporary file beside the target, get flushed all the way to the disk,
+    and are then moved onto the target with ``os.replace``. A rename within one directory is a
+    single filesystem operation, so at every instant the path holds either the whole old file or
+    the whole new one.
+
+    Three details make that hold in practice:
+
+    * The temporary file is created in the target's **own directory**, so the move never crosses a
+      filesystem — across one it would degrade to a copy, which is exactly the non-atomic write
+      being avoided.
+    * A temporary file is created private to its owner, so its permissions are copied from the
+      target first; otherwise the rename would quietly tighten the source file's permissions.
+    * ``os.replace`` would swap a **symbolic link** for a regular file and leave the file it names
+      untouched, so a link is resolved to its destination up front and the real file is the one
+      rewritten — matching what the in-place write did.
+
+    If the crash-safe path cannot complete — most plausibly a Windows lock that outlasts the
+    retries — the write falls back to the plain in-place one. That is no worse than the behaviour
+    this replaces, and keeps a locked file from failing the whole run.
+    """
+    # Resolve a symlink to the file it points at: the rename below replaces whatever sits at the
+    # path it is given, and replacing the link itself would leave the real source unwritten.
+    dest = Path(os.path.realpath(target))
+    body = text if eol == "\n" else text.replace("\n", eol)
+    try:
+        handle_fd, temp_name = tempfile.mkstemp(
+            dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp"
+        )
+    except OSError:
+        # No room for a sibling temporary file (an unwritable or vanished directory). Nothing to
+        # be gained by failing louder here than the in-place write would.
+        _write_in_place(dest, body)
+        return
+    temp = Path(temp_name)
+    try:
+        with open(handle_fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(body)
+            handle.flush()
+            # Push the bytes past the OS cache before the rename: without this the rename can land
+            # first and a power cut would expose a file that is atomically... empty.
+            os.fsync(handle.fileno())
+        shutil.copymode(dest, temp)
+        _replace_with_retry(temp, dest)
+    except OSError:
+        _write_in_place(dest, body)
+    finally:
+        # A successful rename consumed the temporary file; this clears it after a failure.
+        temp.unlink(missing_ok=True)
 
 
 def _run_one(
