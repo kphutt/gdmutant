@@ -17,7 +17,33 @@
 
 gdmutant mutates your GDScript — flips `>`↔`>=`, `and`↔`or`, bumps a number, deletes a statement —
 reruns your tests once per change, and reports the **survivors**: lines a bug could live on that no
-test catches.
+test catches. Here's a real one:
+
+```
+Mutation score: 61.1%
+
+──── survived ──────────────────────────────────────────── comparison ────
+
+  corpus\turn_order.gd:13   func clamp_initiative
+
+     13 |     if value < 0:
+        |              ^  changed  <  to  <= — every test still passed
+
+  gap    Your tests pass whether this says `<` or `<=`. They run this
+         line, but never the one input where the two disagree — equal
+         operands. That case is untested.
+
+  risk   Passing here is false confidence, not proof. A later refactor or
+         merge that changes the equal case slips through green. If the
+         equal case has a right answer, no test guards it.
+
+  start  Add a test that reaches this line with two equal operands (a
+         value compared to itself) and assert the result you expect. Only
+         you know that result — gdmutant reports the gap, not it.
+
+  more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#comparison
+──────────────────────────────────────────────────────────────────────────
+```
 
 Coverage tells you a line *ran*; mutation tells you a bug there would be *caught* — a gap that
 widens when an AI writes the tests, since models tend to pin code they just wrote. A standalone
@@ -31,21 +57,26 @@ CLI, no AI required.
 
 ## Quickstart
 
-Not on PyPI yet — install from git at a pinned commit. New `uv` project? Name the Python version
-explicitly — `uv init` alone floors on whatever interpreter it finds, and gdmutant needs 3.12+:
+```sh
+pip install gdmutant
+```
+
+**Using `uv`?** New project needs the Python version pinned explicitly — `uv init` alone floors on
+whatever interpreter it finds, and gdmutant needs 3.12+:
 
 ```sh
 uv init --python 3.12
-uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
+uv add gdmutant
 ```
 
 No Python in your game repo? Keep gdmutant in a tiny non-package uv project beside it
 (`[tool.uv] package = false`).
 
-**No Godot needed yet** — `--dry-run` lists the mutants gdmutant would generate, with no test run:
+**No Godot needed yet** — point `--dry-run` at your own file to list the mutants gdmutant would
+generate, with no test run and no Godot required:
 
 ```sh
-uv run gdmutant run corpus/turn_order.gd --dry-run
+uv run gdmutant run path/to/your/module.gd --dry-run
 ```
 
 **For real, pick your runner.** [GUT](https://github.com/bitwes/Gut) and
@@ -87,7 +118,7 @@ changed lines, for a fast, **advisory** check — never a hard gate. `--exclude`
 
 ## Example output
 
-A real run against the bundled `corpus/turn_order.gd` fixture (18 mutants, gdUnit4 runner):
+The full run behind the block above — same fixture, all 7 survivors, one command:
 
 ```sh
 uv run gdmutant run --project corpus --godot /path/to/godot corpus/turn_order.gd
@@ -104,29 +135,7 @@ Mutation score: 61.1%
 
 Survivors (7):
 
-──── survived ──────────────────────────────────────────── comparison ────
-
-  corpus\turn_order.gd:13   func clamp_initiative
-
-     13 |     if value < 0:
-        |              ^  changed  <  to  <= — every test still passed
-
-  gap    Your tests pass whether this says `<` or `<=`. They run this
-         line, but never the one input where the two disagree — equal
-         operands. That case is untested.
-
-  risk   Passing here is false confidence, not proof. A later refactor or
-         merge that changes the equal case slips through green. If the
-         equal case has a right answer, no test guards it.
-
-  start  Add a test that reaches this line with two equal operands (a
-         value compared to itself) and assert the result you expect. Only
-         you know that result — gdmutant reports the gap, not it.
-
-  more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#comparison
-──────────────────────────────────────────────────────────────────────────
-
-... 6 more survivors follow, one block each, same format.
+... one block per survivor, same annotated gap/risk/start format as turn_order.gd:13 above.
 ```
 
 **Mutation score isn't a target — it's a direction.** There's no universal "good" number; watch it
