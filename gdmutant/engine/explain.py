@@ -17,6 +17,7 @@ code-aware domain guess and a drafted test are the opt-in LLM mode (L2), and liv
 
 from __future__ import annotations
 
+import re
 import textwrap
 
 from gdmutant.engine.mutants import Mutant
@@ -104,30 +105,113 @@ _FALLBACK = (
     "Add a test that fails under this exact change.",
 )
 
+#: The reference section for a survivor inside an `assert`. Not an operator — any operator can land
+#: on an assert line — so it is keyed by the heading's own slug, exactly like the operator anchors.
+ASSERT_SECTION = "assert"
 
-def doc_url(operator_id: str) -> str:
-    """The stable explainer URL for an operator (clickable anywhere; ShellCheck model) — a section
-    anchor into the merged survivor reference. The operator id is already the heading slug, so it is
-    the anchor verbatim."""
-    return f"{DOC_BASE_URL}#{operator_id}"
+#: An `assert(` call opening on a source line. The `(?<![\w.])` lookbehind keeps it off `my_assert(`
+#: and `helper.assert(`. This and `_enclosing_func`'s ``func`` are the only two language tokens the
+#: explainer knows; everything else it says is derived from the mutant alone.
+_ASSERT_CALL_RE = re.compile(r"(?<![\w.])assert\s*\(")
+
+#: The narrative for a survivor inside an `assert` — the one place the generic "add a test that
+#: distinguishes them" advice is not merely unhelpful but impossible to follow, so saying it anyway
+#: is what makes a whole report read as noise.
+_ASSERT_EXPLAIN = (
+    "This mutant sits inside an `assert`, and your tests pass either way. A weakened assertion "
+    "only behaves differently on an input the original would have rejected — and a failed assert "
+    "aborts the whole Godot process, which a test running inside that process cannot observe as "
+    "anything but its own death. So no in-process test can kill this one.",
+    "Low, and it is not a gap in your tests. The assert guards a condition your callers are "
+    "supposed to already satisfy; the real risk is reading a score built from mutants like this "
+    "one as if every survivor were actionable.",
+    "Treat it as a legitimate survivor. If you want it out of the report, mark the line with "
+    "`# gdmutant: ignore` — it stays visible as `ignored` and drops out of the score. Only reach "
+    "for a test if the condition is one real callers can actually violate, in which case the "
+    "check belongs in a branch that returns or emits an error, not in an assert.",
+)
 
 
-def _narrative(mutant: Mutant) -> tuple[str, str, str]:
-    """The ``(gap, risk, start)`` sentences for `mutant`'s operator, token-substituted. This is the
-    single source of the survivor copy: both the console block (`render_survivor`) and the HTML
-    report fields (`survivor_report_fields`) read it, so the two outputs can never drift."""
+def doc_url(anchor: str) -> str:
+    """The stable explainer URL for a reference section (clickable anywhere; ShellCheck model) — a
+    section anchor into the merged survivor reference. Every ``## …`` heading on that page slugifies
+    to its key (an operator id, or `ASSERT_SECTION`), so the key is the anchor verbatim."""
+    return f"{DOC_BASE_URL}#{anchor}"
+
+
+def source_line(mutant: Mutant, source_lines: list[str] | None) -> str | None:
+    """The raw text of the line `mutant` sits on, or ``None`` when the file's lines are unavailable
+    (unreadable) or the line is off the end of them (a file that moved or shrank since the run).
+
+    The reporting surfaces all need this same lookup before they can ask for a narrative, so it
+    lives once, here, next to the narrative that consumes it. (`render_survivor` keeps its own
+    inline form: it needs the *list* in the same breath, for the enclosing-function scan.)
+    """
+    line_no = mutant.span.line
+    if source_lines is None or not (1 <= line_no <= len(source_lines)):
+        return None
+    return source_lines[line_no - 1]
+
+
+def on_assert(original: str, column: int, source_line: str | None) -> bool:
+    """True when a mutant changes something an `assert` call guards.
+
+    `original` is the text the mutant replaced, `column` its 1-based start column, and `source_line`
+    the raw text of the line it sits on (``None`` when the source is unreadable). Primitives rather
+    than a `Mutant`, so the HTML report — which works from the report *dict*, not the objects — asks
+    the same question of the same rule instead of growing a second copy of it that can drift.
+
+    Two shapes count, and the column is what separates them from a false positive:
+
+    * a token **inside** the call — the assert's ``(`` closes at or before the mutated column, so a
+      trailing ``# assert(...)`` comment further along the line can never match;
+    * a **deletion of the assert statement itself**, whose original text is the whole call.
+
+    Anything else on a line that merely mentions "assert" is left alone."""
+    if _ASSERT_CALL_RE.match(original):
+        return True
+    if source_line is None:
+        return False
+    match = _ASSERT_CALL_RE.search(source_line)
+    return match is not None and match.end() <= column - 1
+
+
+def reference_section(mutant: Mutant, source_line: str | None) -> str:
+    """The survivor-reference section that explains `mutant` — its operator id, or `ASSERT_SECTION`
+    when the mutant sits inside an `assert`. The `more` link, the Markdown link and the HTML
+    report's inline expansion all resolve through this, so no surface can send a reader to the page
+    that contradicts the explanation printed beside it."""
+    if on_assert(mutant.original, mutant.span.column, source_line):
+        return ASSERT_SECTION
+    return mutant.operator_id
+
+
+def _narrative(mutant: Mutant, source_line: str | None = None) -> tuple[str, str, str]:
+    """The ``(gap, risk, start)`` sentences for `mutant`, token-substituted. This is the single
+    source of the survivor copy: the console block (`render_survivor`), the Markdown job summary and
+    the report fields (`survivor_report_fields`) all read it, so the surfaces can never drift.
+
+    `source_line` is the raw text of the mutated line when the caller has it. Given it, a mutant
+    inside an `assert` gets the assert narrative instead of its operator's: on defensive code
+    asserts can be most of a file's survivors, and telling someone to "add a test with two equal
+    operands" for a check whose failure kills the process is advice nobody can act on. Without the
+    line (an unreadable source) the operator narrative still stands — accurate, just less specific.
+    """
+    if on_assert(mutant.original, mutant.span.column, source_line):
+        return _ASSERT_EXPLAIN
     gap_t, risk_t, start_t = _EXPLAIN.get(mutant.operator_id, _FALLBACK)
     fmt = {"a": mutant.original, "b": mutant.replacement}
     return gap_t.format(**fmt), risk_t.format(**fmt), start_t.format(**fmt)
 
 
-def survivor_report_fields(mutant: Mutant) -> tuple[str, str]:
+def survivor_report_fields(mutant: Mutant, source_line: str | None = None) -> tuple[str, str]:
     """The survivor narrative trimmed for the HTML report's ``description`` and ``statusReason``
     fields — the same gap/risk/start copy `render_survivor` shows, minus the box-drawing, caret,
     and docs link the HTML viewer already draws for itself. ``description`` carries the gap (what
     the tests miss); ``statusReason`` carries the risk and the starting point (why it matters and
-    where to begin), blank-line separated. Both are non-empty for every survivor."""
-    gap, risk, start = _narrative(mutant)
+    where to begin), blank-line separated. Both are non-empty for every survivor. `source_line` is
+    passed to `_narrative` (see there: it is what makes an assert survivor explain itself)."""
+    gap, risk, start = _narrative(mutant, source_line)
     return gap, f"{risk}\n\n{start}"
 
 
@@ -164,7 +248,6 @@ def render_survivor(mutant: Mutant, source_lines: list[str] | None) -> list[str]
     op = mutant.operator_id
     a = mutant.original
     b = mutant.replacement  # only rendered for non-deletion operators (deletions use the code line)
-    gap, risk, start = _narrative(mutant)
 
     line_no, col = mutant.span.line, mutant.span.column
     func = None
@@ -172,6 +255,11 @@ def render_survivor(mutant: Mutant, source_lines: list[str] | None) -> list[str]
     if source_lines is not None and 1 <= line_no <= len(source_lines):
         src = source_lines[line_no - 1]
         func = _enclosing_func(source_lines, line_no)
+    gap, risk, start = _narrative(mutant, src)
+    # An assert survivor's `more` link goes to the section that explains *that*, not to the
+    # operator's — the operator's page would send a reader off to write the test this one cannot be
+    # killed by. The header still names the operator: it is still what changed.
+    anchor = reference_section(mutant, src)
 
     prefix, suffix = "──── survived ", f" {op} ────"
     # A negative repeat count is already "" in Python, so no clamp is needed for a long operator id.
@@ -196,6 +284,6 @@ def render_survivor(mutant: Mutant, source_lines: list[str] | None) -> list[str]
     out.append("")
     out += _block("start", start)
     out.append("")
-    out.append(f"  more   {doc_url(op)}")
+    out.append(f"  more   {doc_url(anchor)}")
     out.append("─" * _WIDTH)
     return out

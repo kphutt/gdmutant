@@ -12,7 +12,9 @@ gdmutant — it's a **gap in your tests**, a specific, located "here's a change 
 
 Each section below explains one mutation operator: what the change is, why a survivor matters, how
 to kill it, and when it legitimately survives (an *equivalent mutant*). The `more` link in each
-survivor points to that operator's section here.
+survivor points to that operator's section here. One section — [Assert](#assert) — is not an
+operator: it explains a whole class of survivor that no test can kill, whichever operator produced
+it, and gdmutant links a survivor there instead when that is the real story.
 
 **The score.** Mutation score = detected ÷ (detected + survived), where detected = killed + timeouts
 (a mutation that hung the suite was caught, so a timeout counts as a kill). Three more categories
@@ -37,6 +39,8 @@ intended result; gdmutant reports the gap, not the answer.
 Jump to an operator: [Arithmetic](#arithmetic) · [Boolean](#boolean) · [Comparison](#comparison) ·
 [Compound assign](#compound-assign) · [Constant](#constant) · [Logical not](#logical-not) ·
 [Modulo](#modulo) · [Numeric](#numeric) · [Statement deletion](#statement-deletion)
+
+Not an operator: [Assert](#assert)
 
 ## Arithmetic
 
@@ -127,3 +131,16 @@ Jump to an operator: [Arithmetic](#arithmetic) · [Boolean](#boolean) · [Compar
 **How to kill it:** add a test that asserts the effect of this line — a signal emitted, a field set, a call made — something that fails if the line is gone.
 
 **Equivalent mutant?** Legitimate if the statement genuinely has no observable effect (dead code) — consider removing it.
+
+## Assert
+
+Not an operator. Any operator can land inside an `assert`, and when one does, the assert — not the
+operator — is why the mutant survived.
+
+**The change:** gdmutant changed a token inside an `assert(...)` call — a comparison, a connective, a number — or removed the assert statement outright.
+
+**Why it survived:** a mutated assertion only behaves differently on an input the original would have **rejected**, and a failed `assert` aborts the whole Godot process. A test running inside that process cannot observe the abort as anything but its own death, so no test can pass on the original and fail on the mutant. The survivor is structural — it is not a gap in your suite.
+
+**How to kill it:** from an in-process harness you cannot, and it is not worth trying. To take it out of the report, mark the line `# gdmutant: ignore`; it stays visible as `ignored` and leaves the score. gdmutant does **not** skip assert lines for you — a tool that quietly drops code from its own report is telling you a smaller truth than it knows, and which of your asserts are load-bearing is your call, not its.
+
+**Equivalent mutant?** Effectively yes, and it is the common case rather than the exception: on defensive code, assert lines can hold most of a file's survivors and leave a healthy-looking score with nothing actionable behind it. If the condition is one real callers can actually violate, that is worth knowing — but the fix is to move the check into a branch that returns or emits an error, where a test can reach it, not to write a test that expects a crash.

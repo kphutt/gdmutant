@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from gdmutant.engine.explain import (
+    ASSERT_SECTION,
     _block,
     _display_col,
     _enclosing_func,
     doc_url,
+    on_assert,
+    reference_section,
     render_survivor,
+    source_line,
     survivor_report_fields,
 )
 from gdmutant.engine.mutants import Mutant
@@ -202,3 +206,85 @@ def test_every_operator_more_link_resolves_to_a_real_anchor_in_the_merged_page()
         anchor = doc_url(op).rsplit("#", 1)[1]
         assert anchor == op  # the operator id is the anchor verbatim
         assert anchor in slugs, f"no `## …` section slugifies to #{anchor} in the merged page"
+
+
+# --- survivors inside an `assert` ---------------------------------------------------------------
+#
+# On defensive code these can be most of a file's survivors, and every one of them is unkillable by
+# construction: a failed `assert` aborts the Godot process, so an in-process test cannot pass on
+# the original and fail on the mutant. Handing that reader the `comparison` advice ("add a test with
+# two equal operands") is advice nobody can follow, and it is what makes a whole report read as
+# noise. The rule is one function, `on_assert`, and every surface routes through it.
+
+_ASSERT_LINE = "\tassert(value > 0)"
+
+
+def test_narrative_switches_to_the_assert_explanation_inside_an_assert() -> None:
+    # `>` at column 15 is inside `assert(`, which closes at index 8.
+    mutant = _mutant("comparison", ">", ">=", line=1, col=15)
+    gap, risk_start = survivor_report_fields(mutant, _ASSERT_LINE)
+    assert "sits inside an `assert`" in gap
+    assert "no in-process test can kill this one" in gap
+    # The operator copy — the advice that cannot be followed here — must be gone, not merely joined.
+    assert "equal operands" not in gap + risk_start
+    assert "# gdmutant: ignore" in risk_start  # the escape hatch that does apply
+
+
+def test_narrative_keeps_the_operator_explanation_off_an_assert() -> None:
+    mutant = _mutant("comparison", ">", ">=", line=1, col=15)
+    gap, _ = survivor_report_fields(mutant, "\tif value > 0:")
+    assert "equal operands" in gap and "assert" not in gap
+
+
+def test_deleting_an_assert_statement_is_an_assert_survivor() -> None:
+    # Statement deletion replaces the whole `assert(...)` with `pass`. Its token starts *before*
+    # the paren, so the column test alone would miss it — the mutant's own text carries the answer.
+    deletion = _mutant("statement-deletion", "assert(value > 0)", "pass", line=1, col=2)
+    assert on_assert(deletion.original, deletion.span.column, _ASSERT_LINE)
+
+
+def test_a_token_before_the_assert_paren_is_not_an_assert_survivor() -> None:
+    # Column 5 is inside `push_`, ahead of the `assert(` that opens later on the line — so the
+    # rule must not claim it. This is what keeps a trailing `# assert(...)` comment harmless too.
+    line = "\tif x > 0: assert(y > 0)"
+    assert not on_assert(">", 5, line)
+    assert on_assert(">", 21, line)
+
+
+def test_an_assert_lookalike_identifier_is_not_an_assert() -> None:
+    # `my_assert(` and `helper.assert(` are ordinary calls; a failed one raises nothing special, so
+    # a mutant inside them is an ordinary, killable survivor.
+    assert not on_assert(">", 16, "\tmy_assert(a > b)")
+    assert not on_assert(">", 20, "\thelper.assert(a > b)")
+
+
+def test_an_unreadable_source_falls_back_to_the_operator_explanation() -> None:
+    # With no source line there is nothing to read, so the narrative stays the operator's — still
+    # accurate, just less specific. It must never guess "assert" from the operator alone.
+    mutant = _mutant("comparison", ">", ">=", line=1, col=15)
+    assert not on_assert(mutant.original, mutant.span.column, None)
+    gap, _ = survivor_report_fields(mutant, None)
+    assert "equal operands" in gap
+
+
+def test_source_line_returns_none_off_the_end_of_the_file() -> None:
+    # A survivor whose file has since shrunk keeps its narrative; only the line-derived detail goes.
+    mutant = _mutant("comparison", ">", ">=", line=9, col=15)
+    assert source_line(mutant, ["only one line"]) is None
+    assert source_line(mutant, None) is None
+
+
+def test_reference_section_routes_an_assert_survivor_to_its_own_page_section() -> None:
+    mutant = _mutant("comparison", ">", ">=", line=1, col=15)
+    assert reference_section(mutant, _ASSERT_LINE) == ASSERT_SECTION
+    assert reference_section(mutant, "\tif value > 0:") == "comparison"
+
+
+def test_rendered_assert_survivor_links_to_the_assert_section_not_the_operator() -> None:
+    # The `more` link is the one thing a reader clicks. Sending them to #comparison would land them
+    # on "add a test that reaches this line with two equal operands" — the exact wrong instruction.
+    mutant = _mutant("comparison", ">", ">=", line=1, col=15)
+    block = render_survivor(mutant, [_ASSERT_LINE])
+    assert block[-2] == f"  more   {doc_url(ASSERT_SECTION)}"
+    # The header still names the operator: that IS what changed.
+    assert "comparison" in block[0]

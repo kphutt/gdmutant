@@ -140,18 +140,41 @@ def _format_duration(secs: float) -> str:
     return f"{hours}h {m}m"
 
 
-def _progress_estimate(runnable: int, total: int, baseline_secs: float) -> str:
-    """The pre-run estimate line: how many mutants will run and roughly how long, derived from the
-    baseline's own wall-clock. "Looks hung" is the #1 documented reason people abandon mutation
-    testing; a stated ETA makes a long run read as *expected*. Rough by construction —
-    each mutant is budgeted at ~the baseline time, and killed mutants often finish sooner — so it's
-    an upper-ish "about" figure, not a promise. Ignored mutants never run, so they're excluded from
-    the time but noted in the count."""
-    est = _format_duration(runnable * baseline_secs)
+def _progress_estimate(
+    runnable: int, total: int, baseline_secs: float, per_mutant_timeout: float, jobs: int
+) -> str:
+    """The pre-run line: how many mutants will run, and the **floor** on how long that takes.
+
+    "Looks hung" is the #1 documented reason people abandon mutation testing, so the run says up
+    front how much work it is. What it must not do is quote a *forecast* it cannot keep: one
+    baseline-length run per mutant is the whole of what this can know, and two real costs sit on top
+    of it —
+
+    * gdmutant's own per-mutant work: applying the mutant re-parses the file (the NF-5 validity
+      guard) and rewrites it twice, none of which the baseline's wall-clock contains;
+    * every mutant that **hangs**, which burns its full `per_mutant_timeout` instead of a
+      baseline-length run — a handful of those can outweigh every other mutant combined.
+
+    Neither is knowable before the run, so they are named rather than guessed at, and the number is
+    labelled "at least". Measured against a real project, the old ``estimated ≈`` figure came in
+    1.7–3.4× under; a precise-looking number that far out costs more trust than no number at all.
+
+    `jobs` divides the floor, because perfect scaling is the best case W workers can do — anything
+    less (CPU contention, which is the norm) only makes the real time longer, so the floor holds.
+    Ignored mutants never run, so they're excluded from the time but noted in the count.
+    """
+    # `max(1, ...)` mirrors `_mutate_file`'s own `jobs > 1` test: anything at or below 1 runs
+    # serially, so the floor is the serial one.
+    est = _format_duration(runnable * baseline_secs / max(1, jobs))
     ignored = total - runnable
     ignored_note = f" ({ignored} ignored, not run)" if ignored else ""
     unit = "mutant" if total == 1 else "mutants"
-    return f"{total} {unit}{ignored_note}; baseline ~{baseline_secs:.1f}s each → estimated ≈ {est}"
+    jobs_note = f" across {jobs} jobs" if jobs > 1 else ""
+    return (
+        f"{total} {unit}{ignored_note}; baseline ~{baseline_secs:.1f}s each{jobs_note} → at least "
+        f"{est} (a floor: gdmutant's own per-mutant work is on top, and each mutant that hangs "
+        f"costs up to {per_mutant_timeout:g}s)"
+    )
 
 
 def _progress_line(index: int, total: int, outcome: MutantOutcome) -> str:
@@ -233,7 +256,11 @@ def _run_baseline(
     # runner with nothing to prepare simply isn't Preparable — the engine stays language-neutral.
     if isinstance(runner, Preparable):
         if progress is not None:
-            progress("preparing the project (one-time) ...")
+            # Name the wait. This step is a cold-checkout asset import for the Godot runners, which
+            # on a real game runs for minutes with nothing on screen — the shape a first-time user
+            # reads as a hung tool. The engine stays language-neutral by describing the *cost*, not
+            # what the setup is.
+            progress("preparing the project (one-time; on a fresh checkout this can take minutes)")
         try:
             runner.prepare(project_dir)
         except Exception as error:  # a runner that can't even prepare is a setup error
@@ -274,7 +301,7 @@ def _mutate_file(
     total = len(mutants)
     if progress is not None:
         runnable = sum(1 for m in mutants if m.ignore_reason is None)
-        progress(_progress_estimate(runnable, total, baseline_secs))
+        progress(_progress_estimate(runnable, total, baseline_secs, per_mutant_timeout, jobs))
     if jobs > 1 and total > 0:
         outcomes = _run_mutants_parallel(
             project_dir, path, source, runner, adapter, mutants, per_mutant_timeout, progress, jobs

@@ -4,13 +4,14 @@ import json
 import re
 from pathlib import Path
 
-from gdmutant.engine.explain import render_survivor
+from gdmutant.engine.explain import ASSERT_SECTION, doc_url, render_survivor
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.report import (
     all_survived_warning,
     console_summary,
     html_report,
+    job_summary_markdown,
     stryker_report,
 )
 from gdmutant.engine.spans import Span
@@ -361,3 +362,62 @@ def test_html_report_escapes_script_close_in_source_so_it_cannot_break_out() -> 
     block = html.split('id="mutation-test-report">', 1)[1].split("</script>", 1)[0]
     assert "</script>" not in block  # never raw inside the data block
     assert json.loads(block)["files"]["x.gd"]["source"] == 'var s := "</script>"'  # restored
+
+
+# --- assert survivors, across the report surfaces ------------------------------------------------
+
+
+def _assert_run() -> tuple[MutationRun, str]:
+    """A one-file run whose single survivor sits inside an `assert`."""
+    source = "func f(value):\n\tassert(value > 0)\n\treturn value\n"
+    mutant = Mutant("Foo.gd", Span(2, 15, 2, 16), "comparison", ">", ">=")
+    return MutationRun((MutantOutcome(mutant, Verdict.SURVIVED),)), source
+
+
+def test_stryker_report_carries_the_assert_explanation_not_the_operator_one() -> None:
+    # The JSON is what the HTML report and any consuming agent read. It carries the file's own
+    # source, so the narrative gets the mutated line for free — no reason for this surface to be
+    # the one that still hands out impossible advice.
+    run, source = _assert_run()
+    entry = stryker_report(run, "Foo.gd", source, "gdscript")["files"]["Foo.gd"]["mutants"][0]
+    assert "sits inside an `assert`" in entry["description"]
+    assert "two equal operands" not in entry["description"] + entry["statusReason"]
+
+
+def test_console_summary_counts_assert_survivors_and_links_the_explanation(
+    tmp_path: Path,
+) -> None:
+    # The proportion is the thing no single survivor can show, and it is what a score means: a
+    # file whose survivors are nearly all asserts scores healthily with nothing actionable behind
+    # it. Counted and linked — never hidden, and the score is untouched.
+    source = "func f(value):\n\tassert(value > 0)\n\treturn value\n"
+    path = tmp_path / "Foo.gd"
+    path.write_text(source, encoding="utf-8")
+    mutant = Mutant(str(path), Span(2, 15, 2, 16), "comparison", ">", ">=")
+    run = MutationRun((MutantOutcome(mutant, Verdict.SURVIVED),))
+    out = console_summary(run)
+    assert "note: 1 of 1 survivors sit inside an assert, which no in-process test can kill." in out
+    assert doc_url(ASSERT_SECTION) in out
+    assert "Mutation score: 0.0%" in out  # counted exactly as before
+
+
+def test_console_summary_has_no_assert_note_without_assert_survivors(tmp_path: Path) -> None:
+    source = "func f(a, b):\n\treturn a > b\n"
+    path = tmp_path / "Foo.gd"
+    path.write_text(source, encoding="utf-8")
+    mutant = Mutant(str(path), Span(2, 11, 2, 12), "comparison", ">", ">=")
+    run = MutationRun((MutantOutcome(mutant, Verdict.SURVIVED),))
+    assert "sit inside an assert" not in console_summary(run)
+
+
+def test_job_summary_markdown_links_an_assert_survivor_to_the_assert_section(
+    tmp_path: Path,
+) -> None:
+    source = "func f(value):\n\tassert(value > 0)\n\treturn value\n"
+    path = tmp_path / "Foo.gd"
+    path.write_text(source, encoding="utf-8")
+    mutant = Mutant(str(path), Span(2, 15, 2, 16), "comparison", ">", ">=")
+    run = MutationRun((MutantOutcome(mutant, Verdict.SURVIVED),))
+    markdown = job_summary_markdown(run)
+    assert f"[Explain survivors inside an `assert`]({doc_url(ASSERT_SECTION)})" in markdown
+    assert "sits inside an `assert`" in markdown

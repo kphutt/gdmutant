@@ -489,6 +489,30 @@ def test_the_inlined_reference_carries_only_the_operators_this_report_used() -> 
     assert "<strong>equal</strong>" in view.refs["comparison"][1][1]
 
 
+def test_an_assert_survivor_expands_the_assert_reference_not_its_operators() -> None:
+    # The page reads its narrative back out of the report, so an assert survivor already *says*
+    # "no in-process test can kill this one". If the expandable reference beside it still offered
+    # the comparison entry ("add a test with two equal operands"), the page would contradict itself
+    # in adjacent paragraphs. `ref` is what keeps the two halves agreeing.
+    view = report_view(
+        _report(
+            "assert(a > b)\n",
+            [_mutant(1, 10, 11, "comparison", ">=", "Survived")],
+        )
+    )
+    finding = view.files[0].findings[0]
+    assert finding.op == "comparison"  # still what changed — the operator chip is unaffected
+    assert finding.ref == "assert"  # …but the explanation and the link are the assert one
+    assert set(view.refs) == {"assert"}
+
+
+def test_a_survivor_off_an_assert_keeps_its_operator_reference() -> None:
+    view = report_view(
+        _report("return a > b\n", [_mutant(1, 10, 11, "comparison", ">=", "Survived")])
+    )
+    assert view.files[0].findings[0].ref == "comparison"
+
+
 def test_an_empty_report_still_renders_a_page() -> None:
     page = render_html({"schemaVersion": "2", "files": {}})
     assert "<html" in page and "no mutants could be scored" in page

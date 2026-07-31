@@ -139,7 +139,9 @@ def test_prepare_runs_before_baseline_and_its_cost_is_excluded_from_the_timeout(
     assert runner.log[0] == "prepare"  # prepare precedes the first (baseline) run
     assert runner.log.count("prepare") == 1  # once, not per mutant
     assert runner.prepared_with == [str(tmp_path)]  # handed the real project dir, not None
-    assert "preparing the project (one-time) ..." in messages
+    # The notice names the cost, not just the step: this is the Godot asset import, which on a
+    # cold checkout runs for minutes with nothing on screen and gets read as a hang.
+    assert "preparing the project (one-time; on a fresh checkout this can take minutes)" in messages
     # baseline_secs = suite_cost only (prepare excluded); mutant timeouts derive from it.
     mutant_timeouts = runner.seen_timeouts[1:]
     assert mutant_timeouts, "the source should produce at least one runnable mutant"
@@ -356,7 +358,7 @@ def test_progress_fires_a_heartbeat_then_a_verdict_per_mutant_in_order(tmp_path:
     assert lines[0] == "running the unmutated (baseline) suite ..."
     # The pre-run estimate follows the baseline; its wall-clock timing is
     # nondeterministic, so pin its shape, not the exact seconds.
-    assert lines[1].startswith("3 mutants;") and "estimated ≈" in lines[1]
+    assert lines[1].startswith("3 mutants;") and "at least " in lines[1]
     assert lines[2:] == [
         f"[1/3] {path}:2:11  > -> >=  running (<=10s) ...",
         f"[1/3] {path}:2:11  > -> >=  ... killed",
@@ -380,14 +382,14 @@ def test_progress_reports_invalid_and_error_verdicts(tmp_path: Path) -> None:
     # An invalid mutant never runs, so it gets NO heartbeat — only the verdict line. (lines[1] is
     # the estimate, timing-dependent, so asserted by shape.)
     assert invalid[0] == "running the unmutated (baseline) suite ..."
-    assert invalid[1].startswith("1 mutant;") and "estimated ≈" in invalid[1]
+    assert invalid[1].startswith("1 mutant;") and "at least " in invalid[1]
     assert invalid[2:] == [f"[1/1] {path}:2:11  > -> ))  ... invalid"]
 
     # An erroring mutant DID run, so it gets the heartbeat then the error verdict.
     errored: list[str] = []
     run(str(tmp_path), path, src, RaiseAfterBaselineRunner(), timeout=10.0, progress=errored.append)
     assert errored[0] == "running the unmutated (baseline) suite ..."
-    assert errored[1].startswith("1 mutant;") and "estimated ≈" in errored[1]
+    assert errored[1].startswith("1 mutant;") and "at least " in errored[1]
     assert errored[2:] == [
         f"[1/1] {path}:2:11  > -> >=  running (<=10s) ...",
         f"[1/1] {path}:2:11  > -> >=  ... error",
@@ -413,20 +415,63 @@ def test_format_duration_scales_seconds_minutes_hours() -> None:
     assert _format_duration(3780) == "1h 3m"
 
 
-def test_progress_estimate_reports_count_and_eta_from_baseline() -> None:
-    # 15 runnable mutants at ~9s baseline each ≈ 2m 15s — the ETA example.
-    line = _progress_estimate(runnable=15, total=15, baseline_secs=9.0)
-    assert line == "15 mutants; baseline ~9.0s each → estimated ≈ 2m 15s"
+_FLOOR_NOTE = (
+    " (a floor: gdmutant's own per-mutant work is on top, and each mutant that hangs costs up to"
+)
+
+
+def test_progress_estimate_reports_count_and_a_floor_from_the_baseline() -> None:
+    # 15 runnable mutants at ~9s baseline each = 2m 15s of suite runs. Pinned in full, including
+    # the word "least": "estimated" read as a forecast and measured 1.7-3.4x under on a real
+    # project, because one baseline-length run per mutant is all this can know.
+    line = _progress_estimate(
+        runnable=15, total=15, baseline_secs=9.0, per_mutant_timeout=90.0, jobs=1
+    )
+    assert line == ("15 mutants; baseline ~9.0s each → at least 2m 15s" + _FLOOR_NOTE + " 90s)")
+
+
+def test_progress_estimate_names_the_timeout_a_hung_mutant_would_cost() -> None:
+    # The timeout is THE cost the old figure missed worst: on the measured run, eight hung mutants
+    # were most of the gap between the estimate and reality. It is named, with its real budget, so
+    # a reader can do the arithmetic the tool cannot do for them.
+    line = _progress_estimate(
+        runnable=4, total=4, baseline_secs=1.0, per_mutant_timeout=17.5, jobs=1
+    )
+    assert line.endswith("each mutant that hangs costs up to 17.5s)")
 
 
 def test_progress_estimate_excludes_ignored_from_time_but_notes_them() -> None:
-    # Ignored mutants never run, so they drop out of the ETA but are still counted and flagged.
-    line = _progress_estimate(runnable=2, total=5, baseline_secs=10.0)
-    assert line == "5 mutants (3 ignored, not run); baseline ~10.0s each → estimated ≈ 20s"
+    # Ignored mutants never run, so they drop out of the time but are still counted and flagged.
+    line = _progress_estimate(
+        runnable=2, total=5, baseline_secs=10.0, per_mutant_timeout=100.0, jobs=1
+    )
+    assert line.startswith("5 mutants (3 ignored, not run); baseline ~10.0s each → at least 20s")
 
 
-def test_progress_estimate_singular_for_one_mutant() -> None:
-    assert _progress_estimate(runnable=1, total=1, baseline_secs=3.0).startswith("1 mutant;")
+def test_progress_estimate_divides_the_floor_by_the_worker_count() -> None:
+    # With --jobs N the serial figure is far too HIGH, which would falsify the word "least" in the
+    # other direction. Perfect scaling is the best N workers can do, so N-way division is still a
+    # floor -- contention only ever makes the real time longer.
+    line = _progress_estimate(
+        runnable=16, total=16, baseline_secs=10.0, per_mutant_timeout=100.0, jobs=4
+    )
+    assert line.startswith("16 mutants; baseline ~10.0s each across 4 jobs → at least 40s")
+
+
+def test_progress_estimate_omits_the_jobs_note_when_serial() -> None:
+    line = _progress_estimate(
+        runnable=1, total=1, baseline_secs=3.0, per_mutant_timeout=30.0, jobs=1
+    )
+    assert line.startswith("1 mutant;") and "jobs" not in line
+
+
+def test_progress_estimate_treats_a_sub_one_job_count_as_serial() -> None:
+    # `_mutate_file` runs serially at anything <= 1, so the floor must be the serial one rather
+    # than a division by zero.
+    line = _progress_estimate(
+        runnable=4, total=4, baseline_secs=5.0, per_mutant_timeout=50.0, jobs=0
+    )
+    assert line.startswith("4 mutants; baseline ~5.0s each → at least 20s")
 
 
 def test_progress_defaults_to_silent(tmp_path: Path) -> None:

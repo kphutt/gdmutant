@@ -64,6 +64,30 @@ CLI.
   Godot.
 - Live self-test against real Godot in CI, pinning both runner paths to exact per-mutant outcomes.
 
+### Fixed
+
+- The "executable not found" message is **mode-aware**. Under `--runner command` the executable
+  comes from the `--command` string, not from `--godot` — so the message now says that, states that
+  `--godot` has no effect in that mode, and shows the user's own command back with the path slot
+  marked. It previously recommended `--godot`, which that mode does not read: setting it returned
+  the byte-identical error.
+- `--runner command` says up front when the project has no Godot import cache (`.godot/`). On a
+  fresh checkout Godot imports every asset before it will run anything — minutes of silence that
+  reads as a hang. The JUnit runners do that warm-up themselves (and the "preparing the project"
+  notice now says it can take minutes); the exit-code runner cannot, so it names the one command
+  that fixes it instead.
+- Survivors inside an `assert` explain themselves. A failed `assert` aborts the Godot process, so
+  no in-process test can pass on the original and fail on the mutant — these are unkillable by
+  construction, and on defensive code they can be most of a file's survivors. Every surface (the
+  console block, the JSON report, the HTML page, the job summary) gives them their own explanation
+  and links to a new `assert` section of the survivor reference, instead of operator advice nobody
+  can act on; the console summary counts them under the survivor list. **Nothing is skipped and the
+  score is unchanged** — which of your asserts are load-bearing is your call, not the tool's.
+- The pre-run time figure reads as a **floor**, not a forecast: `at least <duration>`, with the two
+  costs it cannot know named (gdmutant's own per-mutant work, and the per-mutant timeout each hung
+  mutant burns). It also divides by `--jobs`. The old `estimated ≈` figure measured 1.7–3.4× under
+  on a real project, because one baseline-length run per mutant is the whole of what it can know.
+
 ### Safety
 
 - Mutations are applied in place and restored after each mutant and on exit; gdmutant warns on

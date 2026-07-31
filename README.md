@@ -65,6 +65,16 @@ CLI, no AI required.
 
 **Godot 4.3+**, the GUT or gdUnit4 addon installed, and a test suite that already passes.
 
+**A project Godot has already imported.** On a checkout Godot has never opened, it imports every
+asset before it will run anything — minutes of total silence on a real game, which is easy to read
+as a hung tool. `--runner gdunit4` and `--runner gut` do that warm-up for you and say so.
+`--runner command` cannot: it only knows the command you hand it. Do it once yourself, and every
+later run starts in seconds:
+
+```sh
+godot --headless --path path/to/your-game --import
+```
+
 **Python 3.12+** — and if you don't have Python, don't go install it. Install
 [uv](https://docs.astral.sh/uv/) instead: it fetches its own Python and runs gdmutant on it.
 
@@ -229,7 +239,19 @@ full path in that string yourself.
 `0` even on a harness that fails to *compile*, so gate a `--command` harness on `can_instantiate()`.
 
 **It's slow.** Godot boots once per mutant. Mutate one file at a time, and use `--jobs N` — real
-but sub-linear (~3× at `--jobs 4`), since every worker copies the project.
+but sub-linear (~3× at `--jobs 4`), since every worker copies the project. The up-front estimate is
+a **floor**, not a forecast: it counts one baseline-length run per mutant and nothing else, so
+gdmutant's own per-mutant work and any mutant that hangs (up to the per-mutant timeout, each) land
+on top of it.
+
+**The first run sits there for minutes and never starts.** The project has not been imported — see
+[Prerequisites](#prerequisites). Run `godot --headless --path <project> --import` once. Under
+`--runner command` gdmutant says so up front when the project has no `.godot/` directory.
+
+**Most survivors are on `assert` lines.** Expected, and not noise you have to fix: a failed `assert`
+kills the Godot process, so no in-process test can catch a weakened one. gdmutant explains each one
+and counts them under the survivor list rather than hiding them —
+[the full story](docs/survivors/README.md#assert).
 
 ## How it works
 

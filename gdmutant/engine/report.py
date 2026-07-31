@@ -20,7 +20,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from gdmutant.engine.explain import doc_url, render_survivor, survivor_report_fields
+from gdmutant.engine.explain import (
+    ASSERT_SECTION,
+    doc_url,
+    reference_section,
+    render_survivor,
+    source_line,
+    survivor_report_fields,
+)
 from gdmutant.engine.htmlreport import change_note, render_html
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
 from gdmutant.engine.mutants import Mutant
@@ -37,7 +44,7 @@ _STATUS: dict[Verdict, str] = {
 }
 
 
-def _mutant_json(index: int, outcome: MutantOutcome) -> dict[str, Any]:
+def _mutant_json(index: int, outcome: MutantOutcome, source_lines: list[str]) -> dict[str, Any]:
     m = outcome.mutant
     mutant: dict[str, Any] = {
         "id": str(index),
@@ -58,16 +65,23 @@ def _mutant_json(index: int, outcome: MutantOutcome) -> dict[str, Any]:
     # the gap; `statusReason` gets the risk + starting point. (Killed/timeout/invalid/error mutants
     # need no such narrative; ignored keeps its own reason above.)
     if outcome.verdict is Verdict.SURVIVED:
-        mutant["description"], mutant["statusReason"] = survivor_report_fields(m)
+        # The report carries the file's own source, so the narrative gets the mutated line for
+        # free — which is what lets an assert survivor explain itself in the JSON and the HTML
+        # report, not only on the console.
+        src = source_line(m, source_lines)
+        mutant["description"], mutant["statusReason"] = survivor_report_fields(m, src)
     return mutant
 
 
 def _file_entry(run: MutationRun, source: str, language: str) -> dict[str, Any]:
     """One file's entry in the report's `files` map."""
+    source_lines = source.split("\n")
     return {
         "language": language,
         "source": source,
-        "mutants": [_mutant_json(index, outcome) for index, outcome in enumerate(run.outcomes)],
+        "mutants": [
+            _mutant_json(index, outcome, source_lines) for index, outcome in enumerate(run.outcomes)
+        ],
     }
 
 
@@ -154,12 +168,35 @@ def console_summary(run: MutationRun) -> str:
     if run.survivors:
         lines += ["", f"Survivors ({len(run.survivors)}):", ""]
         source_cache: dict[str, list[str] | None] = {}
+        on_asserts = 0
         for m in run.survivors:
             if m.path not in source_cache:
                 source_cache[m.path] = _read_source_lines(m.path)
-            lines += render_survivor(m, source_cache[m.path])
+            source_lines = source_cache[m.path]
+            if reference_section(m, source_line(m, source_lines)) == ASSERT_SECTION:
+                on_asserts += 1
+            lines += render_survivor(m, source_lines)
             lines.append("")
+        note = _assert_survivor_note(on_asserts, len(run.survivors))
+        if note is not None:
+            lines += [note, ""]
     return "\n".join(lines)
+
+
+def _assert_survivor_note(on_asserts: int, survivors: int) -> str | None:
+    """A one-line count of how many survivors sit inside an `assert`, or ``None`` when none do.
+
+    Each such survivor already explains itself, but the *proportion* is the thing a reader can only
+    see in aggregate — and it is what a score means. Defensive code can put most of a file's
+    survivors on assert lines, and none of those are gaps anyone can close, so a healthy-looking
+    percentage over a report with nothing actionable in it is exactly the reading to head off. This
+    counts and links; it never hides a mutant or moves the score."""
+    if not on_asserts:
+        return None
+    return (
+        f"note: {on_asserts} of {survivors} survivors sit inside an assert, which no in-process "
+        f"test can kill.\n  They are legitimate survivors, not gaps: {doc_url(ASSERT_SECTION)}"
+    )
 
 
 def _change_note(mutant: Mutant) -> str:
@@ -180,19 +217,27 @@ def _survivor_markdown(mutant: Mutant, source_lines: list[str] | None) -> list[s
     stable per-operator docs link. This is `render_survivor`'s content rendered as Markdown instead
     of box-drawing; the code slot drops out gracefully when the source is unreadable. The narrative
     is `survivor_report_fields` — the exact copy the console block and the Stryker JSON carry, so
-    the three surfaces can never drift."""
-    gap, risk_start = survivor_report_fields(mutant)
+    the three surfaces can never drift (including its assert handling: an assert survivor gets the
+    assert explanation and the assert link here too, exactly as it does on the console)."""
     line_no = mutant.span.line
+    src = source_line(mutant, source_lines)
+    gap, risk_start = survivor_report_fields(mutant, src)
     out = [f"#### `{mutant.path}:{line_no}` · {mutant.operator_id}", ""]
-    if source_lines is not None and 1 <= line_no <= len(source_lines):
+    if src is not None:
         out += [
             "```gdscript",
-            source_lines[line_no - 1].expandtabs(4),
+            src.expandtabs(4),
             "```",
             "",
             f"{_change_note(mutant)} — every test still passed.",
             "",
         ]
+    anchor = reference_section(mutant, src)
+    label = (
+        "survivors inside an `assert`"
+        if anchor == ASSERT_SECTION
+        else f"the `{mutant.operator_id}` operator"
+    )
     out += [
         f"**The gap.** {gap}",
         "",
@@ -200,7 +245,7 @@ def _survivor_markdown(mutant: Mutant, source_lines: list[str] | None) -> list[s
         "",
         risk_start,
         "",
-        f"[Explain the `{mutant.operator_id}` operator]({doc_url(mutant.operator_id)})",
+        f"[Explain {label}]({doc_url(anchor)})",
         "",
     ]
     return out

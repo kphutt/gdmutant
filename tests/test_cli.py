@@ -19,7 +19,7 @@ from gdmutant.cli import (
     main,
     run_mutation,
 )
-from gdmutant.engine.runner import SuiteResult
+from gdmutant.engine.runner import CommandRunner, SuiteResult
 
 # git exports these to point subprocesses at the *invoking* repo. When pytest runs inside a git
 # hook (e.g. pre-push), inheriting them makes `_git` operate on the hook's repo instead of the
@@ -324,6 +324,155 @@ def test_run_mutation_missing_executable_with_no_filename_uses_fallback(
     rc = run_mutation(str(path), str(tmp_path), MissingGodotRunner(filename=None))
     assert rc == 2
     assert capsys.readouterr().err.endswith(_FALLBACK_MISSING)
+
+
+# --- the missing-executable hint under --runner command ---------------------------------------
+#
+# The exit-code runner takes its executable from --command, not --godot. The generic hint's advice
+# ("pass its full path with --godot") is therefore *wrong* in that mode: a user who follows it gets
+# the byte-identical error back and has to go read the README to get unstuck. These pin the
+# mode-aware branch, each message in full so a mutated string is caught.
+
+#: A command whose first token cannot exist on any platform, so the real `CommandRunner` raises the
+#: real `FileNotFoundError` a missing `godot` would — no mocking of the failure under test.
+_ABSENT = "gdmutant-no-such-binary"
+_COMMAND_MODE_HINT = (
+    "  With --runner command the executable comes from the --command string itself. --godot\n"
+    "  is not read in this mode, so setting it changes nothing. Put the full path inside\n"
+    "  --command instead, quoted if it contains spaces:\n"
+)
+
+
+def test_command_runner_missing_executable_names_command_not_godot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The whole defect in one assertion: under --runner command the message must NOT tell the user
+    # to pass --godot (they will, and nothing will change), and it must show their own command back
+    # with the executable slot marked.
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    path = _gd(tmp_path)
+    runner = CommandRunner(command=[_ABSENT, "--headless", "--script", "res://tests/run.gd"])
+    rc = run_mutation(str(path), str(tmp_path), runner)
+    assert rc == 2  # still a setup error, not a red baseline
+    err = capsys.readouterr().err
+    assert err.endswith(
+        f"error: could not run the test suite — executable '{_ABSENT}' not found.\n"
+        + _COMMAND_MODE_HINT
+        + f'    --command "<full path to {_ABSENT}> --headless --script res://tests/run.gd"\n'
+    )
+    assert "pass its full path with --godot" not in err  # the advice that does not work
+    assert "Godot.app" not in err  # macOS-only, and this is linux
+
+
+def test_command_runner_hint_omits_arguments_for_a_bare_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A one-token --command has no arguments to echo back, so the example is the executable alone —
+    # never a dangling "<full path to x> " with a trailing space inside the quotes.
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), CommandRunner(command=[_ABSENT]))
+    assert rc == 2
+    assert capsys.readouterr().err.endswith(f'    --command "<full path to {_ABSENT}>"\n')
+
+
+def test_command_runner_missing_godot_on_darwin_gives_the_bundle_path_not_the_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # macOS users need the app-bundle path either way — but phrased for the flag this mode reads.
+    # Repeating "--godot /Applications/..." here would re-make the very mistake being corrected.
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    path = _gd(tmp_path)
+    runner = CommandRunner(command=["godot-absent-for-this-test", "--headless"])
+    rc = run_mutation(str(path), str(tmp_path), runner)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.endswith(
+        "  On macOS, Godot ships as an app bundle and is never on PATH — its binary is at\n"
+        "    /Applications/Godot.app/Contents/MacOS/Godot\n"
+    )
+    assert "--godot /Applications" not in err
+
+
+def test_command_runner_non_godot_binary_on_darwin_omits_the_bundle_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The bundle hint is Godot-specific in command mode too: a hand-rolled harness that isn't Godot
+    # must not be told where Godot lives.
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), CommandRunner(command=["run-my-suite-absent"]))
+    assert rc == 2
+    assert "Godot.app" not in capsys.readouterr().err
+
+
+def test_junit_runner_keeps_the_godot_advice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The other half of "mode-aware": for a runner that DOES read --godot, the original advice is
+    # correct and stays. `_command_argv` returns None for anything that isn't a CommandRunner.
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MissingGodotRunner())
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.endswith(_GENERIC_GODOT_MISSING)
+    assert "--runner command" not in err
+
+
+# --- the cold-import notice --------------------------------------------------------------------
+#
+# On a checkout Godot has never opened, importing every asset precedes any test run — minutes of
+# silence that reads as a hang. The JUnit runners pay it inside `prepare` and the engine announces
+# it; --runner command has no such hook, so it says so instead.
+
+
+def _import_notice_args(tmp_path: Path, path: Path) -> list[str]:
+    return [
+        "run",
+        str(path),
+        "--project",
+        str(tmp_path),
+        "--runner",
+        "command",
+        "--command",
+        "run-the-suite",
+    ]
+
+
+def test_command_runner_warns_when_the_project_was_never_imported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _gd(tmp_path)  # no .godot/ in tmp_path — an un-imported checkout
+    monkeypatch.setattr(cli, "CommandRunner", lambda **kwargs: RecordingRunner())
+    assert main(_import_notice_args(tmp_path, path)) == 0
+    err = capsys.readouterr().err
+    assert f"note: {tmp_path} has no Godot import cache (.godot/ is not there)" in err
+    # The fix is a command the reader can paste, aimed at their own project.
+    assert f"    godot --headless --path {tmp_path} --import" in err
+
+
+def test_command_runner_silent_when_the_project_has_an_import_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Reads one fact — does `.godot/` exist — so a project that is merely slow is never accused of
+    # anything, and an already-imported project gets no noise.
+    path = _gd(tmp_path)
+    (tmp_path / ".godot").mkdir()
+    monkeypatch.setattr(cli, "CommandRunner", lambda **kwargs: RecordingRunner())
+    assert main(_import_notice_args(tmp_path, path)) == 0
+    assert "import cache" not in capsys.readouterr().err
+
+
+def test_junit_runner_does_not_print_the_cold_import_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # gdunit4/gut warm the cache themselves, so the notice would be telling the user to do work the
+    # tool is about to do — it is scoped to the one mode that cannot.
+    path = _gd(tmp_path)
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
+    assert main(["run", str(path), "--project", str(tmp_path)]) == 0
+    assert "import cache" not in capsys.readouterr().err
 
 
 def test_jobs_must_be_a_positive_integer(

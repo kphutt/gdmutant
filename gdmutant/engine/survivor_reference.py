@@ -205,4 +205,36 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
             "removing it.",
         ),
     ),
+    "assert": (
+        (
+            "The change",
+            "gdmutant changed a token inside an `assert(...)` call — a comparison, a connective, a "
+            "number — or removed the assert statement outright.",
+        ),
+        (
+            "Why it survived",
+            "a mutated assertion only behaves differently on an input the original would have "
+            "**rejected**, and a failed `assert` aborts the whole Godot process. A test running "
+            "inside that process cannot observe the abort as anything but its own death, so no "
+            "test can pass on the original and fail on the mutant. The survivor is structural — it "
+            "is not a gap in your suite.",
+        ),
+        (
+            "How to kill it",
+            "from an in-process harness you cannot, and it is not worth trying. To take it out of "
+            "the report, mark the line `# gdmutant: ignore`; it stays visible as `ignored` and "
+            "leaves the score. gdmutant does **not** skip assert lines for you — a tool that "
+            "quietly drops code from its own report is telling you a smaller truth than it knows, "
+            "and which of your asserts are load-bearing is your call, not its.",
+        ),
+        (
+            "Equivalent mutant?",
+            "Effectively yes, and it is the common case rather than the exception: on defensive "
+            "code, assert lines can hold most of a file's survivors and leave a healthy-looking "
+            "score with nothing actionable behind it. If the condition is one real callers can "
+            "actually violate, that is worth knowing — but the fix is to move the check into a "
+            "branch that returns or emits an error, where a test can reach it, not to write a test "
+            "that expects a crash.",
+        ),
+    ),
 }
