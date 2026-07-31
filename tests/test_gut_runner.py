@@ -166,7 +166,7 @@ def test_run_treats_zero_tests_as_an_error(tmp_path: Path, monkeypatch: pytest.M
         return subprocess.CompletedProcess([], 0, "", "")
 
     monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
-    with pytest.raises(RuntimeError, match="GUT ran 0 tests"):
+    with pytest.raises(RuntimeError, match="no tests"):
         GutRunner().run(str(tmp_path))
 
 
@@ -187,8 +187,61 @@ def test_zero_tests_error_for_a_parseable_zero_test_suite_surfaces_output(
 
     monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
     # The detail is appended after a newline, so match across it ([\s\S], not . which stops at \n).
-    with pytest.raises(RuntimeError, match=r"GUT ran 0 tests[\s\S]*SCRIPT ERROR: bad script"):
+    with pytest.raises(RuntimeError, match=r"no tests[\s\S]*SCRIPT ERROR: bad script"):
         GutRunner().run(str(tmp_path))
+
+
+def test_zero_tests_on_the_baseline_run_reports_discovery_not_a_compile_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Confirmed live (GUT v9.7.1 on Godot 4.7): --tests defaults to res://test, GUT's own layout
+    # puts suites in test/unit/, and -gdir does NOT recurse — so a stock GUT project collects zero
+    # tests on the BASELINE run, before any mutant exists. Nothing is broken, so the compile/load
+    # message is wrong there: it sends the user to debug a crash that isn't happening. The baseline
+    # case must name the cause (discovery) and the flag that fixes it.
+    report = _report(tmp_path)
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text('<testsuites><testsuite tests="0"/></testsuites>', encoding="utf-8")
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError) as excinfo:
+        GutRunner().run(str(tmp_path))
+    message = str(excinfo.value)
+    assert "res://test/unit" in message  # the flag value that fixes the stock layout
+    assert "-gdir does not search subdirectories" in message  # why the default came up empty
+    assert "res://test" in message  # the directory it actually searched
+    assert "compile" not in message  # NOT the mid-run diagnosis — nothing failed to load
+
+
+def test_zero_tests_after_a_healthy_baseline_keeps_the_compile_crash_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The mid-run drop-to-zero: the baseline collected tests, so discovery demonstrably works and a
+    # later empty report IS the compile/load skip. That message must survive the baseline-case
+    # rewording above, or the false-survivor guard loses its diagnosis.
+    report = _report(tmp_path)
+    counts = iter(["4", "0"])
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text(
+                f'<testsuites><testsuite tests="{next(counts)}" failures="0"/></testsuites>',
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    runner = GutRunner()
+    assert runner.run(str(tmp_path)).passed  # baseline: 4 tests — discovery works
+    with pytest.raises(RuntimeError, match="GUT ran 0 tests — a test suite failed to compile/load"):
+        runner.run(str(tmp_path))
 
 
 def test_run_raises_suite_timeout_on_subprocess_timeout(
