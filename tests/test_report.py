@@ -1,6 +1,7 @@
 """Tests for the reporter (console summary + Stryker JSON)."""
 
 import json
+import re
 from pathlib import Path
 
 from gdmutant.engine.explain import render_survivor
@@ -340,7 +341,9 @@ def test_html_report_is_one_self_contained_file_carrying_the_report() -> None:
     report = stryker_report(_run(), "f.gd", _SRC, "gdscript")
     html = html_report(report)
     assert "<html" in html
-    assert "unpkg" not in html and "<link" not in html
+    assert "unpkg" not in html
+    # Every <link> the page carries must be inlined (the favicon `data:` URI), never a fetch.
+    assert [tag for tag in re.findall(r"<link\b[^>]*>", html) if 'href="data:' not in tag] == []
     block = html.split('id="mutation-test-report">', 1)[1].split("</script>", 1)[0]
     assert json.loads(block) == report  # the inlined JSON parses back to the exact report
 

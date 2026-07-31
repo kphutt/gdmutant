@@ -16,9 +16,14 @@ What it shows, and why it is not the stock viewer:
   unnoticed).
 * **The changed characters are marked**, not a marker beside them — the token itself carries the
   tint and the click target.
-* **The narrative travels with it.** Each survivor's gap/risk/fix copy comes from `explain`, the
+* **The narrative travels with it.** Each survivor's gap/risk/start copy comes from `explain`, the
   same words the console prints, plus the operator reference inlined from `survivor_reference` so
   an offline reader can still learn what the operator means.
+* **Every finding has an address.** A finding's id is the tuple it was grouped by
+  (``line:col:colEnd:operator``), which the page joins to the file path to get a key that is stable
+  across regeneration — so a finding can be linked to (`location.hash`) and remembered
+  (`localStorage`) instead of only looked at. An earlier positional id renumbered on every run,
+  which made both impossible.
 
 The rendered page keeps the full ``mutation-testing-elements`` report in a
 ``<script type="application/json">`` block, so the file stays machine-readable for other tooling
@@ -32,6 +37,8 @@ printed it under all 18 mutants including the 11 a test had actually killed.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import html
 import json
 import re
@@ -92,6 +99,19 @@ FRANK_SVG = (
     "</svg>"
 )
 
+#: The report's tab icon — Frank again, built from the very markup above so the two can never
+#: diverge, and carried as a ``data:`` URI so the page still fetches nothing. This is the one
+#: surface gdmutant controls where a favicon is actually consumed: someone comparing two runs has
+#: several report tabs open, and the icon is what tells them apart.
+#:
+#: **Base64, not percent-encoding.** The art is full of ``#`` colour literals, and a bare ``#``
+#: inside a ``data:`` URI starts the fragment — the icon then fails *silently*, with the markup
+#: looking perfectly correct in view-source. Base64 cannot have that failure. It costs ~33% over
+#: the raw bytes and still lands near 1.2 KB, which is a rounding error beside the report itself.
+#: (The masthead art and this share ``.github/assets/frank.svg`` as their source; a change to
+#: Frank's colours would reach both.)
+FAVICON_HREF = "data:image/svg+xml;base64," + base64.b64encode(FRANK_SVG.encode()).decode("ascii")
+
 
 # --------------------------------------------------------------------------------------------
 # View model
@@ -110,7 +130,18 @@ class Angle:
 
 @dataclass
 class Finding:
-    """One unit of work: a token, an operator, and every mutant that tried it."""
+    """One unit of work: a token, an operator, and every mutant that tried it.
+
+    ``fid`` is the *stable* identity — the very tuple `_findings` groups by, rendered as
+    ``line:col:colEnd:operator``. It is therefore unique within a file by construction, and it is
+    the same string every time the report is regenerated from source that has not moved. Joined to
+    the file's path (`finding_key`) it addresses a finding across the whole report, which is what
+    lets a selection live in the URL and a done-mark live in `localStorage`.
+
+    ``start`` is the console's ``start`` field verbatim: the missing *input* to add a test for.
+    It is deliberately **not** called "fix" — `explain` only names the input, never the expected
+    value, because that oracle is the reader's and a guess could codify a bug.
+    """
 
     fid: str
     line: int
@@ -121,14 +152,20 @@ class Finding:
     angles: list[Angle] = field(default_factory=list)
     gap: str = ""
     risk: str = ""
-    fix: str = ""
+    start: str = ""
     cls: str = ""
     tag: str = ""
 
 
 @dataclass
 class FileView:
-    """One source file: its lines, its findings, and its own tally for the index."""
+    """One source file: its lines, its findings, and its own tally for the index.
+
+    ``stamp`` digests this file's findings **and their outcomes**. A done-mark records the stamp it
+    was made under, so the page can tell "you marked this against the report you are looking at"
+    from "you marked this against an older run of this file". Per file, not per report: adding a
+    second file to a run must not cast doubt on marks made against the first.
+    """
 
     path: str
     lines: list[str]
@@ -138,6 +175,7 @@ class FileView:
     survived: int
     total: int
     score: float | None
+    stamp: str
 
 
 @dataclass
@@ -193,10 +231,10 @@ def _enclosing_func(lines: list[str], line_no: int) -> str:
 
 
 def _narrative(mutant: dict[str, Any]) -> tuple[str, str, str]:
-    """A survivor's ``(gap, risk, fix)`` copy, read back out of the report's own fields.
+    """A survivor's ``(gap, risk, start)`` copy, read back out of the report's own fields.
 
     `report.stryker_report` writes `explain.survivor_report_fields` into ``description`` (the gap)
-    and ``statusReason`` (the risk and the fix, blank-line separated). Reading it back keeps the
+    and ``statusReason`` (the risk and the start, blank-line separated). Reading it back keeps the
     page's words identical to the console's, which is the point — re-authoring report copy here is
     exactly the drift that once put "every test still passed" on a killed mutant.
     """
@@ -208,15 +246,41 @@ def _narrative(mutant: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
+def finding_key(path: str, fid: str) -> str:
+    """A finding's address across the whole report: ``path:line:col:colEnd:operator``.
+
+    The page builds this same string in JavaScript (one place, `keyOf`) rather than the generator
+    storing it per finding — a full path repeated on each of a few thousand findings is pure weight
+    in a file meant to be mailed. Parsing splits from the *right*, because a path may itself contain
+    ``:`` (``res://scripts/a.gd``, ``C:/src/a.gd``) while the four trailing fields never can.
+    """
+    return f"{path}:{fid}"
+
+
+def _stamp(path: str, findings: list[Finding]) -> str:
+    """A short digest of a file's findings *and their outcomes*.
+
+    Changes exactly when this file's result set changes — a finding appearing, vanishing, or
+    flipping between surviving and caught. That is the question a done-mark has to answer to be
+    trustworthy: "is this still the run I marked?" A timestamp would answer "no" on every
+    regeneration, including one that changed nothing, so the digest is over content only and
+    `render_html` stays deterministic.
+    """
+    body = "\n".join(f"{finding.fid}|{finding.cls}" for finding in findings)
+    return hashlib.sha256(f"{path}\n{body}".encode()).hexdigest()[:12]
+
+
 def _findings(
-    mutants: list[dict[str, Any]], raw_lines: list[str], lines: list[str], prefix: str
+    mutants: list[dict[str, Any]], raw_lines: list[str], lines: list[str]
 ) -> list[Finding]:
     """Group `mutants` into findings, keyed by ``(line, span, operator)``.
 
     Never across operators: two operators may touch overlapping spans and still be different gaps.
     `raw_lines` are the source's own lines (whose tabs the report's columns are counted against),
-    `lines` their tab-expanded twins (what the page draws); `prefix` namespaces the finding ids so
-    they stay unique across a multi-file report.
+    `lines` their tab-expanded twins (what the page draws).
+
+    That grouping key *is* the finding's id, so no two findings in a file can share one and a
+    regenerated report reproduces it exactly.
     """
     findings: list[Finding] = []
     by_key: dict[tuple[int, int, int, str], Finding] = {}
@@ -236,7 +300,7 @@ def _findings(
         finding = by_key.get(key)
         if finding is None:
             finding = Finding(
-                fid=f"{prefix}{len(findings)}",
+                fid=f"{line_no}:{col}:{col_end}:{operator}",
                 line=line_no,
                 col=col,
                 colEnd=col_end,
@@ -262,7 +326,7 @@ def _findings(
         # same token (`0 -> 1` killed, `0 -> -1` survived), leaving a finding tagged SURVIVED with
         # nothing to say.
         if not finding.gap:
-            finding.gap, finding.risk, finding.fix = _narrative(mutant)
+            finding.gap, finding.risk, finding.start = _narrative(mutant)
     for finding in findings:
         classes = {a.cls for a in finding.angles}
         # Any surviving angle makes the whole finding actionable. All-caught is green. A finding
@@ -291,11 +355,11 @@ def report_view(report: dict[str, Any]) -> ReportView:
     report dict."""
     files: list[FileView] = []
     counts: dict[str, int] = {}
-    for index, (path, entry) in enumerate(report.get("files", {}).items()):
+    for path, entry in report.get("files", {}).items():
         raw_lines = str(entry.get("source", "")).split("\n")
         lines = [line.expandtabs(4) for line in raw_lines]
         mutants = list(entry.get("mutants", []))
-        findings = _findings(mutants, raw_lines, lines, f"f{index}-")
+        findings = _findings(mutants, raw_lines, lines)
         per_file: dict[str, int] = {}
         for mutant in mutants:
             status = str(mutant["status"])
@@ -306,9 +370,10 @@ def report_view(report: dict[str, Any]) -> ReportView:
         ops: dict[str, int] = {}
         for finding in findings:
             ops[finding.op] = ops.get(finding.op, 0) + 1
+        shown_path = path.replace("\\", "/")
         files.append(
             FileView(
-                path=path.replace("\\", "/"),
+                path=shown_path,
                 lines=lines,
                 findings=findings,
                 ops=sorted(ops.items()),
@@ -316,6 +381,9 @@ def report_view(report: dict[str, Any]) -> ReportView:
                 survived=survived,
                 total=len(mutants),
                 score=_score(detected, survived),
+                # Stamped from the *displayed* path, the one done-marks are keyed by, so a Windows
+                # run and a POSIX run of the same project agree.
+                stamp=_stamp(shown_path, findings),
             )
         )
     # Most actionable first: the file with the most survivors is where the reader should start.
@@ -425,13 +493,16 @@ code,pre,.code,.mono{font-family:var(--mono)}
   border-radius:999px;padding:5px 12px;font:500 12px/1 var(--mono);cursor:pointer}
 .chip[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent-border);
   color:var(--accent)}
-.stepper{margin-left:auto;display:flex;align-items:center;gap:6px;
+.stepper{margin-left:8px;display:flex;align-items:center;gap:6px;
   background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:4px 6px}
 .stepper button{background:none;border:0;color:var(--text);cursor:pointer;font-size:17px;
   width:30px;height:26px;border-radius:999px}
 .stepper button:hover:not(:disabled){background:var(--surface-2)}
 .stepper button:disabled{opacity:.45;cursor:default}
 .stepper .pos{font:600 12px/1 var(--mono);color:var(--text-muted);min-width:118px;text-align:center}
+/* Progress through the list, kept clear of the stepper's position so the two counts are never
+   read as one number. It takes over the `margin-left:auto` that used to push the stepper right. */
+.done{margin-left:auto;font:500 11.5px/1 var(--mono);color:var(--text-muted)}
 
 /* ---- legend: the marks mean nothing without it ---- */
 .legend{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px;
@@ -441,7 +512,8 @@ code,pre,.code,.mono{font-family:var(--mono)}
 .legend .sw.sv{background:var(--danger-soft);box-shadow:0 0 0 1px var(--danger-border)}
 .legend .sw.kd{background:var(--good-soft);box-shadow:0 0 0 1px var(--good)}
 .legend .sw.ot{background:var(--surface-2);box-shadow:0 0 0 1px var(--border-strong)}
-.legend .sw.multi{background:var(--danger-soft);outline:1px dashed var(--danger);outline-offset:1px}
+.legend .sw.multi{background:var(--danger-soft);outline:2px dashed var(--danger);outline-offset:0}
+.legend code{font-size:11px;background:var(--surface-2);border-radius:3px;padding:0 3px}
 
 /* ---- source ---- */
 .panes{display:grid;gap:20px;grid-template-columns:minmax(0,1.55fr) minmax(320px,1fr)}
@@ -465,7 +537,7 @@ code,pre,.code,.mono{font-family:var(--mono)}
    outlines sit outside the glyph box, so they are safe; anything touching the baseline is not. */
 .mark{--tone:var(--danger);--tone-soft:var(--danger-soft);--tone-border:var(--danger-border);
   font:inherit;color:inherit;line-height:inherit;white-space:pre;border:0;margin:0;padding:0;
-  cursor:pointer;border-radius:3px;background:var(--tone-soft);
+  cursor:pointer;border-radius:3px;background:var(--tone-soft);position:relative;
   box-shadow:0 0 0 1px var(--tone-border)}
 .mark.kd{--tone:var(--good);--tone-soft:var(--good-soft);--tone-border:var(--good)}
 /* Neither survived nor caught (ignored / invalid / errored): muted, never green. Green would claim
@@ -474,10 +546,28 @@ code,pre,.code,.mono{font-family:var(--mono)}
 /* Hover strengthens the mark's OWN tone. Fading every mark to neutral grey on hover briefly
    claimed the tone reserved for ignored/invalid. */
 .mark:hover{box-shadow:0 0 0 2px var(--tone)}
-/* A dashed outline (outside the box, clear of the baseline) = several findings on this token;
-   clicking cycles them. */
-.mark.multi{outline:1px dashed var(--tone);outline-offset:1px}
+/* SEVERAL findings on one token. The previous treatment — a 1px dashed outline at 1px offset —
+   was invisible in practice, and measured so in Chrome on the corpus fixture's one multi mark
+   (`return 0`, `numeric` nested inside `statement-deletion`): the outline computed to
+   `1px dashed rgb(20,83,45)` sitting immediately outside a solid ring of the *identical* colour,
+   so the two read as one slightly thick edge. A 1px dash is barely a dash at that size anyway.
+   The replacement states the number instead of hinting at it. The ring goes dashed and doubles in
+   weight, REPLACING the solid one rather than sitting beside it, and a small count badge rides the
+   corner. The ring is an outline and the badge is absolutely positioned, so neither takes layout
+   space, shifts the monospace grid, or touches the baseline the caret row aligns to. */
+.mark.multi{box-shadow:none;outline:2px dashed var(--tone);outline-offset:0}
+.mark.multi::after{content:attr(data-n);position:absolute;top:-5px;right:-6px;
+  font:700 9px/1 var(--sans);color:var(--bg-elevated);background:var(--tone);
+  border-radius:999px;padding:1.5px 3.5px;pointer-events:none}
 .mark.on{background:var(--accent-soft);box-shadow:0 0 0 2px var(--accent)}
+/* Handled: faded, so the eye skips it — but never hidden, and never recoloured to green, which
+   would claim a test now catches it. Opacity only; a strikethrough would touch the baseline and
+   fuse with `<` / `>`, the exact thing this page must never do to an operator. */
+.mark.done{opacity:.45}
+/* Marked done under an EARLIER run and still surviving. Loud on purpose: a stale tick hiding a
+   live survivor is the one failure these marks could introduce, so it is never quiet. Dotted, and
+   outside the glyph box like the other outlines here. */
+.mark.recheck{opacity:1;outline:2px dotted var(--danger);outline-offset:2px}
 
 /* The caret row: a triangle that pops out under the exact token, the HTML echo of the `^` the
    console prints. Explicit height: both cells hold only absolutely-positioned children, so without
@@ -517,8 +607,17 @@ code,pre,.code,.mono{font-family:var(--mono)}
 .f dt{font:700 10.5px/1.7 var(--mono);text-transform:uppercase;letter-spacing:.1em;
   color:var(--text-muted)}
 .f dd{margin:0;font-size:13.5px;line-height:1.62;color:var(--text)}
-.f.fix dt{color:var(--accent)}
+.f.start dt{color:var(--accent)}
 .card a{color:var(--accent);font-size:12.5px;font-family:var(--mono)}
+.tag.re{color:var(--danger);background:var(--danger-soft);border-color:var(--danger-border)}
+/* The done toggle. Quiet until pressed; loud only in the carried-over state. */
+.donebtn{display:block;width:100%;text-align:left;margin:0 0 10px;cursor:pointer;
+  background:var(--bg-elevated);border:1px solid var(--border);color:var(--text-muted);
+  border-radius:8px;padding:7px 10px;font:500 12px/1.35 var(--mono)}
+.donebtn:hover{background:var(--surface-2)}
+.donebtn.done{background:var(--good-soft);border-color:var(--good);color:var(--good)}
+.donebtn.recheck{background:var(--danger-soft);border-color:var(--danger-border);
+  color:var(--danger)}
 /* Inline reference: expands in place rather than navigating away mid-triage. */
 .refbtn{background:none;border:0;padding:0;cursor:pointer;color:var(--accent);
   font:500 12.5px var(--mono);text-align:left}
@@ -562,6 +661,17 @@ let caretEl = null, hostEl = null;
 
 const file = () => D.files[cur];
 const isSv = f => f.cls === 'sv';
+
+// ---- stable finding identity -----------------------------------------------------------------
+//
+// `f.fid` is the tuple the generator grouped by — `line:col:colEnd:operator` — so it is unique
+// within a file and identical every time the report is regenerated from source that has not moved.
+// Joined to the path it addresses a finding across the whole report. That one primitive is what
+// both the URL fragment and the done-marks are built on; nothing else here needs a new id.
+const keyOf = f => file().path + ':' + f.fid;
+// Split from the RIGHT: a path may contain `:` (`res://a.gd`, `C:/src/a.gd`), the four trailing
+// fields never can. `.*` is greedy, so the last legal split wins.
+const KEY_RE = /^(.*):(\d+:\d+:\d+:[^:]+)$/;
 // The stepper walks exactly what is on screen. Making it walk survivors while the source showed
 // everything meant selecting a caught mark reported "- of 6" — a live selection the stepper said
 // did not exist.
@@ -580,6 +690,94 @@ function plural(n, word){ return n + ' ' + word + (n === 1 ? '' : 's'); }
 // copy instead of one per finding (which cost ~240 KB on a 2851-mutant directory run).
 function docUrl(f){ return D.docBase + '#' + f.op; }
 
+// ---- the address bar -------------------------------------------------------------------------
+//
+// The selected (file, finding) is mirrored into `location.hash`, so a reload keeps your place and
+// "look at this survivor" is a link you can paste into a review. Only the three characters that
+// would actually break a fragment are escaped — the hash stays readable, which is the point of
+// having one.
+function encFrag(s){ return s.replace(/%/g, '%25').replace(/#/g, '%23').replace(/ /g, '%20'); }
+function decFrag(s){ try { return decodeURIComponent(s); } catch (e) { return s; } }
+
+// Resolve the current hash against THIS report. Everything here can fail — the link may name a
+// file this run did not cover, or a finding whose line has moved since — and every failure returns
+// null, which the caller turns into the ordinary default view. A stale link never errors and never
+// lands on the wrong finding: an id that does not match exactly does not match at all.
+function fromHash(){
+  const raw = decFrag(String(location.hash || '').replace(/^#/, ''));
+  if (!raw) return null;
+  const m = KEY_RE.exec(raw);
+  const at = D.files.findIndex(f => f.path === (m ? m[1] : raw));
+  if (at < 0) return null;
+  const found = m ? D.files[at].findings.find(f => f.fid === m[2]) : null;
+  // A hash that names a finding the report no longer has resolves to the FILE it named, not to
+  // nothing: the file is still the best answer to "where was I".
+  return { at, finding: found || null };
+}
+
+let lastHash = null;    // what WE last put in the address bar, as the browser reports it back
+function syncHash(){
+  const want = view === 'file' ? '#' + encFrag(sel ? keyOf(sel) : file().path) : '';
+  if (want === lastHash) return;
+  lastHash = want;
+  // replaceState, not `location.hash =`: stepping through 197 findings must not bury the page
+  // under 197 back-button presses. Some browsers refuse it on a `file://` page, so fall back.
+  try { history.replaceState(null, '', want || location.pathname + location.search); }
+  catch (e) { location.hash = want; }
+  // Browsers may normalise what they stored. Remember THAT, so the hashchange guard compares like
+  // with like rather than re-opening the page against its own write.
+  lastHash = String(location.hash || '');
+}
+
+// ---- done marks ------------------------------------------------------------------------------
+//
+// SCOPED PER REPORT FILE, not per run. The triage loop is "mark a batch done, write tests, re-run,
+// regenerate over the same --html path", so marks that evaporated on every regeneration would
+// vanish exactly when they start being worth something. Keying on the report's own location gets
+// that for free, and gets the other half too: a copy that travels — mailed, downloaded, archived —
+// opens on a different path and therefore opens UNMARKED, rather than showing a stranger's
+// progress. Losing marks is the safe failure here; inheriting someone else's is not.
+//
+// The danger this is designed against is a stale tick hiding a live survivor. So each mark records
+// the file's `stamp` (a digest of its findings and their outcomes). A mark made under an older
+// stamp on a finding that is STILL SURVIVING is shown as "re-check", styled apart, and is NOT
+// counted as done — the count never claims progress the run does not support. Marks never filter
+// or hide a finding, and the header's survivor total is always the run's own number.
+const STORE = 'gdmutant.done.v1:' + String(location.href || '').split('#')[0].split('?')[0];
+let marks = {};
+function loadMarks(){
+  // localStorage can be absent, disabled, full, or hold something another version wrote. None of
+  // that is worth an error on a report someone opened to read: fall back to unmarked.
+  try { marks = JSON.parse(localStorage.getItem(STORE) || '{}'); } catch (e) { marks = null; }
+  if (!marks || typeof marks !== 'object' || Array.isArray(marks)) marks = {};
+}
+function saveMarks(){
+  try { localStorage.setItem(STORE, JSON.stringify(marks)); } catch (e) { /* session only */ }
+}
+// '' · 'done' (marked under the stamp on screen) · 'recheck' (marked earlier, still surviving).
+function markState(f){
+  const at = marks[keyOf(f)];
+  if (at === undefined) return '';
+  return (at !== file().stamp && isSv(f)) ? 'recheck' : 'done';
+}
+function toggleDone(f){
+  if (!f) return;
+  // Toggling a carried-over mark re-affirms it against the run on screen; toggling again clears
+  // it. So acknowledging a re-check is one keypress, and never a silent no-op.
+  if (markState(f) === 'done') delete marks[keyOf(f)];
+  else marks[keyOf(f)] = file().stamp;
+  saveMarks();
+  paintSelection();
+}
+function markSets(){
+  const done = new Set(), recheck = new Set();
+  file().findings.forEach(f => {
+    const s = markState(f);
+    if (s === 'done') done.add(f.fid); else if (s === 'recheck') recheck.add(f.fid);
+  });
+  return [done, recheck];
+}
+
 // ---- detail card ---------------------------------------------------------------------------
 
 function cardHTML(f){
@@ -589,11 +787,13 @@ function cardHTML(f){
   const angles = f.angles.map(a => `<b>${esc(a.change)}</b> — ${esc(a.outcome)}.`).join('\n');
   const many = f.angles.length > 1
     ? `<span class="tag op">${plural(f.angles.length, 'change')} here</span>` : '';
+  const state = markState(f);
   return `<div class="card">
     <div class="who">
       <span class="tag ${f.cls}">${esc(f.tag)}</span>
       <span class="tag op">${esc(f.op)}</span>
       ${many}
+      ${state === 'recheck' ? '<span class="tag re">re-check</span>' : ''}
       <span class="loc">${esc(file().path)}:${f.line}${
         f.func ? '  ·  func ' + esc(f.func) : ''}</span>
     </div>
@@ -601,9 +801,23 @@ function cardHTML(f){
 ${angles}</div>
     ${f.gap ? `<dl class="f"><dt>gap</dt><dd>${esc(f.gap)}</dd></dl>` : ''}
     ${f.risk ? `<dl class="f"><dt>risk</dt><dd>${esc(f.risk)}</dd></dl>` : ''}
-    ${f.fix ? `<dl class="f fix"><dt>fix</dt><dd>${esc(f.fix)}</dd></dl>` : ''}
+    ${// `start`, never "fix": `explain` names the missing INPUT and stops there, because the value
+      // it should assert is the reader's to decide — a guess would codify a bug. Labelling it "fix"
+      // promised a remedy the tool does not have.
+      f.start ? `<dl class="f start"><dt>start</dt><dd>${esc(f.start)}</dd></dl>` : ''}
+    ${doneHTML(f, state)}
     ${refHTML(f)}
   </div>`;
+}
+
+// The done control. A mark is progress through a list, not a verdict on the code, so it never
+// changes the finding's tag and never removes it from anything.
+function doneHTML(f, state){
+  const label = state === 'done' ? '&#10003; done'
+    : state === 'recheck' ? '&#10003; done earlier — still surviving, re-check'
+    : 'mark done';
+  return `<button class="donebtn ${state}" data-done="1" aria-pressed="${state === 'done'}"`
+    + ` title="Toggle done (d)">${label}</button>`;
 }
 
 // The per-operator reference, inlined — it expands in place instead of navigating away, and
@@ -621,12 +835,56 @@ function refHTML(f){
         + `<a href="${esc(docUrl(f))}">read it on GitHub &rarr;</a></div>` : '');
 }
 
-function wireRef(root){
-  const b = root.querySelector('.refbtn');
-  if (b) b.onclick = () => {
-    refOpen = refOpen === b.dataset.ref ? null : b.dataset.ref;   // toggle
+// ---- clicks ----------------------------------------------------------------------------------
+//
+// ONE delegated handler for every control in either view, wired ONCE to `#body`. `#body` is part
+// of the page shell — the views replace its innerHTML, never the element — so nothing here is
+// re-wired on a view switch, a filter change, or a repaint.
+//
+// This is not only about the 309-finding file (though per-element listeners on thousands of marks
+// were already the wrong shape). It is about the failure that one-listener-per-control invites:
+// the `#prev` / `#next` arrows shipped DRAWN, labelled, with their disabled state faithfully
+// maintained by `paintStepper`, and never connected to `step()`. They were decorative. The
+// keyboard path worked, so the harness — which pressed keys — saw nothing wrong. A control that
+// exists in the markup now reaches its behaviour through this one function or not at all.
+function onClick(e){
+  const at = s => e.target.closest(s);
+
+  const row = at('.frow');
+  if (row) {
+    cur = +row.dataset.file; sel = null; refOpen = null; view = 'file';
+    renderFile();
+    return;
+  }
+  if (at('#back')) { toIndex(); return; }
+  // A disabled <button> fires no click at all, so the clamp needs no guard here.
+  if (at('#prev')) { step(-1); return; }
+  if (at('#next')) { step(1); return; }
+
+  const chip = at('[data-filter]') || at('[data-op]');
+  if (chip) {
+    if (chip.dataset.filter !== undefined) filter = chip.dataset.filter;
+    else op = chip.dataset.op;
+    keepSelection();
+    refresh();
+    return;
+  }
+
+  const ref = at('.refbtn');
+  if (ref) {
+    refOpen = refOpen === ref.dataset.ref ? null : ref.dataset.ref;   // toggle
     paintSelection();
-  };
+    return;
+  }
+  if (at('.donebtn')) { toggleDone(sel); return; }
+
+  const mark = at('.mark');
+  if (mark) {
+    const ids = mark.dataset.ids.split(',');
+    // One finding: select it. Several sharing this token: cycle findings on repeat clicks.
+    const i = sel ? ids.indexOf(sel.fid) : -1;
+    pick(file().findings.find(x => x.fid === ids[i < 0 ? 0 : (i + 1) % ids.length]));
+  }
 }
 
 // ---- the file index ------------------------------------------------------------------------
@@ -659,13 +917,8 @@ function renderIndex(){
     ${box}<div class="files" id="filelist"></div>`;
   const input = $('#q');
   if (input) { input.value = query; input.oninput = () => { query = input.value; paintFiles(); }; }
-  // Delegated: the row list is rebuilt on every keystroke in the filter box.
-  $('#filelist').onclick = e => {
-    const el = e.target.closest('.frow');
-    if (!el) return;
-    cur = +el.dataset.file; sel = null; refOpen = null; view = 'file'; renderFile();
-  };
   paintFiles();
+  syncHash();   // the index has no address of its own; drop whatever finding the URL still names
 }
 
 // ---- the source pane -----------------------------------------------------------------------
@@ -673,9 +926,14 @@ function renderIndex(){
 // What the painted source depends on. Selection is deliberately NOT part of it.
 function sourceKey(){ return cur + '|' + filter + '|' + op; }
 
+// What the pane last drew, so the legend can explain the marks that are on screen and nothing
+// else. Reset on every repaint, filled while the marks are built.
+let seen = {};
+
 function paintSource(){
   const f = file();
   const vis = new Set(shown().map(x => x.fid));
+  seen = { unscored: {} };
   let out = '';
   f.lines.forEach((text, i) => {
     const n = i + 1;
@@ -699,10 +957,21 @@ function paintSource(){
       const cls = g.fs.some(isSv) ? 'sv' : (g.fs.every(x => x.cls === 'kd') ? 'kd' : 'ot');
       const tip = g.fs.map(x => x.op + ': '
         + x.angles.map(a => a.change + ' (' + a.tag + ')').join(', ')).join(' | ');
+      // Say the real number and the real action. "click to cycle" was vague, and on the common
+      // case — exactly two — "cycle" is simply the wrong word for what the click does.
+      const many = g.fs.length > 1
+        ? ` — ${g.fs.length} findings here, click to switch between them` : '';
+      seen[cls] = true;
+      if (g.fs.length > 1) seen.multi = true;
+      // Only a mark actually DRAWN grey teaches the grey swatch, and it teaches the states it
+      // really holds — collected here, from the angles, rather than assumed from the palette.
+      if (cls === 'ot') {
+        g.fs.forEach(x => x.angles.forEach(a => { if (a.cls === 'ot') seen.unscored[a.tag] = 1; }));
+      }
       // A real <button>, so every finding is reachable by Tab and actionable by Enter/Space.
       body += `<button type="button" class="mark ${cls}${g.fs.length > 1 ? ' multi' : ''}"`
-           +  ` data-ids="${g.fs.map(x => x.fid).join(',')}" aria-pressed="false"`
-           +  ` title="${esc(tip)}${g.fs.length > 1 ? ' — click to cycle findings' : ''}">`
+           +  ` data-ids="${g.fs.map(x => x.fid).join(',')}" data-n="${g.fs.length}"`
+           +  ` aria-pressed="false" title="${esc(tip)}${esc(many)}">`
            +  (esc(text.slice(g.a, g.b)) || '&nbsp;') + `</button>`;
       pos = g.b;
     });
@@ -714,7 +983,45 @@ function paintSource(){
   });
   $('#src').innerHTML = out;
   caretEl = hostEl = null;      // both lived inside the markup just replaced
+  paintLegend();
   painted = sourceKey();
+}
+
+// The three states that are neither survived nor caught. They are NOT one thing, and the legend
+// used to call all three "never run", which is wrong for the third:
+//   * ignored — a `# gdmutant: ignore` annotation suppresses it. Generated for the report, never
+//     run at all (no validity check, no suite run), excluded from the score.
+//   * invalid — the mutation did not survive the re-parse guard, so it was discarded before any
+//     test ran. Also never run.
+//   * error  — the runner FAILED WHILE EXECUTING IT (a Godot crash, say). This one was run, or at
+//     least attempted; calling it "never run" states the opposite of what happened.
+// (Definitions taken from `Verdict` in `gdmutant/engine/loop.py`, which is where they are decided.)
+// They share one grey, because the page draws them one grey — so they share one entry, and the
+// entry names exactly the ones this pane contains.
+const UNSCORED = {
+  ignored: 'ignored — a <code># gdmutant: ignore</code> annotation, so it never ran',
+  invalid: 'invalid — the mutation did not parse, so it never ran',
+  error: 'errored — the runner failed while running it',
+};
+const UNSCORED_ORDER = ['ignored', 'invalid', 'error'];
+
+// Built from the marks just drawn, never from the full palette. An entry for a colour this report
+// does not contain teaches a reader a shade they will never see and cannot recognise — and on the
+// corpus fixture, where ignored/invalid/errored are all zero, that was three quarters of the grey
+// entry's copy describing nothing. It narrows with the filter for the same reason: the legend is a
+// key to the marks on screen, not a glossary of the tool.
+function paintLegend(){
+  const bits = [];
+  const row = (cls, text) => `<span><span class="sw ${cls}">&nbsp;&nbsp;</span>${text}</span>`;
+  if (seen.sv) bits.push(row('sv', 'survived — no test caught it'));
+  if (seen.kd) bits.push(row('kd', 'caught by a test'));
+  const un = UNSCORED_ORDER.filter(k => seen.unscored[k]);
+  if (un.length) bits.push(row('ot', un.map(k => UNSCORED[k]).join(' &middot; ')));
+  if (seen.multi) {
+    bits.push(row('multi', 'more than one finding on this token — the badge is how many;'
+      + ' click to switch between them'));
+  }
+  $('#legend').innerHTML = bits.join('');
 }
 
 // Selection is painted by touching only the nodes that change: the previously-marked buttons, the
@@ -722,28 +1029,32 @@ function paintSource(){
 // and froze the renderer at 309 across 225 lines.
 function paintSelection(){
   const src = $('#src');
-  src.querySelectorAll('.mark.on').forEach(el => {
-    el.classList.remove('on');
-    el.setAttribute('aria-pressed', 'false');
-  });
   const prev = src.querySelector('.row.active');
   if (prev) prev.classList.remove('active');
   if (caretEl) { caretEl.remove(); caretEl = null; }
   if (hostEl) { hostEl.remove(); hostEl = null; }
+
+  // ONE pass over the marks carries both the selection and the done state — the pane is walked
+  // once per selection change either way, and splitting them doubled that walk for nothing.
+  const [done, recheck] = markSets();
+  src.querySelectorAll('.mark').forEach(el => {
+    const ids = el.dataset.ids.split(',');
+    const on = !!sel && ids.indexOf(sel.fid) >= 0;
+    el.classList.toggle('on', on);
+    el.setAttribute('aria-pressed', on ? 'true' : 'false');
+    // A token may host several findings; it reads as handled only when every one of them is.
+    el.classList.toggle('done', ids.every(i => done.has(i)));
+    el.classList.toggle('recheck', ids.some(i => recheck.has(i)));
+  });
 
   const aside = $('#aside');
   if (!sel) {
     aside.innerHTML = '<div class="card empty">Choose a marked token in the source, or use the'
       + ' arrows, to see what it means.</div>';
     paintStepper();
+    syncHash();
     return;
   }
-  src.querySelectorAll('.mark').forEach(el => {
-    if (el.dataset.ids.split(',').indexOf(sel.fid) >= 0) {
-      el.classList.add('on');
-      el.setAttribute('aria-pressed', 'true');
-    }
-  });
   const row = src.querySelector('.row[data-line="' + sel.line + '"]');
   if (row) {
     row.classList.add('active');
@@ -769,12 +1080,11 @@ function paintSelection(){
       hostEl.className = 'inline-host';
       hostEl.innerHTML = cardHTML(sel);
       row.append(hostEl);
-      wireRef(hostEl);
     }
   }
   aside.innerHTML = NARROW.matches ? '' : cardHTML(sel);
-  if (!NARROW.matches) wireRef(aside);
   paintStepper();
+  syncHash();
 }
 
 function paintStepper(){
@@ -787,6 +1097,18 @@ function paintStepper(){
     : 'no findings';
   $('#prev').disabled = !list.length || idx === 0;
   $('#next').disabled = !list.length || idx === list.length - 1;
+
+  // Counted over what is on screen, exactly like the stepper — a mark for a finding this filter
+  // (or this run) does not show contributes nothing, so the number can never claim progress the
+  // page cannot back up. Carried-over marks are called out separately rather than folded in.
+  let done = 0, recheck = 0;
+  list.forEach(f => {
+    const s = markState(f);
+    if (s === 'done') done++; else if (s === 'recheck') recheck++;
+  });
+  $('#done').textContent = list.length
+    ? `${done} of ${list.length} done` + (recheck ? ` · ${recheck} to re-check` : '')
+    : '';
 }
 
 // ---- the file view -------------------------------------------------------------------------
@@ -807,6 +1129,7 @@ function renderFile(){
       <span style="width:10px"></span>
       <button class="chip" data-op="all">every mutator</button>
       ${chips}
+      <span class="done" id="done" aria-live="polite"></span>
       <div class="stepper">
         <button id="prev" title="Previous finding (left arrow)"
           aria-label="Previous finding">&larr;</button>
@@ -817,36 +1140,16 @@ function renderFile(){
     </div>
     <p class="note">A <b>finding</b> is one spot in the code under one mutator. gdmutant may try
       several changes at that spot — each change is a <b>mutant</b>, and the numbers above count
-      mutants. Fixing a finding usually takes one test.</p>
-    <div class="legend">
-      <span><span class="sw sv">&nbsp;&nbsp;</span>survived — no test caught it</span>
-      <span><span class="sw kd">&nbsp;&nbsp;</span>caught by a test</span>
-      <span><span class="sw ot">&nbsp;&nbsp;</span>never run (ignored, invalid or errored)</span>
-      <span><span class="sw multi">&nbsp;&nbsp;</span>more than one finding here — click to
-        cycle</span>
-    </div>
+      mutants. Fixing a finding usually takes one test. Arrow keys step; <b>d</b> marks one done —
+      done marks stay in this browser, for this report file, and never hide a survivor.</p>
+    <div class="legend" id="legend"></div>
     <div class="panes">
       <div class="src"><div class="rows" id="src"></div></div>
       <div class="aside" id="aside"></div>
     </div>`;
 
-  // One delegated handler for every mark in the pane, attached once — not one per mark, reattached
-  // on every click.
-  $('#src').onclick = e => {
-    const el = e.target.closest('.mark');
-    if (!el) return;
-    const ids = el.dataset.ids.split(',');
-    // One finding: select it. Several sharing this token: cycle findings on repeat clicks.
-    const at = sel ? ids.indexOf(sel.fid) : -1;
-    pick(f.findings.find(x => x.fid === ids[at < 0 ? 0 : (at + 1) % ids.length]));
-  };
-  document.querySelectorAll('[data-filter]').forEach(b => b.onclick = () => {
-    filter = b.dataset.filter; keepSelection(); refresh();
-  });
-  document.querySelectorAll('[data-op]').forEach(b => b.onclick = () => {
-    op = b.dataset.op; keepSelection(); refresh();
-  });
-  if (MULTI) $('#back').onclick = toIndex;
+  // Every control in this markup reaches its behaviour through the one delegated handler on
+  // `#body` (see `onClick`), so there is nothing to wire here and nothing to forget to wire.
   painted = null;
   refresh();
   // Land on the first finding rather than an empty panel: the file was opened to read one.
@@ -894,13 +1197,42 @@ document.addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft') step(-1);
   else if (e.key === 'ArrowRight') step(1);
   else if (e.key === 'Escape' && MULTI && view === 'file') toIndex();
+  else if ((e.key === 'd' || e.key === 'D') && view === 'file') toggleDone(sel);
 });
 NARROW.addEventListener('change', () => { if (view === 'file') paintSelection(); });
 $('#theme').onclick = () => {
   const r = document.documentElement;
   r.dataset.theme = r.dataset.theme === 'dark' ? 'light' : 'dark';
 };
-view === 'index' ? renderIndex() : renderFile();
+
+// ---- boot ------------------------------------------------------------------------------------
+
+// Open on whatever the URL names, falling back to the ordinary default view whenever it names
+// nothing this report has. A link that no longer resolves costs you the deep link, never the page.
+function open_(){
+  const hit = fromHash();
+  if (!hit) { lastHash = null; view = MULTI ? 'index' : 'file'; cur = 0; sel = null; }
+  else {
+    cur = hit.at; view = 'file'; sel = hit.finding;
+    // The default filter is `survived`. A link to a caught finding would otherwise resolve
+    // correctly and then land on a pane that does not show it, which reads as a broken link.
+    if (sel && !shown().some(x => x.fid === sel.fid)) { filter = 'all'; op = 'all'; }
+  }
+  painted = null;
+  view === 'index' ? renderIndex() : renderFile();
+}
+
+// Someone pasting a link into the address bar of an already-open report is the same-document case,
+// so nothing reloads — without this the URL would change and the page would not.
+window.addEventListener('hashchange', () => {
+  if (String(location.hash || '') === String(lastHash || '')) return;   // our own write
+  open_();
+});
+
+// `#body` belongs to the page shell and is never replaced, so this outlives every view switch.
+$('#body').onclick = onClick;
+loadMarks();
+open_();
 """
 
 
@@ -942,6 +1274,7 @@ def render_html(report: dict[str, Any]) -> str:
 <html lang="en" data-theme="light">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>gdmutant mutation report</title>
+<link rel="icon" href="{FAVICON_HREF}">
 <style>{_CSS}</style></head>
 <body>
 <div class="wrap">

@@ -4,6 +4,7 @@ The page's *interactive* behaviour is tested separately, by running the shipped 
 see `tests/test_htmlreport_behaviour.py`.
 """
 
+import base64
 import json
 import re
 from pathlib import Path
@@ -14,6 +15,7 @@ from gdmutant.engine.htmlreport import (
     FRANK_SVG,
     TAGLINE,
     change_note,
+    finding_key,
     render_html,
     report_view,
 )
@@ -107,15 +109,59 @@ def test_the_same_operator_on_a_different_token_is_a_different_finding() -> None
     assert [f.col for f in view.files[0].findings] == [10, 20]
 
 
-def test_finding_ids_are_unique_across_files() -> None:
+def test_finding_keys_are_unique_across_files() -> None:
+    # `fid` is only unique WITHIN a file — two files can hold the identical token under the
+    # identical operator, and do here. The path is what separates them, which is why the address
+    # the page links to and stores marks under is the joined key, never the bare id.
     report = _report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Survived")])
     report["files"]["b.gd"] = {
         "language": "gdscript",
         "source": "return 0\n",
         "mutants": [_mutant(1, 8, 9, "numeric", "1", "Survived")],
     }
-    ids = [f.fid for file in report_view(report).files for f in file.findings]
-    assert len(ids) == len(set(ids)) == 2
+    view = report_view(report)
+    assert {f.fid for file in view.files for f in file.findings} == {"1:8:9:numeric"}
+    keys = [finding_key(file.path, f.fid) for file in view.files for f in file.findings]
+    assert sorted(keys) == ["a.gd:1:8:9:numeric", "b.gd:1:8:9:numeric"]
+
+
+def test_a_findings_id_is_the_tuple_it_was_grouped_by_so_it_cannot_collide() -> None:
+    # Co-located findings of DIFFERENT operators are the collision that would matter: on `return 0`
+    # the `numeric` span sits inside the `statement-deletion` span. The operator is in the id, so
+    # they stay two addresses — a done-mark on one can never tick the other.
+    view = report_view(
+        _report(
+            "return 0\n",
+            [
+                _mutant(1, 8, 9, "numeric", "1", "Survived"),
+                _mutant(1, 1, 9, "statement-deletion", "pass", "Survived"),
+            ],
+        )
+    )
+    assert [f.fid for f in view.files[0].findings] == [
+        "1:8:9:numeric",
+        "1:1:9:statement-deletion",
+    ]
+
+
+def test_a_finding_keeps_its_id_when_the_run_is_repeated_and_the_source_has_not_moved() -> None:
+    # The whole point of the identity: regenerate, and every link and done-mark still lands. The
+    # outcome may change — a test now kills it — without the address changing.
+    before = report_view(_report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Survived")]))
+    after = report_view(_report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Killed")]))
+    assert before.files[0].findings[0].fid == after.files[0].findings[0].fid
+    # …but the file's stamp DOES change, which is how a mark made against the old run is spotted.
+    assert before.files[0].stamp != after.files[0].stamp
+
+
+def test_the_stamp_is_stable_for_an_unchanged_run_so_a_reload_is_not_mistaken_for_a_re_run() -> (
+    None
+):
+    # A timestamp here would make every regeneration — including one that changed nothing — accuse
+    # every done-mark of being stale, which is exactly the crying-wolf that gets marks ignored.
+    report = _report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Survived")])
+    assert report_view(report).files[0].stamp == report_view(report).files[0].stamp
+    assert render_html(report) == render_html(report)
 
 
 # ---- verdict roll-up -------------------------------------------------------------------------
@@ -172,13 +218,13 @@ def test_the_narrative_comes_from_the_first_angle_that_has_one() -> None:
                     "-1",
                     "Survived",
                     description="the gap",
-                    statusReason="the risk\n\nthe fix",
+                    statusReason="the risk\n\nthe start",
                 ),
             ],
         )
     )
     (finding,) = view.files[0].findings
-    assert (finding.gap, finding.risk, finding.fix) == ("the gap", "the risk", "the fix")
+    assert (finding.gap, finding.risk, finding.start) == ("the gap", "the risk", "the start")
 
 
 def test_a_report_without_the_narrative_fields_still_renders() -> None:
@@ -186,7 +232,7 @@ def test_a_report_without_the_narrative_fields_still_renders() -> None:
     # status. The narrative blocks must simply not render, never raise.
     view = report_view(_report("return 0\n", [{**_mutant(1, 8, 9, "numeric", "1", "Survived")}]))
     (finding,) = view.files[0].findings
-    assert (finding.gap, finding.risk, finding.fix) == ("", "", "")
+    assert (finding.gap, finding.risk, finding.start) == ("", "", "")
     assert "<div class=" in render_html(
         _report("return 0\n", [_mutant(1, 8, 9, "n", "1", "Survived")])
     )
@@ -354,7 +400,11 @@ def test_the_page_fetches_nothing_it_needs_to_render() -> None:
     page = _page()
     for attribute in re.findall(r'\b(?:src|href)\s*=\s*"([^"]*)"', page):
         assert not attribute.startswith(("http://", "https://", "//")), attribute
-    assert "<link" not in page
+    # The page carries exactly one <link>: the favicon, inlined as a `data:` URI. The old guard —
+    # "no <link> at all" — only ever stood in for the real rule, which is "no <link> that fetches".
+    links = re.findall(r"<link\b[^>]*>", page)
+    assert len(links) == 1, links
+    assert 'href="data:image/svg+xml;base64,' in links[0], links[0]
     assert "@import" not in page
     assert "url(http" not in page
     for banned in ("fetch(", "XMLHttpRequest", "importScripts", "WebSocket", "unpkg"):
@@ -380,6 +430,20 @@ def test_frank_and_the_tagline_ride_along_in_the_page() -> None:
     assert TAGLINE in page
     # Inlined, not linked: a URL would put the page back on the network.
     assert "frank.svg" not in page
+
+
+def test_the_tab_icon_is_frank_himself_inlined_and_decodes_back_to_the_same_markup() -> None:
+    # A `data:` URI favicon fails SILENTLY when it is escaped wrongly, and Frank is full of `#`
+    # colour literals — a bare `#` there starts the URI's fragment and the browser gets a truncated
+    # SVG, with the markup still looking perfectly correct. Base64 removes that class of bug, and
+    # this decodes it back to prove the round trip rather than trusting the tag's shape.
+    page = _page()
+    (href,) = re.findall(r'<link rel="icon" href="([^"]+)"', page)
+    prefix = "data:image/svg+xml;base64,"
+    assert href.startswith(prefix)
+    assert base64.b64decode(href[len(prefix) :]).decode("utf-8") == FRANK_SVG
+    # Small enough that every report can carry it without thinking about it.
+    assert len(href) < 2048, len(href)
 
 
 def test_frank_matches_the_repo_asset_he_was_traced_from() -> None:
