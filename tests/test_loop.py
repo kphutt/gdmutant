@@ -12,6 +12,7 @@ from gdmutant.engine.loop import (
     BaselineFailed,
     MutantOutcome,
     ProgressStyle,
+    SourceOutsideProject,
     Verdict,
     _derive_timeout,
     _detect_eol,
@@ -937,3 +938,131 @@ def test_an_lf_file_stays_lf_after_a_run(tmp_path: Path) -> None:
     after = path.read_bytes()
     assert b"\r\n" not in after, "an LF file must not gain carriage returns"
     assert after == before
+
+
+# --- A worker only ever writes inside its own copy of the project ----------------------------
+#
+# `--jobs N` gives each worker a private copy of the project and mutates the file inside it. The
+# address it wrote to was the source's path taken relative to the project, used as-is -- so a
+# source that was not under the project produced one beginning with "..", and the worker wrote
+# through its own copy and out the other side. The mutation then never reached the copy the tests
+# were about to run against, and every mutant came back SURVIVED.
+
+
+#: A one-comparison source, so the parallel tests below produce a small, predictable mutant set.
+SAFE_SRC = "func f(a, b) -> bool:\n\treturn a > b\n"
+
+
+def _project_and_outside_source(tmp_path: Path) -> tuple[Path, Path]:
+    """A project directory, and a .gd file that is its sibling rather than inside it."""
+    project = tmp_path / "godot-project"
+    project.mkdir()
+    (project / "project.godot").write_text("[application]\n", encoding="utf-8")
+    outside = tmp_path / "shared.gd"
+    outside.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+    return project, outside
+
+
+def test_a_source_outside_the_project_is_refused_rather_than_written_outside_the_copy(
+    tmp_path: Path,
+) -> None:
+    # The regression test. Against the old address arithmetic this run finished quietly and
+    # reported every mutant as SURVIVED -- a false survivor report, which is the single worst
+    # thing this tool can produce -- while writing the mutants to a path outside every worker's
+    # copy. Refusing is the honest answer: there is no copy of this file to isolate.
+    project, outside = _project_and_outside_source(tmp_path)
+    src = outside.read_text(encoding="utf-8")
+
+    with pytest.raises(SourceOutsideProject, match="is not inside the project directory"):
+        run(str(project), str(outside), src, ProjectDirRecordingRunner(), jobs=4)
+
+
+def test_the_refusal_says_how_to_proceed(tmp_path: Path) -> None:
+    # A dead end with no way out is barely better than the wrong answer it replaced.
+    project, outside = _project_and_outside_source(tmp_path)
+
+    with pytest.raises(SourceOutsideProject) as caught:
+        run(
+            str(project),
+            str(outside),
+            outside.read_text(encoding="utf-8"),
+            ProjectDirRecordingRunner(),
+            jobs=2,
+        )
+
+    message = str(caught.value)
+    assert "--project" in message
+    assert "serially" in message
+
+
+def test_a_source_on_another_drive_is_refused_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Windows only: a source and a project on different drives have no relative path at all, and
+    # the old call raised a bare ValueError straight out of the run. Simulated rather than
+    # requiring a second drive, so it guards the behaviour on every platform CI runs.
+    project, outside = _project_and_outside_source(tmp_path)
+
+    def no_common_root(self: Path, *args: object) -> Path:
+        raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+    monkeypatch.setattr(Path, "relative_to", no_common_root)
+    with pytest.raises(SourceOutsideProject):
+        run(
+            str(project),
+            str(outside),
+            outside.read_text(encoding="utf-8"),
+            ProjectDirRecordingRunner(),
+            jobs=2,
+        )
+
+
+def test_a_source_inside_the_project_still_runs_in_parallel(tmp_path: Path) -> None:
+    # The containment check must not cost the feature it protects: the ordinary layout, where the
+    # source lives under the project, keeps working and each worker gets its own copy.
+    project = tmp_path / "godot-project"
+    (project / "src").mkdir(parents=True)
+    inside = project / "src" / "player.gd"
+    src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"
+    inside.write_text(src, encoding="utf-8")
+    runner = ProjectDirRecordingRunner()
+
+    result = run(str(project), str(inside), src, runner, jobs=2)
+
+    assert result.outcomes, "the source should produce mutants"
+    assert inside.read_text(encoding="utf-8") == src, "the real source must come back unchanged"
+    worker_dirs = {seen for seen in runner.seen if seen != str(project)}
+    assert worker_dirs, "mutants should have run in worker copies, not the real project"
+    assert all(str(project) not in d or Path(d) != project for d in worker_dirs)
+
+
+def test_a_source_outside_the_project_still_runs_serially(tmp_path: Path) -> None:
+    # Serial evaluation mutates the real file in place and never needed a copy, so it is not
+    # affected -- the refusal is scoped to the parallel path, not a new restriction on the tool.
+    project, outside = _project_and_outside_source(tmp_path)
+    src = outside.read_text(encoding="utf-8")
+
+    result = run(str(project), str(outside), src, MarkerRunner(str(outside), "a >= b"))
+
+    assert result.killed == 1
+    assert outside.read_text(encoding="utf-8") == src
+
+
+def test_a_deeply_nested_project_cannot_walk_back_onto_the_real_source_file(
+    tmp_path: Path,
+) -> None:
+    # The worst case, and the reason this is not merely untidy. The `..` chain is as long as the
+    # source's distance from the project, so a deeply nested --project produces more of them than
+    # the temporary directory has depth. The walk then clamps at the drive (or filesystem) root and
+    # the tail rebuilds the source's own absolute path -- so the write lands on the REAL file,
+    # every worker races on it at once, and "never leave the project mutated" is void.
+    real = tmp_path / "player.gd"
+    src = SAFE_SRC
+    real.write_text(src, encoding="utf-8")
+    deep = tmp_path / "a" / "b" / "c" / "d" / "e" / "f" / "g" / "h" / "project"
+    deep.mkdir(parents=True)
+
+    with pytest.raises(SourceOutsideProject):
+        run(str(deep), str(real), src, ProjectDirRecordingRunner(), jobs=4)
+
+    assert real.read_text(encoding="utf-8") == src
