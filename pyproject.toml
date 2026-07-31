@@ -78,6 +78,11 @@ packages = ["gdmutant"]
 # harmless file), so no local agent/editor state leaks in and no tooling directory has to be named.
 # Contributor docs stay because `docs/using-with-an-ai-agent.md` links to AGENTS.md and the in-repo
 # link-resolution test asserts it exists.
+# The README's mascot image (`.github/assets/frank.{svg,png}`) is deliberately NOT here: PyPI reads
+# the raw README source for its project-page render and fetches the image itself from an absolute
+# GitHub URL, never from the installed package's own files — so shipping it in the sdist would only
+# add bytes to every install with no rendering benefit. `.github/` already ships nothing (see the
+# test below), which is the right home for a repo/README-only asset.
 include = [
   "/gdmutant",
   "/tests",
