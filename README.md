@@ -38,10 +38,11 @@ render in the existing HTML viewer for it.
 ## Quickstart
 
 Not on PyPI yet — install from git at a pinned commit (v0.1.0, in development; a PyPI release is
-planned). Starting from scratch (no `uv` project yet)? `uv init` first:
+planned). Starting from scratch (no `uv` project yet)? `uv init` first — gdmutant needs Python
+3.12+, and `uv init` picks its floor from whatever interpreter it finds, so name the version:
 
 ```sh
-uv init
+uv init --python 3.12
 uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
 ```
 
