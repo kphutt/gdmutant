@@ -6,7 +6,7 @@
 
 ## How it was tested
 
-<!-- Commands run / cases covered. This is a testing tool — new behavior needs tests. -->
+<!-- Commands run / cases covered. This is a testing tool, so new behavior needs tests. -->
 
 ## Checklist
 

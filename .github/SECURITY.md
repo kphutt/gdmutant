@@ -10,8 +10,8 @@ created: 2026-07-10
 
 Please **do not** open a public issue for security problems.
 
-Report vulnerabilities privately via GitHub's **[Report a vulnerability](https://github.com/kphutt/gdmutant/security/advisories/new)**
-button (repository → **Security** → **Advisories** → **Report a vulnerability**). This opens a
+Report vulnerabilities privately via GitHub's [Report a vulnerability](https://github.com/kphutt/gdmutant/security/advisories/new)
+button (repository → Security → Advisories → Report a vulnerability). This opens a
 private advisory visible only to the maintainers.
 
 We aim to acknowledge a report within a few days and will keep you updated on the fix and
@@ -24,12 +24,12 @@ disclosure.
 the primary risk surfaces:
 
 - It executes code (the target project's tests, plus `godot --headless`). Only run it on code
-  you trust — the same trust boundary as running the project's own test suite.
+  you trust: the same trust boundary as running the project's own test suite.
 - Report handling and any file it writes (mutated sources, reports) should stay within the
   target project's tree.
 
 ## Supported versions
 
 Security fixes land in a new release built from the latest version, published to PyPI. Older
-releases do not receive backports — upgrading to the latest release is how you get a fix.
+releases do not receive backports. Upgrading to the latest release is how you get a fix.
 gdmutant is pre-1.0 and maintained by one person, so this is the only support commitment made.
