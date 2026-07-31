@@ -154,18 +154,41 @@ class _GitBackup:
     backed_up: bool | None
     #: Why there is no usable copy, in words for the user. Empty when `backed_up` is True.
     reason: str = ""
+    #: What the user can actually do about it. Advice has to match the reason: telling someone to
+    #: commit a file that `.gitignore` excludes sends them to do something git will refuse.
+    advice: str = ""
+
+
+def _git_failure_reason(source_path: str, stderr: str) -> str:
+    """Why git refused to answer for `source_path`, in git's own words where it gave any.
+
+    Everything non-zero used to collapse into "not inside a git working tree". That is the common
+    case but far from the only one: dubious ownership, a corrupted repository, an unreadable
+    ``.git`` all land here too, and each prints a specific diagnosis — often with the exact command
+    that fixes it. Discarding that sends the user to look for a missing repository they have.
+    """
+    detail = [line.strip() for line in stderr.strip().splitlines() if line.strip()]
+    if not detail:
+        return f"git could not check {source_path}, and said nothing about why"
+    return f"git could not check {source_path} — " + " ".join(detail)
 
 
 def _git_backup(source_path: str) -> _GitBackup:
     """Ask git whether it holds a recoverable copy of `source_path`.
 
-    ``--ignored=matching`` is what makes the answer honest. Plain ``git status --porcelain`` says
-    nothing at all about an **ignored** file, so a `.gd` matched by `.gitignore` came back
-    indistinguishable from a committed, unmodified one — while being the case where git has *never*
-    held a copy and a killed run could recover nothing. Asking for ignored paths turns that silence
-    into an explicit ``!!``.
+    Two things make the answer honest.
+
+    ``--ignored=matching``: plain ``git status --porcelain`` says nothing at all about an
+    **ignored** file, so a `.gd` matched by `.gitignore` came back indistinguishable from a
+    committed, unmodified one — while being the case where git has *never* held a copy and a killed
+    run could recover nothing. Asking for ignored paths turns that silence into an explicit ``!!``.
+
+    Resolving symlinks: git stores a symlink as the *link string*, not as the content it points at,
+    so a committed, unmodified link reads as safely backed up while the bytes gdmutant actually
+    rewrites are the target's — which may sit outside the repository, or in no repository at all.
+    Asking about the resolved file is what makes the answer describe the thing being mutated.
     """
-    path = Path(source_path)
+    path = Path(os.path.realpath(source_path))
     try:
         # No check=: git exits non-zero outside a repo (the default check=False), and we read the
         # returncode ourselves below. The `--` guards a filename that starts with "-".
@@ -179,15 +202,21 @@ def _git_backup(source_path: str) -> _GitBackup:
     except OSError:
         return _GitBackup(None, "git could not be run here — it may not be installed")
     if completed.returncode != 0:
-        return _GitBackup(None, f"{source_path} is not inside a git working tree")
+        return _GitBackup(None, _git_failure_reason(source_path, completed.stderr))
     # `--porcelain` prints one line per path and nothing at all when there is nothing to report.
     # Comparing to "" (not bool()) also kills a `text=True`->False mutant: raw bytes never equal
     # the str "".
     if completed.stdout == "":
         return _GitBackup(True)
     if completed.stdout.startswith("!!"):
-        return _GitBackup(False, f"{source_path} is ignored by git, so git has no copy of it")
-    return _GitBackup(False, f"{source_path} has uncommitted changes")
+        return _GitBackup(
+            False,
+            f"{source_path} is ignored by git, so git holds no copy of it",
+            "Take it out of .gitignore, or copy it somewhere safe first.",
+        )
+    return _GitBackup(
+        False, f"{source_path} has uncommitted changes", "Commit or stash first to be safe."
+    )
 
 
 def _unbacked_source_problem(source_path: str, *, require_clean: bool) -> str | None:
@@ -197,6 +226,8 @@ def _unbacked_source_problem(source_path: str, *, require_clean: bool) -> str | 
 
     * By default a positively unsafe file warns and the run continues, and a file git could not
       judge says nothing — gdmutant has to work outside git at all, so it cannot nag every run.
+      A gitignored file is newly among the warned: it is one gdmutant can positively tell has no
+      copy anywhere, which is exactly what the warning is for.
     * ``--require-clean`` is someone asking for a guarantee, so anything short of a confirmed
       copy is refused. Passing because git was missing or the file was not in a repo would hand
       back exactly the assurance the flag exists to provide, without ever having checked.
@@ -204,18 +235,19 @@ def _unbacked_source_problem(source_path: str, *, require_clean: bool) -> str | 
     backup = _git_backup(source_path)
     if backup.backed_up is True:
         return None
+    advice = backup.advice or "Commit or stash first to be safe."
     if require_clean:
         return (
             f"error: --require-clean was given, but {backup.reason}.\n"
             "  gdmutant edits the file where it lies, so it will not start without a copy it "
             "could put back.\n"
-            "  Commit or stash your work, or re-run with --no-require-clean to accept the risk."
+            f"  {advice} Or re-run with --no-require-clean to accept the risk."
         )
     if backup.backed_up is None:
         return None  # cannot tell, and nobody asked for a guarantee — stay quiet
     return (
         f"warning: {backup.reason} — gdmutant mutates it in place (restoring it when done), so a "
-        "hard kill could leave it modified. Commit or stash first to be safe. Continuing ..."
+        f"hard kill could leave it modified. {advice} Continuing ..."
     )
 
 

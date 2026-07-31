@@ -9,7 +9,7 @@ from gdmutant.engine.runner import SuiteResult
 
 # Location vars git exports into a hook's environment (e.g. pre-push). If pytest is spawned from
 # such a hook, inheriting them makes EVERY git call — the test helpers AND gdmutant's production git
-# calls (`_has_uncommitted_changes`, `_changed_lines` in cli.py, exercised by the --since /
+# calls (`_git_backup`, `_changed_lines` in cli.py, exercised by the --since /
 # require-clean tests) — operate on the hook's repo instead of each test's throwaway tmp repo,
 # failing those tests only under the hook. Scrub them once, session-wide (generalizes the per-helper
 # scrub in test_cli.py so the production paths are isolated too). Tests never depend on ambient git
