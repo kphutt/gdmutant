@@ -43,7 +43,23 @@ CLI.
 - Reports: a console survivor summary that explains each gap (what's untested, why it matters, where
   to start a test), the
   [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) JSON
-  schema (`--json`), and a self-contained HTML report (`--html`).
+  schema (`--json`), and a genuinely self-contained HTML report (`--html`) — one file with every
+  style, script and image inlined, so it opens with no network at all and works as a CI artifact or
+  an email attachment. It marks the exact changed characters in your source, groups mutants into
+  **findings** (one spot, one operator — the unit of work a single test closes), and inlines the
+  per-operator survivor reference so an offline reader can still look up what an operator means. A
+  multi-file run opens on a file index ordered by survivors. Replaces an earlier page that inlined
+  the report JSON but loaded the generic viewer from a CDN, and so rendered blank offline.
+- Every finding in the HTML report has an **address** — `path:line:column:operator`, the tuple it
+  was grouped by, so it is the same string every time the report is regenerated from source that has
+  not moved. The selected finding lives in the URL, so a reload keeps your place and "look at this
+  survivor" is a link you can send. A link that no longer resolves falls back to the file it named,
+  or to the file index, and never to the wrong finding.
+- Findings can be **marked done** as you work through them, with a "k of n done" count. The marks
+  live in your browser, for that report file, so a copy that travels opens unmarked rather than
+  showing someone else's progress. A mark made against an earlier run of a finding that is *still
+  surviving* is flagged "re-check" and is **not** counted as done — a stale tick must never hide a
+  live survivor.
 - `.gdmutant.toml` for persisted per-project flags; `--dry-run` to list mutants without running
   Godot.
 - Live self-test against real Godot in CI, pinning both runner paths to exact per-mutant outcomes.
