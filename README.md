@@ -191,12 +191,19 @@ trend as you kill survivors. See the [survivor reference](docs/survivors/README.
 4. **Re-run to confirm**, then **move on** — done with a file at zero `survived`. No third state,
    so the loop always ends.
 
-**Runtime.** gdmutant boots Godot once per mutant, so time scales with mutant count — it says so up
-front, and `--jobs N` runs N at once:
+**Runtime.** gdmutant boots Godot once per mutant, so time scales with mutant count. It tells you
+what the run is before it starts, keeps you posted while it goes, and prints the wall-clock when it
+finishes — but it never predicts a finish time, because it cannot do that honestly (see
+[Troubleshooting](#troubleshooting)). `--jobs N` runs N at once:
 
 ```
-18 mutants; baseline ~1.4s each → estimated ≈ 24s
+18 mutants to run. Baseline suite 1.4s; each mutant is capped at 30s.
+… 7/18 done in 1m 12s — 2 survived, 1 timed out.
+Done in 6m 32s — 18 mutants, 8 timed out (4m 0s of that). Baseline suite 1.4s.
 ```
+
+The heartbeat lands every 30s on a terminal, and less often in a log or in CI. `--progress plain`
+forces the quieter cadence; `--progress none` turns it off.
 
 ## Compatibility
 
@@ -239,10 +246,16 @@ full path in that string yourself.
 `0` even on a harness that fails to *compile*, so gate a `--command` harness on `can_instantiate()`.
 
 **It's slow.** Godot boots once per mutant. Mutate one file at a time, and use `--jobs N` — real
-but sub-linear (~3× at `--jobs 4`), since every worker copies the project. The up-front estimate is
-a **floor**, not a forecast: it counts one baseline-length run per mutant and nothing else, so
-gdmutant's own per-mutant work and any mutant that hangs (up to the per-mutant timeout, each) land
-on top of it.
+but sub-linear (~3× at `--jobs 4`), since every worker copies the project. Watch the closing line
+for how much of the time was timeouts; a few hanging mutants can outweigh every other mutant
+combined, and `--timeout` caps each one.
+
+**How long will it take?** gdmutant will not guess, and no other mutation tester does either. Up
+front it tells you what the run *is* — how many mutants, and the cap on each, so you know how long
+silence is normal. A rate estimate was built and measured before being dropped: on an even workload
+it tracked the true finish to within 5%, but on a run whose hanging mutants arrived late it read
+3.2s at 25% done for a run that took 58s. A mutant that hangs costs its whole timeout, and nothing
+before it hints that it will.
 
 **The first run sits there for minutes and never starts.** The project has not been imported — see
 [Prerequisites](#prerequisites). Run `godot --headless --path <project> --import` once. Under

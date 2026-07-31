@@ -22,15 +22,22 @@ from typing import Any
 
 from gdmutant.engine.explain import (
     ASSERT_SECTION,
+    ENUM_SECTION,
     doc_url,
     reference_section,
     render_survivor,
-    source_line,
     survivor_report_fields,
 )
 from gdmutant.engine.htmlreport import change_note, render_html
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
 from gdmutant.engine.mutants import Mutant
+
+#: How a context section is named in the Markdown job summary's "Explain …" link. An operator falls
+#: through to its own id; these two are not operators, so they need words.
+_REFERENCE_LABEL = {
+    ASSERT_SECTION: "survivors inside an `assert`",
+    ENUM_SECTION: "survivors on an `enum` member",
+}
 
 SCHEMA_VERSION = "2"
 
@@ -68,8 +75,7 @@ def _mutant_json(index: int, outcome: MutantOutcome, source_lines: list[str]) ->
         # The report carries the file's own source, so the narrative gets the mutated line for
         # free — which is what lets an assert survivor explain itself in the JSON and the HTML
         # report, not only on the console.
-        src = source_line(m, source_lines)
-        mutant["description"], mutant["statusReason"] = survivor_report_fields(m, src)
+        mutant["description"], mutant["statusReason"] = survivor_report_fields(m, source_lines)
     return mutant
 
 
@@ -173,7 +179,7 @@ def console_summary(run: MutationRun) -> str:
             if m.path not in source_cache:
                 source_cache[m.path] = _read_source_lines(m.path)
             source_lines = source_cache[m.path]
-            if reference_section(m, source_line(m, source_lines)) == ASSERT_SECTION:
+            if reference_section(m, source_lines) == ASSERT_SECTION:
                 on_asserts += 1
             lines += render_survivor(m, source_lines)
             lines.append("")
@@ -220,8 +226,10 @@ def _survivor_markdown(mutant: Mutant, source_lines: list[str] | None) -> list[s
     the three surfaces can never drift (including its assert handling: an assert survivor gets the
     assert explanation and the assert link here too, exactly as it does on the console)."""
     line_no = mutant.span.line
-    src = source_line(mutant, source_lines)
-    gap, risk_start = survivor_report_fields(mutant, src)
+    src = None
+    if source_lines is not None and 1 <= line_no <= len(source_lines):
+        src = source_lines[line_no - 1]
+    gap, risk_start = survivor_report_fields(mutant, source_lines)
     out = [f"#### `{mutant.path}:{line_no}` · {mutant.operator_id}", ""]
     if src is not None:
         out += [
@@ -232,12 +240,8 @@ def _survivor_markdown(mutant: Mutant, source_lines: list[str] | None) -> list[s
             f"{_change_note(mutant)} — every test still passed.",
             "",
         ]
-    anchor = reference_section(mutant, src)
-    label = (
-        "survivors inside an `assert`"
-        if anchor == ASSERT_SECTION
-        else f"the `{mutant.operator_id}` operator"
-    )
+    anchor = reference_section(mutant, source_lines)
+    label = _REFERENCE_LABEL.get(anchor, f"the `{mutant.operator_id}` operator")
     out += [
         f"**The gap.** {gap}",
         "",

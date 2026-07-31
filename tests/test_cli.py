@@ -14,11 +14,13 @@ from gdmutant.cli import (
     _has_uncommitted_changes,
     _load_config,
     _report_path_problem,
+    _resolve_progress_style,
     build_parser,
     list_mutants,
     main,
     run_mutation,
 )
+from gdmutant.engine.loop import ProgressStyle
 from gdmutant.engine.runner import CommandRunner, SuiteResult
 
 # git exports these to point subprocesses at the *invoking* repo. When pytest runs inside a git
@@ -2218,3 +2220,98 @@ def test_force_utf8_swallows_reconfigure_errors() -> None:
             raise ValueError("stream is detached")
 
     cli._force_utf8(_Stream())  # no exception
+
+
+# --- --progress: who is watching, and how often to say something -------------------------------
+
+
+class _FakeStderr:
+    """A stderr stand-in whose `isatty` answer is the thing under test."""
+
+    def __init__(self, tty: bool) -> None:
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+    def write(self, text: str) -> int:  # pragma: no cover - never written to in these tests
+        return len(text)
+
+
+def _no_ci(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("CI", "CONTINUOUS_INTEGRATION"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_auto_picks_the_terminal_cadence_on_a_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    _no_ci(monkeypatch)
+    monkeypatch.setattr(cli.sys, "stderr", _FakeStderr(tty=True))
+    assert _resolve_progress_style("auto") is ProgressStyle.RICH
+
+
+def test_auto_drops_to_the_quiet_cadence_when_stderr_is_redirected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A log file has nobody watching it live, so a 30s heartbeat is just weight in the file.
+    _no_ci(monkeypatch)
+    monkeypatch.setattr(cli.sys, "stderr", _FakeStderr(tty=False))
+    assert _resolve_progress_style("auto") is ProgressStyle.PLAIN
+
+
+def test_auto_drops_to_the_quiet_cadence_under_ci_even_on_a_tty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Some CI runners do allocate a TTY, so the TTY test alone is not enough — gdmutant ships a
+    # GitHub Action, which is exactly that case.
+    monkeypatch.setattr(cli.sys, "stderr", _FakeStderr(tty=True))
+    monkeypatch.setenv("CI", "true")
+    assert _resolve_progress_style("auto") is ProgressStyle.PLAIN
+
+
+def test_ci_detection_wants_the_exact_string_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Infection's test, and the reason it is the right one: `CI=false` is set by real systems, and
+    # treating mere presence as truth would misread it.
+    monkeypatch.setattr(cli.sys, "stderr", _FakeStderr(tty=True))
+    _no_ci(monkeypatch)
+    monkeypatch.setenv("CI", "false")
+    assert _resolve_progress_style("auto") is ProgressStyle.RICH
+    monkeypatch.setenv("CONTINUOUS_INTEGRATION", "true")
+    assert _resolve_progress_style("auto") is ProgressStyle.PLAIN
+
+
+def test_auto_treats_a_stderr_without_isatty_as_not_a_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # pytest's own capture object has no `isatty` at some versions, and a caller may replace stderr
+    # with any file-like object. Missing the method means "not a terminal", never a crash.
+    _no_ci(monkeypatch)
+    monkeypatch.setattr(cli.sys, "stderr", object())
+    assert _resolve_progress_style("auto") is ProgressStyle.PLAIN
+
+
+def test_explicit_choices_override_the_detection(monkeypatch: pytest.MonkeyPatch) -> None:
+    _no_ci(monkeypatch)
+    monkeypatch.setattr(cli.sys, "stderr", _FakeStderr(tty=True))
+    assert _resolve_progress_style("plain") is ProgressStyle.PLAIN
+    assert _resolve_progress_style("none") is ProgressStyle.NONE
+
+
+def test_main_threads_the_resolved_progress_style_to_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _gd(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_run_mutation(*args: object, **kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
+    monkeypatch.setattr(cli, "run_mutation", fake_run_mutation)
+    assert main(["run", str(path), "--project", str(tmp_path), "--progress", "none"]) == 0
+    assert captured["progress_style"] is ProgressStyle.NONE
+
+
+def test_progress_defaults_to_auto_in_the_parser() -> None:
+    args = build_parser().parse_args(["run", "x.gd"])
+    assert args.progress_style == "auto"

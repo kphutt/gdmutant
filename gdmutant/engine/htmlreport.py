@@ -45,7 +45,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from gdmutant.engine.explain import ASSERT_SECTION, DOC_BASE_URL, _display_col, on_assert
+from gdmutant.engine.explain import DOC_BASE_URL, _display_col, context_section
 from gdmutant.engine.survivor_reference import SURVIVOR_REFERENCE
 
 #: Statuses that count as *caught* — the same set `MutationRun.detected` counts (a mutation that
@@ -312,14 +312,10 @@ def _findings(
                 colEnd=col_end,
                 op=operator,
                 func=_enclosing_func(lines, line_no),
-                # The *raw* line and the report's own (raw) start column, so the shared rule sees
-                # exactly what the console saw — the tab-expanded copies the page draws would shift
-                # every column past a tab.
-                ref=(
-                    ASSERT_SECTION
-                    if on_assert(original, int(start["column"]), raw or None)
-                    else operator
-                ),
+                # The *raw* lines and the report's own (raw) start column, so the shared rule
+                # sees exactly what the console saw — the tab-expanded copies the page draws would
+                # shift every column past a tab.
+                ref=context_section(original, line_no, int(start["column"]), raw_lines) or operator,
             )
             by_key[key] = finding
             findings.append(finding)

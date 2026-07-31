@@ -58,9 +58,12 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
   enough to look like a hang and get killed. `--runner gdunit4` / `--runner gut` do this warm-up
   themselves; `--runner command` cannot, and prints a note when the project has no `.godot/`
   directory. Run `godot --headless --path <project> --import` once in setup.
-- **The up-front estimate is a floor.** `at least <duration>` counts one baseline-length run per
-  mutant; gdmutant's per-mutant work and every mutant that hangs (up to the per-mutant timeout) are
-  on top. Budget above it, never at it.
+- **Nothing predicts a finish time.** Before the run gdmutant states the mutant count and the
+  per-mutant cap; during it, a heartbeat reports what has finished; after it, one line gives the
+  wall-clock with the timeout cost broken out. Parse the closing `Done in ...` line for the real
+  duration — do not try to reconstruct a schedule from the opening one. `--progress plain` (the
+  automatic choice off a TTY and under `CI=true`) heartbeats every 60s or 10% of mutants, whichever
+  is rarer; `--progress none` silences it while keeping the plan and closing lines.
 
 ## Exit codes (the contract)
 

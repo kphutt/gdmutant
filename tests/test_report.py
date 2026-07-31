@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from gdmutant.engine.explain import ASSERT_SECTION, doc_url, render_survivor
+from gdmutant.engine.explain import ASSERT_SECTION, ENUM_SECTION, doc_url, render_survivor
 from gdmutant.engine.loop import MutantOutcome, MutationRun, Verdict
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.report import (
@@ -421,3 +421,28 @@ def test_job_summary_markdown_links_an_assert_survivor_to_the_assert_section(
     markdown = job_summary_markdown(run)
     assert f"[Explain survivors inside an `assert`]({doc_url(ASSERT_SECTION)})" in markdown
     assert "sits inside an `assert`" in markdown
+
+
+def test_job_summary_markdown_links_an_enum_survivor_to_the_enum_section(tmp_path: Path) -> None:
+    # The Markdown surface names each context in words, because "Explain the `enum-member`
+    # operator" would be a lie: enum-member is not an operator, and the mutant's own operator
+    # (numeric) is not what the reader needs to read about.
+    source = "extends Node\n\nenum Cell { WALL = 0, FLOOR = 1 }\n"
+    path = tmp_path / "Foo.gd"
+    path.write_text(source, encoding="utf-8")
+    mutant = Mutant(str(path), Span(3, 20, 3, 21), "numeric", "0", "1")
+    run = MutationRun((MutantOutcome(mutant, Verdict.SURVIVED),))
+    markdown = job_summary_markdown(run)
+    assert f"[Explain survivors on an `enum` member]({doc_url(ENUM_SECTION)})" in markdown
+    assert "boundary" not in markdown  # the numeric advice that makes no sense for an enum tag
+
+
+def test_stryker_report_carries_the_enum_explanation(tmp_path: Path) -> None:
+    source = "extends Node\n\nenum Cell { WALL = 0, FLOOR = 1 }\n"
+    mutant = Mutant("Foo.gd", Span(3, 20, 3, 21), "numeric", "0", "1")
+    run = MutationRun((MutantOutcome(mutant, Verdict.SURVIVED),))
+    entry = stryker_report(run, "Foo.gd", source, "gdscript")["files"]["Foo.gd"]["mutants"][0]
+    assert "changes an `enum` member's value" in entry["description"]
+    # Still SURVIVED, still scored: the explanation changed, the accounting did not.
+    assert entry["status"] == "Survived"
+    assert run.mutation_score == 0.0

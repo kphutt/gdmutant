@@ -76,17 +76,45 @@ CLI.
   reads as a hang. The JUnit runners do that warm-up themselves (and the "preparing the project"
   notice now says it can take minutes); the exit-code runner cannot, so it names the one command
   that fixes it instead.
-- Survivors inside an `assert` explain themselves. A failed `assert` aborts the Godot process, so
-  no in-process test can pass on the original and fail on the mutant — these are unkillable by
-  construction, and on defensive code they can be most of a file's survivors. Every surface (the
-  console block, the JSON report, the HTML page, the job summary) gives them their own explanation
-  and links to a new `assert` section of the survivor reference, instead of operator advice nobody
-  can act on; the console summary counts them under the survivor list. **Nothing is skipped and the
-  score is unchanged** — which of your asserts are load-bearing is your call, not the tool's.
-- The pre-run time figure reads as a **floor**, not a forecast: `at least <duration>`, with the two
-  costs it cannot know named (gdmutant's own per-mutant work, and the per-mutant timeout each hung
-  mutant burns). It also divides by `--jobs`. The old `estimated ≈` figure measured 1.7–3.4× under
-  on a real project, because one baseline-length run per mutant is the whole of what it can know.
+- Survivors that are **unkillable by where they sit** explain themselves, instead of handing out
+  advice nobody can follow. Two places qualify:
+  - **inside an `assert`** — a failed assert aborts the Godot process, so no in-process test can
+    pass on the original and fail on the mutant. On defensive code these can be most of a file's
+    survivors.
+  - **on an `enum` member's value** — code that names the member moves with it, so nothing observes
+    the number. The generic numeric advice ("add a test at the boundary this number sets") is
+    meaningless for a tag that has no boundary.
+
+  **Nothing is skipped and no score changes.** Every one of these mutants is still generated, still
+  run, and still counted. Enum values are deliberately *not* suppressed: bitflag enums and any enum
+  that is serialised have values that really are read as numbers, and gdmutant reads one file at a
+  time, so it cannot see a numeric use in another file, a save format, or engine code. Suppressing
+  them would hide exactly the bugs that matter most. The reference explains what would make one
+  killable and leaves the call to you.
+
+  Every surface agrees — the console block, the JSON report, the HTML page and the job summary all
+  resolve their explanation and their link through one rule, so the page can never offer an
+  operator's reference beside a contradicting explanation. The `statement-deletion` reference also
+  now names the **redundant initializer** (`_cells = PackedByteArray()` where the declaration
+  already default-initialises it) as its commonest legitimate equivalent, with the check that
+  confirms one.
+- **Progress is measured, not predicted.** The up-front `estimated ≈ 24s` figure is gone. It was
+  wrong in both directions at once — 1.7–3.4× *under* on a real project (it counted neither
+  gdmutant's own per-mutant work nor timeouts, which were four minutes of one 6m24s run) and, since
+  it never took `--jobs` into account, roughly N× *over* under `--jobs N`. In its place:
+  - **before**, the facts: `18 mutants to run. Baseline suite 1.4s; each mutant is capped at 30s.`
+    The cap is the part that paces the wait — it says how long silence is normal.
+  - **during**, a heartbeat: `… 7/18 done in 1m 12s — 2 survived, 1 timed out.` Every 30s on a
+    terminal; every 60s or 10% of mutants (whichever is rarer) in a log or under `CI=true`, and
+    always once at the end of each file. New `--progress {auto,plain,none}` overrides the choice.
+  - **after**, the wall-clock every other test runner prints and gdmutant did not:
+    `Done in 6m 32s — 18 mutants, 8 timed out (4m 0s of that). Baseline suite 1.4s.` The timeout
+    cost is broken out because it is the cost nobody can see.
+
+  No finish time is forecast anywhere. One was built and measured against a real Godot project
+  first: on an even workload it tracked the true finish to within 5%, but on the shape that
+  actually matters — hanging mutants arriving after the rate has settled — it read 3.2s at 25%
+  done for a run that took 58.0s, so it was dropped.
 
 ### Safety
 

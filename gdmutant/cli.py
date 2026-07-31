@@ -34,7 +34,13 @@ from gdmutant.adapters.gdscript.runner import (
     GutRunner,
 )
 from gdmutant.engine.adapter import Adapter
-from gdmutant.engine.loop import BaselineFailed, MutationRun, run, run_paths
+from gdmutant.engine.loop import (
+    BaselineFailed,
+    MutationRun,
+    ProgressStyle,
+    run,
+    run_paths,
+)
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import Operator
 from gdmutant.engine.report import (
@@ -60,6 +66,37 @@ _MISSING_GODOT_MACOS_COMMAND_HINT = (
     "  On macOS, Godot ships as an app bundle and is never on PATH — its binary is at\n"
     f"    {_MACOS_GODOT_BINARY}"
 )
+
+
+#: Env vars whose value is exactly ``"true"`` when a job is running under CI. The pair (and the
+#: exact-string test rather than mere presence) is Infection's, which is the closest thing this
+#: corner has to a convention.
+_CI_ENV_VARS = ("CI", "CONTINUOUS_INTEGRATION")
+
+
+def _under_ci() -> bool:
+    return any(os.environ.get(name) == "true" for name in _CI_ENV_VARS)
+
+
+def _resolve_progress_style(choice: str) -> ProgressStyle:
+    """The heartbeat cadence for ``--progress`` `choice`.
+
+    ``auto`` asks two questions, and either one turning up false means nobody is watching a
+    terminal: is stderr a TTY, and are we in CI? A redirected log or a CI job gets the quieter
+    cadence, so a long run does not bury the build log in heartbeats. ``plain`` and ``none`` are
+    the explicit overrides, for a caller that knows better than the detection does.
+
+    Nothing here draws a progress bar or rewrites a line — every surface gdmutant prints is
+    append-only, so a non-TTY needs no separate rendering path, only a different rhythm.
+    """
+    if choice == "none":
+        return ProgressStyle.NONE
+    if choice == "plain":
+        return ProgressStyle.PLAIN
+    stderr_is_tty = getattr(sys.stderr, "isatty", None)
+    if _under_ci() or stderr_is_tty is None or not stderr_is_tty():
+        return ProgressStyle.PLAIN
+    return ProgressStyle.RICH
 
 
 def _load_gdscript(source_path: str) -> str | None:
@@ -593,6 +630,7 @@ def run_mutation(
     changed: dict[str, set[int]] | None = None,
     jobs: int = 1,
     step_summary: bool = False,
+    progress_style: ProgressStyle = ProgressStyle.RICH,
 ) -> int:
     """Mutate `source_path`, run via `runner`, print the summary, optionally write a report file.
 
@@ -653,6 +691,7 @@ def run_mutation(
             timeout=timeout,
             progress=lambda line: print(line, file=sys.stderr),
             jobs=jobs,
+            progress_style=progress_style,
         )
     except BaselineFailed as error:
         return _report_baseline_failure(error, project_dir, runner)
@@ -738,6 +777,7 @@ def run_mutation_paths(
     changed: dict[str, set[int]] | None = None,
     jobs: int = 1,
     step_summary: bool = False,
+    progress_style: ProgressStyle = ProgressStyle.RICH,
 ) -> int:
     """Mutate several `.gd` files against one project in a single pass — the baseline runs **once**
     and the score is aggregated across every file, with one merged report. Same return
@@ -784,6 +824,7 @@ def run_mutation_paths(
             timeout=timeout,
             progress=lambda line: print(line, file=sys.stderr),
             jobs=jobs,
+            progress_style=progress_style,
         )
     except BaselineFailed as error:
         return _report_baseline_failure(error, project_dir, runner)
@@ -917,6 +958,14 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     )
     run_parser.add_argument(
         "--godot", default="godot", help="the Godot executable (default: godot)"
+    )
+    run_parser.add_argument(
+        "--progress",
+        choices=("auto", "plain", "none"),
+        default="auto",
+        dest="progress_style",
+        help="how often to print a progress heartbeat: auto (every 30s on a terminal, rarer in a "
+        "log or CI), plain (the rarer cadence always), or none (default: auto)",
     )
     run_parser.add_argument(
         "--tests",
@@ -1128,6 +1177,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--json", args.json_path, None),
                     ("--html", args.html_path, None),
                     ("--report", args.report, None),
+                    ("--progress", args.progress_style, "auto"),
                 )
                 if value != default
             ]
@@ -1200,6 +1250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "changed": changed,
             "jobs": args.jobs,
             "step_summary": bool(args.report) and "step-summary" in args.report,
+            "progress_style": _resolve_progress_style(args.progress_style),
         }
         if len(files) == 1:
             return run_mutation(files[0], project_dir, runner, **common)
