@@ -337,6 +337,16 @@ class GutRunner(_GodotJUnitRunner):
           * **fewer tests than the baseline** — GUT skips a suite whose source-under-test won't
             compile and runs the rest green, so a drop below the first (healthy baseline) run's test
             count means a suite was skipped: the false-survivor case zero-test alone misses.
+
+        **Zero tests on the BASELINE run is a different fault and gets a different message.** The
+        baseline runs the *unmutated* source, so nothing gdmutant did can have broken it — a suite
+        that compiles fine cannot have been skipped by a mutant that does not exist yet. The
+        overwhelmingly likely cause is discovery: ``--tests`` defaults to ``res://test`` while GUT's
+        own documented layout puts suites in ``test/unit/``, and GUT's ``-gdir`` does **not**
+        recurse. Confirmed live (GUT v9.7.1, Godot 4.7): a stock GUT project collects
+        zero tests under the default and GUT prints "Nothing was run." Reporting a compile/load
+        failure there sends the user to debug a crash that isn't happening, and never names the flag
+        that fixes it.
         """
         try:
             result = parse_junit_xml(report_text)
@@ -344,6 +354,7 @@ class GutRunner(_GodotJUnitRunner):
             result = None  # no <testsuite> at all — GUT's empty crash report
         tests = result.tests if result is not None else 0
         baseline = self._baseline_tests
+        is_baseline = baseline is None
         if baseline is None:
             # First run = the engine's healthy baseline (run serially before any --jobs fan-out): it
             # fixes the expected count. Later runs only read it, so the shared instance is safe.
@@ -360,16 +371,27 @@ class GutRunner(_GodotJUnitRunner):
             self._nondeterminism_canary = True
         if result is None or tests == 0 or tests < baseline:
             detail = (completed.stderr or completed.stdout or "").strip()
-            reason = (
-                "GUT ran 0 tests"
-                if tests == 0
-                else f"GUT ran {tests} tests, fewer than the baseline {baseline}"
-            )
-            raise RuntimeError(
-                f"{reason} — a test suite failed to compile/load and GUT skipped it (it runs the "
-                "rest green and exits 0, so this would otherwise be a false survivor)"
-                + (f":\n{detail[-1000:]}" if detail else "")
-            )
+            if is_baseline:
+                # Discovery, not a crash — see the docstring. Mid-run drops keep the message below.
+                message = (
+                    f"GUT found no tests under {self.test_dir} on the unmutated (baseline) run, so "
+                    "this is test discovery, not a broken suite — no mutant existed yet. GUT's "
+                    "-gdir does not search subdirectories, and GUT's own layout puts suites in "
+                    "test/unit/: point gdmutant at them with --tests res://test/unit (or wherever "
+                    "yours live). One directory only — for a tree of suites, run GUT yourself with "
+                    "-ginclude_subdirs via --runner command"
+                )
+            else:
+                reason = (
+                    "GUT ran 0 tests"
+                    if tests == 0
+                    else f"GUT ran {tests} tests, fewer than the baseline {baseline}"
+                )
+                message = (
+                    f"{reason} — a test suite failed to compile/load and GUT skipped it (it runs "
+                    "the rest green and exits 0, so this would otherwise be a false survivor)"
+                )
+            raise RuntimeError(message + (f":\n{detail[-1000:]}" if detail else ""))
         return result
 
     def run_warning(self) -> str | None:

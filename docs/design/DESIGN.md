@@ -101,8 +101,8 @@ reports **survivors** — mutants no test killed. Three goals shape every decisi
   mutants → same verdicts. This is what lets a report be trusted and diffed over time. (Any future
   LLM-semantic mode is nondeterministic and stays out of this core.)
 - **NF-2 — Standalone / no AI.** No runtime dependency on any AI service. Prerequisites are exactly
-  *Godot (already installed by a Godot dev) + the gdmutant CLI*, installed today from a pinned git
-  commit with uv (a `pipx`/PyPI install lands with the first tagged release; see the README).
+  *Godot (already installed by a Godot dev) + the gdmutant CLI*, installed from PyPI with `pip`,
+  `pipx` or `uv` (see the README).
 - **NF-3 — Engine ⊥ adapter decoupling.** `engine/` contains no GDScript-specific assumptions; everything
   language-specific lives in `adapters/<lang>/`. A new language must not require touching the engine.
 - **NF-4 — Language-neutral operators.** The operator catalog is expressed against an abstract notion of
