@@ -1,6 +1,7 @@
 ---
 type: reference
 status: active
+created: 2026-07-19
 ---
 
 # Survivor explainers
