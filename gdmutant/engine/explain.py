@@ -117,8 +117,9 @@ ENUM_SECTION = "enum-member"
 #: and `helper.assert(`.
 _ASSERT_CALL_RE = re.compile(r"(?<![\w.])assert\s*\(")
 #: An `enum` declaration opening. Anchored at the start of the line, so a string or a comment
-#: mentioning "enum" cannot match. `assert`, `enum` and `_enclosing_func`'s `func` are the only
-#: language tokens the explainer knows; everything else it says is derived from the mutant alone.
+#: mentioning "enum" cannot match. `assert`, `enum`, `_enclosing_func`'s `func` and the quote and
+#: comment syntax `_without_strings_and_comments` reads are the only language the explainer knows.
+#: Everything else it says is derived from the mutant alone.
 _ENUM_START_RE = re.compile(r"^\s*enum\b")
 
 _ASSERT_EXPLAIN = (
@@ -163,22 +164,133 @@ def doc_url(anchor: str) -> str:
     return f"{DOC_BASE_URL}#{anchor}"
 
 
-def _on_assert(original: str, column: int, source_line: str) -> bool:
-    """True when a mutant changes something an `assert` call guards on `source_line`.
+def _without_strings_and_comments(text: str) -> str:
+    """One source line with every string literal's body and every ``#`` comment tail replaced by
+    spaces, so the only ``(`` and ``)`` left are the ones the code really runs.
 
-    `original` is the text the mutant replaced and `column` its 1-based start column. Two shapes
-    count, and the column is what separates them from a false positive:
+    Blanking rather than deleting keeps every remaining character at its original column, so a
+    position measured on the raw line still points at the same token here.
 
-    * a token **inside** the call — the assert's ``(`` closes at or before the mutated column, so a
-      trailing ``# assert(...)`` comment further along the line can never match;
-    * a **deletion of the assert statement itself**, whose original text is the whole call.
+    This is the point where the module stops being language-neutral, and it says so rather than
+    assuming it quietly. ``gdmutant/engine/`` holds no language specifics as a rule, but this file
+    already hardcodes ``assert``, ``enum`` and ``func``, so quote and comment syntax is one more
+    GDScript assumption in a file that carries several. The alternative is a full language parse
+    behind every reporting surface, which costs more than an explanation rule is worth. The three
+    forms read here (``"…"``, ``'…'`` and ``#``) are also Python's and Ruby's, so the reading holds
+    beyond GDScript.
 
-    Anything else on a line that merely mentions "assert" is left alone.
+    Two limits stay by design. A backslash hides the next character, which is GDScript's escape
+    rule, so a quote written as an escape does not end the string it sits in. A triple-quoted body
+    is out of reach, because the scan reads one line at a time and never carries a quote across a
+    newline. That case lands back on the pre-existing behaviour: an unbalanced count, which
+    `_closing_paren` reports as "this file does not read the way I assumed", and the caller answers
+    by saying nothing at all.
+    """
+    blanked = list(text)
+    quote = ""
+    escaped = False
+    for index, char in enumerate(text):
+        if quote:
+            blanked[index] = " "
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif char == "#":
+            return "".join(blanked[:index]) + " " * (len(text) - index)
+        elif char in "\"'":
+            quote = char
+            blanked[index] = " "
+    return "".join(blanked)
+
+
+def _closing_paren(
+    source_lines: Sequence[str], line_index: int, column_index: int
+) -> tuple[int, int] | None:
+    """The 1-based ``(line, column)`` of the ``)`` that closes the ``(`` at 0-based
+    `line_index`/`column_index`, or ``None`` when nothing in the rest of the file closes it.
+
+    Counting parens from the opening one is what gives a call a real *end*, and the walk runs to the
+    end of the file because a call may span as many lines as its author wants. `source_lines` here
+    is already masked by `_without_strings_and_comments`, so a paren written inside a string or a
+    comment is not in the count at all.
+
+    ``None`` means "this file does not read the way I assumed". Returning it, rather than running
+    the span to the end of the file, keeps a misread from swallowing every mutant below it. In
+    practice the source has already parsed (it is what the mutants were generated from), so parens
+    balance once strings and comments are out of the way, and an unclosed one is therefore already
+    the misread case.
+    """
+    depth = 0
+    for index in range(line_index, len(source_lines)):
+        text = source_lines[index]
+        for offset in range(column_index if index == line_index else 0, len(text)):
+            char = text[offset]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return index + 1, offset + 1
+    return None
+
+
+def _assert_spans(source_lines: Sequence[str]) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """Every ``assert(…)`` call in the file, as ``(position of the "(", position of its matching
+    ")")`` — both 1-based ``(line, column)`` pairs.
+
+    Whole-file and paren-balanced, not per-line, for the same reason `_in_enum` scans the file: an
+    `assert` spans as many lines as its author writes, and the mutated line is then just the
+    condition (``a == b``), which says nothing about itself. A per-line rule misses every multi-line
+    assert — the expensive direction, because the reader is then handed the operator's advice ("add
+    a test at the boundary"), which is impossible to follow for a check whose failure kills the
+    whole process.
+
+    The closing paren carries as much weight as the opening one. Without it the rule has no upper
+    bound, so ordinary killable code *after* the call on the same physical line
+    (``assert(a > b); return c > d``) inherits the assert's "no test can kill this" narrative — the
+    opposite mistake, and the one that talks a reader out of a test they should write.
+
+    Textual rather than an AST walk, for `_in_enum`'s reason: it only ever mis-scopes an
+    *explanation* — it can never change a verdict, a score, or which mutants run — and an AST walk
+    would put a language parse behind every reporting surface.
+
+    The scan reads `_without_strings_and_comments`'s masked copy of the file, not the raw lines, so
+    a paren or an `assert(` written inside a string or a comment counts for nothing. Both halves
+    need the same copy. Matching `assert(` on a raw line and counting parens on a masked one lets a
+    commented-out call open a span that a real ``)`` further down then closes, which puts ordinary
+    killable code inside an assert that is not there.
+    """
+    masked = [_without_strings_and_comments(text) for text in source_lines]
+    spans: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    for index, text in enumerate(masked):
+        for match in _ASSERT_CALL_RE.finditer(text):
+            closing = _closing_paren(masked, index, match.end() - 1)
+            if closing is not None:
+                spans.append(((index + 1, match.end()), closing))
+    return spans
+
+
+def _on_assert(original: str, line: int, column: int, source_lines: Sequence[str]) -> bool:
+    """True when a mutant changes something an `assert` call guards.
+
+    `original` is the text the mutant replaced and `line`/`column` its 1-based start position. Two
+    shapes count:
+
+    * a token **strictly between** an assert call's parens — which is why the answer needs the whole
+      file and both ends of the call, not the mutated line and a lower bound (see `_assert_spans`);
+    * a **deletion of the assert statement itself**, whose original text is the whole call, and so
+      carries the answer without the file being consulted at all.
+
+    Anything else that merely mentions "assert" — a lookalike identifier, a comment, a token that
+    sits before the call opens or after it closes — is left alone.
     """
     if _ASSERT_CALL_RE.match(original):
         return True
-    match = _ASSERT_CALL_RE.search(source_line)
-    return match is not None and match.end() <= column - 1
+    at = (line, column)
+    return any(opened < at < closed for opened, closed in _assert_spans(source_lines))
 
 
 def _in_enum(source_lines: Sequence[str], line_no: int) -> bool:
@@ -222,7 +334,7 @@ def context_section(
     """
     if source_lines is None:
         return None
-    if 1 <= line <= len(source_lines) and _on_assert(original, column, source_lines[line - 1]):
+    if _on_assert(original, line, column, source_lines):
         return ASSERT_SECTION
     if _in_enum(source_lines, line):
         return ENUM_SECTION

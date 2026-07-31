@@ -180,8 +180,20 @@ _HEARTBEAT_FRACTION_PLAIN = 0.10  # …and at least a tenth of the mutants, whic
 #: finish time is a guess this tool has no way to make honestly.
 
 
+def _contention_budget(per_mutant_timeout: float, workers: int) -> float:
+    """The per-mutant time budget actually enforced when `workers` suites run at once.
+
+    The single source of that arithmetic: `_run_mutants_parallel` enforces it and `_progress_plan`
+    announces it, and when the two computed it separately the announcement drifted — it named the
+    unscaled figure while the run allowed up to N times that. The number is the answer to "how long
+    is silence normal?", so an announcement that understates it is exactly the thing that makes a
+    healthy run look hung. `_run_mutants_parallel` explains why the scaling itself is right.
+    """
+    return per_mutant_timeout * max(workers, 1)
+
+
 def _progress_plan(
-    runnable: int, total: int, baseline_secs: float, budget: float, jobs: int
+    runnable: int, total: int, baseline_secs: float, per_mutant_timeout: float, jobs: int
 ) -> str:
     """The pre-run line: **what the run is**, with no prediction of how long it will take.
 
@@ -197,11 +209,19 @@ def _progress_plan(
     abandon mutation testing, and the first Godot boot is real silence. So the budget clause stays,
     and does the job better than a total ever did: *how long silence is normal* is exactly what
     someone staring at a still terminal needs, and unlike a forecast it is a fact.
+
+    Which is why the cap it names is the **contention-scaled** one under ``--jobs``: that is what
+    the run enforces (`_contention_budget`), and naming the unscaled figure instead understated the
+    real worst case by up to N times — turning the one clause that paces the wait into the reason a
+    healthy run looks hung. `min(jobs, runnable)` is the worker count the parallel path will pick;
+    it can only over-count (a mutant that turns out invalid never takes a worker), which errs toward
+    naming a longer silence than will happen — the safe direction for this particular fact.
     """
     unit = "mutant" if runnable == 1 else "mutants"
     ignored = total - runnable
     ignored_note = f" ({ignored} ignored)" if ignored else ""
     jobs_note = f" Running {jobs} at a time." if jobs > 1 else ""
+    budget = _contention_budget(per_mutant_timeout, min(jobs, runnable))
     return (
         f"{runnable} {unit} to run{ignored_note}. Baseline suite {baseline_secs:.1f}s; "
         f"each mutant is capped at {budget:g}s.{jobs_note}"
@@ -612,7 +632,7 @@ def _run_mutants_parallel(
         return [outcomes[index] for index in range(total)]
 
     worker_count = min(jobs, len(runnable))
-    contention_timeout = per_mutant_timeout * worker_count
+    contention_timeout = _contention_budget(per_mutant_timeout, worker_count)
     work: queue.Queue[tuple[int, Mutant, str]] = queue.Queue()
     for item in runnable:
         work.put(item)

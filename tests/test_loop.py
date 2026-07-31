@@ -19,6 +19,7 @@ from gdmutant.engine.loop import (
     SourceOutsideProject,
     SourceWriteFailed,
     Verdict,
+    _contention_budget,
     _derive_timeout,
     _detect_eol,
     _format_duration,
@@ -433,29 +434,57 @@ def test_progress_plan_states_the_work_and_the_cap_without_forecasting() -> None
     # The pre-run line is facts only. "each mutant is capped at 30s" is the load-bearing clause: it
     # tells someone at a still terminal how long silence is normal, which is the pacing job the old
     # `estimated ≈` figure was doing badly. No total duration appears anywhere in it.
-    line = _progress_plan(runnable=18, total=18, baseline_secs=1.4, budget=30.0, jobs=1)
+    line = _progress_plan(runnable=18, total=18, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=1)
     assert line == "18 mutants to run. Baseline suite 1.4s; each mutant is capped at 30s."
 
 
 def test_progress_plan_counts_ignored_separately() -> None:
-    line = _progress_plan(runnable=18, total=21, baseline_secs=1.4, budget=30.0, jobs=1)
+    line = _progress_plan(runnable=18, total=21, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=1)
     assert line.startswith("18 mutants to run (3 ignored). ")
 
 
 def test_progress_plan_names_the_worker_count() -> None:
-    line = _progress_plan(runnable=18, total=18, baseline_secs=1.4, budget=30.0, jobs=4)
-    assert line.endswith("each mutant is capped at 30s. Running 4 at a time.")
+    line = _progress_plan(runnable=18, total=18, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=4)
+    assert line.endswith(" Running 4 at a time.")
+
+
+def test_progress_plan_names_the_cap_the_parallel_path_really_enforces() -> None:
+    # Under `--jobs N` the run scales each mutant's budget by the worker count, so the unscaled
+    # figure this line used to print understated the real worst case by up to N times — in the one
+    # clause whose whole job is telling someone at a still terminal how long silence is normal.
+    # Derived, never a literal: a hardcoded number is exactly how the message drifted from the code.
+    expected = _contention_budget(30.0, min(4, 18))
+    line = _progress_plan(runnable=18, total=18, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=4)
+    assert f"each mutant is capped at {expected:g}s." in line
+    assert expected == 120.0  # and the scaling is real: 4 workers, not the 30s serial figure
+
+
+def test_progress_plan_still_names_a_real_cap_when_nothing_is_runnable() -> None:
+    # A file whose mutants are all `# gdmutant: ignore`d reaches this line with a runnable count of
+    # zero, and zero workers would scale the budget to "capped at 0s" — a figure that is not just
+    # useless but visibly wrong, in the line a first-time user reads before the silence starts.
+    line = _progress_plan(runnable=0, total=3, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=1)
+    assert line.startswith("0 mutants to run (3 ignored). ")
+    assert "each mutant is capped at 30s." in line
+
+
+def test_progress_plan_never_names_a_scaled_cap_the_serial_path_will_not_apply() -> None:
+    # The mirror of the case above. Serial runs enforce the unscaled budget, and one worker cannot
+    # contend with itself — so `--jobs 4` on a single runnable mutant is a serial run wearing a
+    # flag, and the announcement must not inflate its cap fourfold.
+    line = _progress_plan(runnable=1, total=1, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=4)
+    assert "each mutant is capped at 30s." in line
 
 
 def test_progress_plan_is_singular_for_one_mutant() -> None:
-    line = _progress_plan(runnable=1, total=1, baseline_secs=2.0, budget=20.0, jobs=1)
+    line = _progress_plan(runnable=1, total=1, baseline_secs=2.0, per_mutant_timeout=20.0, jobs=1)
     assert line.startswith("1 mutant to run. ")
 
 
 def test_progress_plan_never_predicts_a_finish_time() -> None:
     # The whole point of the change. Nine surveyed mutation testers forecast an absolute duration
     # before the work starts; none of them do. Pin the absence so it cannot creep back.
-    line = _progress_plan(runnable=99, total=99, baseline_secs=1.4, budget=30.0, jobs=1)
+    line = _progress_plan(runnable=99, total=99, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=1)
     for forecast in ("estimated", "≈", "at least", "left", "ETA"):
         assert forecast not in line
 
@@ -822,6 +851,22 @@ def test_parallel_scales_the_per_mutant_timeout_by_worker_count(tmp_path: Path) 
     assert len(mutant_timeouts) == 3  # every mutant ran
     # worker_count = min(jobs=2, mutants=3) = 2, so each budget is the 5.0s serial value x2.
     assert all(t == 5.0 * 2 for t in mutant_timeouts)
+
+
+def test_the_announced_cap_is_the_cap_the_run_hands_the_runner(tmp_path: Path) -> None:
+    # The two facts, compared against each other in one real run: what the pre-run line PROMISES and
+    # what the runner is actually GIVEN. Asserting the promise on its own is what let the message
+    # drift to a quarter of the enforced value — the number was checked, the agreement never was.
+    src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"  # 3 runnable mutants
+    path = _write(tmp_path, "f.gd", src)
+    runner = TimeoutRecordingRunner()
+    lines: list[str] = []
+    run(str(tmp_path), path, src, runner, timeout=5.0, jobs=2, progress=lines.append)
+
+    plan = next(line for line in lines if "each mutant is capped at" in line)
+    announced = float(plan.split("each mutant is capped at ")[1].split("s.")[0])
+    _, *mutant_timeouts = runner.seen  # drop the baseline, which uses the runner's own budget
+    assert mutant_timeouts and all(t == announced for t in mutant_timeouts)
 
 
 def test_parallel_classifies_an_invalid_mutant_like_serial(tmp_path: Path) -> None:

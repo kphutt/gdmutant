@@ -259,6 +259,104 @@ def test_a_token_before_the_assert_paren_is_not_an_assert_survivor() -> None:
     assert context_section(">", 1, 21, lines) == ASSERT_SECTION
 
 
+def test_the_assert_rule_reaches_a_condition_on_its_own_line() -> None:
+    # The common shape once a condition grows: the mutated line is just `a == b`, which says nothing
+    # about itself, and the `assert(` is a line above. A per-line rule cannot see this one — and
+    # missing it is the costly direction: the reader is handed "add a test with two equal operands"
+    # for a check whose failure kills the whole process, i.e. advice that cannot be followed.
+    lines = ["func f(a, b):", "\tassert(", "\t\ta == b", "\t)"]
+    assert context_section("==", 3, 5, lines) == ASSERT_SECTION
+    mutant = _mutant("comparison", "==", "!=", line=3, col=5)
+    gap, _ = survivor_report_fields(mutant, lines)
+    assert "no in-process test can kill this one" in gap
+
+
+def test_a_token_after_the_assert_closes_is_not_an_assert_survivor() -> None:
+    # Ordinary, killable code sharing the physical line with an assert. Claiming it is the mistake
+    # that costs a user a bug: the reader is told "no in-process test can kill this one" about a
+    # line an ordinary test kills easily, so the test never gets written.
+    lines = ["\tassert(a > b); return c > d"]
+    assert context_section(">", 1, 11, lines) == ASSERT_SECTION  # inside the call
+    assert context_section(">", 1, 26, lines) is None  # after its closing paren
+
+
+def test_the_assert_scan_reads_a_continuation_line_end_to_end() -> None:
+    # Where a multi-line call's `)` lands is the author's choice — hugging the condition, or alone
+    # in the first column, since indentation carries no meaning inside parens. Skipping either end
+    # of a continuation line loses the whole call, and a lost call is the silent failure: the reader
+    # gets the operator's advice for a check that no in-process test can kill.
+    hugging = ["func f(a, b):", "\tassert(", "\t\ta == b)"]
+    assert context_section("==", 3, 5, hugging) == ASSERT_SECTION
+    alone = ["func f(a, b):", "\tassert(", "\t\ta == b", ")"]
+    assert context_section("==", 3, 5, alone) == ASSERT_SECTION
+
+
+def test_the_assert_rule_starts_and_ends_exactly_at_the_parens() -> None:
+    # Both parens are exact boundaries, not approximations. `assert(value > 0)` is the shape asserts
+    # usually take, and its last token sits directly against the closing paren — so an off-by-one at
+    # either end flips a real verdict on the most ordinary line in the file.
+    lines = ["\tassert(value > 0)"]
+    assert context_section("0", 1, 17, lines) == ASSERT_SECTION  # the last token inside the call
+    assert context_section(">", 1, 8, lines) is None  # the opening paren itself is not inside
+    assert context_section(">", 1, 18, lines) is None  # nor is the closing one
+
+
+def test_a_nested_call_inside_an_assert_does_not_end_it_early() -> None:
+    # The assert's own paren closes last, not first. Counting depth is what keeps `len(items)` from
+    # being read as the end of the call and dropping the rest of the condition out of the rule.
+    lines = ["\tassert(len(items) > 0)"]
+    assert context_section(">", 1, 20, lines) == ASSERT_SECTION
+
+
+def test_an_assert_whose_paren_never_closes_claims_nothing() -> None:
+    # An opening paren with no closing one after it anywhere means the scan has misread the file.
+    # The honest answer to "I misread this" is to say nothing and let the operator's own narrative
+    # stand, rather than declare every mutant below the misread unkillable.
+    lines = ["\tassert(", "\tvar n = 1", "\treturn n > 0"]
+    assert context_section(">", 3, 11, lines) is None
+
+
+def test_a_paren_inside_a_string_does_not_hide_the_assert_it_sits_in() -> None:
+    # An assert that checks an error message holds a `(` of its own, inside a string. Counting that
+    # paren leaves the call looking unclosed, so the scan drops the whole assert and hands the
+    # reader "add a test with two equal operands" for a comparison no in-process test can kill.
+    # Both quote characters GDScript accepts have to read the same way.
+    double = ["func f(x, a, b):", '\tassert(x == "(" and a > b)']
+    assert context_section(">", 2, double[1].index(">") + 1, double) == ASSERT_SECTION
+    single = ["func f(x, a, b):", "\tassert(x == '(' and a > b)"]
+    assert context_section(">", 2, single[1].index(">") + 1, single) == ASSERT_SECTION
+
+
+def test_a_backslash_escaped_quote_does_not_end_a_string_early() -> None:
+    # GDScript escapes a quote with a backslash. Reading that quote as the end of the string puts
+    # the rest of the literal back into the paren count, and the `(` it holds unbalances the call.
+    lines = ['\tassert(label == "a\\"(" and a > b)']
+    assert context_section(">", 1, lines[0].index(">") + 1, lines) == ASSERT_SECTION
+
+
+def test_a_paren_inside_a_comment_does_not_end_a_multi_line_assert() -> None:
+    # A trailing comment on a continuation line can hold a `)` that belongs to prose, not to code.
+    # Counting it satisfies the depth before the real closing paren arrives, so the span stops
+    # short and every condition on the lines below falls out of the assert it is genuinely inside.
+    lines = [
+        "func f(a, b, c, d):",
+        "\tassert(",
+        "\t\ta > b and  # see note 2)",
+        "\t\tc > d",
+        "\t)",
+    ]
+    assert context_section(">", 3, lines[2].index(">") + 1, lines) == ASSERT_SECTION
+    assert context_section(">", 4, lines[3].index(">") + 1, lines) == ASSERT_SECTION
+
+
+def test_a_commented_out_assert_does_not_claim_the_code_below_it() -> None:
+    # The mirror of the two cases above. An `assert(` inside a comment opens nothing, so a real
+    # closing paren further down cannot be read as its end. Claiming that span is the costly
+    # direction: it tells the reader no test can kill a comparison an ordinary test kills easily.
+    lines = ["func f(a, b):", "\tvar x = 1  # assert(disabled)", "\treturn foo(a > b)"]
+    assert context_section(">", 3, lines[2].index(">") + 1, lines) is None
+
+
 def test_an_assert_lookalike_identifier_is_not_an_assert() -> None:
     # `my_assert(` and `helper.assert(` are ordinary calls; a failed one raises nothing special, so
     # a mutant inside them is an ordinary, killable survivor.
