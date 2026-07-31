@@ -280,6 +280,27 @@ def test_a_token_after_the_assert_closes_is_not_an_assert_survivor() -> None:
     assert context_section(">", 1, 26, lines) is None  # after its closing paren
 
 
+def test_the_assert_scan_reads_a_continuation_line_end_to_end() -> None:
+    # Where a multi-line call's `)` lands is the author's choice — hugging the condition, or alone
+    # in the first column, since indentation carries no meaning inside parens. Skipping either end
+    # of a continuation line loses the whole call, and a lost call is the silent failure: the reader
+    # gets the operator's advice for a check that no in-process test can kill.
+    hugging = ["func f(a, b):", "\tassert(", "\t\ta == b)"]
+    assert context_section("==", 3, 5, hugging) == ASSERT_SECTION
+    alone = ["func f(a, b):", "\tassert(", "\t\ta == b", ")"]
+    assert context_section("==", 3, 5, alone) == ASSERT_SECTION
+
+
+def test_the_assert_rule_starts_and_ends_exactly_at_the_parens() -> None:
+    # Both parens are exact boundaries, not approximations. `assert(value > 0)` is the shape asserts
+    # usually take, and its last token sits directly against the closing paren — so an off-by-one at
+    # either end flips a real verdict on the most ordinary line in the file.
+    lines = ["\tassert(value > 0)"]
+    assert context_section("0", 1, 17, lines) == ASSERT_SECTION  # the last token inside the call
+    assert context_section(">", 1, 8, lines) is None  # the opening paren itself is not inside
+    assert context_section(">", 1, 18, lines) is None  # nor is the closing one
+
+
 def test_a_nested_call_inside_an_assert_does_not_end_it_early() -> None:
     # The assert's own paren closes last, not first. Counting depth is what keeps `len(items)` from
     # being read as the end of the call and dropping the rest of the condition out of the rule.
