@@ -157,6 +157,10 @@ at release time.
    same private window. *Pass:* it lands on the survivor reference, at that operator's section. Every
    user sees that URL on every run, which makes it the most-read link the project has.
 
+   A badge reading "no status" is reporting a workflow that has no automatic trigger, not a check
+   that failed — the fix is **`ci.yml` runs automatically again**, the last item under
+   [One-time](#one-time--setup-confirmed-once).
+
 ### One-time — setup, confirmed once
 
 - **The trusted publisher moved.** The first upload to an index converts the pending publisher and
@@ -187,6 +191,19 @@ at release time.
   or Godot reaches the project at all; without them it is findable only by people who already know
   its name. *Automatable:* description and topics are repository settings `scripts/harden_github.py`
   can converge. The social-preview image is uploaded by hand and stays a one-time click.
+
+- **`ci.yml` runs automatically again.** The README's CI badge reports on `ci.yml`, and a workflow
+  with no automatic trigger has no result to report, so the badge reads "no status" to every visitor
+  — the thing item 4 above catches without saying what to do about it. Restoring the triggers belongs
+  to the move to public, where the reason they were removed, billed Actions minutes on a private
+  repository, stops applying. The steps live in
+  [ADR-0012](decisions/0012-merge-time-local-ship-time-cloud.md)'s Decision section, under "Trivial to
+  reverse, by design" — follow them there rather than from here, so the two cannot drift. *Pass:*
+  signed out, the badge on the repository front page shows a real result, passing or failing, instead
+  of "no status". One knock-on to know about: this changes which checks report on a pull request, and
+  `scripts/harden_github.py` converges branch protection, so the required-check list it applies has to
+  match the checks that really report — a required check nothing reports blocks every pull request
+  forever.
 
 ### What is still fixable afterwards
 - The GitHub Release's title and notes: editable at any time.
