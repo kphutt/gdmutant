@@ -24,6 +24,17 @@ Configuration lives in `pyproject.toml` under `[tool.mutmut]`. mutmut runs the s
 tests) are copied in via `also_copy`, and coverage is turned off for those runs (pure per-mutant
 overhead).
 
+`also_copy` is the one part of this that bites. A test that reads a file at the repository root
+passes a normal `pytest` run and raises `FileNotFoundError` inside the copied tree, which fails the
+baseline — so mutmut aborts and evaluates **zero** mutants, and the score stops existing rather than
+going down. Nothing about writing that test hints at it. `tests/test_mutation_baseline_inputs.py`
+closes the loop: it reads every test module, works out which repository entries the suite reaches
+for, and fails naming the one that is missing from `also_copy`. It is a plain test, so it runs in
+`verify` on every platform — including Windows, where mutmut itself cannot run — before a merge
+rather than after one. It only sees paths built from the suite's usual
+`Path(__file__).resolve().parent.parent` idiom; the zero-mutant check below is what catches
+everything else.
+
 CI runs mutmut in **report mode** as a **non-blocking** job (not a required status check): it
 surfaces the score on the run summary and never fails the build over survivors or a low score. But
 a *baseline* failure — the suite not running cleanly unmutated, so mutmut evaluates zero mutants —
