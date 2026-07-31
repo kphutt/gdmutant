@@ -17,6 +17,11 @@ uv sync --frozen      # fetches the pinned Python (via .python-version) + locked
 
 Run commands with `uv run`.
 
+The live self-test suites below need a real Godot binary, which `uv sync` does not provide (`uv`
+owns only Python here). `mise.toml` pins the same Godot release CI runs against — install
+[mise](https://mise.jdx.dev/), then `mise install` fetches it; `mise which godot` prints the path
+to pass as `GDMUTANT_GODOT`. Never add Python to `mise.toml` — that stays `uv`'s alone.
+
 ## Build · test
 
 ```sh
