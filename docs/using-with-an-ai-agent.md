@@ -6,9 +6,10 @@ created: 2026-07-11
 
 # Driving gdmutant from an AI agent
 
-A one-read guide for an AI agent to run gdmutant and act on the results correctly. This is a
-*how-to-use-the-tool* guide for consumers — distinct from
-[`AGENTS.md`](../AGENTS.md), which is for contributors *to* gdmutant.
+A one-read guide for an AI agent to run gdmutant and act on the results correctly: how to invoke
+the CLI and read its output. This is a *how-to-use-the-tool* guide for consumers — distinct from
+[`AGENTS.md`](../AGENTS.md), which tells a contributor how to work *on* gdmutant's own source, not
+how to run it.
 
 ## Install
 
