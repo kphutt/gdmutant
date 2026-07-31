@@ -103,6 +103,10 @@ stash first, or pass `--require-clean`.
 
 ## The survivor → killing-test loop
 
+Same loop the [README's workflow section](../README.md#the-workflow) walks a human through —
+pick a target, kill or annotate every survivor, re-run, move on — driven from JSON instead of the
+console:
+
 1. Run with `--json -`, capture stdout, and read `files[<path>].mutants`.
 2. For each `"Survived"` mutant: it gives you a `location` and the `replacement` (the exact change
    no test caught). Write or strengthen a test that **fails** under that change — usually an
@@ -110,7 +114,7 @@ stash first, or pass `--require-clean`.
 3. Re-run and confirm that mutant is now `"Killed"`.
 4. If a survivor is a genuine **equivalent mutant** — one that *cannot* change observable behavior
    (e.g. a clamp whose boundary can't be reached) — annotate its line so it becomes `Ignored`
-   (excluded from the score) and your fixer loop terminates:
+   (excluded from the score):
    - `# gdmutant: ignore` — suppress **every** mutant on the line.
    - `# gdmutant: ignore[comparison]` — suppress only that operator's mutant(s) on the line, when a
      killed or timeout mutant shares the line (use the `mutatorName` from the report). Comma-list
@@ -121,10 +125,6 @@ stash first, or pass `--require-clean`.
    Only suppress *proven* equivalents (or benign, brittle-to-kill mutants — with a reason). See
    [`docs/decisions/0004`](decisions/0004-equivalent-mutant-ignore-annotation.md) and
    [`0006`](decisions/0006-operator-scoped-ignore-and-ignored-status.md).
-
-The loop **terminates**: every survivor ends up either killed (step 3) or suppressed as a proven
-equivalent (step 4) — there is no "retry forever" branch. Run one module at a time (the report is
-per-file) and fix its whole survivor list before moving on.
 
 ## Worked example (the bundled corpus)
 

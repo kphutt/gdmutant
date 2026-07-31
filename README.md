@@ -26,9 +26,8 @@ CLI, no AI required.
 ## Is this for you?
 
 - You write **GDScript** and test with **GUT**, **gdUnit4**, or any `godot --headless` command.
-- You already have a test suite and want to know which of it actually bites.
-- gdmutant is a natural companion to GUT and gdUnit4 alike — it doesn't replace your test runner, it
-  grades it.
+- You already have a test suite and want to know which of it actually bites — gdmutant grades your
+  tests, it doesn't replace them.
 
 ## Quickstart
 
@@ -41,7 +40,7 @@ uv add "git+https://github.com/kphutt/gdmutant@<commit-sha>"
 ```
 
 No Python in your game repo? Keep gdmutant in a tiny non-package uv project beside it
-(`[tool.uv] package = false`) so it never touches shipped code.
+(`[tool.uv] package = false`).
 
 **No Godot needed yet** — `--dry-run` lists the mutants gdmutant would generate, with no test run:
 
@@ -66,23 +65,25 @@ uv run gdmutant run path/to/module.gd --project . \
   --runner command --command "godot --headless --script res://tests/run_tests.gd" --json report.json
 ```
 
+Godot exits `0` even on a harness that fails to *compile* — gate it on `can_instantiate()`, or a
+broken mutant reads as a false pass.
+
 ## What it does
 
 **Mutates the AST, not text** — nine re-parse-guarded operators
 ([full list](docs/survivors/README.md)), so invalid mutants never run. One file, many, or a whole
 directory in one pass, with a per-file breakdown and one aggregate score.
 
-**Runs your existing tests** — gdUnit4 and GUT via JUnit-XML adapters, or a universal exit-code
-runner for any headless `godot` command. [Runner seam →](docs/decisions/0011-runner-agnostic-adapter-seam.md)
+**Runs your existing tests** — gdUnit4, GUT, or any headless `godot` exit-code command.
 
 **Explains every survivor** — not just a location, but what's untested, why it matters, and where
-to start a test. See it below.
+to start a test.
 
 **Interoperates and fits CI.** `--json` emits the
 [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema
 for dashboards; `--html` renders a self-contained viewer. `--since <ref>` mutates only a PR's
-changed lines, for a fast, **advisory** check — never a hard gate. `--jobs N` parallelizes;
-`--exclude` globs; `.gdmutant.toml` holds per-project defaults.
+changed lines, for a fast, **advisory** check — never a hard gate. `--exclude` globs;
+`.gdmutant.toml` holds per-project defaults.
 
 ## Example output
 
@@ -128,12 +129,32 @@ Survivors (7):
 ... 6 more survivors follow, one block each, same format.
 ```
 
-**Mutation score isn't a target — it's a direction.** There's no universal "good" number; it depends
-on how gnarly the code under test is. Watch it trend, not the absolute value: a rising score as you
-kill survivors is progress, and a low score on code you just wrote is more urgent than a stable score
-on code nobody's touched in months. `ignored`, `invalid`, and `error` are the other three result
-categories — what each means, the exact score formula, and how to kill or justify each survivor above
-all live in the [survivor reference](docs/survivors/README.md).
+**Mutation score isn't a target — it's a direction.** There's no universal "good" number; watch it
+trend as you kill survivors, not the absolute value. `ignored`, `invalid`, and `error` are the other
+three result categories — see the [survivor reference](docs/survivors/README.md) for what each
+means, the exact formula, and every operator's kill/equivalent guidance.
+
+## The workflow
+
+1. **Pick a target.** Start with the file you trust least — new code, thin tests, or core logic
+   (state machines, scoring, boundaries). Run one file at a time; a whole directory's survivor list
+   is too much to work through at once.
+2. **Run it** (see Quickstart above).
+3. **Kill or annotate every survivor.** Each block's `start` line says where to add a test. A
+   proven equivalent — one that truly can't change behavior, like an unreachable clamp boundary —
+   gets `# gdmutant: ignore` on that line (`ignore[comparison]` for one operator) plus a reason
+   instead; see the [survivor reference](docs/survivors/README.md) for each operator's cases.
+4. **Re-run to confirm**, then **move on** — done with a file at zero `survived`. No third state,
+   so the loop always ends.
+
+**Runtime.** gdmutant boots Godot once per mutant, so time scales with mutant count — it says so up
+front:
+
+```
+18 mutants; baseline ~1.4s each → estimated ≈ 24s
+```
+
+`--jobs N` runs N mutants at once, each on its own project copy, for close to an N× speedup.
 
 ## Compatibility
 
@@ -158,17 +179,17 @@ command = "godot --headless --script res://tests/run_tests.gd"
 A language-neutral loop — select → mutate → run → tally → score — with two language-specific
 pieces behind an adapter: mutating the AST (via
 [gdtoolkit](https://github.com/Scony/godot-gdscript-toolkit)) and running the tests. A new language
-is one small adapter. Full design: [`docs/design/DESIGN.md`](docs/design/DESIGN.md).
+is one small adapter.
 
-**Safety:** gdmutant edits source **in place** and restores it after every mutant and on exit — commit
-or stash first, or pass `--require-clean`. [Full guarantee →](docs/using-with-an-ai-agent.md#safety-guarantee)
+**Safety:** gdmutant edits your source file **in place**, then restores its exact original bytes
+after every mutant and on exit, including Ctrl-C. Only a hard kill (a crash, a power loss) can leave
+a swap in place — commit or stash first, or pass `--require-clean` to refuse a dirty tree.
 
 ## Documentation
 
-- [Survivor reference](docs/survivors/README.md) — what a survivor is, the score formula, and how to kill or justify each mutation operator.
+- [Survivor reference](docs/survivors/README.md) — every operator explained, the score formula, how to kill or justify each.
 - [Design & architecture](docs/design/DESIGN.md) — the engine and the "Saboteur & the Jury" design.
-- [Driving gdmutant from an AI agent](docs/using-with-an-ai-agent.md) — invocation, JSON schema, survivor→killing-test loop.
-- [Exit-code runner convention](docs/decisions/0005-exit-code-test-runner-convention.md) — the stdout/exit-code contract.
+- [Driving gdmutant from an AI agent](docs/using-with-an-ai-agent.md) — invocation, JSON schema, the loop for a script.
 - [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Credits](docs/credits.md)
 
 ## License
