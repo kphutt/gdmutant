@@ -459,6 +459,15 @@ def test_progress_plan_names_the_cap_the_parallel_path_really_enforces() -> None
     assert expected == 120.0  # and the scaling is real: 4 workers, not the 30s serial figure
 
 
+def test_progress_plan_still_names_a_real_cap_when_nothing_is_runnable() -> None:
+    # A file whose mutants are all `# gdmutant: ignore`d reaches this line with a runnable count of
+    # zero, and zero workers would scale the budget to "capped at 0s" — a figure that is not just
+    # useless but visibly wrong, in the line a first-time user reads before the silence starts.
+    line = _progress_plan(runnable=0, total=3, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=1)
+    assert line.startswith("0 mutants to run (3 ignored). ")
+    assert "each mutant is capped at 30s." in line
+
+
 def test_progress_plan_never_names_a_scaled_cap_the_serial_path_will_not_apply() -> None:
     # The mirror of the case above. Serial runs enforce the unscaled budget, and one worker cannot
     # contend with itself — so `--jobs 4` on a single runnable mutant is a serial run wearing a
