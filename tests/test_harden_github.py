@@ -5,7 +5,7 @@ required-check list is not a stale value that drifts harmlessly — re-running t
 the live setting with the wrong one. Two ways that goes bad, both fatal to the repo:
 
 * requiring a context no job reports (a bare `Verify` when the matrix reports
-  `Verify (ubuntu-24.04)` and `Verify (windows-2025)`) leaves every PR pending forever;
+  `Verify (ubuntu-24.04)`) leaves every PR pending forever;
 * silently shipping a shorter list than the live one quietly REDUCES the merge gate.
 
 So these tests pin the derivation against the repo's real workflow files and pin the ratchet that
@@ -35,36 +35,48 @@ sys.modules["harden_github"] = harden_github
 _spec.loader.exec_module(harden_github)
 
 
-# The exact contexts GitHub would report for the required jobs, derived from THIS branch's
-# workflow files. Written out in full so a workflow rename that changes a context has to be
-# reflected here deliberately, not absorbed silently.
+# The exact contexts GitHub would report for the required jobs, derived from THIS repo's workflow
+# files. Written out in full so a workflow rename that changes a context has to be reflected here
+# deliberately, not absorbed silently.
 #
-# These are deliberately NOT compared against live branch protection any more. `main` requires no
-# status checks at all: the merge-time checks moved to the local pre-commit gate and `ci.yml` was
-# reduced to `workflow_dispatch`. A test that asserted "derived == live" would now be asserting
-# that the spec is empty, which says nothing about whether the derivation is correct.
-EXPECTED_CONTEXTS = [
-    "Verify (ubuntu-24.04)",
-    "Verify (windows-2025)",
-    "Secret scan (gitleaks)",
-    "Self-test (real Godot)",
-    "Self-test (real Godot + GUT)",
-]
+# One entry, because one job qualifies. ADR-0012 moved the merge-time checks to the local
+# pre-commit gate and reduced `ci.yml` to `workflow_dispatch`, so nothing in it can report on a
+# pull request; `zizmor.yml` kept its unfiltered `pull_request` trigger to stay the one cloud
+# check that gates a merge. This is also the one context branch protection requires on `main`
+# today, so the derivation and the live setting agree — but the assertion stays offline (the
+# derivation is the thing under test, and a test that phoned GitHub would fail on a fork).
+EXPECTED_CONTEXTS = ["Workflow security (zizmor)"]
 
 
-def test_required_contexts_are_derived_from_this_branch_workflows() -> None:
-    """The derived list is exactly what this branch's workflows would make GitHub report."""
+def test_required_contexts_are_derived_from_this_repos_workflows() -> None:
+    """The derived list is exactly what this repo's workflows would make GitHub report."""
     assert harden_github.required_contexts() == EXPECTED_CONTEXTS
 
 
-def test_matrix_job_never_yields_the_bare_job_name() -> None:
-    """The regression guard: `verify` is a matrix job, so a bare `Verify` can never report.
+def test_a_name_with_parentheses_is_the_context_verbatim() -> None:
+    """`zizmor` is `name: Workflow security (zizmor)`, and the whole string is the context.
 
-    Requiring it would block every PR in the repo permanently.
+    A plain job's parenthesised name looks exactly like a matrix suffix, so the derivation must
+    not treat it as one — trimming it would require a context nothing reports.
     """
-    contexts = harden_github.required_contexts()
+    job = harden_github.all_jobs()["zizmor"][0]
+    assert job.matrix == {}
+    assert job.contexts() == ["Workflow security (zizmor)"]
+
+
+def test_matrix_job_never_yields_the_bare_job_name() -> None:
+    """The regression guard: `verify` in `ci.yml` is a matrix job, so a bare `Verify` never reports.
+
+    `verify` is not a required check any more (its workflow no longer runs on a pull request), but
+    the shape that made the old hardcoded list fatal is still in the tree, so the guard stays
+    pinned against the real file rather than only against a synthetic one.
+    """
+    verify = harden_github.all_jobs()["verify"][0]
+    assert verify.name == "Verify"
+    assert verify.matrix, "verify is a matrix job; a bare `Verify` context can never report"
+    contexts = verify.contexts()
     assert "Verify" not in contexts
-    assert sum(c.startswith("Verify (") for c in contexts) == 2
+    assert all(c.startswith("Verify (") for c in contexts)
 
 
 def test_every_required_job_id_exists_and_always_runs() -> None:
@@ -234,7 +246,7 @@ def test_if_always_still_counts_as_always_running(tmp_path: Path) -> None:
 def test_a_missing_required_job_raises_instead_of_dropping_the_check(tmp_path: Path) -> None:
     """A renamed job id must fail loudly. Silently dropping it would shrink the merge gate."""
     body = "name: CI\non:\n  pull_request:\njobs:\n  something-else:\n    name: Other\n"
-    with pytest.raises(ValueError, match="secret-scan|verify|selftest"):
+    with pytest.raises(ValueError, match="defined in no workflow"):
         harden_github.required_contexts(_workflow(tmp_path, body))
 
 
@@ -395,6 +407,11 @@ def _all_required(tmp_path: Path, on_block: str, filename: str = "a-ci.yml") -> 
 DISPATCH_ONLY = "on:\n  workflow_dispatch: # manual only"
 FILTERED_ONLY = 'on:\n  pull_request:\n    paths:\n      - "src/**"'
 
+# The ambiguity and shadowing tests need a SECOND definition of a job id that `required_contexts()`
+# actually looks at; a duplicate of any other id is invisible to it. Read out of REQUIRED_JOBS so
+# those tests keep testing what they claim to when the required set changes.
+A_REQUIRED_JOB_ID = harden_github.REQUIRED_JOBS[0]
+
 
 def test_a_required_job_whose_workflow_no_pull_request_triggers_raises(tmp_path: Path) -> None:
     """The migration case: a `ci.yml` reduced to `workflow_dispatch` can gate nothing."""
@@ -416,7 +433,7 @@ def test_a_job_id_defined_in_two_pull_request_workflows_is_ambiguous(tmp_path: P
     directory = _all_required(tmp_path, "on:\n  pull_request:")
     (directory / "b-other.yml").write_text(
         "name: Other\non:\n  pull_request:\njobs:\n"
-        "  verify:\n    name: Verify elsewhere\n    runs-on: ubuntu-24.04\n",
+        f"  {A_REQUIRED_JOB_ID}:\n    name: Same id elsewhere\n    runs-on: ubuntu-24.04\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="more than one workflow"):
@@ -428,15 +445,16 @@ def test_a_release_only_twin_does_not_shadow_the_pull_request_job(tmp_path: Path
     directory = _all_required(tmp_path, "on:\n  pull_request:")
     (directory / "z-publish.yml").write_text(
         "name: Publish\non:\n  release:\n    types: [published]\njobs:\n"
-        "  verify:\n    name: Verify on the released commit\n    runs-on: ubuntu-24.04\n",
+        f"  {A_REQUIRED_JOB_ID}:\n    name: The same job, release-time\n"
+        "    runs-on: ubuntu-24.04\n",
         encoding="utf-8",
     )
-    assert [job.workflow for job in harden_github.all_jobs(directory)["verify"]] == [
+    assert [job.workflow for job in harden_github.all_jobs(directory)[A_REQUIRED_JOB_ID]] == [
         "a-ci.yml",
         "z-publish.yml",
     ]
-    assert "verify" in harden_github.required_contexts(directory)
-    assert "Verify on the released commit" not in harden_github.required_contexts(directory)
+    assert A_REQUIRED_JOB_ID in harden_github.required_contexts(directory)
+    assert "The same job, release-time" not in harden_github.required_contexts(directory)
 
 
 def test_producible_contexts_excludes_anything_that_misses_a_pull_request(tmp_path: Path) -> None:

@@ -44,8 +44,11 @@ def _workflows_dir(workflows: pathlib.Path | None) -> pathlib.Path:
 # time — see `required_contexts()` — because a job's reported context is not simply its `name:`:
 #
 #   * a matrix job reports one context per combination, suffixed with the matrix values.
-#     `verify` is `name: Verify` over `os: [ubuntu-24.04, windows-2025]`, so GitHub reports
-#     `Verify (ubuntu-24.04)` and `Verify (windows-2025)` — never a bare `Verify`;
+#     `verify` is `name: Verify` over `os: [ubuntu-24.04]`, so GitHub reports
+#     `Verify (ubuntu-24.04)` — never a bare `Verify`, and a second `os:` value would silently
+#     become a second required context;
+#   * a job's `name:` is the context verbatim, parentheses and all: `zizmor` is
+#     `name: Workflow security (zizmor)`, so that whole string is the context;
 #   * renaming a job's `name:` silently changes its context.
 #
 # Requiring a context that no job can report blocks every PR on the branch forever, and this script
@@ -69,12 +72,14 @@ def _workflows_dir(workflows: pathlib.Path | None) -> pathlib.Path:
 # If this list should be empty - because no check gates a merge in the cloud any more - empty it
 # deliberately. Leaving ids here that nothing can report is the same failure as hardcoding a
 # stale context string, just one step further back.
-REQUIRED_JOBS = (
-    "verify",
-    "secret-scan",
-    "selftest-godot",
-    "selftest-gut",
-)
+#
+# Today exactly one job qualifies. ADR-0012 moved the merge-time checks to the local pre-commit
+# gate and reduced `ci.yml` to `workflow_dispatch`, so `verify`, `secret-scan`, `selftest-godot`
+# and `selftest-gut` can no longer run on a pull request at all - listing them here would be the
+# same never-reports failure this file exists to prevent. `zizmor.yml` stayed on `pull_request`
+# with no path filter precisely so it could be the one cloud check that gates a merge, and it is
+# the one context branch protection requires on `main` today.
+REQUIRED_JOBS = ("zizmor",)
 
 
 def _ok(msg: str) -> None:
