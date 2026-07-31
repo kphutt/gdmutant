@@ -154,7 +154,8 @@ front:
 18 mutants; baseline ~1.4s each → estimated ≈ 24s
 ```
 
-`--jobs N` runs N mutants at once, each on its own project copy, for close to an N× speedup.
+`--jobs N` runs N mutants at once, each on its own project copy. The speedup is real but sub-linear
+— measured ~3× at `--jobs 4` on a real GdUnit4 module — because every worker copies the project.
 
 ## Compatibility
 
