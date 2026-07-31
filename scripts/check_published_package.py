@@ -205,10 +205,31 @@ def location_problem(result: Result, venv_dir: Path) -> str | None:
 
 
 def smoke_problem(result: Result) -> str | None:
-    """An error message unless the dry-run listed at least one mutant, else None."""
+    """An error message unless the dry-run listed at least one mutant, else None.
+
+    The count is read as a number, not matched as a substring. ``gdmutant run --dry-run`` prints
+    ``0 mutants for smoke.gd:`` for an empty list and still exits 0, so "the line appeared" and
+    "the adapter found something" are two different questions, and only the second one shows that
+    the GDScript parser reached real source. Matching on ``"0 mutants for "`` instead would answer
+    neither: it is a substring of ``"10 mutants for smoke.gd:"``, so every count that ends in a
+    zero would read as a failure.
+
+    A first word that is not a number means the output no longer has the shape read here. That
+    fails loudly rather than raising, because a check whose job is to describe a broken release
+    should not itself end in a traceback.
+    """
     if result.returncode != 0:
         return f"`gdmutant run smoke.gd --dry-run` exited {result.returncode}:\n{result.output}"
     if " mutants for " not in result.output:
+        return f"the dry run listed no mutants:\n{result.output}"
+    counted = result.output.split(maxsplit=1)[0]
+    try:
+        count = int(counted)
+    except ValueError:
+        return (
+            f"the dry run did not open with a mutant count, but with {counted!r}:\n{result.output}"
+        )
+    if count == 0:
         return f"the dry run listed no mutants:\n{result.output}"
     return None
 

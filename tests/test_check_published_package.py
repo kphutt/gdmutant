@@ -158,6 +158,30 @@ def test_a_dry_run_that_lists_nothing_fails() -> None:
     assert problem is not None and "no mutants" in problem
 
 
+def test_a_dry_run_that_counts_zero_mutants_fails() -> None:
+    """`gdmutant run --dry-run` prints its count line and exits 0 even when it found nothing, so a
+    run that produced no mutants satisfies both the exit code and the shape of the output. Reading
+    the count is what tells the two apart, and it is the whole claim this check makes: a mutant
+    means the parser loaded and parsed real source."""
+    problem = check.smoke_problem(check.Result(0, "0 mutants for smoke.gd:\n"))
+    assert problem is not None and "no mutants" in problem
+
+
+def test_a_mutant_count_ending_in_zero_passes() -> None:
+    """The count is a number, not a prefix. Testing for the substring "0 mutants for " instead
+    would call every multiple of ten a broken release, which is the loudest possible false alarm on
+    the most ordinary result."""
+    for output in ("10 mutants for smoke.gd:\n", "20 mutants for smoke.gd:\n"):
+        assert check.smoke_problem(check.Result(0, output)) is None
+
+
+def test_a_dry_run_whose_output_does_not_start_with_a_count_fails() -> None:
+    """If the CLI's output format changes, this check stops being able to answer its question. It
+    says so and fails, rather than raising a ValueError that reads as a bug in the check itself."""
+    problem = check.smoke_problem(check.Result(0, "listed 3 mutants for smoke.gd:\n"))
+    assert problem is not None and "'listed'" in problem
+
+
 def test_a_crashing_dry_run_fails() -> None:
     problem = check.smoke_problem(
         check.Result(1, "ModuleNotFoundError: No module named 'gdtoolkit'")
