@@ -40,6 +40,7 @@ from gdmutant.engine.loop import (
     MutationRun,
     ProgressStyle,
     SourceOutsideProject,
+    SourceWriteFailed,
     run,
     run_paths,
 )
@@ -736,7 +737,7 @@ def run_mutation(
             jobs=jobs,
             progress_style=progress_style,
         )
-    except SourceOutsideProject as error:
+    except (SourceOutsideProject, SourceWriteFailed) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     except BaselineFailed as error:
@@ -864,7 +865,7 @@ def run_mutation_paths(
             jobs=jobs,
             progress_style=progress_style,
         )
-    except SourceOutsideProject as error:
+    except (SourceOutsideProject, SourceWriteFailed) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     except BaselineFailed as error:

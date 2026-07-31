@@ -17,6 +17,7 @@ from gdmutant.engine.loop import (
     MutantOutcome,
     ProgressStyle,
     SourceOutsideProject,
+    SourceWriteFailed,
     Verdict,
     _derive_timeout,
     _detect_eol,
@@ -1182,41 +1183,103 @@ def test_a_rename_blocked_by_another_process_is_retried(
     assert path.read_text(encoding="utf-8") == "func f(a, b) -> bool:\n\treturn a >= b\n"
 
 
-def test_a_rename_that_never_unblocks_falls_back_to_writing_in_place(
+def test_a_rename_that_never_unblocks_refuses_rather_than_writing_unsafely(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A lock that outlasts the retries must not fail the run: a write that is merely as safe as
-    # the old one still beats no write at all, and for the restore in particular, leaving the file
-    # mutated would be the worse outcome. So the last resort is the plain in-place write.
+    # A lock that outlasts the retries used to fall back to the plain in-place write, on the
+    # reasoning that a write as unsafe as the old one still beat no write at all. It does not: the
+    # fallback truncates first, so it can leave the file empty (see the persistent-fault test
+    # below). Refusing with the file intact is the only answer consistent with this module's
+    # promise.
     path = tmp_path / "stuck.gd"
-    path.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8", newline="")
+    original = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path.write_text(original, encoding="utf-8", newline="")
 
     def always_blocked(src: Any, dst: Any) -> None:
         raise PermissionError(13, "Access is denied")
 
     monkeypatch.setattr("gdmutant.engine.loop.os.replace", always_blocked)
     monkeypatch.setattr("gdmutant.engine.loop._REPLACE_BACKOFF", 0.0)
-    _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
+    with pytest.raises(SourceWriteFailed, match="left exactly as it was"):
+        _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
 
-    assert path.read_text(encoding="utf-8") == "func f(a, b) -> bool:\n\treturn a >= b\n"
+    assert path.read_text(encoding="utf-8") == original
     assert sorted(p.name for p in tmp_path.iterdir()) == ["stuck.gd"], "no temporary file left"
 
 
-def test_a_directory_that_cannot_hold_a_temporary_file_still_gets_written(
+def test_a_persistent_write_fault_leaves_the_source_whole(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # If a staging file cannot be created at all, there is nothing to be gained by failing louder
-    # than the plain write would have -- the write goes ahead the old way.
+    # The regression test for the defect this module exists to prevent, reached from the other
+    # side. A full disk fails the staged write's flush; the old code then fell back to the plain
+    # in-place write, which truncates the file BEFORE writing, so the same full disk failed that
+    # write too and left the user's source at zero bytes. One fault, both paths -- they write to
+    # the same filesystem, so a single cause hitting both is the expected case, not a coincidence.
+    #
+    # Against the fallback this test fails with the file empty: the exact outcome the PR's title
+    # promises can never happen.
+    path = tmp_path / "fullDisk.gd"
+    original = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path.write_text(original, encoding="utf-8", newline="")
+
+    def disk_full(fd: int) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr("gdmutant.engine.loop.os.fsync", disk_full)
+    with pytest.raises(SourceWriteFailed):
+        _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
+
+    assert path.read_bytes() == original.encode(), "a failed write must not touch the source"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["fullDisk.gd"]
+
+
+def test_a_directory_that_cannot_hold_a_temporary_file_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With no staging file there is no safe write to make, and the unsafe one is not on offer any
+    # more. Refuse, and say the source is untouched -- which it is, because nothing was opened.
     path = tmp_path / "notemp.gd"
-    path.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8", newline="")
+    original = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path.write_text(original, encoding="utf-8", newline="")
 
     def no_temp_files(*args: Any, **kwargs: Any) -> tuple[int, str]:
         raise OSError(13, "Permission denied")
 
     monkeypatch.setattr("gdmutant.engine.loop.tempfile.mkstemp", no_temp_files)
-    _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
+    with pytest.raises(SourceWriteFailed, match="left untouched"):
+        _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
 
-    assert path.read_text(encoding="utf-8") == "func f(a, b) -> bool:\n\treturn a >= b\n"
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_a_read_only_source_is_refused_rather_than_replaced(tmp_path: Path) -> None:
+    # A rename needs write permission on the DIRECTORY, not on the file, so the staged write would
+    # happily replace a file whose permissions say "do not modify me" -- something the plain write
+    # it replaces refused to do. Marking a file read-only is a deliberate instruction (Perforce
+    # checkouts do it to every unopened file), so it is honoured.
+    path = tmp_path / "readonly.gd"
+    original = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path.write_text(original, encoding="utf-8", newline="")
+    os.chmod(path, stat.S_IREAD)
+    if os.access(path, os.W_OK):  # pragma: no cover - root ignores permission bits entirely
+        pytest.skip("this account can write read-only files, so the bit proves nothing here")
+
+    try:
+        with pytest.raises(SourceWriteFailed, match="read-only"):
+            _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
+        assert path.read_text(encoding="utf-8") == original
+    finally:
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)  # let tmp_path clean up
+
+
+def test_a_missing_target_is_still_written(tmp_path: Path) -> None:
+    # The permission check and the mode copy both only apply to a file that is actually there.
+    # A target that does not exist yet is simply created -- no mode to preserve, nothing to refuse.
+    path = tmp_path / "brandnew.gd"
+
+    _write_source(path, "func f(a, b) -> bool:\n\treturn a > b\n", "\n")
+
+    assert path.read_text(encoding="utf-8") == "func f(a, b) -> bool:\n\treturn a > b\n"
 
 
 def test_a_symlinked_source_is_written_through_rather_than_replaced(tmp_path: Path) -> None:
