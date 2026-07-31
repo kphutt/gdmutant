@@ -63,6 +63,10 @@ CLI.
 - `.gdmutant.toml` for persisted per-project flags; `--dry-run` to list mutants without running
   Godot.
 - Live self-test against real Godot in CI, pinning both runner paths to exact per-mutant outcomes.
+- A GitHub Action, so a consumer's CI runs gdmutant from a few lines of `uses:` YAML instead of a
+  hand-rolled install step: it sets up Python and Godot, installs gdmutant, runs it against the
+  consumer's project, and writes the surviving mutants — with their explanations — to the job
+  summary, right where a reviewer already looks.
 
 ### Fixed
 
