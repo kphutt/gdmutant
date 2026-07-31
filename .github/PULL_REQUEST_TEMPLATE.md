@@ -13,5 +13,5 @@
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run mypy gdmutant` passes
 - [ ] `uv run pytest` passes (new behavior has tests)
-- [ ] Any new dependency is recorded in `CREDITS.md`
+- [ ] Any new dependency is recorded in `docs/credits.md`
 - [ ] A design change is captured as an ADR in `docs/decisions/` (if applicable)

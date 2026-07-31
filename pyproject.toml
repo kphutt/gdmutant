@@ -25,7 +25,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 
-# Runtime dependencies (both MIT — recorded in CREDITS.md):
+# Runtime dependencies (both MIT — recorded in docs/credits.md):
 # - gdtoolkit ships the real GDScript parser the adapter mutates (see docs/decisions/0001).
 # - lark: the adapter imports its Token/Tree/LarkError types directly, so it is a declared
 #   direct dependency, not only a gdtoolkit transitive one.
@@ -86,7 +86,6 @@ include = [
   "/README.md",
   "/CHANGELOG.md",
   "/CONTRIBUTING.md",
-  "/CREDITS.md",
   "/AGENTS.md",
   "/LICENSE",
   "/pyproject.toml",

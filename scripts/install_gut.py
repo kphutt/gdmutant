@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Install the GUT (Godot Unit Test) addon into the corpus fixture for the live self-test.
 
-GUT is intentionally NOT vendored (same policy as GdUnit4 — see corpus/project.godot, CREDITS.md).
-It is downloaded at a pinned commit and verified by a hash of the extracted addon *tree* — see
-scripts/_addon_install.py for why a tree hash (not the tag, not the source-tarball bytes) and how a
-deliberate bump works.
+GUT is intentionally NOT vendored (same policy as GdUnit4 — see corpus/project.godot,
+docs/credits.md). It is downloaded at a pinned commit and verified by a hash of the extracted
+addon *tree* — see scripts/_addon_install.py for why a tree hash (not the tag, not the
+source-tarball bytes) and how a deliberate bump works.
 
 Usage: python scripts/install_gut.py  (run from anywhere; installs into <repo>/corpus/addons/gut)
 """

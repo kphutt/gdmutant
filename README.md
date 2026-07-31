@@ -169,7 +169,7 @@ or stash first, or pass `--require-clean`. [Full guarantee →](docs/using-with-
 - [Design & architecture](docs/design/DESIGN.md) — the engine and the "Saboteur & the Jury" design.
 - [Driving gdmutant from an AI agent](docs/using-with-an-ai-agent.md) — invocation, JSON schema, survivor→killing-test loop.
 - [Exit-code runner convention](docs/decisions/0005-exit-code-test-runner-convention.md) — the stdout/exit-code contract.
-- [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Credits](CREDITS.md)
+- [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Credits](docs/credits.md)
 
 ## License
 

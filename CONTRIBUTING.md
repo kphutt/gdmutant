@@ -56,7 +56,7 @@ GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-
 - Larger design changes are recorded as an **ADR** in `docs/decisions/` (append-only; see the
   existing records for the format) and, where relevant, reflected in `docs/design/`.
 - Commits and PRs carry **no AI co-author trailer**.
-- Add any new third-party dependency to `CREDITS.md` with its license.
+- Add any new third-party dependency to `docs/credits.md` with its license.
 
 ## Automated review
 
