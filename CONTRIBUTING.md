@@ -6,9 +6,9 @@ created: 2026-07-10
 
 # Contributing to gdmutant
 
-gdmutant is early (pre-v0.1): the engine, GDScript adapter, runners, reporter, and CLI are built and
-tested. The most useful contributions right now are issues — bug reports, GDScript patterns that
-should be mutated, and real-world use cases.
+gdmutant's engine, GDScript adapter, runners, reporter, and CLI are built and tested. The most
+useful contributions are issues — bug reports, GDScript patterns that should be mutated, and
+real-world use cases.
 
 ## Development setup
 
@@ -17,7 +17,7 @@ gdmutant is a [uv](https://docs.astral.sh/uv/) project. Follow [`AGENTS.md`](AGE
 `uv run` (e.g. `uv run pytest`).
 
 **Install the local checks — they're the real gate.** `ci.yml` doesn't run automatically on pull
-requests right now (see
+requests (see
 [ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md)); merge-time checks run on your
 own machine instead, via the git hooks in `.pre-commit-config.yaml`. They run the same commands CI
 would, not a reimplementation, and are self-contained (no personal-machine setup). Install them:
@@ -51,7 +51,7 @@ GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-
 - **Lint, types, tests, audit, and secret scan all pass** — the pre-commit and pre-push hooks
   enforce this automatically if you installed both above (the secret scan runs at commit time, the
   rest before a push); otherwise run the commands by hand before opening the PR. There's no
-  automated PR check today (see "Install the local checks" above).
+  automated PR check (see "Install the local checks" above).
 - New behavior comes **with tests** — this is a testing tool; we hold ourselves to it.
 - Larger design changes are recorded as an **ADR** in `docs/decisions/` (append-only; see the
   existing records for the format) and, where relevant, reflected in `docs/design/`.

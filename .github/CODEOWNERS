@@ -10,8 +10,8 @@
 # admin enforcement is off — so an owner with admin rights can push straight to main and
 # bypass even the pull-request requirement.
 #
-# Merge-time checks are not mechanical here. ci.yml is workflow_dispatch-only while this
-# repo is private (docs/decisions/0012-merge-time-local-ship-time-cloud.md), so the checks
+# Merge-time checks are not mechanical here. ci.yml is workflow_dispatch-only
+# (docs/decisions/0012-merge-time-local-ship-time-cloud.md), so the checks
 # run on the machine making the change, from .pre-commit-config.yaml's pre-push stage. Those
 # hooks must be installed per clone (`pre-commit install --hook-type pre-commit --hook-type
 # pre-push`); a clone where that has not run has no automated gate at all.
@@ -36,7 +36,7 @@
 /uv.lock         @kphutt
 /.gitleaks.toml  @kphutt
 
-# --- Engine surfaces (land with the v0.1 milestone) ------------------------
+# --- Engine surfaces -------------------------------------------------------
 # The mutation-operator catalog + the GDScript adapter are the tool's real
 # technical risk (a wrong mutant = a silently wrong survivor report). Read every
 # change here carefully before merging.

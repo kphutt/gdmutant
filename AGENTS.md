@@ -79,8 +79,8 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   ```
 
   This script reads its commands out of `ci.yml` rather than restating them, so local, CI, and the
-  release gate can't drift apart. To restore `ci.yml` running automatically (worth doing once
-  gdmutant is public), see ADR-0012's Decision section for the exact steps.
+  release gate can't drift apart. To restore `ci.yml` running automatically, see ADR-0012's
+  Decision section for the exact steps.
 
   **If every tool fails with `uv trampoline failed to canonicalize script path`,** the venv's
   launcher shims are stale — usually after a `uv` version bump. Fix: `uv sync --frozen --reinstall`.

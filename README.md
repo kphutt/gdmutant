@@ -52,10 +52,6 @@ Coverage tells you a line *ran*; mutation tells you a bug there would be *caught
 widens when an AI writes the tests, since models tend to pin code they just wrote. A standalone
 CLI, no AI required.
 
-**Validated against real code.** gdmutant has been run against the
-[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) and [GUT](https://github.com/bitwes/Gut)
-test frameworks, and surfaced defects in both — each confirmed by execution.
-
 ## Is this for you?
 
 - You write **GDScript** and test with **GUT**, **gdUnit4**, or any `godot --headless` command.
