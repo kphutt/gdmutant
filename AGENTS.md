@@ -96,10 +96,12 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   future LLM-semantic mode stays out of it.
 - **Sensitive paths** — CI, scripts, toolchain, the mutation-operator catalog, and the GDScript
   adapter — are listed in `CODEOWNERS` for documentation only; it enforces no review (a sole
-  maintainer can't approve their own PR). Nothing else mechanically blocks a bad change to them
-  either: `main` requires a PR but no status checks, and merge-time checks are local discipline, not
-  a gate (ADR-0012). Read changes to these paths carefully before merging — the GDScript adapter is
-  the real technical risk, since a wrong mutant means a silently wrong survivor report.
+  maintainer can't approve their own PR). `main` requires a pull request and one status check,
+  `Workflow security (zizmor)`, which reads the workflow files and nothing else — so no check on
+  the code blocks a merge; those are local discipline (ADR-0012). `.github/CODEOWNERS` carries the
+  full list of what branch protection enforces. Read changes to these paths carefully before
+  merging — the GDScript adapter is the real technical risk, since a wrong mutant means a silently
+  wrong survivor report.
 
 ## Design goals (keep these in mind)
 
