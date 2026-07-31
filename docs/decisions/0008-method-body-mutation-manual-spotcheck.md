@@ -1,6 +1,6 @@
 ---
 type: decision
-status: active
+status: superseded
 created: 2026-07-19
 ---
 

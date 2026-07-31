@@ -29,7 +29,13 @@ clean. **Re-verify each license at the moment of use** — licenses and repos ch
 | [GUT](https://github.com/bitwes/Gut) (v9.7.1) | GDScript test framework (peer JUnit adapter); its addon is downloaded — not vendored — into the corpus fixture for the live self-test (`scripts/install_gut.py`) | MIT |
 | Python | Runtime | PSF |
 | uv | Dependency + environment manager | Apache-2.0 / MIT |
+| [mise](https://mise.jdx.dev) | Pins the Godot release the live self-test runs against (`mise.toml`) | MIT |
+| [hatchling](https://github.com/pypa/hatch/tree/master/backend) | Build backend that produces the wheel and sdist | MIT |
 | ruff · mypy · pytest · pip-audit | Lint / typecheck / test / audit | MIT / MIT / MIT / Apache-2.0 |
+| [pytest-cov](https://github.com/pytest-dev/pytest-cov) | Coverage measurement during `pytest`, and the 100% line+branch floor | MIT |
+| [mutmut](https://github.com/boxed/mutmut) | Mutation-tests gdmutant's own Python suite (the dogfood check) | BSD-3-Clause |
+| [poodle](https://github.com/WiredNerd/poodle) | Mutation-tests the class-method bodies mutmut 3.x does not reach (`poodle.toml`) | MIT |
+| [pip-licenses](https://github.com/raimon49/pip-licenses) | Reads dependency license metadata for the license gate (`scripts/check_licenses.py`) | MIT |
 | [pre-commit](https://pre-commit.com) | Manages the local git hooks that run the checks in `.pre-commit-config.yaml` | MIT |
 | gitleaks | Secret scan, local (pre-commit stage) and in CI | MIT |
 
@@ -39,3 +45,11 @@ clean. **Re-verify each license at the moment of use** — licenses and repos ch
 - **mutmut** (BSD-3), **Stryker** / **PIT** (Apache-2.0), **infection** (BSD-3),
   **cargo-mutants** (MIT) — architecture and patterns studied. Patterns aren't copyrightable,
   and these licenses permit adaptation with attribution; none of their code is copied here.
+  **mutmut appears twice on purpose:** it is listed here for the ideas studied, and in the
+  build/dev tools table above because gdmutant also *runs* it as a dev dependency. Neither
+  entry implies any of its code was copied.
+
+## Adapted documents
+| Document | Source | License |
+|---|---|---|
+| [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md) | [Contributor Covenant 3.0](https://www.contributor-covenant.org/version/3/0/) (reporting and enforcement sections filled in for this project, as that version instructs) | CC BY-SA 4.0 |
