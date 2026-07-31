@@ -52,11 +52,9 @@ Coverage tells you a line *ran*; mutation tells you a bug there would be *caught
 widens when an AI writes the tests, since models tend to pin code they just wrote. A standalone
 CLI, no AI required.
 
-**Validated against real code.** gdmutant has been run across 37 modules of
-[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) and [GUT](https://github.com/bitwes/Gut) —
-the two Godot test frameworks, neither written by its author — generating over 2,100 mutants. That
-work also surfaced six defects in the frameworks themselves, each confirmed by execution against the
-current releases: three in gdUnit4 v6.2.0, three in GUT v9.7.1. They are not yet reported upstream.
+**Validated against real code.** gdmutant has been run against the
+[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) and [GUT](https://github.com/bitwes/Gut)
+test frameworks, and surfaced defects in both — each confirmed by execution.
 
 ## Is this for you?
 
