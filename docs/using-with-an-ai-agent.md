@@ -38,7 +38,9 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
   progress go to **stderr**. Capture stdout for parsing; stdout stays pure JSON.
 - `--dry-run` lists the mutants gdmutant *would* generate, without Godot and without running any
   tests — a fast, dependency-free preview.
-- `--require-clean` refuses to run if the source file has uncommitted git changes (exit 2).
+- `--require-clean` refuses to run unless git holds a copy of the source file it could put
+  back (exit 2). Uncommitted changes fail it, and so does anything gdmutant could not
+  confirm: a file git ignores, a file outside any repository, or a machine with no git.
   Without it, gdmutant only *warns* and proceeds (it never blocks on a prompt — safe for headless
   agents).
 - `--since <ref>` mutates only the lines changed since a git ref (e.g. `--since origin/main`) — the

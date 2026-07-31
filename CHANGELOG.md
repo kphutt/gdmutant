@@ -120,6 +120,10 @@ CLI.
 
 - Mutations are applied in place and restored after each mutant and on exit; gdmutant warns on
   uncommitted changes and `--require-clean` makes that a hard stop.
+- `--require-clean` refuses anything it could not confirm, not just changes it could see. A file
+  git ignores, a file outside any repository, and a machine with no git all used to pass the
+  check silently — the ignored file being the worst of them, since git has never held a copy of
+  it. Without the flag the default is unchanged: a file gdmutant cannot judge says nothing.
 - `.gdmutant.toml` cannot decide what gdmutant executes. Its `command` and `godot` keys name a
   program to run, and the file is read from the project directory — so in a project you cloned,
   somebody else wrote it. Both keys are skipped, with an explanation, unless you add

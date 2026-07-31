@@ -13,7 +13,7 @@ from conftest import MarkerRunner
 import gdmutant.cli as cli
 from gdmutant.adapters.gdscript.runner import GutRunner
 from gdmutant.cli import (
-    _has_uncommitted_changes,
+    _git_backup,
     _load_config,
     _report_path_problem,
     _resolve_progress_style,
@@ -1400,57 +1400,65 @@ def _dirty_warning(source: str) -> str:
 
 def _require_clean_error(source: str) -> str:
     return (
-        f"error: {source} has uncommitted changes and --require-clean was given. "
-        "Commit or stash first."
+        f"error: --require-clean was given, but {source} has uncommitted changes.\n"
+        "  gdmutant edits the file where it lies, so it will not start without a copy it "
+        "could put back.\n"
+        "  Commit or stash your work, or re-run with --no-require-clean to accept the risk."
     )
 
 
-def test_has_uncommitted_changes_true_when_modified(tmp_path: Path) -> None:
+def test_git_backup_reports_no_copy_when_modified(tmp_path: Path) -> None:
     repo = _committed_repo(tmp_path)
     (repo / "f.gd").write_text(
         "func f(a, b) -> bool:\n\treturn a >= b\n", encoding="utf-8"
     )  # now modified
-    assert _has_uncommitted_changes(str(repo / "f.gd")) is True
+    assert _git_backup(str(repo / "f.gd")).backed_up is False
 
 
-def test_has_uncommitted_changes_false_when_clean(tmp_path: Path) -> None:
+def test_git_backup_reports_a_copy_when_committed_and_clean(tmp_path: Path) -> None:
     repo = _committed_repo(tmp_path)  # committed, unmodified
-    assert _has_uncommitted_changes(str(repo / "f.gd")) is False
+    assert _git_backup(str(repo / "f.gd")).backed_up is True
 
 
-def test_has_uncommitted_changes_true_when_untracked(tmp_path: Path) -> None:
+def test_git_backup_reports_no_copy_when_untracked(tmp_path: Path) -> None:
     _git(tmp_path, "init")
     path = _gd(tmp_path)  # written but never `git add`ed
-    assert _has_uncommitted_changes(str(path)) is True
+    assert _git_backup(str(path)).backed_up is False
 
 
-def test_has_uncommitted_changes_handles_dash_prefixed_filename(tmp_path: Path) -> None:
+def test_git_backup_handles_a_dash_prefixed_filename(tmp_path: Path) -> None:
     # The `--` before the pathspec matters for a filename starting with "-" (git would otherwise
     # parse it as an option). A dash-named, untracked file must still report dirty — this pins the
     # `--` so dropping/mangling it is caught.
     _git(tmp_path, "init")
     weird = tmp_path / "-weird.gd"
     weird.write_text("func f() -> int:\n\treturn 1\n", encoding="utf-8")
-    assert _has_uncommitted_changes(str(weird)) is True
+    assert _git_backup(str(weird)).backed_up is False
 
 
-def test_has_uncommitted_changes_false_outside_git(tmp_path: Path) -> None:
-    # No repo at all: gdmutant must run fine outside git, so "can't check" reads as not-dirty.
+def test_git_backup_is_unknown_outside_a_repo(tmp_path: Path) -> None:
+    # No repo at all. This must read as "cannot tell", NOT as "git has a copy of it" -- those were
+    # the same answer before, which is how --require-clean came to pass without checking anything.
     path = _gd(tmp_path)
-    assert _has_uncommitted_changes(str(path)) is False
+    backup = _git_backup(str(path))
+    assert backup.backed_up is None
+    assert "not inside a git working tree" in backup.reason
 
 
-def test_has_uncommitted_changes_false_when_git_unavailable(
+def test_git_backup_is_unknown_when_git_is_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # git not installed (subprocess raises FileNotFoundError) must be swallowed, not crash.
+    # git not installed (subprocess raises FileNotFoundError) must be swallowed, not crash -- but
+    # it must also not be mistaken for a clean tree, which is what --require-clean then trusted.
     path = _gd(tmp_path)
 
     def raise_fnf(*args: object, **kwargs: object) -> object:
         raise FileNotFoundError("git not found")
 
     monkeypatch.setattr(cli.subprocess, "run", raise_fnf)
-    assert _has_uncommitted_changes(str(path)) is False
+    backup = _git_backup(str(path))
+    assert backup.backed_up is None
+    assert "may not be installed" in backup.reason
 
 
 def test_git_helper_isolated_from_hook_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1468,10 +1476,10 @@ def test_git_helper_isolated_from_hook_env(tmp_path: Path, monkeypatch: pytest.M
     assert not decoy.exists()  # ...not on the leaked GIT_DIR
 
 
-def test_has_uncommitted_changes_ignores_leaked_hook_git_env(
+def test_git_backup_ignores_leaked_hook_git_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regression test: production `_has_uncommitted_changes` (the ``git status
+    """Regression test: production `_git_backup` (the ``git status
     --porcelain`` call) must scrub GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE itself — it must not lean on
     conftest's autouse `_isolate_git_env` fixture, which would re-mask the very leak this test is
     meant to pin. `monkeypatch.setenv` below runs inside the test body, i.e. *after* that fixture's
@@ -1494,7 +1502,7 @@ def test_has_uncommitted_changes_ignores_leaked_hook_git_env(
     for key, value in _leak_decoy_env(decoy).items():
         monkeypatch.setenv(key, value)
 
-    assert _has_uncommitted_changes(str(path)) is True
+    assert _git_backup(str(path)).backed_up is False
 
 
 @dataclass
@@ -1902,7 +1910,7 @@ def test_run_mutation_paths_dirty_tree_warns_or_refuses(
     )  # dirty
     f, g = str(repo / "f.gd"), str(repo / "g.gd")
     assert cli.run_mutation_paths([f, g], str(repo), RecordingRunner(), require_clean=True) == 2
-    assert "uncommitted changes and --require-clean" in capsys.readouterr().err
+    assert "--require-clean was given, but" in capsys.readouterr().err
     assert (
         cli.run_mutation_paths([f, g], str(repo), RecordingRunner()) == 0
     )  # default: warn + proceed
@@ -2056,7 +2064,7 @@ def test_all_git_subprocess_calls_scrub_leaked_hook_env(
     (``git status``, ``git diff``, ``git ls-files``) must pass ``env=`` with all six inherited
     GIT_* location vars removed — checked directly against the live env kwarg, independent of any
     particular git version's real-repo error behavior. Spies on `cli.subprocess.run` (never
-    touching a real git binary) so the three call sites in `_has_uncommitted_changes` and
+    touching a real git binary) so the three call sites in `_git_backup` and
     `_changed_lines` are each exercised and captured. Deliberately re-injects the leak vars via
     monkeypatch inside the test body (after conftest's autouse `_isolate_git_env` fixture already
     cleared them), so it does not depend on that fixture.
@@ -2083,7 +2091,7 @@ def test_all_git_subprocess_calls_scrub_leaked_hook_env(
     monkeypatch.setattr(cli.subprocess, "run", spy)
 
     path = _gd(tmp_path)  # a real file on disk; git itself is never actually invoked (spied above)
-    cli._has_uncommitted_changes(str(path))  # -> git status
+    cli._git_backup(str(path))  # -> git status
     cli._changed_lines("HEAD", [str(path)])  # -> git diff, then git ls-files (empty diff + is_file)
 
     assert len(captured_envs) == 3  # status, diff, ls-files — every call site hit exactly once
@@ -2480,3 +2488,108 @@ def test_the_trust_flag_cannot_itself_come_from_the_config_file(tmp_path: Path) 
 
     assert settings is not None
     assert "trust_config" not in settings
+
+
+# --- --require-clean refuses whatever it could not confirm ----------------------------------
+#
+# The flag is someone asking for a guarantee before gdmutant edits their file in place: don't
+# start unless git could put this back. The check answered that question with a plain
+# `git status --porcelain`, which is silent in three quite different situations -- the file is
+# genuinely committed and unmodified, git could not be run, or the file is ignored and git has
+# never held a copy of it. Only the first is safe, and all three passed.
+
+
+def test_a_gitignored_source_is_not_treated_as_safely_committed(tmp_path: Path) -> None:
+    # The sharpest case, because it is the one where git has NO copy at all -- not an out-of-date
+    # one, none -- and it was reported exactly like a clean, committed file. `git status
+    # --porcelain` says nothing about ignored paths unless asked.
+    repo = _committed_repo(tmp_path)
+    (repo / ".gitignore").write_text("generated.gd\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-m", "ignore generated")
+    ignored = repo / "generated.gd"
+    ignored.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+
+    backup = _git_backup(str(ignored))
+
+    assert backup.backed_up is False, "an ignored file has no copy in git and must not read clean"
+    assert "ignored by git" in backup.reason
+
+
+def test_require_clean_refuses_a_gitignored_source(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # ...and the flag has to act on it. Running here would edit in place a file that no checkout
+    # could ever restore.
+    repo = _committed_repo(tmp_path)
+    (repo / ".gitignore").write_text("generated.gd\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-m", "ignore generated")
+    ignored = repo / "generated.gd"
+    ignored.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+
+    rc = run_mutation(str(ignored), str(repo), RunBoomRunner(), require_clean=True)
+
+    assert rc == 2
+    assert "ignored by git" in capsys.readouterr().err
+
+
+def test_require_clean_refuses_when_the_file_is_not_in_a_repo(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Fail closed. Passing here returned the flag's assurance without ever having checked
+    # anything: there is no repository, so nothing could be recovered from one.
+    path = _gd(tmp_path)
+
+    rc = run_mutation(str(path), str(tmp_path), RunBoomRunner(), require_clean=True)
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "not inside a git working tree" in err
+    assert "--no-require-clean" in err, "the refusal must say how to proceed anyway"
+
+
+def test_require_clean_refuses_when_git_cannot_be_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The same rule for a missing git binary: "could not check" is not "checked and safe".
+    repo = _committed_repo(tmp_path)
+
+    def no_git(*args: object, **kwargs: object) -> object:
+        raise FileNotFoundError("git not found")
+
+    monkeypatch.setattr(cli.subprocess, "run", no_git)
+    rc = run_mutation(str(repo / "f.gd"), str(repo), RunBoomRunner(), require_clean=True)
+
+    assert rc == 2
+    assert "may not be installed" in capsys.readouterr().err
+
+
+def test_without_the_flag_an_unjudgeable_tree_stays_silent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The default must not change: gdmutant has to work outside git at all, so a file it cannot
+    # judge is not worth a warning on every single run. Only the flag turns not-knowing into a
+    # refusal, because only the flag promised anything.
+    path = _gd(tmp_path)
+
+    rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), "a >= b"))
+
+    assert rc == 0
+    assert "warning:" not in capsys.readouterr().err
+
+
+def test_multi_file_require_clean_refuses_an_unjudgeable_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The multi-file path has its own copy of the decision, so it needs its own proof.
+    first = _gd(tmp_path)  # f.gd
+    second = tmp_path / "g.gd"
+    second.write_text(_gd(tmp_path).read_text(encoding="utf-8"), encoding="utf-8")
+
+    rc = cli.run_mutation_paths(
+        [str(first), str(second)], str(tmp_path), RunBoomRunner(), require_clean=True
+    )
+
+    assert rc == 2
+    assert "not inside a git working tree" in capsys.readouterr().err

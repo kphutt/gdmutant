@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tomllib
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from gdmutant import __version__
@@ -137,33 +138,83 @@ def _clean_git_env() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if key not in _GIT_ENV_LEAKS}
 
 
-def _has_uncommitted_changes(source_path: str) -> bool:
-    """True only if `source_path` is inside a git work tree and has uncommitted changes (tracked
-    and modified, or untracked). False when it is clean, not under git, or git isn't available.
+@dataclass(frozen=True)
+class _GitBackup:
+    """Whether git is holding a copy of a source file that a killed run could be recovered from.
 
-    gdmutant mutates the file in place and restores it in a ``finally`` — safe for a normal exit or
-    Ctrl-C, but a hard kill (SIGKILL / power loss) could leave one swap on disk. Warning when the
-    file is dirty lets the user commit or stash first. We only positively confirm *dirty*: anything
-    we can't check (no git, not a repo) returns False, because gdmutant must run fine outside git.
+    gdmutant edits the file in place. `backed_up` is the one question that matters before it does:
+    ``True`` when git has a committed copy matching what is on disk, ``False`` when it positively
+    does not, and ``None`` when git could not answer at all. Those last two are genuinely different
+    — "there is no safety net" versus "nobody knows whether there is one" — and collapsing them is
+    what let `--require-clean` pass on a file it had never checked.
+    """
+
+    backed_up: bool | None
+    #: Why there is no usable copy, in words for the user. Empty when `backed_up` is True.
+    reason: str = ""
+
+
+def _git_backup(source_path: str) -> _GitBackup:
+    """Ask git whether it holds a recoverable copy of `source_path`.
+
+    ``--ignored=matching`` is what makes the answer honest. Plain ``git status --porcelain`` says
+    nothing at all about an **ignored** file, so a `.gd` matched by `.gitignore` came back
+    indistinguishable from a committed, unmodified one — while being the case where git has *never*
+    held a copy and a killed run could recover nothing. Asking for ignored paths turns that silence
+    into an explicit ``!!``.
     """
     path = Path(source_path)
     try:
         # No check=: git exits non-zero outside a repo (the default check=False), and we read the
         # returncode ourselves below. The `--` guards a filename that starts with "-".
         completed = subprocess.run(
-            ["git", "status", "--porcelain", "--", path.name],
+            ["git", "status", "--porcelain", "--ignored=matching", "--", path.name],
             cwd=path.parent,
             capture_output=True,
             text=True,
             env=_clean_git_env(),
         )
     except OSError:
-        return False  # git not installed, or the working directory is gone
+        return _GitBackup(None, "git could not be run here — it may not be installed")
     if completed.returncode != 0:
-        return False  # not a git work tree, etc.
-    # `--porcelain` prints one line per changed path and nothing at all when clean. Comparing to ""
-    # (not bool()) also kills a `text=True`->False mutant: raw bytes never equal the str "".
-    return completed.stdout != ""
+        return _GitBackup(None, f"{source_path} is not inside a git working tree")
+    # `--porcelain` prints one line per path and nothing at all when there is nothing to report.
+    # Comparing to "" (not bool()) also kills a `text=True`->False mutant: raw bytes never equal
+    # the str "".
+    if completed.stdout == "":
+        return _GitBackup(True)
+    if completed.stdout.startswith("!!"):
+        return _GitBackup(False, f"{source_path} is ignored by git, so git has no copy of it")
+    return _GitBackup(False, f"{source_path} has uncommitted changes")
+
+
+def _unbacked_source_problem(source_path: str, *, require_clean: bool) -> str | None:
+    """The message to print before mutating `source_path`, or None when git has it safely.
+
+    The two modes differ on purpose, and only in what they do about *not knowing*:
+
+    * By default a positively unsafe file warns and the run continues, and a file git could not
+      judge says nothing — gdmutant has to work outside git at all, so it cannot nag every run.
+    * ``--require-clean`` is someone asking for a guarantee, so anything short of a confirmed
+      copy is refused. Passing because git was missing or the file was not in a repo would hand
+      back exactly the assurance the flag exists to provide, without ever having checked.
+    """
+    backup = _git_backup(source_path)
+    if backup.backed_up is True:
+        return None
+    if require_clean:
+        return (
+            f"error: --require-clean was given, but {backup.reason}.\n"
+            "  gdmutant edits the file where it lies, so it will not start without a copy it "
+            "could put back.\n"
+            "  Commit or stash your work, or re-run with --no-require-clean to accept the risk."
+        )
+    if backup.backed_up is None:
+        return None  # cannot tell, and nobody asked for a guarantee — stay quiet
+    return (
+        f"warning: {backup.reason} — gdmutant mutates it in place (restoring it when done), so a "
+        "hard kill could leave it modified. Commit or stash first to be safe. Continuing ..."
+    )
 
 
 def _missing_executable(error: BaselineFailed) -> str | None:
@@ -663,20 +714,11 @@ def run_mutation(
     # require_clean, refuse) on a dirty tree so a hard interrupt can't lose uncommitted work.
     # Ordered after the read/parse validation above so a genuine read error is reported first,
     # not preceded by a "Continuing ..." warning.
-    if _has_uncommitted_changes(source_path):
+    problem = _unbacked_source_problem(source_path, require_clean=require_clean)
+    if problem is not None:
+        print(problem, file=sys.stderr)
         if require_clean:
-            print(
-                f"error: {source_path} has uncommitted changes and --require-clean was given. "
-                "Commit or stash first.",
-                file=sys.stderr,
-            )
             return 2
-        print(
-            f"warning: {source_path} has uncommitted changes — gdmutant mutates it in place "
-            "(restoring it when done), so a hard kill could leave it modified. Commit or stash "
-            "first to be safe. Continuing ...",
-            file=sys.stderr,
-        )
     path = Path(source_path)
     # Progress goes to stderr unconditionally: a real run boots Godot per mutant, so without it the
     # tool looks hung. stderr keeps stdout clean for --json - (pure JSON) and the human summary.
@@ -801,19 +843,11 @@ def run_mutation_paths(
             print(f"error: {problem}", file=sys.stderr)
             return 2
     for source_path in source_paths:
-        if _has_uncommitted_changes(source_path):
+        problem = _unbacked_source_problem(source_path, require_clean=require_clean)
+        if problem is not None:
+            print(problem, file=sys.stderr)
             if require_clean:
-                print(
-                    f"error: {source_path} has uncommitted changes and --require-clean was given. "
-                    "Commit or stash first.",
-                    file=sys.stderr,
-                )
                 return 2
-            print(
-                f"warning: {source_path} has uncommitted changes — gdmutant mutates it in place "
-                "(restoring it when done). Commit or stash first to be safe. Continuing ...",
-                file=sys.stderr,
-            )
     adapter = ADAPTER if changed is None else _diff_scoped(ADAPTER, changed)
     try:
         runs = run_paths(
