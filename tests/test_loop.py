@@ -1,7 +1,11 @@
 """Tests for the mutation-run loop (no Godot — fake runners drive killed/survived)."""
 
+import os
+import stat
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import MarkerRunner
@@ -13,6 +17,7 @@ from gdmutant.engine.loop import (
     MutantOutcome,
     ProgressStyle,
     SourceOutsideProject,
+    SourceWriteFailed,
     Verdict,
     _derive_timeout,
     _detect_eol,
@@ -22,6 +27,7 @@ from gdmutant.engine.loop import (
     _progress_line,
     _progress_plan,
     _progress_start,
+    _write_source,
 )
 from gdmutant.engine.loop import run as _run
 from gdmutant.engine.loop import run_paths as _run_paths
@@ -1066,3 +1072,230 @@ def test_a_deeply_nested_project_cannot_walk_back_onto_the_real_source_file(
         run(str(deep), str(real), src, ProjectDirRecordingRunner(), jobs=4)
 
     assert real.read_text(encoding="utf-8") == src
+
+
+# --- The source file is only ever replaced whole (crash-safe restore) -------------------------
+#
+# A mutation run rewrites the user's own source twice per mutant, and spends nearly all of its
+# time between those two writes. Writing in place emptied the file before putting anything back,
+# so a hard kill, a power cut, or a Ctrl-C landing in that window destroyed it. `_write_source`
+# now stages the bytes in a sibling temporary file and renames it over the target, so the path
+# always holds one complete version or the other.
+
+
+class ProcessKilled(Exception):
+    """Stands in for the process dying mid-write (a hard kill, a power cut, a Ctrl-C).
+
+    Not an `OSError`, so nothing in `_write_source`'s fallback path swallows it -- it ends the
+    write where it was raised, which is what a real kill does.
+    """
+
+
+def _kill_on_truncating_open(target: Path, real_open: Callable[..., Any]) -> Callable[..., Any]:
+    """A stand-in for `open` that kills the process the instant `target` is opened for writing.
+
+    Opening a file for ``"w"`` empties it before a single byte can be written back, so that
+    instant *is* the window in which the user's source exists nowhere on disk. This stand-in makes
+    the window fatal, so a write that still has one cannot pass.
+    """
+
+    def opener(file: Any, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        if isinstance(file, (str, Path)) and Path(file) == target and "w" in mode:
+            real_open(file, mode, *args, **kwargs).close()  # truncate, as the real call would
+            raise ProcessKilled("killed mid-write")
+        return real_open(file, mode, *args, **kwargs)
+
+    return opener
+
+
+def test_a_write_never_opens_the_source_file_in_a_truncating_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The regression test, and the whole guarantee in one line: there is no moment at which the
+    # user's source file has been emptied and not yet rewritten. The stand-in above makes any such
+    # moment fatal.
+    #
+    # Against the old in-place write this fails outright -- the write opens the target for "w",
+    # the stand-in fires, and the file is left at zero bytes, which is what a hard kill did to real
+    # source code. The staged write opens only a sibling temporary file and renames it over the
+    # target, so the stand-in never fires and the new content arrives whole.
+    path = tmp_path / "player.gd"
+    path.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8", newline="")
+    mutated = "func f(a, b) -> bool:\n\treturn a >= b\n"
+
+    monkeypatch.setattr("builtins.open", _kill_on_truncating_open(path, open))
+    _write_source(path, mutated, "\n")
+    monkeypatch.undo()
+
+    assert path.read_text(encoding="utf-8") == mutated
+
+
+def test_a_write_keeps_the_targets_permission_bits(tmp_path: Path) -> None:
+    # A temporary file is created private to its owner. Renaming it over the target without
+    # copying the target's mode across would silently tighten the source file's permissions -- a
+    # file the whole team could read becoming owner-only, as a side effect of a test run.
+    path = tmp_path / "modes.gd"
+    path.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8", newline="")
+    os.chmod(path, 0o644)
+    before = stat.S_IMODE(path.stat().st_mode)
+
+    _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
+
+    assert stat.S_IMODE(path.stat().st_mode) == before
+
+
+def test_a_completed_run_leaves_no_temporary_file_behind(tmp_path: Path) -> None:
+    # The staging file lives beside the source, inside the user's own project. A completed run
+    # must leave that directory exactly as it found it -- no stray files for the game engine to
+    # scan or for the user to wonder about.
+    path = tmp_path / "clean.gd"
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path.write_text(src, encoding="utf-8", newline="")
+
+    run(str(tmp_path), str(path), src, MarkerRunner(str(path), "a >= b"))
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["clean.gd"]
+
+
+def test_a_rename_blocked_by_another_process_is_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On Windows the rename fails with PermissionError while ANY other process holds the target
+    # open -- even only for reading, which an editor, an antivirus scanner, or the very test
+    # engine gdmutant just launched all do routinely. Those holders let go in milliseconds, so a
+    # couple of retries turn the common case into a non-event instead of a degraded write.
+    path = tmp_path / "locked.gd"
+    path.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8", newline="")
+    real_replace = os.replace
+    attempts: list[int] = []
+
+    def flaky_replace(src: Any, dst: Any) -> None:
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise PermissionError(13, "Access is denied")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("gdmutant.engine.loop.os.replace", flaky_replace)
+    monkeypatch.setattr("gdmutant.engine.loop._REPLACE_BACKOFF", 0.0)
+    _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
+
+    assert len(attempts) == 3, "the blocked rename should have been retried, not given up on"
+    assert path.read_text(encoding="utf-8") == "func f(a, b) -> bool:\n\treturn a >= b\n"
+
+
+def test_a_rename_that_never_unblocks_refuses_rather_than_writing_unsafely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A lock that outlasts the retries used to fall back to the plain in-place write, on the
+    # reasoning that a write as unsafe as the old one still beat no write at all. It does not: the
+    # fallback truncates first, so it can leave the file empty (see the persistent-fault test
+    # below). Refusing with the file intact is the only answer consistent with this module's
+    # promise.
+    path = tmp_path / "stuck.gd"
+    original = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path.write_text(original, encoding="utf-8", newline="")
+
+    def always_blocked(src: Any, dst: Any) -> None:
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr("gdmutant.engine.loop.os.replace", always_blocked)
+    monkeypatch.setattr("gdmutant.engine.loop._REPLACE_BACKOFF", 0.0)
+    with pytest.raises(SourceWriteFailed, match="left exactly as it was"):
+        _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
+
+    assert path.read_text(encoding="utf-8") == original
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["stuck.gd"], "no temporary file left"
+
+
+def test_a_persistent_write_fault_leaves_the_source_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The regression test for the defect this module exists to prevent, reached from the other
+    # side. A full disk fails the staged write's flush; the old code then fell back to the plain
+    # in-place write, which truncates the file BEFORE writing, so the same full disk failed that
+    # write too and left the user's source at zero bytes. One fault, both paths -- they write to
+    # the same filesystem, so a single cause hitting both is the expected case, not a coincidence.
+    #
+    # Against the fallback this test fails with the file empty: the exact outcome the PR's title
+    # promises can never happen.
+    path = tmp_path / "fullDisk.gd"
+    original = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path.write_text(original, encoding="utf-8", newline="")
+
+    def disk_full(fd: int) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr("gdmutant.engine.loop.os.fsync", disk_full)
+    with pytest.raises(SourceWriteFailed):
+        _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
+
+    assert path.read_bytes() == original.encode(), "a failed write must not touch the source"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["fullDisk.gd"]
+
+
+def test_a_directory_that_cannot_hold_a_temporary_file_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With no staging file there is no safe write to make, and the unsafe one is not on offer any
+    # more. Refuse, and say the source is untouched -- which it is, because nothing was opened.
+    path = tmp_path / "notemp.gd"
+    original = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path.write_text(original, encoding="utf-8", newline="")
+
+    def no_temp_files(*args: Any, **kwargs: Any) -> tuple[int, str]:
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr("gdmutant.engine.loop.tempfile.mkstemp", no_temp_files)
+    with pytest.raises(SourceWriteFailed, match="left untouched"):
+        _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
+
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_a_read_only_source_is_refused_rather_than_replaced(tmp_path: Path) -> None:
+    # A rename needs write permission on the DIRECTORY, not on the file, so the staged write would
+    # happily replace a file whose permissions say "do not modify me" -- something the plain write
+    # it replaces refused to do. Marking a file read-only is a deliberate instruction (Perforce
+    # checkouts do it to every unopened file), so it is honoured.
+    path = tmp_path / "readonly.gd"
+    original = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path.write_text(original, encoding="utf-8", newline="")
+    os.chmod(path, stat.S_IREAD)
+    if os.access(path, os.W_OK):  # pragma: no cover - root ignores permission bits entirely
+        pytest.skip("this account can write read-only files, so the bit proves nothing here")
+
+    try:
+        with pytest.raises(SourceWriteFailed, match="read-only"):
+            _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
+        assert path.read_text(encoding="utf-8") == original
+    finally:
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)  # let tmp_path clean up
+
+
+def test_a_missing_target_is_still_written(tmp_path: Path) -> None:
+    # The permission check and the mode copy both only apply to a file that is actually there.
+    # A target that does not exist yet is simply created -- no mode to preserve, nothing to refuse.
+    path = tmp_path / "brandnew.gd"
+
+    _write_source(path, "func f(a, b) -> bool:\n\treturn a > b\n", "\n")
+
+    assert path.read_text(encoding="utf-8") == "func f(a, b) -> bool:\n\treturn a > b\n"
+
+
+def test_a_symlinked_source_is_written_through_rather_than_replaced(tmp_path: Path) -> None:
+    # Renaming over a symlink swaps the LINK for a regular file and leaves the file it names
+    # untouched -- so a project that symlinks a shared script would have the link silently
+    # destroyed and the real source never mutated, nor restored. Resolving the link first keeps
+    # the behaviour the plain in-place write had, which wrote straight through it.
+    real = tmp_path / "real.gd"
+    real.write_text("func f(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8", newline="")
+    link = tmp_path / "link.gd"
+    try:
+        link.symlink_to(real)
+    except (OSError, NotImplementedError):  # pragma: no cover - unprivileged Windows
+        pytest.skip("this platform or account cannot create symlinks")
+
+    _write_source(link, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
+
+    assert link.is_symlink(), "the symlink itself must survive the write"
+    assert real.read_text(encoding="utf-8") == "func f(a, b) -> bool:\n\treturn a >= b\n"

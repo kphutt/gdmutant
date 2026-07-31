@@ -124,6 +124,11 @@ CLI.
   git ignores, a file outside any repository, and a machine with no git all used to pass the
   check silently — the ignored file being the worst of them, since git has never held a copy of
   it. Without the flag the default is unchanged: a file gdmutant cannot judge says nothing.
+- A source file is never left half-written. Each rewrite is staged in a temporary file beside the
+  target and renamed over it, so the path always holds one whole version or the other. If that
+  cannot be done — no room for the temporary file, a failed flush, a lock that will not clear, or
+  a file marked read-only — gdmutant stops and says so, leaving the file untouched, rather than
+  attempting a write that could truncate it.
 - Under `--jobs N`, a worker only ever writes inside its own copy of the project. A source file
   that is not under `--project` has no copy to mutate, so the run is refused with an explanation
   instead of writing outside the copy — which used to report every mutant as a survivor, because
