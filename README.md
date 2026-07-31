@@ -223,8 +223,22 @@ Persist per-project defaults in `.gdmutant.toml` (any explicit flag overrides it
 project = "."
 runner = "command"
 command = "godot --headless --script res://tests/run_tests.gd"
+# godot = "/Applications/Godot.app/Contents/MacOS/Godot"
 # exclude = ["*_generated.gd", "*/vendor/*"]
 ```
+
+Two of those keys — `command` and `godot` — name a **program gdmutant will run**. gdmutant reads
+`.gdmutant.toml` from the directory you are in, so in a project you cloned that file was written
+by somebody else. It therefore ignores those two keys unless you say the file is trustworthy:
+
+```
+gdmutant run scripts --trust-config
+```
+
+Without `--trust-config` gdmutant stops and tells you which keys it skipped. Passing the value as
+a flag (`--command ...`, `--godot ...`) also works and needs no trust, since then you named the
+program yourself. Every other key — `project`, `runner`, `tests`, `report-path`, `timeout`,
+`require-clean`, `exclude` — is read normally: none of them can decide what gets executed.
 
 ## GitHub Action
 
@@ -250,6 +264,9 @@ It sets up Python and Godot, installs gdmutant, runs it, and writes every surviv
 `godot-use-dotnet: true` picks the .NET build of Godot. Survivors are output, not failure: the step
 exits non-zero only on a real error, such as a red baseline suite. Your GUT or gdUnit4 addon must
 already be in the project — the action installs neither.
+
+If your project's `.gdmutant.toml` sets `command` or `godot`, add `args: --trust-config` — gdmutant
+skips those two keys otherwise, for the reason given under [Configuration](#configuration).
 
 **Pin the commit SHA. There is no `@v1` or `@v0`.** Every published tag names a full version
 (`v0.1.0`) and never moves: a tag ruleset blocks deleting or re-pointing any tag, and the release

@@ -870,6 +870,18 @@ _CONFIG_KEY_TO_DEST = {
 }
 _CONFIG_FILENAME = ".gdmutant.toml"
 
+#: The config keys whose value names a **program gdmutant will execute**: `command` is handed
+#: straight to the operating system, and `godot` is the binary every JUnit runner launches.
+#:
+#: `.gdmutant.toml` is read from the working directory, so on a project you cloned it is a file
+#: somebody else wrote. Every other key it can set is inert — a directory, a glob, a number, a
+#: `res://` path — but these two decide what runs on your machine, which turns "point the mutation
+#: tester at this checkout" into "run whatever this checkout says". So they are ignored unless the
+#: person at the keyboard vouches for the file with ``--trust-config``, or passes the value as a
+#: flag themselves. `runner` is deliberately NOT here: it only picks *which* runner, and the
+#: program it would need still has to come from a trusted source.
+_EXECUTABLE_CONFIG_KEYS = ("command", "godot")
+
 
 def _load_config(path: Path | None = None) -> dict[str, object] | None:
     """Load per-project defaults from `.gdmutant.toml` (a flat table of flag-named keys) in the
@@ -925,6 +937,36 @@ def _load_config(path: Path | None = None) -> dict[str, object] | None:
         print(f"error: {path}: 'exclude' must be a list of glob strings", file=sys.stderr)
         return None
     return settings
+
+
+def _program_naming_keys(settings: dict[str, object]) -> list[str]:
+    """The `_EXECUTABLE_CONFIG_KEYS` this config actually sets, as the user wrote them."""
+    return [
+        key for key in _EXECUTABLE_CONFIG_KEYS if settings.get(_CONFIG_KEY_TO_DEST[key]) is not None
+    ]
+
+
+def _without_program_names(settings: dict[str, object]) -> dict[str, object]:
+    """`settings` with every program-naming key dropped — the version that is safe to trust."""
+    dropped = {_CONFIG_KEY_TO_DEST[key] for key in _EXECUTABLE_CONFIG_KEYS}
+    return {dest: value for dest, value in settings.items() if dest not in dropped}
+
+
+def _untrusted_config_message(keys: list[str]) -> str:
+    """The refusal shown when `.gdmutant.toml` names a program and nobody has vouched for it."""
+    named = " and ".join(f"'{key}'" for key in keys)
+    flags = " / ".join(f"--{key}" for key in keys)
+    return (
+        f"error: {_CONFIG_FILENAME} names a program for gdmutant to run ({named}), so gdmutant "
+        "stopped instead of running it.\n"
+        f"  {_CONFIG_FILENAME} is read from the directory you are in. In a project you cloned, "
+        "that file was written by\n"
+        "  somebody else, and these keys decide what gets executed on your machine — so gdmutant "
+        "will not act on\n"
+        "  them by itself.\n"
+        "  If this project is yours, or you have read the file and trust it, add --trust-config.\n"
+        f"  Otherwise pass the value yourself ({flags}), which always wins over the file."
+    )
 
 
 def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentParser:
@@ -1004,6 +1046,14 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         dest="require_clean",
         action="store_false",
         help="allow running even if the source file has uncommitted git changes",
+    )
+    run_parser.add_argument(
+        "--trust-config",
+        action="store_true",
+        help=f"act on the keys in {_CONFIG_FILENAME} that name a program to run "
+        f"({', '.join(_EXECUTABLE_CONFIG_KEYS)}). Without this they are refused, because that "
+        "file comes from the project directory and a project you did not write could point them "
+        "at anything.",
     )
     run_parser.add_argument(
         "--exclude",
@@ -1113,9 +1163,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = _load_config()
     if config is None:
         return 2  # a malformed/invalid .gdmutant.toml is a setup error
-    parser = build_parser(config)
+    # Parse first with the program-naming keys withheld, so nothing the config file says can pick
+    # what runs before the user has had a chance to vouch for it. Only once --trust-config is seen
+    # on the command line are they parsed back in.
+    program_keys = _program_naming_keys(config)
+    parser = build_parser(_without_program_names(config) if program_keys else config)
     args = parser.parse_args(argv)
     if args.command == "run":
+        if program_keys:
+            # Parse a second time with the whole config, and compare. A program-naming key only
+            # matters where the two disagree: where they agree, the user named that program on the
+            # command line themselves, so the file decided nothing and there is nothing to refuse.
+            trusted = build_parser(config).parse_args(argv)
+            decided = [
+                key
+                for key in program_keys
+                if getattr(args, _CONFIG_KEY_TO_DEST[key])
+                != getattr(trusted, _CONFIG_KEY_TO_DEST[key])
+            ]
+            if decided and not args.trust_config:
+                print(_untrusted_config_message(decided), file=sys.stderr)
+                return 2
+            args = trusted
         if args.jobs < 1:
             print("error: --jobs must be a positive integer", file=sys.stderr)
             return 2
