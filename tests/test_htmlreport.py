@@ -14,6 +14,7 @@ from gdmutant.engine.explain import DOC_BASE_URL
 from gdmutant.engine.htmlreport import (
     FRANK_SVG,
     TAGLINE,
+    _render_inline_markdown,
     change_note,
     finding_key,
     render_html,
@@ -482,11 +483,21 @@ def test_the_inlined_reference_carries_only_the_operators_this_report_used() -> 
         _report("return a > b\n", [_mutant(1, 10, 11, "comparison", ">=", "Survived")])
     )
     assert set(view.refs) == {"comparison"}
-    # …rendered from the page's two inline markers into real markup.
+    # …rendered from the page's inline markers into real markup.
     labels = [label for label, _ in view.refs["comparison"]]
     assert labels == ["The change", "Why it survived", "How to kill it", "Equivalent mutant?"]
     assert "<code>&gt;</code>" in view.refs["comparison"][0][1]
-    assert "<strong>equal</strong>" in view.refs["comparison"][1][1]
+
+
+def test_the_reference_renderer_escapes_then_re_applies_both_inline_markers() -> None:
+    # The reference page uses backticks throughout and, since the house-style pass, no bold — so
+    # the bold branch has no live example left to assert against in the test above. It stays
+    # supported and pinned here instead, so a page edit that reintroduces bold renders as markup
+    # rather than leaking literal asterisks into the report.
+    assert _render_inline_markdown("a `x` b") == "a <code>x</code> b"
+    assert _render_inline_markdown("a **x** b") == "a <strong>x</strong> b"
+    # Escaping happens first, so source characters can never become markup.
+    assert _render_inline_markdown("<b> & `x`") == "&lt;b&gt; &amp; <code>x</code>"
 
 
 def test_an_assert_survivor_expands_the_assert_reference_not_its_operators() -> None:

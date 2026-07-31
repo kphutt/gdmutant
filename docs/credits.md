@@ -8,7 +8,7 @@ created: 2026-07-10
 
 Every third-party library shipped or adapted here is logged with its license, verified
 permissive at the time of use. This keeps open-sourcing (and any future dual-licensing)
-clean. **Re-verify each license at the moment of use** — licenses and repos change.
+clean. Re-verify each license at the moment of use. Licenses and repos change.
 
 ## Runtime dependencies (shipped)
 | Library | Use | License | Source | Verified |
@@ -25,8 +25,8 @@ clean. **Re-verify each license at the moment of use** — licenses and repos ch
 | Tool | Use | License |
 |---|---|---|
 | Godot Engine | Runs the GDScript test suites headlessly | MIT |
-| [GdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) (v6.1.3) | GDScript test framework; its addon is downloaded — not vendored — into the corpus fixture for the live self-test (`scripts/install_gdunit4.py`) | MIT |
-| [GUT](https://github.com/bitwes/Gut) (v9.7.1) | GDScript test framework (peer JUnit adapter); its addon is downloaded — not vendored — into the corpus fixture for the live self-test (`scripts/install_gut.py`) | MIT |
+| [GdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) (v6.1.3) | GDScript test framework. Its addon is downloaded (not vendored) into the corpus fixture for the live self-test (`scripts/install_gdunit4.py`) | MIT |
+| [GUT](https://github.com/bitwes/Gut) (v9.7.1) | GDScript test framework (peer JUnit adapter). Its addon is downloaded, not vendored, into the corpus fixture for the live self-test (`scripts/install_gut.py`) | MIT |
 | Python | Runtime | PSF |
 | uv | Dependency + environment manager | Apache-2.0 / MIT |
 | [mise](https://mise.jdx.dev) | Pins the Godot release the live self-test runs against (`mise.toml`) | MIT |
@@ -39,13 +39,14 @@ clean. **Re-verify each license at the moment of use** — licenses and repos ch
 | [pre-commit](https://pre-commit.com) | Manages the local git hooks that run the checks in `.pre-commit-config.yaml` | MIT |
 | gitleaks | Secret scan, local (pre-commit stage) and in CI | MIT |
 
-## Prior art (studied for ideas only — no code copied)
-- **hanse7962/GodotMutationTesting** — **unlicensed** (all rights reserved). Studied for
-  ideas only; no code used or adapted.
-- **mutmut** (BSD-3), **Stryker** / **PIT** (Apache-2.0), **infection** (BSD-3),
-  **cargo-mutants** (MIT) — architecture and patterns studied. Patterns aren't copyrightable,
-  and these licenses permit adaptation with attribution; none of their code is copied here.
-  **mutmut appears twice on purpose:** it is listed here for the ideas studied, and in the
+## Prior art (studied for ideas only, no code copied)
+- hanse7962/GodotMutationTesting: unlicensed (all rights reserved). Studied for
+  ideas only, no code used or adapted.
+- mutmut (BSD-3), Stryker / PIT (Apache-2.0), infection (BSD-3),
+  cargo-mutants (MIT): architecture and patterns studied. Patterns aren't copyrightable,
+  and these licenses permit adaptation with attribution. None of their code is copied here.
+
+  mutmut appears twice on purpose. It is listed here for the ideas studied, and in the
   build/dev tools table above because gdmutant also *runs* it as a dev dependency. Neither
   entry implies any of its code was copied.
 
