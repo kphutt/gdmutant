@@ -30,4 +30,6 @@ the primary risk surfaces:
 
 ## Supported versions
 
-Pre-1.0: only the latest `main` is supported. Security fixes land there first.
+Security fixes land in a new release built from the latest version, published to PyPI. Older
+releases do not receive backports — upgrading to the latest release is how you get a fix.
+gdmutant is pre-1.0 and maintained by one person, so this is the only support commitment made.
