@@ -88,7 +88,130 @@ Verify the result at https://test.pypi.org/p/gdmutant.
    leaving the Release published; fix the cause and re-run the failed jobs from the Actions tab
    (a re-run replays the same `release: published` event), or cut a new version if the fix needs a
    code change.
-8. Verify at https://pypi.org/p/gdmutant.
+8. **Verify what shipped** — the project page is at https://pypi.org/p/gdmutant, and the checklist
+   below covers what a green upload does not prove.
+
+## After the release
+Almost everything that can be wrong with a release is invisible from the inside. The maintainer's
+browser is signed in, their machine already has the source, and their clone already has the tag — so
+the page 404s for a stranger, the install pulls files nobody else receives, and the `uses:` line
+resolves to a ref only this account can see. A green publish run says the upload succeeded; it says
+nothing about any of that.
+
+Each item below is one action and the result that counts as a pass. **Recurring** items belong to
+every release. **One-time** items are setup: do them once, confirm them once, and never re-check them
+at release time.
+
+### Recurring — every release
+
+1. **Install from the index on a machine that has never held the source.**
+
+   ```sh
+   uv tool install gdmutant     # or, in a fresh virtualenv: pip install gdmutant
+   gdmutant --version
+   ```
+
+   *Pass:* the printed version is the one just tagged, and saving the README quickstart's
+   `scratch.gd` into an empty folder and running `gdmutant run scratch.gd --dry-run` lists mutants.
+   That proves the entry point, the declared dependencies, and the parser all arrived.
+
+   An editable install, a `pip install dist/*.whl`, or any command run from a checkout proves none
+   of it — each reads files a stranger never receives. The install has to resolve by name, from the
+   index. Index propagation takes a few minutes; a `404` straight after the upload means wait, not
+   fail. *Automatable:* a job in `publish.yml` gated on the upload, installing `gdmutant==X.Y.Z`
+   from the index with a retry and asserting `gdmutant --version`, turns this into a gate.
+
+2. **Open the project page signed out.** https://pypi.org/p/gdmutant in a private window.
+
+   *Pass:* the banner image renders rather than showing a broken-image icon, the description is
+   formatted Markdown rather than raw text, the version shown is the new one, and every entry in the
+   sidebar's project links (Homepage, Repository, Issues, Changelog) opens.
+
+   PyPI renders the description with its own renderer and fetches images through its own proxy, so a
+   banner that is fine on the repo front page can still fail here. **A release's description is
+   frozen at upload** — the only fix for a broken one is another version number. `twine check`, in
+   the build job, proves the description *renders*; it never fetches an image. *Automatable:* a
+   release-time step that pulls the image URLs out of the built long description and fails on a
+   non-200 makes this a gate instead of a look.
+
+3. **Run the action from a consumer's seat.** In a **separate** repository, add a workflow that pins
+   the published ref the action's documentation tells consumers to use, passes the documented inputs,
+   and appends `--html report.html` through the `args` input; upload that file as an artifact.
+
+   *Pass:* the ref resolves — a `uses:` naming a ref that does not exist fails the run before any
+   step executes — the run completes, the job summary carries the survivor block, and the downloaded
+   `report.html`, opened on a machine with the network switched off, shows every survivor with its
+   explanation.
+
+   The in-repo smoke workflow cannot answer this. It consumes the action as `uses: ./` and installs
+   gdmutant from the branch under test, so it exercises the composite steps while proving nothing
+   about a published ref resolving for somebody else, or about what the published package renders.
+
+4. **Look at the repository the way a stranger does.** Front page, private window.
+
+   *Pass:* the banner renders; every badge shows a real value rather than "no status", "invalid" or
+   "not found"; the README's documentation links all open; and Issues -> **New issue** offers its
+   contact links, each of which opens.
+
+   Then take the `more` URL out of a survivor block the CLI actually printed and paste it into the
+   same private window. *Pass:* it lands on the survivor reference, at that operator's section. Every
+   user sees that URL on every run, which makes it the most-read link the project has.
+
+   A badge reading "no status" is reporting a workflow that has no automatic trigger, not a check
+   that failed — the fix is **`ci.yml` runs automatically again**, the last item under
+   [One-time](#one-time--setup-confirmed-once).
+
+### One-time — setup, confirmed once
+
+- **The trusted publisher moved.** The first upload to an index converts the pending publisher and
+  relocates it to the project's own publishing settings. Right after that first upload — separately
+  for each index — confirm the entry is there:
+  [The publisher moves after an index's first upload](#the-publisher-moves-after-an-indexs-first-upload).
+  *Pass:* the five registration values are listed under the project's settings. Skipping this is
+  invisible now and surfaces at the *next* release as an OIDC trust error whose real cause, an upload
+  that succeeded, appears nowhere in the log.
+
+- **Private vulnerability reporting is on.** `SECURITY.md` sends reporters to GitHub's private
+  advisory form, and that form exists only where the setting is enabled — it is an option for public
+  repositories, found in the repository's settings among the security options. *Pass:*
+  `gh api repos/<owner>/<repo>/private-vulnerability-reporting` answers instead of returning `404`,
+  and the repository's **Security** tab offers **Report a vulnerability**. Nothing ever signals this
+  is broken: a reporter who finds no form does not fall back to email, they give up quietly.
+  *Automatable:* `scripts/harden_github.py` already converges repository settings through `gh api`;
+  this belongs in it.
+
+- **Discussions are enabled.** The issue chooser's community-support link points at the repository's
+  Discussions and 404s while they are off. *Pass:* `gh api repos/<owner>/<repo> --jq .has_discussions`
+  prints `true`, and the link in the chooser opens a Discussions page. *Automatable:* same script —
+  `has_discussions` is a plain repository field.
+
+- **Description, topics, social preview.** *Pass:* the repository header carries the one-line
+  description and topics, and pasting the repository URL into a chat client produces a card showing
+  the project's own image rather than a generic avatar. Topics are how a search for mutation testing
+  or Godot reaches the project at all; without them it is findable only by people who already know
+  its name. *Automatable:* description and topics are repository settings `scripts/harden_github.py`
+  can converge. The social-preview image is uploaded by hand and stays a one-time click.
+
+- **`ci.yml` runs automatically again.** The README's CI badge reports on `ci.yml`, and a workflow
+  with no automatic trigger has no result to report, so the badge reads "no status" to every visitor
+  — the thing item 4 above catches without saying what to do about it. Restoring the triggers belongs
+  to the move to public, where the reason they were removed, billed Actions minutes on a private
+  repository, stops applying. The steps live in
+  [ADR-0012](decisions/0012-merge-time-local-ship-time-cloud.md)'s Decision section, under "Trivial to
+  reverse, by design" — follow them there rather than from here, so the two cannot drift. *Pass:*
+  signed out, the badge on the repository front page shows a real result, passing or failing, instead
+  of "no status". One knock-on to know about: this changes which checks report on a pull request, and
+  `scripts/harden_github.py` converges branch protection, so the required-check list it applies has to
+  match the checks that really report — a required check nothing reports blocks every pull request
+  forever.
+
+### What is still fixable afterwards
+- The GitHub Release's title and notes: editable at any time.
+- The repository's docs, including the survivor-reference URL the CLI prints — it tracks `main`, so a
+  fix there reaches every copy already installed.
+- A published distribution and the description on its project page: **not** editable. A release can be
+  yanked, which hides it from resolvers without deleting it, and replaced under a new version number.
+  Nothing else.
 
 ## Notes
 - **Nothing is stored** — no token secret; the index mints a one-shot credential per upload.
