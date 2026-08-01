@@ -75,12 +75,17 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   ([ADR-0005](../decisions/0005-exit-code-test-runner-convention.md)) as the fallback for any harness
   without JUnit output (a hand-rolled `SceneTree` runner, a bespoke CLI). Every runner upholds the
   crash-safety clause: a load/compile crash surfaces as a kill or error, never a silent zero-test
-  pass. GdUnit4 upholds it via the "report must reappear" guard, the command runner via its exit code.
-  GUT needs more. It skips a suite that fails to compile, runs the remaining ones green and exits 0,
-  so the report still carries the healthy files' passes and the test count is not zero. What catches
-  that case is a drop below the healthy baseline's test count, which a live probe proved necessary. A
-  `tests == 0` guard covers only the narrower shape where the whole run collects nothing. Any future
-  JUnit-emitting framework is first-class by adding one small adapter, with no engine change.
+  pass. Each framework fails differently, so each adapter's enforcement is shaped to its own failure,
+  and both shapes are measured live against a two-suite corpus rather than assumed. GdUnit4 loads
+  every suite during discovery, so one it cannot parse aborts the whole run and writes no report,
+  which the "report must reappear" guard catches. The command runner upholds the clause via its exit
+  code. GUT needs more. It skips a suite that fails to compile, runs the remaining ones green and
+  exits 0, so the report still carries the healthy files' passes and the test count is not zero. What
+  catches that case is a drop below the healthy baseline's test count, which a live probe proved
+  necessary. A `tests == 0` guard covers only the narrower shape where the whole run collects
+  nothing, so both JUnit adapters carry one of those too. Any future JUnit-emitting framework is
+  first-class by adding one small adapter, with no engine change, and both of that adapter's hooks
+  are abstract so it has to state how its own framework fails.
 
   The seam is three protocols, not one. `Runner` is the required one: run the suite once, report the
   aggregate result. `Preparable` is optional and covers a slow one-time setup. The engine calls
@@ -92,8 +97,18 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   the same contract module but the front desk is what tests for it, because printing a warning to
   the user is a CLI job and not an engine one. Neither test names what the setup or the warning
   actually is, so both stay language-neutral (NF-3).
-- FG-3.3: The original (unmutated) suite must pass first. If it doesn't, the run aborts with a clear
-  error (mutation testing a red suite is meaningless).
+- FG-3.3: The original (unmutated) suite must pass first, and must actually have run tests. If it
+  fails, or if it reports zero tests, the run aborts with a clear error. Mutation testing a red suite
+  is meaningless, and a suite nobody ran is worse than meaningless: it reads as a pass, and then
+  every mutant comes back survived with no error anywhere in the run. The zero-test check lives in the
+  engine rather than in an adapter, because "the baseline ran nothing" is a property of a result, not
+  of a language or a framework, and it has to hold for every runner. A mutant run that reports zero
+  tests without failing is tallied as an error for the same reason, never as a survivor. The check
+  reads only the aggregate test count, so it stays language-neutral (NF-3). An adapter that can name
+  the cause and the cure still raises first with the better message. The one runner outside the
+  check's reach is the exit-code command runner, which has no test count to read, so a harness used
+  with it must exit non-zero when it discovers no tests
+  ([ADR-0011](../decisions/0011-runner-agnostic-adapter-seam.md)).
 
 ### FG-4: Verdict tally
 - FG-4.1: Each mutant is classified as one of:
