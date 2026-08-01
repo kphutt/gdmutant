@@ -13,16 +13,38 @@ this codebase `operator` almost always means a *mutation operator*: the thing th
 survivor reference, and the handful of real ones sit inside that pile. A reader cannot win that,
 so this module does it mechanically instead.
 
-The rules below are deliberately narrow. Each one matches a *construction* that cannot mean the
-domain term, never the bare word:
+There are two halves here, and they answer to different rules.
 
-- `this operator's` (a demonstrative pointing at a person) rather than `the operator's` (which is
-  how every mutation-operator sentence in this repo is written).
-- `Litmus`, `Catalyst`, `ai-toolkit` and friends: private tool names, matched case-sensitively
-  where an ordinary English word shares the spelling.
-- A home directory (`~/dev/`, `C:\\Users\\...`) rather than a path.
+**The shape rules name nothing, so they run everywhere, always.** Each matches a *construction*
+that cannot mean the domain term, never the bare word:
+
+- A possessive whose determiner points at a person: a demonstrative or a first-person pronoun in
+  front of `operator's`, rather than the definite or indefinite article every mutation-operator
+  sentence in this repo uses.
+- A home directory rather than a path: a tilde home, a Windows user directory, a `/home/<name>/`.
 - An e-mail address outside the reserved test domains, which is how a personal address arrives.
-- A tracker ticket id, which belongs to the tracker and not to a file a stranger will read.
+- The name on this clone's own commits, read out of `git config` rather than written down here.
+
+**The vocabulary rule needs a word list, and a file that ships must not hold one.** The private
+names are real ones: an internal tool, a codename, a repository nobody outside can look up.
+Spelling them out here publishes the very list the rule exists to protect, and it did. An earlier
+version held four of them in source and had to exempt itself from its own scan to stay green,
+which then had to be argued about, narrowed, and defended by a test of its own. That exemption is
+gone. Nothing tracked in this repository names a single private term any more: the list lives
+outside the tree, in a file this machine points at through the `GDMUTANT_PRIVATE_TERMS`
+environment variable.
+
+That leaves the rule with three states, and it says out loud which one it is in, because a check
+that can be mistaken for having run is the hazard this whole module is about:
+
+- **The variable names a readable file.** The rule runs, over every tracked file, like the rest.
+- **The variable names a file that is missing, unreadable, or holds no terms.** A hard failure.
+  A machine that declared a list and cannot produce it is broken, not unconfigured, and quietly
+  narrowing the scan is precisely what must never happen here.
+- **The variable is unset.** The rule does not run, and every run of this suite says so: in the
+  header pytest prints before the first test, in the skip reason, and in a warning. A fresh clone
+  and a CI runner are both this case legitimately. Neither has the file, and neither can be given
+  it, because the file is private. What they must not do is *look* checked.
 
 The scan reads `git ls-files`, not a directory walk, so a file added anywhere in the tree is
 covered the day it is added and there is no directory left over for a leak to hide in.
@@ -46,6 +68,12 @@ than an attack, so what a rule gets shown is now as deliberate as the rule itsel
   positively (a mutation tool's copy of the tree, an unpacked source distribution). Git failing
   for any other reason is a failure, not a pass: a guard that reports clean because it read
   nothing is the exact hazard `test_the_scan_reaches_the_whole_tree` exists to catch.
+- *This file is scanned like every other one.* There is no exemption left, for any path, under
+  any spelling. The two places where a shape rule would otherwise match its own example — a home
+  directory and an address on a real host — are written here in pieces and assembled by
+  `_spelled`, so the example still reaches the rule at run time without the tree carrying the
+  text. That is the whole reason the terms had to leave: an exemption is a hole with a name, and
+  the way to close it is to stop needing one.
 
 This is a hard failure, not advice. It is also not a proof: judgement calls like a stale status
 paragraph, a test count, or a roadmap-progress note are equally unwelcome in a file a stranger
@@ -55,9 +83,11 @@ class that a reader provably cannot catch by reading.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
+import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,15 +96,17 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-#: This module states the very names it forbids, so it cannot pass its own scan. Exempting it is
-#: the accepted cost of keeping the list readable: a rule file that spells out what it bans is the
-#: same shape as `.gitleaks.toml`, and a list of five words says far less than a sentence using
-#: one of them would. Nothing else may be added here without the same argument written beside it.
-#:
-#: The whole path, not the base name. Matching on the base name exempted every file in the tree
-#: that happened to be called `test_public_readiness.py`, and this project ships a corpus of
-#: fixture projects, so a second file wearing that name is a rename away rather than far-fetched.
-SELF = Path(__file__).resolve()
+
+def _spelled(*parts: str) -> str:
+    """`parts` joined, with nothing added.
+
+    A shape rule matches its own examples: the text that says what a home directory looks like
+    *is* a home directory. This file is no longer exempt from its own scan, so the two examples
+    that would match are written as pieces and put together here, at run time. The rule still sees
+    the whole string; the tree only ever carries the halves. `+` and a call, never two adjacent
+    string literals, because a formatter is allowed to fold those back into one.
+    """
+    return "".join(parts)
 
 
 @dataclass(frozen=True)
@@ -86,12 +118,22 @@ class Rule:
     fix: str
 
 
+#: The home directories, assembled rather than written. Spelled out, each of these would be a home
+#: path sitting in a tracked file, and the rule below would report this very module. This file is
+#: no longer exempt from its own scan, so every example that would match is built at run time out
+#: of pieces that do not. See `_spelled`.
+_TILDE_HOME = _spelled("~", "/dev/")
+_WINDOWS_HOME = _spelled("C:", "\\", "users", "\\")
+_MAC_HOME = _spelled("/", "users", "/")
+_LINUX_HOME = _spelled("/", "home", "/")
+
 RULES: tuple[Rule, ...] = (
     Rule(
         name="a possessive that can only mean a person",
-        # `this/our/my operator's` never describes a mutation operator: every such sentence in
-        # this repo says `the operator's`, `an operator's` or `that operator's`. The second half
-        # catches the nouns that give the person away whatever the determiner is.
+        # A demonstrative or a first-person pronoun in front of `operator's` never describes a
+        # mutation operator: every such sentence in this repo uses the definite or the indefinite
+        # article instead. The second half catches the nouns that give the person away whatever
+        # the determiner is.
         pattern=re.compile(
             r"\b(?:this|our|my)\s+operator's\b|\boperator's\s+(?:fleet|machine|laptop|inbox)\b",
             re.IGNORECASE,
@@ -103,49 +145,31 @@ RULES: tuple[Rule, ...] = (
         ),
     ),
     Rule(
-        name="a private tool or fleet name",
-        # Case-sensitive where an ordinary word shares the spelling, so `a litmus test` and
-        # `no precedent for this` stay legal English. `Precedent` is common enough at the start
-        # of a sentence that only the tool-shaped collocations are matched.
-        pattern=re.compile(
-            r"\bLitmus\b|\bCatalyst\b|(?i:\bprecedent\s+(?:review|pass|method|loop|round)\b)"
-            r"|(?i:\bai-toolkit\b)|(?i:\blodestar\b)"
-        ),
-        fix=(
-            "name the effect, not the tool: 'a review pass found', 'a design review', "
-            "'a second reader'. Nobody outside can look these up, so they read as noise at best."
-        ),
-    ),
-    Rule(
         name="a path inside somebody's home directory",
-        # Case-insensitive, because Windows paths are: `C:\\users\\...` names exactly the same
-        # directory as `C:\\Users\\...` and is exactly as private, and the case-sensitive version
-        # of this rule waved it through.
+        # Case-insensitive, because Windows paths are: the user directory spelled in lower case
+        # names exactly the same place as the capitalised one and is exactly as private, and the
+        # case-sensitive version of this rule waved it through.
         #
-        # The one exemption is CI's own home directory, and it is spelled out twice over, because
+        # The one exemption is CI's own home directory, and it is held down twice over, because
         # ignoring case widens what a negative lookahead *excuses* just as much as it widens what
-        # the rule catches. `(?!runner\b)` excused every path that merely *starts* with those six
-        # letters, since `\b` only asks for a word boundary and `-` and `.` are boundaries:
-        # `/home/runner-fixes-the-thing/` is a person's home and went unreported. So the exemption
-        # ends at a `/`, which makes it a whole path segment, and `(?-i:...)` holds it to lower
-        # case, because `/home/` is a Linux path and `/home/Runner/` there is not CI, it is
-        # somebody called Runner.
+        # the rule catches. Ending that lookahead at a word boundary excused every account that
+        # merely *starts* with the runner's six letters, since `-` and `.` are word boundaries
+        # too, so a person whose account begins that way had a home directory that went
+        # unreported. The exemption therefore ends at a `/`, which makes it a whole path segment,
+        # and `(?-i:...)` holds it to lower case: a Linux home is case-sensitive, so the
+        # capitalised spelling there is not the CI account, it is somebody with that name. All ten
+        # spellings are pinned, assembled at run time, in the parametrised test named for this
+        # rule at the foot of this module.
         pattern=re.compile(
-            r"~/dev/|[A-Za-z]:\\Users\\|/Users/[A-Za-z0-9._-]+/"
-            r"|/home/(?!(?-i:runner)/)[A-Za-z0-9._-]+/",
+            _TILDE_HOME
+            + r"|[A-Za-z]:\\Users\\"
+            + r"|/Users/[A-Za-z0-9._-]+/"
+            + r"|/home/(?!(?-i:runner)/)[A-Za-z0-9._-]+/",
             re.IGNORECASE,
         ),
         fix=(
             "use a repository-relative path, or a placeholder like `<path-to-a-checkout>`. "
             "An absolute home path is both a private detail and wrong on every other machine."
-        ),
-    ),
-    Rule(
-        name="a tracker ticket reference",
-        pattern=re.compile(r"\bLOD-\d+\b|\blinear\.app\b", re.IGNORECASE),
-        fix=(
-            "the tracker is private and its ids mean nothing here. Link a GitHub issue, or "
-            "write the requirement out."
         ),
     ),
 )
@@ -189,6 +213,181 @@ _GENERIC_GIT_NAMES = frozenset(
 )
 
 
+# --- the private vocabulary, which is not kept here ----------------------------------------------
+
+#: The environment variable a machine uses to declare that it holds a private vocabulary, and
+#: where. The variable is the declaration: setting it is a deliberate act, taken by whatever
+#: provisions the machine, and it is the only thing that puts the vocabulary rule into service.
+#:
+#: Not a default path, deliberately. A default would let an *empty* location mean "configured but
+#: clean", which is the shape of every bug this module has ever had: silence read as a pass.
+VOCABULARY_ENV = "GDMUTANT_PRIVATE_TERMS"
+
+#: How the file is written, quoted in the failure so a reader never has to find the format
+#: elsewhere. One term per line; `#` opens a comment; a blank line is nothing.
+VOCABULARY_FORMAT = (
+    "one term per line. A line starting with '#' is a comment and a blank line is ignored. "
+    "A plain line is matched literally, ignoring case, and ignoring which separator joins its "
+    "parts, so one entry covers the hyphenated, spaced, underscored and run-together spellings. "
+    "A line starting with 're:' is a regular expression instead, for the entries that need a "
+    "shape (an id scheme, a collocation, a spelling that must stay case-sensitive)."
+)
+
+#: The prefix that turns a line into a regular expression rather than a literal.
+_PATTERN_PREFIX = "re:"
+
+#: What may sit between the parts of a literal term. One entry then covers every spelling a
+#: hyphenated private name arrives in: hyphenated, spaced, underscored, dotted, run together.
+#: Zero-or-more, so a single-word term is unaffected.
+_TERM_SEPARATOR = r"[\s\-_.]*"
+
+#: The boundary a literal term is held to. Not `\b`: a term may begin or end with a character
+#: `\b` does not treat as a word character, and a hyphen must stay *allowed* on both sides, so
+#: that a term still matches inside a longer hyphenated name.
+_TERM_EDGE_BEFORE = r"(?<![A-Za-z0-9])"
+_TERM_EDGE_AFTER = r"(?![A-Za-z0-9])"
+
+
+class _VocabularyUnreadable(Exception):
+    """This machine declared a vocabulary and could not produce one. Never a reason to narrow."""
+
+
+@dataclass(frozen=True)
+class Vocabulary:
+    """The private terms this machine declared, compiled, plus where they came from."""
+
+    source: str
+    terms: tuple[str, ...]
+    pattern: re.Pattern[str]
+
+
+def _term_pattern(term: str) -> str:
+    """One written term as a regular-expression fragment.
+
+    A `re:` line is handed through untouched, so an entry that needs a shape can have one, and an
+    entry that must stay case-sensitive can say so inline with `(?-i:...)`. Everything else is a
+    literal, escaped, with its parts allowed to be joined by any of the separators a private name
+    gets typed with.
+    """
+    if term.startswith(_PATTERN_PREFIX):
+        return term[len(_PATTERN_PREFIX) :].strip()
+    parts = [re.escape(part) for part in re.split(r"[\s\-_.]+", term) if part]
+    return _TERM_EDGE_BEFORE + _TERM_SEPARATOR.join(parts) + _TERM_EDGE_AFTER
+
+
+def _read_vocabulary(path: Path) -> Vocabulary:
+    """The vocabulary at `path`, or `_VocabularyUnreadable` naming what went wrong.
+
+    Every way this can fail raises. A file that is missing, unreadable, or holds no terms at all
+    is a broken machine, not an unconfigured one, and the difference matters: an unconfigured
+    machine says so and stops, whereas a broken one that was allowed to continue would run a scan
+    with nothing in it and report the tree clean.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise _VocabularyUnreadable(str(exc)) from exc
+    except UnicodeDecodeError as exc:
+        raise _VocabularyUnreadable(f"it is not UTF-8 text ({exc})") from exc
+    terms = tuple(
+        stripped
+        for line in raw.splitlines()
+        if (stripped := line.strip()) and not stripped.startswith("#")
+    )
+    if not terms:
+        raise _VocabularyUnreadable("it holds no terms at all")
+    try:
+        pattern = re.compile("|".join(_term_pattern(term) for term in terms), re.IGNORECASE)
+    except re.error as exc:
+        raise _VocabularyUnreadable(f"one of its terms is not a valid expression ({exc})") from exc
+    return Vocabulary(source=str(path), terms=terms, pattern=pattern)
+
+
+def _declared_vocabulary_path() -> Path | None:
+    """The file this machine declares, or None when it declares none.
+
+    A variable set to nothing but whitespace counts as unset. It is what an exported-but-empty
+    variable looks like, and reading it as a declaration would turn the loudest state into the
+    quietest one: a declared machine that fails, rather than an undeclared one that says so.
+    """
+    raw = os.environ.get(VOCABULARY_ENV, "").strip()
+    return Path(raw).expanduser() if raw else None
+
+
+#: What the three states are called. The word travels into the header line, the skip reason, the
+#: warning and the tests, so that one place decides what a run is allowed to claim.
+LOADED, UNREADABLE, UNDECLARED = "loaded", "unreadable", "undeclared"
+
+
+def _looked_up() -> tuple[str, str, Vocabulary | None]:
+    """Which of the three states this machine is in, the sentence that says so, and the terms.
+
+    One lookup feeds the header line `conftest.py` prints, the skip reason, the warning, and the
+    scan itself, so the announcement cannot drift away from what actually happened.
+    """
+    path = _declared_vocabulary_path()
+    if path is None:
+        return (
+            UNDECLARED,
+            (
+                f"private vocabulary NOT CONFIGURED: {VOCABULARY_ENV} is unset, so the "
+                "vocabulary rule DID NOT RUN and this run is not a full public-readiness "
+                "check. The shape rules (possessive, home path, e-mail domain, git identity) "
+                "did run. A CI runner and a fresh clone are both this case legitimately, "
+                "because the word list is private and cannot ship with the repository. To run "
+                f"the other half, set {VOCABULARY_ENV} to a file outside this repository "
+                "holding " + VOCABULARY_FORMAT
+            ),
+            None,
+        )
+    try:
+        vocabulary = _read_vocabulary(path)
+    except _VocabularyUnreadable as exc:
+        return (
+            UNREADABLE,
+            (
+                f"private vocabulary BROKEN: {VOCABULARY_ENV} names {str(path)!r}, and {exc}. "
+                "This machine declared a word list and cannot produce it, which is a hard failure "
+                "rather than a narrower scan: a declared-but-missing list would leave the "
+                "vocabulary rule passing over every tracked file without a term in it. Repair the "
+                f"file or unset {VOCABULARY_ENV}. The file holds " + VOCABULARY_FORMAT
+            ),
+            None,
+        )
+    return (
+        LOADED,
+        # Names the variable as well as the file, like the other two states do. Without it the one
+        # state a configured machine actually sees was the only one that did not say what to change
+        # to get a different answer, and `test_the_run_says_out_loud_which_half_of_the_guard_ran`
+        # could not ask the same question of all three.
+        f"private vocabulary loaded: {len(vocabulary.terms)} terms from {vocabulary.source!r} "
+        f"(named by {VOCABULARY_ENV})",
+        vocabulary,
+    )
+
+
+def vocabulary_state() -> tuple[str, str]:
+    """Which state this machine is in, and the sentence that says so. Read by `conftest.py`."""
+    state, said, _ = _looked_up()
+    return state, said
+
+
+def _vocabulary() -> Vocabulary:
+    """The loaded vocabulary, or the right kind of noise instead.
+
+    Never returns an empty vocabulary, and never a narrower one than the machine asked for. The
+    two ways out are a failure and an announced skip, and which one a machine gets turns on
+    whether it declared a list, never on whether one happened to be there.
+    """
+    state, said, vocabulary = _looked_up()
+    if vocabulary is None:
+        if state == UNREADABLE:
+            pytest.fail(said)
+        warnings.warn(said, stacklevel=2)
+        pytest.skip(said)
+    return vocabulary
+
+
 # --- what the rules are shown ------------------------------------------------------------------
 
 #: Characters a reader cannot see at all. They arrive by pasting out of a browser or a rendered
@@ -199,8 +398,9 @@ _INVISIBLE = (0x00AD, 0x180E, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF)
 #: Characters a reader reads as ASCII punctuation. A word processor, a browser paste or a
 #: smart-quotes autocorrect substitutes these silently, and the possessive rule, which is the
 #: reason this module exists, is switched off by exactly one of them: the curly apostrophe. The
-#: dashes are here for the same reason a hyphenated private name is: `ai-toolkit` typed through
-#: an autocorrect is not spelled with the hyphen the rule looks for.
+#: dashes are here for the same reason a hyphenated private name is: `widget-corp` typed through
+#: an autocorrect is not spelled with the hyphen the rule looks for. The example is the made-up
+#: name the red team below uses, not a real one, because this comment is itself scanned.
 _LOOKALIKE = {
     0x2018: "'",
     0x2019: "'",
@@ -410,10 +610,16 @@ def _matches_in(pattern: re.Pattern[str], path: Path) -> list[Match]:
 
 
 def _matches(pattern: re.Pattern[str], paths: Iterable[Path]) -> list[Match]:
-    """Every hit for `pattern` across `paths`, skipping only this file itself."""
-    return [
-        match for path in paths if path.resolve() != SELF for match in _matches_in(pattern, path)
-    ]
+    """Every hit for `pattern` across `paths`. No path is skipped, this module's own included.
+
+    There used to be an exemption here, because this module spelled out the private names it
+    forbade and so could not pass its own scan. It was the one hole in the guard with a name on
+    it, and it was reached for real: it compared base names, so every file in the tree called
+    what this one is called went unscanned too. Moving the names out of the tree is what made the
+    exemption unnecessary, and the exemption is gone rather than merely made exact, because an
+    exact hole is still a hole.
+    """
+    return [match for path in paths for match in _matches_in(pattern, path)]
 
 
 def _hits(pattern: re.Pattern[str], paths: Iterable[Path]) -> list[str]:
@@ -526,6 +732,48 @@ def test_no_tracked_file_leaks_a_private_detail(rule: Rule) -> None:
     )
 
 
+def test_no_tracked_file_names_a_private_term() -> None:
+    """The half that needs a word list, and therefore needs this machine to have declared one.
+
+    Fails on a machine that declared a list it cannot produce. Skips, loudly, on one that declared
+    none. Never narrows: there is no path through here that scans a tree with an empty vocabulary
+    and calls the result clean.
+    """
+    targets = _scan_targets()  # fail or skip on the tree first, before asking about the word list
+    vocabulary = _vocabulary()
+    hits = _hits(vocabulary.pattern, targets)
+    assert not hits, (
+        f"{len(hits)} tracked line(s) name something out of the private vocabulary "
+        f"({len(vocabulary.terms)} terms, from {vocabulary.source!r}), which would be public the "
+        "moment this repo is:\n" + "\n".join(hits) + "\n\n"
+        "Fix: name the effect, not the thing. 'a review pass found', 'another project of mine', "
+        "'the tracker'. A reader outside cannot look any of these up, so at best they read as "
+        "noise, and at worst they hand out the shape of a workspace nobody was shown."
+    )
+
+
+def test_the_private_vocabulary_is_not_kept_inside_this_repository() -> None:
+    """A word list that ships is a word list that leaked, so the guard refuses to read one.
+
+    Three things keep the file out of this tree, and this is the one that runs even when the file
+    is somewhere silly. The second is `.gitignore`, pinned below, which runs on every machine
+    whether or not one is configured. The third is the rule above: a committed word list is a
+    tracked file in which every term matches its own line, so committing it turns the guard red
+    once per term rather than quietly making it a no-op.
+    """
+    path = _declared_vocabulary_path()
+    if path is None:
+        pytest.skip(f"{VOCABULARY_ENV} is unset, so there is no declared file to place")
+    assert not path.resolve().is_relative_to(REPO_ROOT), (
+        f"{VOCABULARY_ENV} names {str(path)!r}, which is inside this repository at "
+        f"{str(REPO_ROOT)!r}. The private vocabulary must live outside the tree: anything in here "
+        "is one `git add` away from being published, and publishing the list of words a project "
+        "must never publish is the worst single outcome available.\n\n"
+        "Fix: keep the file in whatever already syncs private configuration between your "
+        f"machines, and point {VOCABULARY_ENV} at it there."
+    )
+
+
 def _is_a_documentation_address(address: str) -> bool:
     domain = address.rsplit("@", 1)[1].lower()
     return domain in ALLOWED_EMAIL_DOMAINS or domain.endswith(".invalid")
@@ -604,6 +852,327 @@ def test_the_scan_reaches_the_whole_tree() -> None:
     assert "README.md" in found
     assert any(name.startswith("docs/decisions/") for name in found)
     assert any(name.startswith("tests/") for name in found)
+    # And this module. It was always in the list and then dropped again on the way to the rules,
+    # which is the difference an exemption makes and the reason it is checked here now.
+    assert Path(__file__).resolve().relative_to(REPO_ROOT).as_posix() in found
+
+
+#: A string that exists exactly once in this module: on this line, as this constant's value. It is
+#: the probe for "the scan really does read this file". It has to be a constant rather than a
+#: literal written inside the test, because the scan reads this module's *source*: a probe spelled
+#: out at the point of use appears twice over, once as the constant and once as the search for it,
+#: and the test then measures its own text rather than the scan. Both self-scan tests were written
+#: that way first and both counted two hits.
+_SELF_SCAN_SENTINEL = "public-readiness self-scan sentinel, 4f2a9c, deliberately unique"
+
+
+def _lines_holding(needle: str) -> list[int]:
+    """Which lines of this module hold `needle`, read off the file rather than written down."""
+    source = Path(__file__).resolve().read_text(encoding="utf-8").splitlines()
+    return [number for number, line in enumerate(source, start=1) if needle in line]
+
+
+def test_this_module_is_scanned_like_every_other_file() -> None:
+    """The exemption is gone, so the rules read this file too, and this proves they reach it.
+
+    The inverse of the check that used to sit here. That one asserted this module was skipped;
+    this one asserts it is not, by finding a string that only exists in it. A reintroduced
+    exemption, under any spelling, fails here: the scan stops seeing this file and the hit goes.
+    """
+    here = Path(__file__).resolve()
+    expected = _lines_holding(_SELF_SCAN_SENTINEL)
+    assert len(expected) == 1, f"the sentinel must appear exactly once, found {expected}"
+    found = _matches(re.compile(re.escape(_SELF_SCAN_SENTINEL)), [here])
+    assert [match.rel for match in found] == [here.relative_to(REPO_ROOT).as_posix()]
+    assert [match.line for match in found] == expected
+
+
+def test_the_run_says_out_loud_which_half_of_the_guard_ran() -> None:
+    """Whatever state the vocabulary is in, the run announces it, and the announcement is true.
+
+    `conftest.py` prints this sentence as a pytest header line before the first test, so it is on
+    screen for every run on every machine, CI included. The point is not the sentence: it is that
+    a green run on a machine with no word list cannot be read as a fully checked one.
+    """
+    state, said = vocabulary_state()
+    assert state in {LOADED, UNREADABLE, UNDECLARED}
+    assert VOCABULARY_ENV in said, said
+    # It says which half ran in words a reader does not have to decode, not just a state name.
+    expected = {LOADED: "loaded", UNREADABLE: "BROKEN", UNDECLARED: "DID NOT RUN"}[state]
+    assert expected in said, said
+
+
+# --- the vocabulary machinery ---------------------------------------------------------------------
+#
+# The half that was moved out of source. Everything here is about one property: the rule either
+# runs over a real word list, or says out loud that it did not. There is no third way through, and
+# in particular no way to scan a tree with an empty vocabulary and call the result clean — that is
+# the shape of every defect this module has ever had.
+
+
+def _declared(monkeypatch: pytest.MonkeyPatch, value: str | None) -> None:
+    """Put this machine into the "declares a word list at `value`" state, or into the unset one."""
+    if value is None:
+        monkeypatch.delenv(VOCABULARY_ENV, raising=False)
+    else:
+        monkeypatch.setenv(VOCABULARY_ENV, value)
+
+
+def _outcome_of_asking_for_the_vocabulary() -> tuple[str, str]:
+    """What `_vocabulary()` does here, as a word, plus what it said.
+
+    The same trick `_outcome_of_scanning` uses, and for the same reason: a skip raised inside a
+    test is reported as a skip rather than a failure, so asserting on the raise directly would make
+    a check go quiet in exactly the case it exists to make noisy.
+    """
+    try:
+        _vocabulary()
+    except pytest.fail.Exception as failure:
+        return "fail", str(failure)
+    except pytest.skip.Exception as skipped:
+        return "skip", str(skipped)
+    return "loaded", ""
+
+
+@pytest.mark.parametrize(
+    ("value", "declares"),
+    [(None, False), ("", False), ("   ", False), ("\t\n", False), ("a-list.txt", True)],
+    ids=["unset", "empty", "spaces", "whitespace", "a path"],
+)
+def test_what_counts_as_declaring_a_word_list(
+    monkeypatch: pytest.MonkeyPatch, value: str | None, declares: bool
+) -> None:
+    # An exported-but-empty variable is what a half-written shell profile leaves behind. Reading it
+    # as a declaration would turn the loudest state (a declared machine that fails) into the
+    # quietest one, which is backwards.
+    _declared(monkeypatch, value)
+    assert (_declared_vocabulary_path() is not None) is declares
+
+
+def test_a_declared_path_is_expanded_from_the_home_shorthand(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The word list lives in whatever syncs private configuration between machines, which is
+    # naturally written relative to home. An unexpanded tilde would be a path no machine has.
+    _declared(monkeypatch, _spelled("~", "/") + "a-list.txt")
+    path = _declared_vocabulary_path()
+    assert path is not None
+    assert "~" not in str(path)
+    assert path.is_absolute()
+
+
+def test_a_machine_that_declares_nothing_skips_loudly_rather_than_passing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh clone and a CI runner. Neither has the list, and neither can be given it."""
+    _declared(monkeypatch, None)
+    with pytest.warns(UserWarning, match="DID NOT RUN"):
+        outcome, said = _outcome_of_asking_for_the_vocabulary()
+    assert outcome == "skip", f"an undeclared machine came back as {outcome!r}: {said}"
+    # The skip has to say the rule did not run, name the variable that would make it run, and be
+    # honest that the other half did. A bare "skipped" reads as "nothing to do here".
+    assert "DID NOT RUN" in said
+    assert VOCABULARY_ENV in said
+    assert "shape rules" in said
+
+
+@pytest.mark.parametrize(
+    ("content", "complaint"),
+    [
+        (None, "the file is not there at all"),
+        ("", "it holds no terms at all"),
+        ("# only a comment\n\n   \n", "it holds no terms at all"),
+        ("re:[unclosed\n", "not a valid expression"),
+    ],
+    ids=["missing", "empty", "comments and blanks only", "a broken expression"],
+)
+def test_a_machine_that_declares_a_word_list_it_cannot_produce_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str | None, complaint: str
+) -> None:
+    """The single most important behaviour here, and the one the old design got wrong.
+
+    Every one of these is a machine that *said* it had a word list. Skipping would leave the
+    vocabulary rule passing over every tracked file without a term in it, which is a guard
+    reporting clean because it read nothing — the exact hazard this module exists to prevent. So
+    each is a hard failure that names what went wrong.
+    """
+    path = tmp_path / "a-list.txt"
+    if content is not None:
+        path.write_text(content, encoding="utf-8")
+    _declared(monkeypatch, str(path))
+
+    outcome, said = _outcome_of_asking_for_the_vocabulary()
+    assert outcome == "fail", f"a broken word list came back as {outcome!r} instead of failing"
+    assert "BROKEN" in said
+    # It names the file, or nobody can go and fix it. The file *name* rather than the whole path:
+    # the message quotes the path with `!r`, which on Windows doubles every backslash, so the raw
+    # string is not a substring of its own error message.
+    assert path.name in said
+    assert VOCABULARY_ENV in said
+    if complaint != "the file is not there at all":
+        assert complaint in said
+
+
+def test_a_word_list_that_is_not_text_fails_rather_than_being_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A word list saved in the wrong encoding is a broken machine, not an unconfigured one.
+    path = tmp_path / "a-list.txt"
+    path.write_bytes("widgetcorp\n".encode("utf-16"))
+    _declared(monkeypatch, str(path))
+    outcome, said = _outcome_of_asking_for_the_vocabulary()
+    assert (outcome, "not UTF-8" in said) == ("fail", True), said
+
+
+def test_a_readable_word_list_loads_and_says_how_many_terms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a-list.txt"
+    path.write_text("# a comment\n\nwidgetcorp\nwidget-corp\n", encoding="utf-8")
+    _declared(monkeypatch, str(path))
+
+    state, said = vocabulary_state()
+    assert state == LOADED
+    assert "2 terms" in said, said
+    assert _outcome_of_asking_for_the_vocabulary() == ("loaded", "")
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["widget-corp", "widget corp", "widget_corp", "widget.corp", "widgetcorp", "WIDGET-CORP"],
+    ids=["hyphenated", "spaced", "underscored", "dotted", "run together", "shouted"],
+)
+def test_one_written_term_covers_every_way_the_name_gets_typed(tree: Path, spelling: str) -> None:
+    # A private name arrives hyphenated in one file, spaced in a sentence and run together in an
+    # identifier. Writing one entry per spelling is how a list rots, so the entry covers them all.
+    pattern = re.compile(_term_pattern("widget-corp"), re.IGNORECASE)
+    planted = _plant(tree, "docs/notes.md", f"a note about {spelling} here\n")
+    assert [match.line for match in _matches(pattern, [planted])] == [1]
+
+
+@pytest.mark.parametrize(
+    ("text", "hits"),
+    [
+        ("widgetcorp", True),
+        ("a note about widgetcorp here", True),
+        # A term still matches inside a longer hyphenated name: that is how these get buried.
+        ("pre-widgetcorp-suffix", True),
+        # But not inside an unrelated longer word, which would be a false positive.
+        ("awidgetcorp", False),
+        ("widgetcorps", False),
+        # The separator flexibility comes from the *written* term's own parts. A term written as
+        # one word has no parts to rejoin, so it does not match a hyphenated spelling. Whoever
+        # writes the list has to write `widget-corp` to cover `widget corp` and `widgetcorp`; this
+        # is pinned because it is the one thing about the format that surprises.
+        ("the widget-corp handbook", False),
+    ],
+    ids=[
+        "alone",
+        "in a sentence",
+        "inside a hyphenated name",
+        "glued in front",
+        "glued behind",
+        "a spelling a one-word term cannot reach",
+    ],
+)
+def test_where_a_literal_terms_edges_are(text: str, hits: bool) -> None:
+    pattern = re.compile(_term_pattern("widgetcorp"), re.IGNORECASE)
+    assert bool(pattern.search(text)) is hits
+
+
+def test_a_term_written_as_an_expression_is_used_as_one() -> None:
+    # The `re:` prefix is what lets an id scheme or a collocation into the list without inventing a
+    # second file format. A literal entry would have escaped these into uselessness.
+    pattern = re.compile(_term_pattern(r"re:\bWDG-\d+\b"), re.IGNORECASE)
+    assert pattern.search("tracked as WDG-411 on the board")
+    assert not pattern.search("tracked as WDG- on the board")
+
+
+def test_an_expression_term_can_insist_on_its_own_capitalisation() -> None:
+    # The list is compiled case-insensitively, because that is right for almost every private name.
+    # The exception is a name that is also an ordinary lowercase word, where only the capitalised
+    # spelling is the private one. `(?-i:...)` is how such an entry says so, inside a list that is
+    # otherwise case-blind.
+    pattern = re.compile(_term_pattern(r"re:(?-i:\bWidget\b)"), re.IGNORECASE)
+    assert pattern.search("filed in Widget last week")
+    assert not pattern.search("a sub-widget of the other one")
+
+
+def test_a_loaded_vocabulary_finds_its_terms_in_a_tracked_file(
+    tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # End to end, through the public entry point rather than the helpers: a real file, a real list.
+    listing = tmp_path / "a-list.txt"
+    listing.write_text("widgetcorp\n", encoding="utf-8")
+    _declared(monkeypatch, str(listing))
+    planted = _plant(tree, "docs/notes.md", "an innocent line\na note about WidgetCorp\n")
+    assert [match.line for match in _matches(_vocabulary().pattern, [planted])] == [2]
+
+
+def test_a_vocabulary_term_split_by_a_line_wrap_is_still_a_hit(
+    tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The rewrap failure, applied to the half that moved out of source. A word list is no use if a
+    # reflowed paragraph hides its terms.
+    listing = tmp_path / "a-list.txt"
+    listing.write_text("widget-corp\n", encoding="utf-8")
+    _declared(monkeypatch, str(listing))
+    planted = _plant(tree, "docs/wrapped.md", "as set out in the widget-\ncorp handbook\n")
+    found = _matches(_vocabulary().pattern, [planted])
+    # A set, not a list: a separator-flexible term matches in *both* readings of the wrap (as
+    # `widget- corp` when the break rejoins with a space, and as `widget-corp` when it closes up),
+    # and the two matched texts differ, so the de-duplication by (line, matched text) keeps both.
+    # The reported line is what matters, and both readings agree on it.
+    assert {match.line for match in found} == {1}
+    assert found, "the wrapped term has to be found at all"
+
+
+def test_the_word_list_is_refused_when_it_sits_inside_this_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The guard against the worst single outcome available: committing the list of words the repo
+    # must never publish. `.gitignore` is the other half, and is checked separately.
+    inside = REPO_ROOT / "docs" / "private-terms.txt"
+    _declared(monkeypatch, str(inside))
+    with pytest.raises(AssertionError, match="must live outside the tree"):
+        test_the_private_vocabulary_is_not_kept_inside_this_repository()
+
+
+def test_the_run_header_announces_the_state_before_the_first_test() -> None:
+    """The announcement pytest prints, not the sentence the guard composes.
+
+    This is the difference between "the module can describe its state" and "every run on every
+    machine shows it". `conftest.py` is what makes CI logs carry the line, and deleting that hook
+    would leave the three-state contract true but invisible, which is the same as absent.
+    """
+    from tests.conftest import pytest_report_header
+
+    header = pytest_report_header()
+    state, said = vocabulary_state()
+    assert state in header
+    assert said in header
+
+
+def test_git_ignores_a_private_word_list_dropped_into_this_tree() -> None:
+    """The half of "keep it out of the repository" that works with no configuration at all.
+
+    Asked of git rather than read out of `.gitignore`, because a pattern in that file that git
+    does not actually apply to the path in question would read as protection and be none.
+    """
+    ignored = subprocess.run(
+        ["git", "check-ignore", "private-terms.txt", "docs/my-private-terms.txt"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ignored.stdout.split() == ["private-terms.txt", "docs/my-private-terms.txt"], (
+        "git does not ignore a private word list placed in this tree, so one could be committed:\n"
+        f"  git check-ignore said: {ignored.stdout!r} {ignored.stderr!r}\n\n"
+        "Fix: restore the `*private-terms*` line in .gitignore. The word list must never be a "
+        "tracked file: publishing the list of words this repo may not publish is the worst "
+        "single outcome available here."
+    )
 
 
 #: The tracked files this scan cannot read as text. A binary holds no prose for a reader to leak,
@@ -692,16 +1261,17 @@ def test_the_file_name_is_read_relative_to_the_repository_not_absolute(tree: Pat
 
 
 # S2: the self-exemption matched on the base name, so any file wearing that name was skipped.
+#
+# The exemption is gone rather than made exact, so both halves of S2 are closed at once: this
+# module is scanned, and so is anything else that happens to share its name. These two tests are
+# what a reintroduced exemption fails on, whichever of the two spellings it is written in.
 
 
-def test_this_file_is_still_exempt_from_its_own_scan() -> None:
-    spells_out_a_rule = re.compile(re.escape("a private tool or fleet name"))
-    assert _matches(spells_out_a_rule, [Path(__file__)]) == []
-
-
-def test_a_different_file_with_this_files_name_is_not_exempt(tree: Path) -> None:
-    impostor = _plant(tree, "corpus/probe/test_public_readiness.py", "WIDGETCORP was here\n")
-    assert impostor.name == SELF.name
+def test_a_different_file_wearing_this_modules_name_is_not_exempt(tree: Path) -> None:
+    # The exact shape S2 was: the old exemption compared base names, so every file in the tree
+    # called what this one is called went unscanned, wherever it sat.
+    impostor = _plant(tree, "corpus/probe/" + Path(__file__).name, "WIDGETCORP was here\n")
+    assert impostor.name == Path(__file__).name
     assert [match.line for match in _matches(_FAKE, [impostor])] == [1]
 
 
@@ -1019,21 +1589,21 @@ def test_an_ordinary_checkout_has_no_reason_to_track_nothing(tree: Path) -> None
 
 
 @pytest.mark.parametrize(
-    ("line", "leaks"),
+    ("tail", "leaks"),
     [
-        (r"the checkout is at C:\users\somebody\code", True),
-        ("the checkout is at /users/somebody/code", True),
-        ("the checkout is at ~/dev/a-project", True),
-        ("the checkout is at /home/somebody/code", True),
-        ("the workspace is at /home/runner/work/a-project", False),
+        (_WINDOWS_HOME + "somebody", True),
+        (_MAC_HOME + "somebody/code", True),
+        (_TILDE_HOME + "a-project", True),
+        (_LINUX_HOME + "somebody/code", True),
+        (_LINUX_HOME + "runner/work/a-project", False),
         # The exemption is one directory, not a prefix. A person whose account merely begins with
         # those six letters has a home directory like anybody else, and `\b` used to excuse it.
-        ("the checkout is at /home/runner-fixes-the-thing/code", True),
-        ("the checkout is at /home/Runner-fixes-the-thing/code", True),
-        ("the checkout is at /home/runner.smith/code", True),
-        ("the checkout is at /home/runnerbot/code", True),
+        (_LINUX_HOME + "runner-fixes-the-thing/code", True),
+        (_LINUX_HOME + "Runner-fixes-the-thing/code", True),
+        (_LINUX_HOME + "runner.smith/code", True),
+        (_LINUX_HOME + "runnerbot/code", True),
         # `/home/` is a Linux path, and Linux tells these apart. This one is not CI.
-        ("the checkout is at /home/Runner/work/a-project", True),
+        (_LINUX_HOME + "Runner/work/a-project", True),
     ],
     ids=[
         "windows",
@@ -1049,10 +1619,14 @@ def test_an_ordinary_checkout_has_no_reason_to_track_nothing(tree: Path) -> None
     ],
 )
 def test_a_home_directory_is_a_hit_however_it_is_spelled(
-    tree: Path, line: str, leaks: bool
+    tree: Path, tail: str, leaks: bool
 ) -> None:
+    # The paths are assembled by `_spelled` rather than written literally, because this module is
+    # scanned like every other file: a real home path in this list would make the rule report the
+    # test that proves it works. The rule still sees the whole path, because the pieces are joined
+    # before it is shown anything.
     rule = _rule_named("a path inside somebody's home directory")
-    planted = _plant(tree, "docs/setup.md", line + "\n")
+    planted = _plant(tree, "docs/setup.md", "the checkout is at " + tail + "\n")
     assert bool(_matches(rule.pattern, [planted])) is leaks
 
 
@@ -1070,15 +1644,30 @@ def test_which_git_identities_are_worth_searching_for(name: str, expected: bool)
     assert _is_too_generic(name) is expected
 
 
+#: An address on a host that is not a reserved documentation domain. Assembled, because written
+#: out it would be exactly what `test_no_tracked_file_carries_a_real_e_mail_address` forbids, in a
+#: file that rule now reads. See `_spelled`.
+_ADDRESS_ON_A_REAL_HOST = _spelled("someone", "@", "a-real-host", ".dev")
+
+
 @pytest.mark.parametrize(
     ("address", "publishable"),
     [
         ("someone@example.com", True),
         ("SOMEONE@EXAMPLE.COM", True),
         ("someone@a-fixture.invalid", True),
-        ("someone@a-real-host.dev", False),
+        (_ADDRESS_ON_A_REAL_HOST, False),
     ],
     ids=["a reserved domain", "shouted", "any .invalid host", "anything else"],
 )
 def test_which_addresses_are_safe_to_publish(address: str, publishable: bool) -> None:
     assert _is_a_documentation_address(address) is publishable
+
+
+def test_an_address_on_a_real_host_is_a_hit_in_a_tracked_file(tree: Path) -> None:
+    # The rule end to end, not just the domain predicate: the pattern has to find the address in
+    # a file before the domain test ever gets a say.
+    planted = _plant(tree, "docs/contact.md", "write to " + _ADDRESS_ON_A_REAL_HOST + " for help\n")
+    found = [m.matched for m in _matches(_EMAIL, [planted])]
+    assert found == [_ADDRESS_ON_A_REAL_HOST]
+    assert not _is_a_documentation_address(found[0])
