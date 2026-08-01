@@ -64,18 +64,25 @@ change just go untested," not "match CI's number."
 
 ## Current result
 
-3,088 of 3,560 mutants killed: 86.7%, with 472 survivors. Measured on the first CI run after
-the baseline was repaired, so it is the first real number this project has had in a while: the
-baseline had been aborting, and an aborted baseline reports nothing rather than reporting badly.
+3,275 of 3,773 mutants killed: 86.8%, with 498 survivors, measured 2026-07-31 at commit `10fdb48`.
+A mutation score is a snapshot: it is only true at the commit it was measured against, so read that
+commit and date as part of the number, not as decoration. `main` has moved since. Re-measure rather
+than trust this line past that commit.
 
-Those 472 survivors are not triaged. The 18 below are equivalent mutants: changes that cannot
+The first real number this project had, right after the baseline was repaired, was 3,088 of 3,560
+mutants killed (86.7%, 472 survivors), measured on CI. The figure above is a full local rebuild of
+that same measurement, done later on a codebase that had grown in the meantime: mutmut stayed
+pinned at 3.6.0 across both runs, so the larger mutant count is codebase growth, not the tool
+widening its reach. The percentage barely moved, 86.7% to 86.8%.
+
+Those 498 survivors are not triaged. The 18 below are equivalent mutants: changes that cannot
 alter observable behavior, so no test *can* catch them (the well-known [equivalent mutant
 problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)), and they are still
 equivalent. But they were enumerated against a much smaller codebase, over a run whose own mutant
 total is withdrawn as unreproducible ([ADR-0008's
 correction](decisions/0008-method-body-mutation-manual-spotcheck.md#correction-2026-07-31)), and
 they do not account for the rest. Working through the remaining survivors, and deciding which are
-real gaps and which are equivalents, is outstanding work. Until it is done, read the 86.7% as a
+real gaps and which are equivalents, is outstanding work. Until it is done, read the 86.8% as a
 measurement and not as a claim that every behavioral mutant is killed.
 
 ### Scope: the method bodies this run never reaches

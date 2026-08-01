@@ -86,3 +86,22 @@ that point. It stays the authoritative check regardless of whether `ci.yml` also
 - A release now costs more Actions time than the old gate did (six live jobs against one API call),
   but pays for itself immediately given how rare releases are relative to merges, which is the
   entire point of moving the expensive checks to the rare event instead of the frequent one.
+
+## Correction (2026-08-01)
+
+The Decision above describes the pre-push stage as running "the same checks" as `ci.yml`'s `verify`
+job, naming `gitleaks, ruff, gdlint, mypy, pytest, pip-audit`. `uv run pytest` has since moved off
+that stage, to `stages: [manual]` (`chore: take the test suite off the pre-push stage`, #192,
+corrected on [ADR-0009](0009-pre-commit-for-local-dev-checks.md#correction-2026-07-31), which is the
+record of the pre-push stage's own contents and is where this correction defers for the reasoning).
+Everything else in that list still runs on every push, unchanged.
+
+This does not touch the split this record makes. The suite still runs, just not gated at push time:
+by hand through `uv run python scripts/verify_local.py` or `pre-commit run --hook-stage manual
+pytest`, and unconditionally in `publish.yml`'s release-time gate, on both Linux and Windows, before
+anything ships. That gate is the one this ADR names as the sole unbypassable check, and it is
+untouched. "Merge-time correctness is no longer mechanically enforced" already covered exactly this
+kind of gap: a contributor who skips the manual suite run reaches `main` unverified on that one axis,
+the same way skipping any pre-commit hook always could. The premise this decision rests on, that a
+merge does not ship anything and the release gate is what catches it, is unaffected. Only the
+pre-push stage's exact command list, quoted above, needed updating.

@@ -1252,6 +1252,45 @@ def test_a_rename_that_never_unblocks_refuses_rather_than_writing_unsafely(
     assert sorted(p.name for p in tmp_path.iterdir()) == ["stuck.gd"], "no temporary file left"
 
 
+def test_the_retry_budget_is_six_tries_spread_over_about_a_second_and_a_half(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The two tests above prove the retry loop retries and that it eventually gives up. Neither
+    # looks at the two numbers that decide whether the retries are worth having: how many tries,
+    # and how long apart. A budget that spends one try, or that sleeps zero, still passes both --
+    # and so does one that stalls the run for minutes. That is not a detail. Six tries spaced by
+    # waits that grow one _REPLACE_BACKOFF at a time is what makes a virus scanner or a search
+    # indexer holding the file a non-event rather than a failed run, and holding the total near a
+    # second and a half is what keeps a genuinely stuck file from costing that much per mutant,
+    # thousands of times over.
+    #
+    # Both numbers are read off a lock that never lets go, because that is the only case that
+    # spends the whole budget. Nothing sleeps for real: time.sleep is replaced by a recorder, so
+    # the schedule is checked at its true values instead of being zeroed out for speed.
+    path = tmp_path / "held.gd"
+    original = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path.write_text(original, encoding="utf-8", newline="")
+    tries = 0
+    waits: list[float] = []
+
+    def always_blocked(src: Any, dst: Any) -> None:
+        nonlocal tries
+        tries += 1
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr("gdmutant.engine.loop.os.replace", always_blocked)
+    monkeypatch.setattr("gdmutant.engine.loop.time.sleep", waits.append)
+
+    with pytest.raises(SourceWriteFailed):
+        _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
+
+    assert tries == 6, "five tries inside the retry loop, then one last one that is allowed to fail"
+    assert waits == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.5]), (
+        "each wait is one _REPLACE_BACKOFF longer than the last, so the whole budget is 1.5s"
+    )
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_a_persistent_write_fault_leaves_the_source_whole(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1282,7 +1321,9 @@ def test_a_directory_that_cannot_hold_a_temporary_file_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # With no staging file there is no safe write to make, and the unsafe one is not on offer any
-    # more. Refuse, and say the source is untouched -- which it is, because nothing was opened.
+    # more. Refuse -- and name what is on disk rather than calling it untouched. Nothing was
+    # opened, so the file is whole, but this helper is also what restores the original after a
+    # mutant, and on that call "whole" means the mutant is still there.
     path = tmp_path / "notemp.gd"
     original = "func f(a, b) -> bool:\n\treturn a > b\n"
     path.write_text(original, encoding="utf-8", newline="")
@@ -1291,7 +1332,7 @@ def test_a_directory_that_cannot_hold_a_temporary_file_refuses(
         raise OSError(13, "Permission denied")
 
     monkeypatch.setattr("gdmutant.engine.loop.tempfile.mkstemp", no_temp_files)
-    with pytest.raises(SourceWriteFailed, match="left untouched"):
+    with pytest.raises(SourceWriteFailed, match="not your original"):
         _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
 
     assert path.read_text(encoding="utf-8") == original
@@ -1315,6 +1356,51 @@ def test_a_read_only_source_is_refused_rather_than_replaced(tmp_path: Path) -> N
         assert path.read_text(encoding="utf-8") == original
     finally:
         os.chmod(path, stat.S_IWRITE | stat.S_IREAD)  # let tmp_path clean up
+
+
+def test_a_source_that_turns_read_only_mid_mutant_says_the_mutant_is_the_one_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The read-only refusal is the third thing that raises SourceWriteFailed, and it used to be the
+    # one that told the user nothing about what they were left with. It is reached from the restore
+    # write as readily as from the mutate write: _write_source runs twice per mutant, so a file
+    # whose read-only bit is set in the window between them fails on the way back, with the mutant
+    # sitting on disk. That window is not hypothetical on a machine where Perforce reverts a
+    # checkout or a build step marks generated sources read-only, and "your file is read-only" is
+    # a sentence a reader takes as being about their own source.
+    #
+    # Driven through the real two-write sequence, so the assertion is about the case a user hits
+    # rather than about one isolated call. os.access is forced rather than the bit being chmod'ed,
+    # because a real chmod proves nothing under an account that ignores permission bits, and the
+    # test above skips there. A test that skips where it matters is this change's own subject.
+    path = tmp_path / "checkedout.gd"
+    original = "func f(a, b) -> bool:\n\treturn a > b\n"
+    mutant = "func f(a, b) -> bool:\n\treturn a >= b\n"
+    path.write_text(original, encoding="utf-8", newline="")
+
+    _write_source(path, mutant, "\n")  # what _run_one does first: put the mutant in
+
+    real_access = os.access
+
+    def read_only_now(target: Any, mode: int) -> bool:
+        if Path(target) == path.resolve() and mode == os.W_OK:
+            return False
+        return real_access(target, mode)
+
+    monkeypatch.setattr("gdmutant.engine.loop.os.access", read_only_now)
+
+    with pytest.raises(SourceWriteFailed) as refusal:
+        _write_source(path, original, "\n")  # what _run_one does in its finally: put it back
+
+    assert path.read_text(encoding="utf-8") == mutant, (
+        "the premise of this test: the restore failed, so the MUTANT is what is sitting there"
+    )
+    message = str(refusal.value)
+    assert "the mutant is what is on disk now" in message, (
+        "the refusal must name what the user is actually left holding"
+    )
+    assert "not your original" in message, "and say plainly that it is not their own source"
+    assert "from git" in message, "and point at the one place the original can be got back"
 
 
 def test_a_missing_target_is_still_written(tmp_path: Path) -> None:
