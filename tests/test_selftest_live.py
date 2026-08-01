@@ -184,8 +184,9 @@ def test_gut_against_real_godot(tmp_path: Path) -> None:
 
 
 # An uncompilable target (a parse gdtoolkit would reject too, but here it's the file *under test*,
-# not a mutant): keeps `class_name TurnOrder` so the TurnOrder-referencing GUT suite still resolves
-# the name yet fails to load, while the independent suite stays healthy.
+# not a mutant): keeps `class_name TurnOrder` so the TurnOrder-referencing suite still resolves the
+# name yet fails to load, while that framework's independent suite stays healthy. Shared by both
+# crash-safety probes below, so GUT and GdUnit4 are driven with the identical break.
 _UNCOMPILABLE_TARGET = "class_name TurnOrder\nextends RefCounted\nfunc broken( ->:\n"
 
 
@@ -253,6 +254,98 @@ def test_gut_crash_safety_never_reports_a_false_survivor_at_n_gt_1(tmp_path: Pat
         "GUT reported a PASS for an uncompilable source-under-test at n>1 — a false survivor. "
         f"The baseline-test-count-drop guard failed to fire. Observed: {branch}"
     )
+
+
+def test_gdunit4_crash_safety_never_reports_a_false_survivor_at_n_gt_1(tmp_path: Path) -> None:
+    """The GdUnit4 peer of the GUT probe above — and the reason ADR-0011's claim is no longer n=1.
+
+    GdUnit4 is gdmutant's **default** runner and overrides nothing for crash safety: its whole
+    defence is the base's "the report must reappear" guard, justified in ADR-0011 with "a crash
+    writes no report". That was only ever observed against the corpus's single GdUnit4 suite, where
+    breaking ``turn_order.gd`` breaks the only suite — n=1. GUT looked exactly as safe at n=1 and
+    turned out to skip-and-continue, which is a false survivor. Assuming GdUnit4 differs, on a
+    single observation, on the default path, is precisely the bet that is not worth making.
+
+    So this drives the same shape GUT gets: a **healthy baseline first**, then — with a SECOND,
+    independent suite (``test_independent.gd``) that compiles and passes on its own —
+    ``turn_order.gd`` is made uncompilable and the SAME runner is run again. The invariant is
+    **never a false survivor**: a kill (``failures``/``errors`` > 0) or an error (a guard raises),
+    but never a passing `SuiteResult`. It records which branch real GdUnit4 took so CI documents the
+    behavior instead of the docs asserting it.
+
+    Observed (GdUnit4 v6.1.3, Godot 4.7): **abort-at-discovery.** GdUnit4 loads every suite up
+    front, so the unparseable one aborts the whole run — "Script errors were detected during test
+    discovery!", exit 105, no report written, and the healthy suite never ran. Unlike GUT, there is
+    no healthy-suites-green report for a drop guard to measure, which is why `GdUnit4Runner` has
+    none. If that ever changes, this probe is what fails first.
+    """
+    if not ADDON.is_dir():
+        pytest.skip("GdUnit4 addon not installed — run python scripts/install_gdunit4.py")
+    from gdmutant.adapters.gdscript.runner import GdUnit4Runner
+    from gdmutant.engine.runner import SuiteResult
+
+    project = _corpus_copy(tmp_path)
+    # Sanity: the second, independent suite is present, so this is genuinely an n>1 run.
+    assert (project / "test" / "test_independent.gd").is_file()
+
+    runner = GdUnit4Runner(test_path="res://test", godot=str(_GODOT))
+    # 1. Healthy baseline (as the engine runs first): every suite loads and passes.
+    baseline = runner.run(str(project))
+    assert baseline.passed and baseline.tests >= 5, (
+        f"the healthy GdUnit4 baseline should pass with both suites loaded, got {baseline}"
+    )
+
+    # 2. Break the source-under-test and run the SAME runner again (the mutant scenario).
+    (project / TARGET).write_text(_UNCOMPILABLE_TARGET, encoding="utf-8")
+    branch: str
+    result: SuiteResult | None = None
+    try:
+        result = runner.run(str(project))
+    except RuntimeError as error:
+        branch = f"ERROR — a guard raised (no report, or a zero-test report): {error}"
+    else:
+        if result.failed:
+            branch = (
+                f"KILLED — GdUnit4 ran the broken suite and it failed "
+                f"(tests={result.tests}, failures={result.failures}, errors={result.errors})"
+            )
+        else:
+            branch = (
+                f"FALSE SURVIVOR — GdUnit4 skipped the broken suite and passed the rest "
+                f"(tests={result.tests}, failures={result.failures}, errors={result.errors})"
+            )
+
+    print(f"\n[GdUnit4 crash-safety probe] real GdUnit4 branch: {branch}")
+    # The one outcome that must never happen: a clean pass off the healthy suite alone.
+    assert result is None or result.failed, (
+        "GdUnit4 reported a PASS for an uncompilable source-under-test at n>1 — a false survivor, "
+        f"on the DEFAULT runner. Observed: {branch}"
+    )
+
+
+def test_gdunit4_empty_discovery_is_diagnosed_as_discovery_not_a_crash(tmp_path: Path) -> None:
+    """A wrong ``--tests`` path must not be reported as a Godot crash.
+
+    GdUnit4 exits **0** and writes no report when discovery finds no suites, so the base runner's
+    "wrote no report — Godot may have failed to run" sends the user to debug a crash that is not
+    happening. This pins that `GdUnit4Runner` reads GdUnit4's own "No test cases found" and says
+    what to fix instead — against the real binary, because the whole hint hangs off a string only
+    real GdUnit4 emits.
+    """
+    if not ADDON.is_dir():
+        pytest.skip("GdUnit4 addon not installed — run python scripts/install_gdunit4.py")
+    from gdmutant.adapters.gdscript.runner import GdUnit4Runner
+
+    project = _corpus_copy(tmp_path)
+    # res://harness holds the CommandRunner harness script — real, but not a GdUnit4 suite.
+    runner = GdUnit4Runner(test_path="res://harness", godot=str(_GODOT))
+    with pytest.raises(RuntimeError) as excinfo:
+        runner.run(str(project))
+    message = str(excinfo.value)
+    assert "discovered no test suites" in message, message
+    assert "--tests" in message, message
+    # Never the addon hint's trigger phrase: the addon plainly loaded, it just found nothing.
+    assert "wrote no report" not in message, message
 
 
 def test_statement_deletion_mutants_all_compile_in_godot(tmp_path: Path) -> None:

@@ -454,6 +454,33 @@ def _run_baseline(
     if baseline.failed:
         detail = f":\n{baseline.detail}" if baseline.detail else ""
         raise BaselineFailed(f"the unmutated test suite failed for {project_dir!r}{detail}")
+    # A baseline that ran ZERO tests is not a green baseline — it is no baseline at all, and it is
+    # the quietest way this tool can lie. `SuiteResult(0, 0, 0).failed` is False, so a suite nobody
+    # ran reads exactly like a suite that passed, and then every single mutant comes back SURVIVED:
+    # a whole report of false survivors with no error anywhere in the run. That is gdmutant's worst
+    # failure mode, produced by a typo in a path.
+    #
+    # **This check lives here, in the engine, on purpose** — "the baseline ran no tests" is a
+    # property of a baseline, not of a language or a framework, and it is reachable under ANY runner
+    # whose test path or project is misconfigured. It used to live in one adapter (`GutRunner`),
+    # which left the other two runners unguarded; the same guard duplicated per adapter would drift
+    # apart the moment a fourth runner is added. Language-neutrality (NF-3) is kept because this
+    # check reads only `SuiteResult.tests` and names no framework.
+    #
+    # The adapters still keep their own zero-test guards, and that is not duplication: this one
+    # states the *condition*, while an adapter can state the *cause and the cure* — GUT's `-gdir`
+    # does not recurse, GdUnit4 prints "No test cases found" — which the engine must not know. An
+    # adapter that raises first simply wins with the better message, and this stays the backstop for
+    # every runner that has nothing framework-specific to say (the exit-code `CommandRunner`, and
+    # any runner added later).
+    if baseline.tests == 0:
+        raise BaselineFailed(
+            f"the unmutated (baseline) test suite for {project_dir!r} reported 0 tests. Nothing "
+            "ran, so nothing can be detected: every mutant would come back SURVIVED and the whole "
+            "report would be false. This is a discovery or configuration problem rather than a red "
+            "suite — check that the runner is pointed at your tests (--tests, or --command for a "
+            "custom harness) and that the suite runs on its own."
+        )
     per_mutant_timeout = timeout if timeout is not None else _derive_timeout(baseline_secs)
     return per_mutant_timeout, baseline_secs
 
@@ -898,6 +925,19 @@ def _run_one(
         except Exception:
             # The runner failed to execute this mutant (e.g. a Godot crash). Tally it as ERROR and
             # carry on — one bad run must not discard the whole pass (FG-4.1).
+            return Verdict.ERROR
+        if result.tests == 0 and not result.failed:
+            # Zero tests, no failures — the same silent lie the baseline guard refuses, one mutant
+            # at a time. The baseline already proved this project collects tests (`_run_baseline`
+            # refuses a zero-test baseline), so a mutant run that collects none did not "pass": test
+            # collection collapsed, most likely because the mutant broke a file the suites load. A
+            # SURVIVED verdict here is a false survivor. ERROR is the honest one — the same verdict
+            # a raising runner gets, and it is excluded from the score rather than inflating it.
+            #
+            # Language-neutral, and the counterpart of the baseline check above: it reads only
+            # `SuiteResult.tests`, so it covers any runner whose framework zeroes a run *without*
+            # raising. An adapter that can recognise the shape still raises first with a better
+            # message (`GutRunner` does); this catches the ones that cannot.
             return Verdict.ERROR
         return Verdict.KILLED if result.failed else Verdict.SURVIVED
     finally:
