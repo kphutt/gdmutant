@@ -88,8 +88,10 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   derived from that baseline. Both Godot runners implement it, because each needs a cold-checkout
   import scan before its framework's command-line tool will load. `RunWarning` is optional too and
   lets a runner raise a single run-level warning once the whole pass ends, which never changes the
-  mutation score or the exit code. The engine tests for the optional two by type, so it never names
-  what the setup or the warning actually is and stays language-neutral (NF-3).
+  mutation score or the exit code. The engine tests for `Preparable` by type. `RunWarning` lives in
+  the same contract module but the front desk is what tests for it, because printing a warning to
+  the user is a CLI job and not an engine one. Neither test names what the setup or the warning
+  actually is, so both stay language-neutral (NF-3).
 - FG-3.3: The original (unmutated) suite must pass first. If it doesn't, the run aborts with a clear
   error (mutation testing a red suite is meaningless).
 
