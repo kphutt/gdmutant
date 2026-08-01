@@ -101,6 +101,20 @@ CLI.
   consumer's project, and writes the surviving mutants (with their explanations) to the job
   summary, right where a reviewer already looks.
 
+### Changed
+
+- `--progress none` now silences the whole progress stream, not just the heartbeat: the plan
+  line, the heartbeat, the per-mutant lines, the closing wall-clock line, and the "preparing the
+  project" / "running the unmutated (baseline) suite" notices are all gone. `auto` and `plain`
+  still print all of it. The console summary, survivor blocks, and the reports themselves are
+  unaffected.
+- `--since <ref>` with no lines changed now writes a valid, empty report instead of leaving
+  stdout empty. The exit code and the stderr explanation are unchanged: still 0, still the same
+  "nothing to mutate" note, still no tests run and no Godot booted. New: the `--json` or `--html`
+  report is written (every given file listed, an empty `mutants` list, no score key), the job
+  summary is emitted if `--report step-summary` was asked for, `--project` and the report targets
+  are validated the same as on a real run, and a malformed `# gdmutant: ignore[...]` pragma warns.
+
 ### Fixed
 
 - Six survivor explanations stated something that is not true. The text reaches every user on every
@@ -164,12 +178,14 @@ CLI.
 - Progress is measured, not predicted. The up-front `estimated ≈ 24s` figure is gone. It was
   wrong in both directions at once: 1.7–3.4× *under* on a real project (it counted neither
   gdmutant's own per-mutant work nor timeouts, which were four minutes of one 6m24s run) and, since
-  it never took `--jobs` into account, roughly N× *over* under `--jobs N`. In its place:
+  it never took `--jobs` into account, roughly N× *over* under `--jobs N`. In its place, three
+  lines that `--progress {auto,plain,none}` controls together (`none` silences all three; `auto`
+  and `plain` print all three):
   - before, the facts: `18 mutants to run. Baseline suite 1.4s; each mutant is capped at 30s.`
     The cap is the part that paces the wait, and it says how long silence is normal.
   - during, a heartbeat: `… 7/18 done in 1m 12s — 2 survived, 1 timed out.` Every 30s on a
     terminal, every 60s or 10% of mutants (whichever is rarer) in a log or under `CI=true`, and
-    always once at the end of each file. New `--progress {auto,plain,none}` overrides the choice.
+    always once at the end of each file.
   - after, the wall-clock every other test runner prints and gdmutant did not:
     `Done in 6m 32s — 18 mutants, 8 timed out (4m 0s of that). Baseline suite 1.4s.` The timeout
     cost is broken out because it is the cost nobody can see.
@@ -178,6 +194,11 @@ CLI.
   first: on an even workload it tracked the true finish to within 5%, but on the shape that
   actually matters (hanging mutants arriving after the rate has settled), it read 3.2s at 25%
   done for a run that took 58.0s, so it was dropped.
+- `--json -` combined with `--html` no longer writes the `Wrote HTML report to ...`
+  confirmation into the JSON stream. It goes to stderr instead, so stdout stays valid JSON.
+- `--json -` combined with `--report step-summary` and no `$GITHUB_STEP_SUMMARY` set is now
+  refused up front with exit 2, naming both flags and how to fix it, instead of printing the
+  report to stdout and poisoning the JSON.
 
 ### Safety
 
@@ -195,10 +216,14 @@ CLI.
   names the file git was actually asked about, so a report about a target outside every repository
   does not read as a report about the link.
 - A source file is never left half-written. Each rewrite is staged in a temporary file beside the
-  target and renamed over it, so the path always holds one whole version or the other. If that
-  cannot be done (no room for the temporary file, a failed flush, a lock that will not clear, or
-  a file marked read-only), gdmutant stops and says so, leaving the file untouched, rather than
-  attempting a write that could truncate it.
+  target and renamed over it, so the path always holds one whole version or the other, never
+  something truncated or cut off mid-token. If that cannot be done (no room for the temporary
+  file, a failed flush, a lock that will not clear, or a file marked read-only), gdmutant stops
+  and says so instead of attempting a write that could truncate the file. That promise is about
+  the write, not the run: the same write happens twice per mutant, once to apply it and once to
+  restore the original, and a failure on the restore leaves the mutant on disk, not your
+  original. Every message names which of the two is actually there and points at git to recover
+  it.
 - Under `--jobs N`, a worker only ever writes inside its own copy of the project. A source file
   that is not under `--project` has no copy to mutate, so the run is refused with an explanation
   instead of writing outside the copy, which used to report every mutant as a survivor because
