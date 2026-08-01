@@ -71,19 +71,53 @@ baseline had been aborting, and an aborted baseline reports nothing rather than 
 Those 472 survivors are not triaged. The 18 below are equivalent mutants: changes that cannot
 alter observable behavior, so no test *can* catch them (the well-known [equivalent mutant
 problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)), and they are still
-equivalent. But they were enumerated against a run of 781 mutants over a much smaller codebase, and
+equivalent. But they were enumerated against a much smaller codebase, over a run whose own mutant
+total is withdrawn as unreproducible ([ADR-0008's
+correction](decisions/0008-method-body-mutation-manual-spotcheck.md#correction-2026-07-31)), and
 they do not account for the rest. Working through the remaining survivors, and deciding which are
 real gaps and which are equivalents, is outstanding work. Until it is done, read the 86.7% as a
 measurement and not as a claim that every behavioral mutant is killed.
 
-### Scope: what the 3,560 covers
+### Scope: the method bodies this run never reaches
 
-mutmut 3.6.0 mutates class-method bodies as well as module-level functions (`file_mutation.py`
-walks into a `ClassDef` and emits per-method mutants), so the run spans the whole package. An
-earlier version of this page said mutmut generated nothing inside method bodies. That was true of
-the older mutmut this project started on, and `docs/decisions/0008` and `0013` still argue from it.
-Their conclusions may well stand on other grounds (poodle is there because mutmut cannot run on
-Windows at all), but the scope premise itself no longer holds.
+Two claims get run together here, and only the first one is about mutmut.
+
+The first: mutmut 3.6.0 is not module-level-only. It walks into a `ClassDef` and builds a trampoline
+for each method it finds (`mutmut/mutation/file_mutation.py`), so an ordinary class method is
+mutated like any other function. What it refuses is a *decorated* class or function, with
+`@staticmethod` and `@classmethod` the only exemptions, because copying a decorated definition for
+the trampoline can re-run the decorator. An earlier version of this page said mutmut generated
+nothing inside method bodies at all, which was never right. See [ADR-0008's
+correction](decisions/0008-method-body-mutation-manual-spotcheck.md#correction-2026-07-31), which
+also records that mutmut has been pinned at 3.6.0 for every run this project has ever measured.
+
+The second: whether the run therefore spans this package. It does not. gdmutant is built almost
+entirely out of frozen dataclasses, so nearly every class here carries a decorator and nearly every
+method body here is skipped. Measured on 2026-07-31, mutmut generates 3,773 mutants across
+`gdmutant/` and none of them lands inside a class-method body.
+
+That is 425 lines mutmut will not enter, about 12% of every line inside a function or method
+definition in the package. (Counted as the physical lines from each `def` to the end of its
+definition, which is the count that reproduces the per-file figures below.) It is also the wrong
+12%:
+
+| lines skipped | file | what is in them |
+|---|---|---|
+| 244 | `adapters/gdscript/runner.py` | the whole GdUnit4 and GUT runner: Godot command construction, JUnit XML parsing, the addon-prepare step. The file holds three `@dataclass` classes and no module-level function, so none of its 413 lines yields a mutant. |
+| 94 | `engine/loop.py` | `MutationRun`'s ten counters and the mutation score, plus `_Progress` |
+| 36 | `engine/runner.py` | `CommandRunner.run`, `SuiteResult.passed` / `.failed`, and the runner protocols' method stubs |
+| 28 | `engine/mutants.py` | `Mutant.apply`, `Mutant.describe_change` |
+| 16 | `engine/operators/__init__.py` | `TableOperator.replacements`, `NumericBumpOperator.replacements` |
+| 7 | `engine/spans.py` | `Span.__post_init__` |
+
+The mutation-operator catalog that `AGENTS.md` names as a sensitive path produces three mutants in
+the whole run. The tables that define what a mutation *is* are all but unmeasured, and so is every
+line that decides whether a test suite passed. A score computed over the rest of the package says
+nothing about either.
+
+This is the gap [`docs/decisions/0013`](decisions/0013-windows-local-mutation-testing.md) reaches
+for a second, local tool to cover. Both that record and `0008` reached the right conclusion from a
+wrong explanation, and both now carry a correction saying so.
 
 ### The 18 known equivalent mutants
 
