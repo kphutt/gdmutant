@@ -94,6 +94,17 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   Language specifics live only in `gdmutant/adapters/<lang>/`.
 - The mutation-operator core is deterministic, the reproducible mode a CI check can trust. Any
   future LLM-semantic mode stays out of it.
+- **Recurring bug one: a gate that passes without checking anything.** Seen five times. A test that
+  skipped when `git` was missing. A mutation hook that ran zero mutants. A license check over an
+  empty package list. A script that exited 0 after all its writes failed. A mutation run scored
+  against an already-broken baseline, where every mutant "died" so the 100% meant nothing.
+  Ask of any gate: what happens when its input is missing, empty, or unreadable? Silence is the
+  wrong answer. Make it fail, or make it say out loud that it did not run.
+- **Recurring bug two: two paths that should agree, and one checks less.** A second entry point
+  running fewer checks than the first. A message fixed in one place but not its twin. Two things
+  writing to stdout at once. Coverage and mutation testing cannot catch these. Both ask "is this
+  path correct?", and the bug is "do these two paths match?". So when you change one of a pair, say
+  what every member of the pair does now, including the ones already right.
 - Sensitive paths (CI, scripts, toolchain, the mutation-operator catalog, and the GDScript
   adapter) are listed in `CODEOWNERS` for documentation only. It enforces no review (a sole
   maintainer can't approve their own PR). `main` requires a pull request and one status check,
