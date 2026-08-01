@@ -190,9 +190,12 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   symbolic link is resolved first, so the real file is the one rewritten rather than the link
   replaced, and a file the user marked read-only is refused rather than quietly replaced. There is no
   degraded path. Anything that stops the staged write, a full disk or a lock that never clears, raises
-  an error with the target exactly as it was. A fallback that wrote in place would already have
-  emptied the file by the time its own write failed, which is the outcome this requirement exists to
-  prevent.
+  an error and changes nothing, so the file still holds exactly what it held before that particular
+  write. That is an atomicity guarantee, not a promise that the original survives. gdmutant writes
+  each file twice per mutant (§4), so when the write that fails is the restore, the mutant is what
+  stays on disk. The error message says so plainly, and the fix is to restore the file from git. A
+  fallback that wrote in place would be worse still, having already emptied the file by the time its
+  own write failed, which is the outcome this requirement exists to prevent.
 
 ---
 
@@ -247,9 +250,11 @@ mutated text over the file itself, runs the suite against it, and writes the ori
 `finally` ([ADR-0003](../decisions/0003-mutation-application-strategy.md)). The suite loads code from
 disk through `res://`, so there is nowhere else to put a mutant the tests would actually see. The
 engine restores the file whenever it is still running to do so, but a process killed outright cannot
-restore anything, so a hard kill can leave a mutant on disk. This is why gdmutant warns when git holds
-no copy of a file it is about to mutate, and why `--require-clean` refuses to start without one. NF-7
-governs how each individual write survives that risk.
+restore anything, so a hard kill can leave a mutant on disk. A failed restore does the same thing with
+no crash at all: when a full disk or a lock that outlasts the retries stops that second write, it
+raises and the mutant stays where it is. This is why gdmutant warns when git holds no copy of a file
+it is about to mutate, and why `--require-clean` refuses to start without one. NF-7 governs what each
+individual write guarantees, and what it does not.
 
 Under `--jobs N` this changes. Each worker gets its own copy of the whole project and mutates the file
 inside that copy, so workers can never collide on one file and the real source is never written to on
