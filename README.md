@@ -91,9 +91,11 @@ from every command below.
 ## Quickstart
 
 Make gdmutant a small uv project in a folder beside your game, never inside it: `uv init` drops
-`.git`, `.gitignore`, `.python-version`, `main.py`, `pyproject.toml` and a `README.md` of its own
-wherever you run it, and none of that belongs in a game repo. Pin the interpreter: `uv init` alone
-floors on whatever it finds, and gdmutant needs 3.12+.
+`.git`, `.gitignore`, `.python-version`, `pyproject.toml`, a `README.md` of its own and a starter
+Python file wherever you run it, and none of that belongs in a game repo. Which starter file
+depends on your uv version, `main.py` at the root through 0.11 and `src/<name>/__init__.py` from
+0.12, so treat the list as the shape of the mess rather than an exact manifest. Pin the
+interpreter: `uv init` alone floors on whatever it finds, and gdmutant needs 3.12+.
 
 ```sh
 uv init --python 3.12 gdmutant-workspace
