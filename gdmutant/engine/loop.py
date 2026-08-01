@@ -752,9 +752,15 @@ _REPLACE_BACKOFF = 0.1
 class SourceWriteFailed(Exception):
     """gdmutant could not write a source file — and did not damage it trying.
 
-    Raised only where the destination is still exactly as it was, so the caller can report the
-    failure knowing the user's file is intact. That is the whole point: there is no half-written
-    outcome to warn about, because this is raised *instead of* attempting one.
+    Raised only where the destination is still exactly as it was a moment ago, so this write left
+    nothing half-written behind: it is raised *instead of* attempting a write that could.
+
+    That is a promise about the **write**, not about the **run**. `_write_source` runs twice per
+    mutant, once to put the mutant in and once to put the original back, and a failure on the
+    second one leaves the mutant on disk — whole, readable, and not what the user wrote. So
+    "undamaged" can still mean "holding a mutant". Every message raised with this therefore says
+    which of the two is sitting there and points at git, and a caller must not report it as
+    reassurance that the user's own source survived.
     """
 
 
@@ -821,18 +827,30 @@ def _write_source(target: Path, text: str, eol: str) -> None:
     body = text if eol == "\n" else text.replace("\n", eol)
     exists = dest.exists()
     if exists and not os.access(dest, os.W_OK):
+        # The same disambiguation the other two refusals carry, and needed here for the same
+        # reason. This helper is also what restores the original after a mutant, so a file that
+        # turns read-only between those two writes fails on the restore, and the mutant is what is
+        # left sitting there. Nothing in "is read-only" tells the reader that.
         raise SourceWriteFailed(
             f"{dest} is read-only. gdmutant rewrites the files it mutates, so it will not "
-            "silently override that — make the file writable, or leave it out of the run."
+            "silently override that. Make the file writable, or leave it out of the run. "
+            "Nothing was written, so the file still holds whatever was in it a moment ago. "
+            "If gdmutant had already put a mutant there, the mutant is what is on disk now, "
+            "not your original. Restore the file from git before trusting it."
         )
     try:
         handle_fd, temp_name = tempfile.mkstemp(
             dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp"
         )
     except OSError as error:
+        # Same care as the rename failure below, and for the same reason: "left untouched" is true
+        # of this write, but a reader takes it as a promise about their *original*, and this same
+        # helper is what puts the original back after a mutant. Say which of the two is there.
         raise SourceWriteFailed(
             f"could not create a temporary file next to {dest} ({error}), so {dest.name} could "
-            "not be rewritten safely. It has been left untouched."
+            "not be rewritten safely. Nothing was written, so the file still holds whatever was "
+            "in it a moment ago. If gdmutant had already put a mutant there, the mutant is what "
+            "is on disk now, not your original. Restore the file from git before trusting it."
         ) from error
     temp = Path(temp_name)
     try:
