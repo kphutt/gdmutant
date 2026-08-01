@@ -22,6 +22,11 @@ clean. Re-verify each license at the moment of use. Licenses and repos change.
 | `mutation-testing-elements` report schema (Stryker) | Report output format (renders in the shared HTML viewer) | Apache-2.0 | Adopting the schema *shape* is interoperability. If any schema files are ever vendored verbatim, add the Apache-2.0 NOTICE + attribution. |
 
 ## Build / dev tools (not shipped, recorded for completeness)
+
+Scope here is anything the repository invokes, not only what `pyproject.toml` declares. A tool
+pinned in a workflow or a hook is as real a dependency as a locked one, which is why the external
+binaries and the `uvx` / `uv run --with` invocations are listed alongside the declared packages.
+
 | Tool | Use | License |
 |---|---|---|
 | Godot Engine | Runs the GDScript test suites headlessly | MIT |
@@ -31,6 +36,9 @@ clean. Re-verify each license at the moment of use. Licenses and repos change.
 | uv | Dependency + environment manager | Apache-2.0 / MIT |
 | [mise](https://mise.jdx.dev) | Pins the Godot release the live self-test runs against (`mise.toml`) | MIT |
 | [hatchling](https://github.com/pypa/hatch/tree/master/backend) | Build backend that produces the wheel and sdist | MIT |
+| [hatch-fancy-pypi-readme](https://github.com/hynek/hatch-fancy-pypi-readme) | Build-backend metadata hook (`build-system.requires`) that rewrites the README banner into a tag-pinned absolute URL in every built distribution, which is what `publish.yml`'s long-description image check exists to verify | MIT |
+| [twine](https://github.com/pypa/twine) | Validates the built distributions' metadata before the upload (`twine check`, via `uv run --with`) | Apache-2.0 |
+| [zizmor](https://docs.zizmor.sh) | Static-analysis security lint for the GitHub Actions workflows (`zizmor.yml`, via `uvx` at a pinned version) | MIT |
 | ruff · mypy · pytest · pip-audit | Lint / typecheck / test / audit | MIT / MIT / MIT / Apache-2.0 |
 | [pytest-cov](https://github.com/pytest-dev/pytest-cov) | Coverage measurement during `pytest`, and the 100% line+branch floor | MIT |
 | [mutmut](https://github.com/boxed/mutmut) | Mutation-tests gdmutant's own Python suite (the dogfood check) | BSD-3-Clause |

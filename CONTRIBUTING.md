@@ -23,24 +23,48 @@ gdmutant is a [uv](https://docs.astral.sh/uv/) project. Follow [`AGENTS.md`](AGE
 
 `ci.yml` doesn't run automatically on pull
 requests (see
-[ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md)). Merge-time checks run on your
-own machine instead, via the git hooks in `.pre-commit-config.yaml`. They run the same commands CI
-would, not a reimplementation, and are self-contained (no personal-machine setup). Install them:
+[ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md)). The lint, type, test, audit
+and license checks run on your own machine instead, via the git hooks in `.pre-commit-config.yaml`.
+They run the same commands CI would, not a reimplementation. Install them:
 
 ```sh
 uv run pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-Once installed, a secret scan runs on every commit and the full checks (lint, types, tests, audit,
-license check) run before every push. **If you skip this install step, nothing automated checks
-your commits before they reach `main`.** The one check nothing local can skip is the release-time
+Once installed, a secret scan runs on every commit and the full checks (lint, format, GDScript lint,
+types, tests, audit, license check) run before every push.
+
+Install `gitleaks` too. Every other hook runs out of the synced virtualenv, but `gitleaks` is a
+standalone binary that `uv sync` does not provide, and `scripts/run_gitleaks.py` prints a skip
+message and exits 0 when it is not on `PATH`. Left uninstalled, the hook is green and scanning
+nothing. Get it from [the gitleaks install
+instructions](https://github.com/gitleaks/gitleaks#installing), then confirm with `uv run pre-commit
+run gitleaks`.
+
+Skipping the install does not leave your pull request unchecked, but it leaves most of it unchecked.
+Some workflows do trigger on `pull_request`, just not `ci.yml`: a workflow-security lint
+(`zizmor.yml`) on every pull request, plus the mutation check and the action smoke test on the paths
+they cover. Branch protection on `main` requires the workflow-security context, so a red result
+there blocks the merge whether or not you installed anything. To see what is really required rather
+than trusting this paragraph, run `gh api repos/<owner>/<repo>/branches/main/protection --jq
+'.required_status_checks.contexts'`. What none of those cover is the rest: lint, types, tests,
+audit, the license gate and the secret scan have no cloud run on a pull request, so they reach
+`main` unexamined if you skip the hooks. The one check nothing local can skip is the release-time
 gate (`publish.yml`), which re-runs everything live before a real release, not on every merge.
 
 ## Before you open a PR
 
-If you didn't install the hooks above, run the same checks by hand. The exact command list is in
-[`AGENTS.md`](AGENTS.md) under "Build · test" (`ruff` lint + format, `mypy`, `pytest`,
-`pip-audit`).
+If you didn't install the hooks above, run the same checks by hand:
+
+```sh
+uv run python scripts/verify_local.py                       # lint, format, GDScript lint, types, tests, audit
+uv run python scripts/verify_local.py --job license-check   # the license gate
+uv run python scripts/verify_local.py --list                # print a job's commands without running them
+```
+
+That script reads its commands out of `ci.yml` rather than restating them, so it cannot drift from
+what the hooks and the release-time gate run. [`AGENTS.md`](AGENTS.md) under "Build · test" spells
+the individual commands out, which is what you want when you only need one of them.
 
 The live self-test (`tests/test_selftest_live.py`) auto-skips unless you opt in with a real Godot.
 To run it locally:
@@ -55,8 +79,9 @@ GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-
 - One focused change per PR, with a clear description of what and why.
 - Lint, types, tests, audit, and secret scan all pass. The pre-commit and pre-push hooks
   enforce this automatically if you installed both above (the secret scan runs at commit time, the
-  rest before a push). Otherwise run the commands by hand before opening the PR. There's no
-  automated PR check (see "Install the local checks" above).
+  rest before a push). Otherwise run the commands by hand before opening the PR. The checks that do
+  run in the cloud on a pull request cover none of this (see "Install the local checks" above), so
+  it is on you.
 - New behavior comes with tests. This is a testing tool, and we hold ourselves to it.
 - Larger design changes are recorded as an ADR in `docs/decisions/` (append-only, see the
   existing records for the format) and, where relevant, reflected in `docs/design/`.
