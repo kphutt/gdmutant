@@ -40,6 +40,11 @@ def _span_of(tok: Token) -> Span:
     return Span(line, col, end_line, end_col)
 
 
+#: The operator id every statement-deletion mutant carries. The generation half lives further down
+#: (`_statement_deletions`); the id is declared up here because `unknown_ignore_operators` needs it
+#: to know that ``ignore[statement-deletion]`` names a real operator.
+STATEMENT_DELETION_ID = "statement-deletion"
+
 # The canonical annotation prefix (the spelling used in docs); the regex below is the lenient parse.
 _IGNORE_MARKER = "# gdmutant: ignore"
 
@@ -84,9 +89,17 @@ def unknown_ignore_operators(
     source: str, catalog: tuple[Operator, ...] = CATALOG
 ) -> list[tuple[int, str]]:
     """``(line, name)`` for every malformed operator scope in an ignore directive — either a name no
-    operator in `catalog` produces (a likely typo) or **empty brackets** ``ignore[]`` (reported with
-    ``name == ""``). Both silently suppress nothing, so the CLI warns; the run is never failed."""
-    valid = {op.id for op in catalog}
+    mutant this adapter generates can carry (a likely typo) or **empty brackets** ``ignore[]``
+    (reported with ``name == ""``). Both silently suppress nothing, so the CLI warns; the run is
+    never failed.
+
+    The valid names are `catalog`'s ids **plus** `STATEMENT_DELETION_ID`, which is exactly what
+    `_mark_ignored` matches a directive against. Statement deletion is structural rather than a
+    token swap, so it lives here instead of the token catalog (see `_statement_deletions`) — and
+    validating against the catalog alone told anyone writing the documented, *working*
+    ``# gdmutant: ignore[statement-deletion]`` that their annotation suppressed nothing.
+    """
+    valid = {op.id for op in catalog} | {STATEMENT_DELETION_ID}
     warnings: list[tuple[int, str]] = []
     for line, directive in _ignore_directives(source).items():
         if directive.operators is None:
@@ -378,8 +391,7 @@ def _mark_ignored(mutant: Mutant, directives: dict[int, _IgnoreDirective]) -> Mu
 _DELETABLE_STMT_NODES = frozenset({"expr_stmt", "return_stmt"})
 _FUNCTION_SCOPE_NODES = frozenset({"func_def", "lambda"})
 _SCOPE_HEADER_NODES = frozenset({"func_header", "lambda_header"})
-STATEMENT_DELETION_ID = "statement-deletion"
-_STATEMENT_REPLACEMENT = "pass"
+_STATEMENT_REPLACEMENT = "pass"  # STATEMENT_DELETION_ID is declared at the top of the module
 
 
 def _scope_requires_a_return_value(scope: Tree[Token]) -> bool:

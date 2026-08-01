@@ -34,16 +34,17 @@ _GOLDEN_COMPARISON = """\
         |               ^  changed  >  to  >= — every test still passed
 
   gap    Your tests pass whether this says `>` or `>=`. They run this
-         line, but never the one input where the two disagree — equal
-         operands. That case is untested.
+         line, but never with an input the two decide differently, so what
+         this comparison decides is untested.
 
   risk   Passing here is false confidence, not proof. A later refactor or
-         merge that changes the equal case slips through green. If the
-         equal case has a right answer, no test guards it.
+         merge that changes this comparison slips through green. If it has
+         a right answer, no test guards it.
 
   start  Add a test that reaches this line with two equal operands (a
-         value compared to itself) and assert the result you expect. Only
-         you know that result — gdmutant reports the gap, not it.
+         value compared to itself) and assert the result you expect. Equal
+         operands separate every comparison swap gdmutant makes. Only you
+         know the result, gdmutant reports the gap, not it.
 
   more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#comparison
 ──────────────────────────────────────────────────────────────────────────"""
@@ -153,13 +154,13 @@ def test_survivor_report_fields_reuse_the_same_narrative_as_the_console_block() 
     m = _mutant("comparison", ">", ">=")
     description, status_reason = survivor_report_fields(m)
     gap, risk, start = (
-        "Your tests pass whether this says `>` or `>=`. They run this line, but never the one "
-        "input where the two disagree — equal operands. That case is untested.",
-        "Passing here is false confidence, not proof. A later refactor or merge that changes the "
-        "equal case slips through green. If the equal case has a right answer, no test guards it.",
+        "Your tests pass whether this says `>` or `>=`. They run this line, but never with an "
+        "input the two decide differently, so what this comparison decides is untested.",
+        "Passing here is false confidence, not proof. A later refactor or merge that changes this "
+        "comparison slips through green. If it has a right answer, no test guards it.",
         "Add a test that reaches this line with two equal operands (a value compared to itself) "
-        "and assert the result you expect. Only you know that result — gdmutant reports the gap, "
-        "not it.",
+        "and assert the result you expect. Equal operands separate every comparison swap gdmutant "
+        "makes. Only you know the result, gdmutant reports the gap, not it.",
     )
     assert description == gap
     assert status_reason == f"{risk}\n\n{start}"
@@ -239,9 +240,10 @@ def test_narrative_switches_to_the_assert_explanation_inside_an_assert() -> None
 
 
 def test_narrative_keeps_the_operator_explanation_off_an_assert() -> None:
+    # The token substitution is the tell: only the operator's own copy names the swap it made.
     mutant = _mutant("comparison", ">", ">=", line=1, col=12)
     gap, _ = survivor_report_fields(mutant, ["\tif value > 0:"])
-    assert "equal operands" in gap and "assert" not in gap
+    assert "whether this says `>` or `>=`" in gap and "assert" not in gap
 
 
 def test_deleting_an_assert_statement_is_an_assert_survivor() -> None:
@@ -407,7 +409,7 @@ def test_an_unreadable_source_falls_back_to_the_operator_explanation() -> None:
     mutant = _mutant("comparison", ">", ">=", line=1, col=15)
     assert context_section(mutant.original, 1, 15, None) is None
     gap, _ = survivor_report_fields(mutant, None)
-    assert "equal operands" in gap
+    assert "whether this says `>` or `>=`" in gap
 
 
 def test_a_line_off_the_end_of_the_file_falls_back_too() -> None:

@@ -26,9 +26,11 @@ CLI.
   is string concatenation (GDScript's `String` defines no `-`), a `+=` that appends to a string (same
   reason), and a property declaration's initializer whose stored value no getter can read back.
   These change the mutation score, and upward: an excluded mutant leaves the denominator instead
-  of counting as a survivor. That is deliberate and is the honest direction: the excluded shapes are
-  invalid GDScript, not gaps a test could ever have closed. It does mean, though, that a score is not
-  comparable across a version that added an exclusion. Each is recognised from the parse tree only
+  of counting as a survivor. That is deliberate and is the honest direction: the language already
+  settles all four, so none is a gap a test could ever have closed. The first three are invalid
+  GDScript, and the property initializer is valid GDScript whose mutant is inert, because the value
+  it stores can never be read back. It does mean, though, that a score is not comparable across a
+  version that added an exclusion. Each is recognised from the parse tree only
   where the shape is certain (a `String`-typed *variable* is still mutated), because reporting noise
   is a smaller failure than hiding a real gap. `docs/survivors/README.md` states the full list and
   its effect on the score for users.
@@ -101,6 +103,32 @@ CLI.
 
 ### Fixed
 
+- Six survivor explanations stated something that is not true. The text reaches every user on every
+  run, through the console block, the JSON report and the HTML report, and the docs page and the
+  shipped copy of it were pinned to each other, so all three said the same wrong thing in sync.
+  - Modulo blamed a clean multiple ("where `%`, `*`, and `/` can produce indistinguishable
+    results"). A clean multiple is where those three differ most: `6 % 3` is 0, `6 * 3` is 18,
+    `6 / 3` is 2. A reader was told the test that works cannot work. The reason is arithmetic's,
+    which is what the entry's own "assert the exact result" advice already implied: nothing pins
+    the result.
+  - Comparison said the swapped operators "differ on exactly one input", which is false for the
+    `==` ↔ `!=` pair the operator also produces, and which the entry names in its own example.
+    Those two are complements and differ on every input.
+  - The list of shapes that are never generated called all four "code GDScript rejects". Three
+    are, resting on `String` having no `-`. The fourth, a property initializer no getter can read
+    back, is valid GDScript that is merely inert, so an auditor was sent hunting a syntax error
+    that is not there.
+  - Numeric said "a numeric literal", but only bare decimal integers are mutated: `0.5`, `0xFF`
+    and `1_000` produce nothing, so a float bound was never covered.
+  - Enum member described only a `numeric` mutant on a member's value, though any mutant inside
+    an `enum` block is explained there, including an arithmetic one on `A = 1 + 0`.
+  - Compound assign said a string `+=` is "not mutated at all". It gets no compound-assign
+    mutant, but the line still gets a statement deletion.
+- `# gdmutant: ignore[statement-deletion]` no longer draws a warning that it "suppresses nothing".
+  The annotation always worked. The validator checked names against the token operator catalog
+  alone, and statement deletion is structural, so it lives in the GDScript adapter instead. The
+  tool was contradicting its own documented advice to scope an ignore with the `mutatorName` from
+  the report.
 - The "executable not found" message is mode-aware. Under `--runner command` the executable
   comes from the `--command` string, not from `--godot`, so the message now says that, states that
   `--godot` has no effect in that mode, and shows the user's own command back with the path slot
