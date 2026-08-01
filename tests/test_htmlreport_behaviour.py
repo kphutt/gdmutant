@@ -459,6 +459,22 @@ def test_the_three_rare_states_stay_three_things_and_do_not_collapse_into_one(
     assert "did not parse" not in card and "never ran" not in card
 
 
+def test_a_rare_count_is_not_narrowed_by_an_operator_chip_left_from_an_earlier_click(
+    observed: dict[str, Any],
+) -> None:
+    # `matches()` ANDs the status filter with the operator chip. A header count is a claim about the
+    # whole report, so a chip still narrowed to some other operator could hide exactly the mutants
+    # the count promised: the header says "1 runtime error", the click lands on "no findings", and
+    # nothing on screen says an unrelated filter is why. Every other assertion in this section
+    # clicks a count with the operator left at its default, so none of them can see this.
+    stale = observed["staleOp"]
+    assert stale["afterOpChip"] == "no findings"  # `comparison` holds an Ignored, not a survivor
+    assert stale["afterHeaderCount"] == "1 of 1 finding"
+    # And it is the counted mutant that got opened, not merely some finding.
+    assert "numeric" in stale["card"]
+    assert "the run errored" in stale["card"]
+
+
 def test_a_rare_count_clicked_from_the_index_opens_a_file_that_actually_has_one(
     observed: dict[str, Any],
 ) -> None:

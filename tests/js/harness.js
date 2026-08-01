@@ -487,6 +487,17 @@ for (const status of ['Ignored', 'CompileError', 'RuntimeError']) {
 rare.clickHead('rare:RuntimeError');
 out.rare.runtimeCard = rare.card();
 
+// Every click above leaves the operator chip at its default, so none of them can tell whether the
+// status filter is the only thing deciding what a header count reaches. Narrow the operator first,
+// to one that holds none of the counted mutants, then click the count. `RuntimeError` lives on
+// `numeric` in this report and `comparison` holds an `Ignored`, so the two genuinely disagree.
+const stale = openTab(UNSCORED, {}, '');
+stale.clickChip('[data-op]', 'comparison');
+out.staleOp = { afterOpChip: stale.pos() };
+stale.clickHead('rare:RuntimeError');
+out.staleOp.afterHeaderCount = stale.pos();
+out.staleOp.card = stale.card();
+
 // From the INDEX, where there is no source pane to filter at all: the click has to open a file.
 const rx = openTab(MULTI, {}, '');
 out.rareIndex = { openedOnIndex: isIndex(rx) };

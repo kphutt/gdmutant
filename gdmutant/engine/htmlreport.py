@@ -1003,13 +1003,22 @@ function onClick(e){
 
   const chip = at('[data-filter]') || at('[data-op]');
   if (chip) {
-    if (chip.dataset.filter !== undefined) filter = chip.dataset.filter;
+    const isFilterChip = chip.dataset.filter !== undefined;
+    if (isFilterChip) filter = chip.dataset.filter;
     else op = chip.dataset.op;
     // A `rare:` filter came from a header count, which sits above BOTH views and counts the whole
     // report, so it can be clicked from the index, or on a file holding none of what it counts.
     // Either way it has to land where those mutants actually are. The in-file chips never move
     // you: filtering the file you are reading must not carry you off to a different one.
     const fromHeader = filter.indexOf(RARE) === 0;
+    // `matches()` ANDs the status filter with the operator chip, so an operator still narrowed from
+    // an earlier click in this file could hide the very mutants the header count just promised: the
+    // count says "1 runtime error", the click lands on "no findings", and nothing on screen says an
+    // unrelated filter is the reason. A count is a claim about the whole report, so answering it
+    // means clearing the operator too. Guarded on `isFilterChip` rather than on `fromHeader` alone,
+    // because `fromHeader` only asks what the filter IS: without the guard, clicking an operator
+    // chip while a rare filter is up would reset that chip to `all` the instant it was pressed.
+    if (isFilterChip && fromHeader) op = 'all';
     if (fromHeader && (view !== 'file' || !shown().length)) { toFirstMatch(); return; }
     keepSelection();
     refresh();
@@ -1503,9 +1512,14 @@ def _head_stats(view: ReportView) -> str:
         f'<div class="stat {cls}"><b>{count}</b><i>{html.escape(label)}</i></div>'
         for cls, count, label in plain
     )
+    # Both `label` and `status` come only from the hardcoded `_RARE` tuple, so neither can carry a
+    # quote today and nothing here is currently reachable by report content. They are escaped
+    # anyway, so that the day `_RARE` or `_head_stats` renders anything report-derived, this markup
+    # is already safe rather than one forgotten attribute away from an injection. The `<i>` below
+    # was already escaped, which made the attribute beside it the odd one out.
     return out + "".join(
-        f'<button type="button" class="stat jump" data-filter="rare:{status}"'
-        f' aria-pressed="false" title="Show the {label} in the source">'
+        f'<button type="button" class="stat jump" data-filter="rare:{html.escape(status)}"'
+        f' aria-pressed="false" title="Show the {html.escape(label)} in the source">'
         f"<b>{count}</b><i>{html.escape(label)}</i></button>"
         for label, count, status in view.rare
     )
