@@ -462,9 +462,10 @@ def _run_baseline(
     #
     # **This check lives here, in the engine, on purpose** — "the baseline ran no tests" is a
     # property of a baseline, not of a language or a framework, and it is reachable under ANY runner
-    # whose test path or project is misconfigured. It used to live in one adapter (`GutRunner`),
-    # which left the other two runners unguarded; the same guard duplicated per adapter would drift
-    # apart the moment a fourth runner is added. Language-neutrality (NF-3) is kept because this
+    # whose test path or project is misconfigured. Before this, the only such check anywhere lived
+    # in one adapter (`GutRunner`), which left the other two runners unguarded; the same guard
+    # copied per adapter would drift apart the moment a fourth runner is added — the adapters do
+    # still keep theirs, for the reason below. Language-neutrality (NF-3) is kept because this
     # check reads only `SuiteResult.tests` and names no framework.
     #
     # The adapters still keep their own zero-test guards, and that is not duplication: this one
@@ -938,6 +939,12 @@ def _run_one(
             # `SuiteResult.tests`, so it covers any runner whose framework zeroes a run *without*
             # raising. An adapter that can recognise the shape still raises first with a better
             # message (`GutRunner` does); this catches the ones that cannot.
+            #
+            # Deliberately unreachable for every runner that ships TODAY: both JUnit adapters raise
+            # on a zero-test report before returning one, and `CommandRunner` reports `tests=1` for
+            # any exit-0 run because an exit code carries no count. It is the backstop a fourth
+            # runner inherits without having to know it exists — which is the whole reason the
+            # check moved here instead of being copied into a third adapter.
             return Verdict.ERROR
         return Verdict.KILLED if result.failed else Verdict.SURVIVED
     finally:

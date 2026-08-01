@@ -259,9 +259,9 @@ def test_gut_crash_safety_never_reports_a_false_survivor_at_n_gt_1(tmp_path: Pat
 def test_gdunit4_crash_safety_never_reports_a_false_survivor_at_n_gt_1(tmp_path: Path) -> None:
     """The GdUnit4 peer of the GUT probe above — and the reason ADR-0011's claim is no longer n=1.
 
-    GdUnit4 is gdmutant's **default** runner and overrides nothing for crash safety: its whole
-    defence is the base's "the report must reappear" guard, justified in ADR-0011 with "a crash
-    writes no report". That was only ever observed against the corpus's single GdUnit4 suite, where
+    GdUnit4 is gdmutant's **default** runner, and it used to override nothing for crash safety: its
+    whole defence was the base's "the report must reappear" guard, justified in ADR-0011 with "a
+    crash writes no report". That was only ever observed against the corpus's single suite, where
     breaking ``turn_order.gd`` breaks the only suite — n=1. GUT looked exactly as safe at n=1 and
     turned out to skip-and-continue, which is a false survivor. Assuming GdUnit4 differs, on a
     single observation, on the default path, is precisely the bet that is not worth making.
