@@ -35,7 +35,7 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
 ```
 
 - `--json -` streams the machine-readable report to stdout. The human summary and per-mutant
-  progress go to stderr. Capture stdout for parsing. Three flag combinations put something else on
+  progress go to stderr. Capture stdout for parsing. Two flag combinations put something else on
   stdout as well, so keep them out of a run you parse:
   [Keeping stdout parseable](#keeping-stdout-parseable) lists them.
 - `--dry-run` lists the mutants gdmutant *would* generate, without Godot and without running any
@@ -53,10 +53,11 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
   stdout instead. `step-summary` is the only value it takes, and repeating the flag changes
   nothing. It is advisory: a failed write warns and changes neither the score nor the exit code.
 - `--since <ref>` mutates only the lines changed since a git ref (e.g. `--since origin/main`), the
-  fast per-PR mode for CI. When no line in the given paths changed since that ref, gdmutant prints
-  a note to stderr and exits 0 *before generating any report*, so with `--json -` stdout is empty.
-  Read empty stdout on exit 0 as "nothing to mutate", never as a parse failure. A PR that touches
-  no `.gd` file hits this every time, so a CI script has to handle it.
+  fast per-PR mode for CI. When no line in the given paths changed since that ref, gdmutant runs no
+  tests at all and exits 0, with a note on stderr. It still writes the report you asked for: every
+  given file is there with an empty `mutants` list, and the score is `null`. So `--json -` stays
+  parseable and needs no special case — a run with nothing to mutate reads exactly like any other
+  run with nothing to score. A PR that touches no `.gd` file hits this every time.
 - `--jobs N` evaluates mutants in parallel, each worker inside its own copy of the project. That
   copy is what keeps your own file untouched (see [Safety guarantee](#safety-guarantee)), and it
   brings one restriction: every file to mutate has to sit inside `--project`, or the run exits 2.
@@ -81,22 +82,24 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
   wall-clock with the timeout cost broken out. Parse the closing `Done in ...` line for the real
   duration. Do not try to reconstruct a schedule from the opening one. `--progress plain` (the
   automatic choice off a TTY and when `CI=true` or `CONTINUOUS_INTEGRATION=true`) heartbeats every
-  60s or 10% of mutants, whichever is rarer. `--progress none` drops the *heartbeat* only. The plan
-  line, the closing line, and a line per mutant as it finishes all still go to stderr, so this
-  trims the stderr volume rather than bounding it.
+  60s or 10% of mutants, whichever is rarer. `--progress none` turns the whole progress stream off:
+  no heartbeat, no plan line, no closing line, and no line per mutant. That bounds the stderr volume
+  instead of trimming it, at the cost of the `Done in ...` line — so use `--progress plain` when a
+  script wants the duration.
 
 ## Keeping stdout parseable
 
-With `--json -` the report is the only thing on stdout, as long as nothing else writes there. Three
-combinations break that:
+With `--json -` the report is the only thing on stdout, as long as nothing else writes there.
+`--html <path>` is safe to combine with it: the report goes to stdout, the page goes to the file,
+and the `Wrote HTML report to ...` note goes to stderr with the rest of the human text. Two
+combinations do still break stdout:
 
-- `--html <path>` prints `Wrote HTML report to ...` to stdout, after the JSON. Parsing the two
-  together fails on the trailing text.
-- `--report step-summary` with `$GITHUB_STEP_SUMMARY` unset prints its Markdown to stdout.
+- `--report step-summary` with `$GITHUB_STEP_SUMMARY` unset prints its Markdown to stdout. Set that
+  variable (GitHub Actions always does) and it goes to the file instead.
 - `--dry-run` ignores `--json` and prints its plain-text mutant list to stdout.
 
-`--json <path>`, a real path rather than `-`, sidesteps all three: the report goes to that file and
-stdout carries only human text. Use it when a run needs the HTML report as well.
+`--json <path>`, a real path rather than `-`, sidesteps both: the report goes to that file and
+stdout carries only human text.
 
 ## Project config (`.gdmutant.toml`)
 
@@ -119,9 +122,9 @@ Every other key is read normally: none of them can decide what gets executed.
 
 ## Exit codes (the contract)
 
-- `0`: the run completed. Survivors are normal output, not a failure. Parse them. One exit-0 path
-  writes no report at all: `--since <ref>` with no changed lines returns before generating
-  anything, so check stdout for emptiness before parsing it.
+- `0`: the run completed. Survivors are normal output, not a failure. Parse them. Every exit-0 path
+  writes the report you asked for, including `--since <ref>` with no changed lines — that one is an
+  empty report, not an empty stdout.
 - `1`: the unmutated *baseline* suite failed. Fix your tests first. Mutation-testing a red
   suite is meaningless.
 - `2`: a setup or input error. The stderr message says which one. The causes:

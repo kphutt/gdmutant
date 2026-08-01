@@ -16,7 +16,7 @@ import shlex
 import subprocess
 import sys
 import tomllib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -100,6 +100,27 @@ def _resolve_progress_style(choice: str) -> ProgressStyle:
     if _under_ci() or stderr_is_tty is None or not stderr_is_tty():
         return ProgressStyle.PLAIN
     return ProgressStyle.RICH
+
+
+def _progress_emitter(style: ProgressStyle) -> Callable[[str], None] | None:
+    """Where the engine's progress lines go for `style` — stderr, or nowhere at all under ``none``.
+
+    stderr, never stdout: a real run boots Godot per mutant, so with nothing printed the tool looks
+    hung, and keeping those lines off stdout is what lets ``--json -`` stream a report a parser can
+    read.
+
+    ``none`` gets no emitter, which is the only way the flag can mean what its name says.
+    `ProgressStyle` governs the periodic **heartbeat** alone: the plan line, the per-mutant
+    "running" and verdict lines, and the closing wall-clock are handed to the emitter whatever the
+    style is. So ``--progress none`` used to still print two lines per mutant — 36 lines for an
+    18-mutant file, which is most of the volume somebody asking for no progress wants gone.
+    Withholding the emitter silences the whole channel instead of a tenth of it. The console
+    summary, the survivor blocks and the report are untouched: those are the run's result, not
+    progress about it.
+    """
+    if style is ProgressStyle.NONE:
+        return None
+    return lambda line: print(line, file=sys.stderr)
 
 
 def _load_gdscript(source_path: str) -> str | None:
@@ -786,8 +807,6 @@ def run_mutation(
         if require_clean:
             return 2
     path = Path(source_path)
-    # Progress goes to stderr unconditionally: a real run boots Godot per mutant, so without it the
-    # tool looks hung. stderr keeps stdout clean for --json - (pure JSON) and the human summary.
     adapter = ADAPTER if changed is None else _diff_scoped(ADAPTER, changed)
     try:
         result = run(
@@ -797,7 +816,7 @@ def run_mutation(
             runner,
             adapter,
             timeout=timeout,
-            progress=lambda line: print(line, file=sys.stderr),
+            progress=_progress_emitter(progress_style),
             jobs=jobs,
             progress_style=progress_style,
         )
@@ -874,6 +893,8 @@ def _write_reports(
         except OSError as error:
             print(f"error: cannot write report to {json_path}: {error}", file=sys.stderr)
             return 2
+        # Only reachable when the report went to a file, so stdout is not the report's channel and
+        # this confirmation cannot land in the middle of anything.
         print(f"\nWrote report to {json_path}")
     if html_path is not None:
         try:
@@ -881,8 +902,54 @@ def _write_reports(
         except OSError as error:
             print(f"error: cannot write HTML report to {html_path}: {error}", file=sys.stderr)
             return 2
-        print(f"\nWrote HTML report to {html_path} — open it in a browser.")
+        # This one *is* reachable next to `--json -`, and it is human text, not report data. Under
+        # `--json -` the JSON above owns stdout, so the note joins the summary on stderr. Printing
+        # it to stdout appended "Wrote HTML report to ..." after the closing brace, and the caller
+        # piping the run into `json.loads` got a parse error naming a column in the trailing prose
+        # with nothing to say that `--html` had caused it.
+        print(
+            f"\nWrote HTML report to {html_path} — open it in a browser.",
+            file=sys.stderr if json_path == "-" else sys.stdout,
+        )
     return 0
+
+
+def _no_changes_report(
+    files: list[str],
+    project_dir: str,
+    json_path: str | None,
+    html_path: str | None,
+) -> int:
+    """Emit the report for a ``--since`` run whose diff touched nothing: every given file present,
+    each with an empty mutant list. Returns 0, or 2 if a file can't be read or a report target
+    can't be written.
+
+    A run that generates no mutants is still a run that **completed**, and the caller most likely to
+    pass ``--since`` is a CI script piping ``--json -`` into a parser. Exiting 0 with nothing at all
+    on stdout handed that caller no report and no signal: the explanation went to stderr, which the
+    parser is not reading, so "nothing changed" and "the tool broke" arrived looking identical. A
+    valid report with zero mutants says the same thing on the channel the caller is already
+    listening to, and needs no special case at the other end — the score is `null`, exactly as it
+    is for any run with nothing to score.
+
+    No mutants are generated, so no test suite runs and no Godot boots: this stays the fast no-op
+    it always was.
+    """
+    for problem in (
+        _report_path_problem(json_path, "--json", stdout_ok=True),
+        _report_path_problem(html_path, "--html", stdout_ok=False),
+    ):
+        if problem is not None:
+            print(f"error: {problem}", file=sys.stderr)
+            return 2
+    empty: dict[str, tuple[MutationRun, str]] = {}
+    for source_path in files:
+        source = _load_gdscript(source_path)
+        if source is None:
+            return 2
+        empty[str(Path(source_path))] = (MutationRun(()), source)
+    stryker = stryker_report_multi(empty, "gdscript")
+    return _write_reports(stryker, json_path, html_path, project_dir)
 
 
 def run_mutation_paths(
@@ -934,7 +1001,7 @@ def run_mutation_paths(
             runner,
             adapter,
             timeout=timeout,
-            progress=lambda line: print(line, file=sys.stderr),
+            progress=_progress_emitter(progress_style),
             jobs=jobs,
             progress_style=progress_style,
         )
@@ -1121,8 +1188,10 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         choices=("auto", "plain", "none"),
         default="auto",
         dest="progress_style",
-        help="how often to print a progress heartbeat: auto (every 30s on a terminal, rarer in a "
-        "log or CI), plain (the rarer cadence always), or none (default: auto)",
+        help="how much the run says about itself while it works: auto (a heartbeat every 30s on a "
+        "terminal, rarer in a log or CI), plain (the rarer cadence always), or none (no progress "
+        "output at all — no heartbeat, no per-mutant line, no plan or closing line). The summary "
+        "and the report are unaffected either way. (default: auto)",
     )
     run_parser.add_argument(
         "--tests",
@@ -1334,7 +1403,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("error: no parseable .gd files in the given path(s)", file=sys.stderr)
             return 2
         # Diff-scoped mode: restrict mutation to lines changed since a base ref. A bad ref
-        # is a setup error; no changed lines at all is a clean no-op (exit 0), not a failed run.
+        # is a setup error; no changed lines at all is a clean no-op (exit 0), not a failed run —
+        # but a no-op that still reports, so a caller parsing stdout gets an answer rather than
+        # silence (`_no_changes_report`).
         changed: dict[str, set[int]] | None = None
         if args.since:
             changed = _changed_lines(args.since, files)
@@ -1345,7 +1416,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"no lines changed since {args.since} in the given path(s) — nothing to mutate",
                     file=sys.stderr,
                 )
-                return 0
+                if args.dry_run:
+                    return 0  # --dry-run ignores --json/--html, and has no mutants to list
+                return _no_changes_report(
+                    files,
+                    args.project or _default_project_dir(args.source, files),
+                    args.json_path,
+                    args.html_path,
+                )
         if args.dry_run:
             ignored = [
                 flag

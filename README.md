@@ -209,7 +209,9 @@ Done in 6m 32s — 18 mutants, 8 timed out (4m 0s of that). Baseline suite 1.4s.
 ```
 
 The heartbeat lands every 30s on a terminal, and less often in a log or in CI. `--progress plain`
-forces the quieter cadence. `--progress none` turns it off.
+forces the quieter cadence. `--progress none` turns the whole progress stream off — heartbeat, plan
+line, closing line and the line each mutant prints as it finishes. The summary and the report are
+unaffected.
 
 ## Compatibility
 
