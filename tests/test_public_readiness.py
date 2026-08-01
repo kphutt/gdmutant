@@ -83,6 +83,7 @@ class that a reader provably cannot catch by reading.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import subprocess
@@ -1037,6 +1038,50 @@ def test_a_readable_word_list_loads_and_says_how_many_terms(
     assert _outcome_of_asking_for_the_vocabulary() == ("loaded", "")
 
 
+def test_a_loaded_vocabulary_cannot_be_edited_after_it_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The loaded list is read once and then shown to every rule. Freezing it means nothing further
+    # down can quietly narrow the scan by dropping a term from the object in memory.
+    path = tmp_path / "a-list.txt"
+    path.write_text("widgetcorp\n", encoding="utf-8")
+    _declared(monkeypatch, str(path))
+    vocabulary = _vocabulary()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        vocabulary.terms = ()  # type: ignore[misc]
+
+
+def test_the_name_of_the_variable_is_part_of_the_contract() -> None:
+    # Every other test sets the variable *through* this constant, so all of them keep passing if
+    # its value changes -- while a real machine, which exports the name literally, silently stops
+    # being read. Mutation testing found that: renaming the constant survived the whole suite.
+    # The name is the interface between this repo and whatever configures a machine, so it is
+    # pinned here as a literal, once.
+    assert VOCABULARY_ENV == "GDMUTANT_PRIVATE_TERMS"
+
+
+def test_a_list_of_several_terms_matches_each_of_them_independently(
+    tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """More than one term, because one term never exercises how they are joined together.
+
+    The terms are compiled into a single alternation. With a one-term list there is nothing to
+    join, so every test above passes no matter what separator the join uses -- mutation testing
+    survived changing it. Three terms, each found on its own line, is what actually pins it.
+    """
+    listing = tmp_path / "a-list.txt"
+    listing.write_text("widgetcorp\nacmeworks\nre:\\bWDG-\\d+\\b\n", encoding="utf-8")
+    _declared(monkeypatch, str(listing))
+    planted = _plant(
+        tree,
+        "docs/notes.md",
+        "a line about widgetcorp\nnothing here\na line about acmeworks\nfiled as WDG-7\n",
+    )
+    found = _matches(_vocabulary().pattern, [planted])
+    assert [match.line for match in found] == [1, 3, 4]
+    assert [match.matched for match in found] == ["widgetcorp", "acmeworks", "WDG-7"]
+
+
 @pytest.mark.parametrize(
     "spelling",
     ["widget-corp", "widget corp", "widget_corp", "widget.corp", "widgetcorp", "WIDGET-CORP"],
@@ -1628,6 +1673,20 @@ def test_a_home_directory_is_a_hit_however_it_is_spelled(
     rule = _rule_named("a path inside somebody's home directory")
     planted = _plant(tree, "docs/setup.md", "the checkout is at " + tail + "\n")
     assert bool(_matches(rule.pattern, [planted])) is leaks
+
+
+def test_the_tilde_home_the_rule_looks_for_is_the_real_one(tree: Path) -> None:
+    """The tilde case above builds its example out of the same constant the rule is built from.
+
+    That makes the two move together: change the constant and the rule stops matching real tilde
+    homes while the test keeps passing, because its example changed to match. Mutation testing
+    found exactly that. So this assembles the path independently, out of its own pieces, and the
+    rule has to find *that*.
+    """
+    rule = _rule_named("a path inside somebody's home directory")
+    independently = _spelled("~", "/", "dev", "/") + "a-project"
+    planted = _plant(tree, "docs/setup.md", "the checkout is at " + independently + "\n")
+    assert [match.line for match in _matches(rule.pattern, [planted])] == [1]
 
 
 def test_a_name_is_a_hit_whatever_its_capitalisation(tree: Path) -> None:
