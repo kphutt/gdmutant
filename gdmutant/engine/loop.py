@@ -159,8 +159,11 @@ class ProgressStyle(Enum):
     #: A log file or a CI job: rarer, so a two-hour run does not bury the build log. Both rules must
     #: be satisfied, which makes the *rarer* of the two win.
     PLAIN = "plain"
-    #: No heartbeat at all. The plan and the closing wall-clock still print: those are facts about
-    #: the run, not progress chatter.
+    #: No heartbeat at all. A caller that still passes a `progress` callback keeps the plan line and
+    #: the closing wall-clock: those are facts about the run, not progress chatter. gdmutant's own
+    #: CLI is not such a caller — under ``--progress none`` it passes no callback at all
+    #: (`cli._progress_emitter`), so nothing this class governs reaches a terminal. The distinction
+    #: matters here because this style alone cannot deliver silence: the emitter is what decides.
     NONE = "none"
 
 

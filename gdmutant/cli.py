@@ -117,6 +117,15 @@ def _progress_emitter(style: ProgressStyle) -> Callable[[str], None] | None:
     Withholding the emitter silences the whole channel instead of a tenth of it. The console
     summary, the survivor blocks and the report are untouched: those are the run's result, not
     progress about it.
+
+    That silence is total, and deliberately so. It includes the engine's two baseline notices —
+    "preparing the project ..." and "running the unmutated (baseline) suite ..." — which are
+    elsewhere justified as the signal that stops a first run on a fresh checkout from looking hung.
+    Keeping a carve-out for them would rebuild the exact ambiguity this fixes: an engine style whose
+    name said "none" while two lines per mutant still arrived. A flag whose contract a script can
+    state in one sentence is worth more than two rescued lines, and the caller who wants the
+    anti-hang signal has ``auto`` (the default) and ``plain`` — nobody reaches for ``none`` while
+    watching a terminal.
     """
     if style is ProgressStyle.NONE:
         return None
@@ -768,6 +777,45 @@ def _stdout_contention_problem(json_path: str | None, step_summary: bool) -> str
     )
 
 
+def _wants_step_summary(report: list[str] | None) -> bool:
+    """True when ``--report step-summary`` was asked for. One reader, because two call sites need
+    the answer — the real run and the ``--since``-no-changes report — and two copies of the
+    expression is precisely how the two came to disagree in the first place."""
+    return report is not None and "step-summary" in report
+
+
+def _setup_problem(
+    project_dir: str, json_path: str | None, html_path: str | None, step_summary: bool
+) -> str | None:
+    """Everything that can be known to be wrong *before* a run starts, in one place, or None.
+
+    Checked up front because a real pass boots Godot per mutant for minutes: an unwritable report
+    target, a mistyped ``--project`` or two reports contending for stdout must all fail now rather
+    than after the whole run has completed.
+
+    This exists as one function because gdmutant has **three** entry points that produce a report —
+    `run_mutation`, `run_mutation_paths` and `_no_changes_report` — and the third was written with a
+    subset of the checks the first two enforce. That is how a mistyped ``--project`` came to exit 0
+    with a clean-looking empty report on the ``--since``-no-changes path while both real-run paths
+    exited 2, and how the ``--json -`` / ``--report step-summary`` refusal came to hold on two paths
+    out of three. A shared preflight makes that class of drift impossible: a check added here is
+    enforced by every path that can write a report, and there is no second list to remember.
+
+    Order matters and mirrors what the checks cost the reader: the project dir is the thing they
+    most likely mistyped, so it is named first.
+    """
+    if not Path(project_dir).is_dir():
+        return f"project directory not found: {project_dir}"
+    for problem in (
+        _report_path_problem(json_path, "--json", stdout_ok=True),
+        _report_path_problem(html_path, "--html", stdout_ok=False),
+        _stdout_contention_problem(json_path, step_summary),
+    ):
+        if problem is not None:
+            return problem
+    return None
+
+
 def list_mutants(source_path: str, only_lines: set[int] | None = None) -> int:
     """Print every mutant gdmutant would generate for `source_path` **without running any tests** —
     a Godot-free way to see the tool work. With `only_lines` (diff-scoped) only mutants on
@@ -815,24 +863,14 @@ def run_mutation(
     if source is None:
         return 2
     _warn_unknown_ignore_operators(source)
-    # Validate project_dir up front: the runner shells out with `cwd=project_dir`, so a missing dir
-    # raises FileNotFoundError too — indistinguishable by type from a missing `godot`. Catching it
-    # here keeps _missing_executable's FileNotFoundError unambiguously about the executable, and
-    # gives a bad --project its own clear message.
-    if not Path(project_dir).is_dir():
-        print(f"error: project directory not found: {project_dir}", file=sys.stderr)
+    # Validating project_dir is part of `_setup_problem`: the runner shells out with
+    # `cwd=project_dir`, so a missing dir raises FileNotFoundError too — indistinguishable by type
+    # from a missing `godot`. Catching it up front keeps _missing_executable's FileNotFoundError
+    # unambiguously about the executable, and gives a bad --project its own clear message.
+    problem = _setup_problem(project_dir, json_path, html_path, step_summary)
+    if problem is not None:
+        print(f"error: {problem}", file=sys.stderr)
         return 2
-    # Preflight the report targets up front: a run boots Godot per mutant for minutes, so an
-    # unwritable --json/--html target, or two reports contending for stdout, must fail now rather
-    # than after the whole pass has completed.
-    for problem in (
-        _report_path_problem(json_path, "--json", stdout_ok=True),
-        _report_path_problem(html_path, "--html", stdout_ok=False),
-        _stdout_contention_problem(json_path, step_summary),
-    ):
-        if problem is not None:
-            print(f"error: {problem}", file=sys.stderr)
-            return 2
     # In-place-mutation safety: the run edits the source file per mutant. Warn (or, with
     # require_clean, refuse) on a dirty tree so a hard interrupt can't lose uncommitted work.
     # Ordered after the read/parse validation above so a genuine read error is reported first,
@@ -961,35 +999,54 @@ def _no_changes_report(
     project_dir: str,
     json_path: str | None,
     html_path: str | None,
+    *,
+    step_summary: bool,
 ) -> int:
     """Emit the report for a ``--since`` run whose diff touched nothing: every given file present,
-    each with an empty mutant list. Returns 0, or 2 if a file can't be read or a report target
-    can't be written.
+    each with an empty mutant list. Returns 0, or 2 if a file can't be read, ``--project`` isn't a
+    directory, or a report target can't be written.
 
     A run that generates no mutants is still a run that **completed**, and the caller most likely to
     pass ``--since`` is a CI script piping ``--json -`` into a parser. Exiting 0 with nothing at all
     on stdout handed that caller no report and no signal: the explanation went to stderr, which the
     parser is not reading, so "nothing changed" and "the tool broke" arrived looking identical. A
     valid report with zero mutants says the same thing on the channel the caller is already
-    listening to, and needs no special case at the other end — the score is `null`, exactly as it
-    is for any run with nothing to score.
+    listening to, and needs no special case at the other end — no score is reported, exactly as for
+    any other run with nothing to score.
+
+    This is gdmutant's third report-producing path, and it deliberately enforces the same contract
+    as the two real ones. It shares their preflight (`_setup_problem`), warns about the same
+    malformed ignore pragmas, and honours ``--report step-summary`` — because a caller cannot tell
+    from the outside which path served their run, so a guarantee that holds on two paths out of
+    three is not a guarantee. What it does **not** do is `_unbacked_source_problem` /
+    ``--require-clean``: that check exists to protect a file this tool is about to rewrite in place,
+    and this path writes no mutant to any file, so its warning ("gdmutant mutates it in place ...")
+    would be false. Nor does it print a `console_summary`: the stderr note the caller already got
+    ("no lines changed since <ref> ...") says the same thing in one clearer line.
 
     No mutants are generated, so no test suite runs and no Godot boots: this stays the fast no-op
     it always was.
+
+    `step_summary` is required rather than defaulted. There is one caller, so a default would only
+    ever be the value nothing passes — and a silent default is how this path came to enforce less
+    than the real ones. A future second caller now has to decide.
     """
-    for problem in (
-        _report_path_problem(json_path, "--json", stdout_ok=True),
-        _report_path_problem(html_path, "--html", stdout_ok=False),
-    ):
-        if problem is not None:
-            print(f"error: {problem}", file=sys.stderr)
-            return 2
+    problem = _setup_problem(project_dir, json_path, html_path, step_summary)
+    if problem is not None:
+        print(f"error: {problem}", file=sys.stderr)
+        return 2
     empty: dict[str, tuple[MutationRun, str]] = {}
     for source_path in files:
         source = _load_gdscript(source_path)
         if source is None:
             return 2
+        _warn_unknown_ignore_operators(source)
         empty[str(Path(source_path))] = (MutationRun(()), source)
+    if step_summary:
+        # An empty job summary, not a missing one: a CI job that reports survivors on every run
+        # should say "nothing to mutate" in the place reviewers look, rather than leaving the
+        # section blank and indistinguishable from a step that never ran.
+        _emit_step_summary(MutationRun(()))
     stryker = stryker_report_multi(empty, "gdscript")
     return _write_reports(stryker, json_path, html_path, project_dir)
 
@@ -1019,17 +1076,10 @@ def run_mutation_paths(
             return 2
         _warn_unknown_ignore_operators(source)
         sources[str(Path(source_path))] = source
-    if not Path(project_dir).is_dir():
-        print(f"error: project directory not found: {project_dir}", file=sys.stderr)
+    problem = _setup_problem(project_dir, json_path, html_path, step_summary)
+    if problem is not None:
+        print(f"error: {problem}", file=sys.stderr)
         return 2
-    for problem in (
-        _report_path_problem(json_path, "--json", stdout_ok=True),
-        _report_path_problem(html_path, "--html", stdout_ok=False),
-        _stdout_contention_problem(json_path, step_summary),
-    ):
-        if problem is not None:
-            print(f"error: {problem}", file=sys.stderr)
-            return 2
     for source_path in source_paths:
         problem = _unbacked_source_problem(source_path, require_clean=require_clean)
         if problem is not None:
@@ -1232,9 +1282,10 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         default="auto",
         dest="progress_style",
         help="how much the run says about itself while it works: auto (a heartbeat every 30s on a "
-        "terminal, rarer in a log or CI), plain (the rarer cadence always), or none (no progress "
-        "output at all — no heartbeat, no per-mutant line, no plan or closing line). The summary "
-        "and the report are unaffected either way. (default: auto)",
+        "terminal, rarer in a log or CI), plain (the rarer cadence always), or none (nothing at "
+        "all — no heartbeat, no per-mutant line, no plan or closing line, and not the 'preparing "
+        "the project' / 'running the baseline suite' notices either, so a slow first run is "
+        "silent). The summary and the report are unaffected either way. (default: auto)",
     )
     run_parser.add_argument(
         "--tests",
@@ -1468,6 +1519,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.project or _default_project_dir(args.source, files),
                     args.json_path,
                     args.html_path,
+                    step_summary=_wants_step_summary(args.report),
                 )
         if args.dry_run:
             ignored = [
@@ -1556,7 +1608,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "require_clean": args.require_clean,
             "changed": changed,
             "jobs": args.jobs,
-            "step_summary": bool(args.report) and "step-summary" in args.report,
+            "step_summary": _wants_step_summary(args.report),
             "progress_style": _resolve_progress_style(args.progress_style),
         }
         if len(files) == 1:

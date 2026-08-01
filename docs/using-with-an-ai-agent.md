@@ -57,10 +57,11 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
   and changes neither the score nor the exit code.
 - `--since <ref>` mutates only the lines changed since a git ref (e.g. `--since origin/main`), the
   fast per-PR mode for CI. When no line in the given paths changed since that ref, gdmutant runs no
-  tests at all and exits 0, with a note on stderr. It still writes the report you asked for: every
-  given file is there with an empty `mutants` list, and the score is `null`. So `--json -` stays
-  parseable and needs no special case — a run with nothing to mutate reads exactly like any other
-  run with nothing to score. A PR that touches no `.gd` file hits this every time.
+  tests at all and exits 0, with a note on stderr. It still writes the report you asked for, and
+  emits the job summary if you asked for one: every given file is there with an empty `mutants`
+  list, and no score is reported — exactly as for any other run with nothing to score, since the
+  report carries no score key in either case. So `--json -` stays parseable and needs no special
+  case. A PR that touches no `.gd` file hits this every time.
 - `--jobs N` evaluates mutants in parallel, each worker inside its own copy of the project. That
   copy is what keeps your own file untouched (see [Safety guarantee](#safety-guarantee)), and it
   brings one restriction: every file to mutate has to sit inside `--project`, or the run exits 2.
@@ -86,9 +87,11 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
   duration. Do not try to reconstruct a schedule from the opening one. `--progress plain` (the
   automatic choice off a TTY and when `CI=true` or `CONTINUOUS_INTEGRATION=true`) heartbeats every
   60s or 10% of mutants, whichever is rarer. `--progress none` turns the whole progress stream off:
-  no heartbeat, no plan line, no closing line, and no line per mutant. That bounds the stderr volume
-  instead of trimming it, at the cost of the `Done in ...` line — so use `--progress plain` when a
-  script wants the duration.
+  no heartbeat, no plan line, no closing line, no line per mutant, and none of the `preparing the
+  project` / `running the unmutated (baseline) suite` notices either. That bounds the stderr volume
+  instead of trimming it, and the price is real: you lose the `Done in ...` line, and a first run on
+  a fresh checkout is silent for however long Godot takes to import. Use `--progress plain` when a
+  script wants the duration or the run is long enough that silence looks like a hang.
 
 ## Keeping stdout parseable
 
@@ -128,8 +131,9 @@ Every other key is read normally: none of them can decide what gets executed.
 ## Exit codes (the contract)
 
 - `0`: the run completed. Survivors are normal output, not a failure. Parse them. Every exit-0 path
-  writes the report you asked for, including `--since <ref>` with no changed lines — that one is an
-  empty report, not an empty stdout.
+  except `--dry-run` writes the report you asked for, including `--since <ref>` with no changed
+  lines — that one is an empty report, not an empty stdout. `--dry-run` writes no `--json`/`--html`
+  report at all, says so on stderr, and prints its mutant list to stdout instead.
 - `1`: the unmutated *baseline* suite failed. Fix your tests first. Mutation-testing a red
   suite is meaningless.
 - `2`: a setup or input error. The stderr message says which one. The causes:
