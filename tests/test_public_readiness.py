@@ -138,6 +138,14 @@ _LINUX_HOME = _spelled("/", "home", "/")
 #: the intended direction. The failure is loud and the fix is one line, whereas the opposite
 #: default -- a rule that only knows the private prefixes it was told about -- is the thing this
 #: rule replaced, and it caught exactly one.
+#:
+#: **Every entry has to be earned**, and `test_every_public_prefix_is_earned` enforces it: a prefix
+#: is listed only if it really occurs in this tree. The first version of this list also carried
+#: MIT, APACHE, RFC, ISO, CVE, SHA and PEP, added defensively because they sounded like things a
+#: repository might contain. None of them occurred. Mutation testing found them, because an entry
+#: nothing depends on can be changed to anything without a test noticing -- and each one was a
+#: standing excuse for a tracker that happened to use those letters. A speculative allowlist entry
+#: is a hole nobody asked for, so the tree, not intuition, decides what is here.
 _PUBLIC_ID_PREFIXES = (
     "ADR",  # this repo's decision records
     "FG",
@@ -148,18 +156,11 @@ _PUBLIC_ID_PREFIXES = (
     "LGPL",
     "SSPL",
     "BUSL",
-    "PSF",
-    "MIT",
-    "APACHE",  # SPDX licence ids
+    "PSF",  # SPDX licence ids, in docs/credits.md
     "GUT",
     "GDUNIT",  # the two supported test frameworks
     "BLE",
     "RUF",  # ruff rule codes
-    "RFC",
-    "ISO",
-    "CVE",
-    "SHA",
-    "PEP",  # public standards
     "WDG",  # the invented prefix this module's own tests use
 )
 
@@ -1774,6 +1775,33 @@ def test_every_public_prefix_is_excused(tree: Path, prefix: str) -> None:
     rule = _rule_named("a tracker ticket reference")
     planted = _plant(tree, "docs/notes.md", f"see {prefix}-3 for the details\n")
     assert not _matches(rule.pattern, [planted]), f"{prefix}-3 should be excused"
+
+
+def test_every_public_prefix_is_earned() -> None:
+    """No speculative entries: a prefix is excused only if this tree really uses it.
+
+    An allowlist entry is an exemption, and an exemption nothing depends on is a hole nobody
+    asked for -- a standing excuse for any tracker whose ids happen to start with those letters.
+    Seven entries in the first version of this list (MIT, APACHE, RFC, ISO, CVE, SHA, PEP) were
+    added because they sounded plausible and occurred nowhere. Mutation testing found them: an
+    entry the tree does not depend on can be changed to anything without a test noticing.
+
+    So the tree decides. Delete an entry this finds unused rather than keeping it "just in case".
+    """
+    shape = re.compile(r"\b([A-Z]{2,6})-?\d+\b")
+    used = {
+        match.group(1)
+        for path in _scan_targets()
+        if (text := _text_of(path)) is not None
+        for match in shape.finditer(text)
+    }
+    unearned = [prefix for prefix in _PUBLIC_ID_PREFIXES if prefix not in used]
+    assert not unearned, (
+        f"these prefixes are excused but occur nowhere in this tree: {unearned}.\n"
+        "Each is a standing exemption for a tracker that happens to use those letters, bought "
+        "for nothing. Remove them from _PUBLIC_ID_PREFIXES. If one is about to become real, add "
+        "it in the change that makes it real, not before."
+    )
 
 
 @pytest.mark.parametrize(
