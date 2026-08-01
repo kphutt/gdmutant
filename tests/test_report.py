@@ -244,6 +244,39 @@ def test_console_summary_reads_the_real_source_for_the_code_and_caret(tmp_path: 
     assert "func f" in out  # enclosing function pulled from the real file
 
 
+def test_console_summary_survives_a_form_feed_earlier_in_the_file(tmp_path: Path) -> None:
+    # A form feed (one of str.splitlines()'s extra break characters — vertical tab, form
+    # feed, \x1c-\x1e, NEL, U+2028/U+2029 are the rest) earlier in the file must NOT shift which
+    # physical line the survivor block shows. The parser (gdtoolkit/lark, matching engine.spans's
+    # `_NEWLINE = "\n"`) counts line 3 as `\tif x > y:`; splitlines() would instead insert a phantom
+    # blank line and report line 3 as `func foo(x, y):` -- the wrong line, with no `>` on it at all.
+    source = "const A = 1  # note\x0c\nfunc foo(x, y):\n\tif x > y:\n\t\treturn x\n\treturn y\n"
+    path = tmp_path / "example.gd"
+    path.write_text(source, encoding="utf-8")
+    mutant = Mutant(str(path), Span(3, 7, 3, 8), "comparison", ">", ">=")
+    out = console_summary(MutationRun((MutantOutcome(mutant, Verdict.SURVIVED),)))
+    assert "if x > y:" in out  # the real mutated line
+    assert "func foo(x, y):" not in out  # the line splitlines() would wrongly show instead
+    lines = out.splitlines()
+    src_index = next(i for i, line in enumerate(lines) if line.strip().startswith("3 |"))
+    src_display = lines[src_index].split("| ", 1)[1]
+    caret_display = lines[src_index + 1].split("| ", 1)[1]
+    assert src_display[caret_display.index("^")] == ">"  # caret lands on the real `>`
+
+
+def test_job_summary_markdown_survives_a_form_feed_earlier_in_the_file(tmp_path: Path) -> None:
+    # Same desync as the console block, through the Markdown job-summary surface
+    # (`_read_source_lines` feeds both, plus the assert/enum classification — all three go wrong
+    # together).
+    source = "const A = 1  # note\x0c\nfunc foo(x, y):\n\tif x > y:\n\t\treturn x\n\treturn y\n"
+    path = tmp_path / "example.gd"
+    path.write_text(source, encoding="utf-8")
+    mutant = Mutant(str(path), Span(3, 7, 3, 8), "comparison", ">", ">=")
+    markdown = job_summary_markdown(MutationRun((MutantOutcome(mutant, Verdict.SURVIVED),)))
+    assert "if x > y:" in markdown
+    assert "func foo(x, y):\n```" not in markdown  # not shown as the (wrong) mutated line
+
+
 def test_console_summary_start_never_suggests_an_assertion_value() -> None:
     # The safety invariant: `start` names the missing INPUT, never the expected/oracle value —
     # suggesting one could codify a bug. It must say the answer is the developer's.
