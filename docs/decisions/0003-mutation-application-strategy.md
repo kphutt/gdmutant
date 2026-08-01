@@ -70,3 +70,26 @@ Only this record was wrong. The user-facing guarantee in
 limit correctly: a swap can persist through a hard kill, so commit or stash first, or pass
 `--require-clean`. This correction brings the decision record in line with the guidance users
 actually read.
+
+## Correction (2026-08-01)
+
+The correction above, written the same day as the code change it describes, said:
+
+> The write path also truncates the target in place before writing, so the file passes through a
+> zero-length state on both the mutate and the restore step, a window in which process death leaves
+> an empty file rather than either version of the source.
+
+That was true of the code at the moment it was written, and false of the code that landed a few
+hours later the same day. `fix: never leave a source file truncated by an interrupted restore (#159)`
+replaced the in-place write with the staged one `_write_source` in `gdmutant/engine/loop.py` still
+uses: the new bytes go to a temporary file created beside the target, get flushed to disk, and are
+then moved onto the target with `os.replace`, a single filesystem operation. The target itself is
+never opened for truncation, so there is no zero-length window on the write path today, and no
+"empty file" outcome for a kill landing during either the mutate or the restore write.
+
+The narrower claim directly above this one still holds: a hard kill between the mutate write and the
+restore write leaves the target holding the mutant, because the restore simply has not run yet. That
+is a gap between two writes, not a truncation inside either one, and it is exactly the limit
+`docs/using-with-an-ai-agent.md#safety-guarantee` already describes. Only the "truncates in place" /
+"zero-length state" mechanism was wrong. Read `_write_source`'s own docstring for the current
+mechanism rather than from this record, per the guidance the first correction already gave.
