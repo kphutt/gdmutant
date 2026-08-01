@@ -819,7 +819,7 @@ def run_mutation(
     if step_summary:
         _emit_step_summary(result)
     stryker = stryker_report(result, str(path), source, "gdscript")
-    return _write_reports(stryker, json_path, html_path)
+    return _write_reports(stryker, json_path, html_path, project_dir)
 
 
 def _emit_runner_warning(runner: Runner) -> None:
@@ -853,10 +853,19 @@ def _emit_step_summary(run: MutationRun) -> None:
         )
 
 
-def _write_reports(stryker: dict[str, object], json_path: str | None, html_path: str | None) -> int:
+def _write_reports(
+    stryker: dict[str, object],
+    json_path: str | None,
+    html_path: str | None,
+    project_dir: str,
+) -> int:
     """Write the ``--json`` / ``--html`` reports (both rendered from the same Stryker dict). Returns
     2 on a write error, else 0. ``--json -`` streams JSON to stdout; the caller has already routed
-    the human summary appropriately. Shared by the single- and multi-file run paths."""
+    the human summary appropriately. Shared by the single- and multi-file run paths.
+
+    `project_dir` reaches the HTML page so it can show paths relative to the project instead of
+    absolute ones from the machine that produced the report. The JSON is written unchanged: its
+    keys are the report's identifiers and other tooling resolves them."""
     if json_path == "-":
         print(json.dumps(stryker, indent=2))
     elif json_path is not None:
@@ -868,7 +877,7 @@ def _write_reports(stryker: dict[str, object], json_path: str | None, html_path:
         print(f"\nWrote report to {json_path}")
     if html_path is not None:
         try:
-            Path(html_path).write_text(html_report(stryker), encoding="utf-8")
+            Path(html_path).write_text(html_report(stryker, project_dir), encoding="utf-8")
         except OSError as error:
             print(f"error: cannot write HTML report to {html_path}: {error}", file=sys.stderr)
             return 2
@@ -956,7 +965,7 @@ def run_mutation_paths(
     if step_summary:
         _emit_step_summary(aggregate)
     stryker = stryker_report_multi({p: (r, sources[p]) for p, r in runs.items()}, "gdscript")
-    return _write_reports(stryker, json_path, html_path)
+    return _write_reports(stryker, json_path, html_path, project_dir)
 
 
 #: Config-file (`.gdmutant.toml`) key -> argparse dest. Keys mirror the CLI flag names (so a project

@@ -18,11 +18,18 @@ const fs = require('fs');
 const vm = require('vm');
 
 // The renderer is the last <script>; the first is the report's application/json data block.
-function scriptOf(file) {
+function scriptsOf(file) {
   const page = fs.readFileSync(file, 'utf8');
-  const scripts = [...page.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+  return [...page.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+}
+function scriptOf(file) {
+  const scripts = scriptsOf(file);
   return scripts[scripts.length - 1];
 }
+// The embedded report, exactly as the page carries it. The download button reads this block back
+// out of the DOM, so the harness has to hold the page's REAL bytes here. A placeholder would let
+// a button that downloads the wrong thing pass unnoticed.
+function dataOf(file) { return scriptsOf(file)[0]; }
 
 const OPS = JSON.parse(process.env.HARNESS_OPS || '[]');
 
@@ -34,12 +41,21 @@ function openTab(file, store, hash, opts) {
   const options = opts || {};
   const cache = new Map();
 
+  // What the page handed the browser to download: one entry per click that really downloaded.
+  const downloads = [];
+  const revoked = [];
+
   function stub(dataset = {}) {
     const classes = new Set();
     const el = {
       dataset,
       style: {},
       disabled: false,
+      // Only an <a> carrying a `download` ever uses this. Recording it is how the harness sees a
+      // download actually happen, rather than seeing markup that would cause one.
+      click() {
+        if (this.download) downloads.push({ name: this.download, url: this.href });
+      },
       _html: '',
       _text: '',
       classList: {
@@ -85,6 +101,10 @@ function openTab(file, store, hash, opts) {
   src.querySelector = sel => (sel.startsWith('.row[data-line=') ? stub() : null);
   src.querySelectorAll = () => [];
 
+  // The page's own `application/json` block, so what the download button reads back is what the
+  // file really carries.
+  byId('#mutation-test-report').textContent = dataOf(file);
+
   const chips = {
     '[data-filter]': ['survived', 'caught', 'all'].map(f => target('[data-filter]', { filter: f })),
     '[data-op]': ['all', ...OPS].map(o => target('[data-op]', { op: o })),
@@ -114,10 +134,23 @@ function openTab(file, store, hash, opts) {
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     addEventListener: (kind, fn) => { if (kind === 'hashchange') onhash = fn; },
   };
+  // A real-enough history stack, because "does the browser's own back button work" is now a
+  // question the page answers rather than sidesteps. `stack` holds every entry and `cursor` is
+  // where the reader stands in it, so a push that grows the stack and a replace that does not are
+  // told apart by observing the history, never by watching which method got called.
+  const stack = [at + (hash || '')];
+  let cursor = 0;
+  const apply = url => {
+    const i = String(url).indexOf('#');
+    location.hash = i < 0 ? '' : String(url).slice(i);
+  };
   const history = {
-    replaceState: (a, b, url) => {
-      const at = String(url).indexOf('#');
-      location.hash = at < 0 ? '' : String(url).slice(at);
+    replaceState: (a, b, url) => { stack[cursor] = String(url); apply(url); },
+    pushState: (a, b, url) => {
+      stack.length = cursor + 1;         // a new branch discards anything ahead, as a browser does
+      stack.push(String(url));
+      cursor += 1;
+      apply(url);
     },
   };
   // `broken` is the private-window / quota-exceeded / storage-disabled case, which must cost the
@@ -129,8 +162,32 @@ function openTab(file, store, hash, opts) {
         setItem: (k, v) => { store[k] = String(v); },
       };
 
+  // Enough of the Blob / object-URL pair to observe a download. Nothing here reaches a network,
+  // and that is the point: the bytes handed to `Blob` are ones the page already holds.
+  const blobs = new Map();
+  let nextBlob = 0;
+  class Blob {
+    constructor(parts, opts) { this.text = parts.join(''); this.type = (opts || {}).type; }
+  }
+  const URL = {
+    createObjectURL: blob => {
+      const url = 'blob:' + (nextBlob += 1);
+      blobs.set(url, blob);
+      return url;
+    },
+    revokeObjectURL: url => { revoked.push(url); },
+  };
+
+  // The page defers its revoke by a tick so it cannot pull the URL out from under a download that
+  // has only just started. Nothing here is about timing, so the queue is drained on demand by
+  // `downloads()`, which empties it before reporting.
+  const timers = [];
+  const setTimeout_ = fn => { timers.push(fn); };
+  const drain = () => { while (timers.length) timers.shift()(); };
+
   const context = vm.createContext({
-    document, window, location, history, localStorage, console, JSON,
+    document, window, location, history, localStorage, console, JSON, Blob, URL,
+    setTimeout: setTimeout_,
   });
   vm.runInContext(scriptOf(file), context);
 
@@ -159,6 +216,17 @@ function openTab(file, store, hash, opts) {
     // The index's rows and the source pane's marks are drawn as innerHTML, so the harness
     // fabricates the element the click lands on, carrying the data attributes the page reads.
     clickRow: i => hit(target('.frow', { file: String(i) })),
+    // A column heading on the file index, and a rare-status count in the header. The heading rides
+    // the same delegated handler as everything in `#body`; the header count reaches it through
+    // `#head`, which is the wiring that would otherwise be easy to draw and forget to connect.
+    clickSort: key => hit(target('[data-sort]', { sort: key })),
+    clickHead: value => byId('#head').onclick({ target: target('[data-filter]', { filter: value }) }),
+    // The index's file paths in the order it drew them, the whole of what a sort changes, read
+    // off the markup rather than off the state variable that produced it.
+    rows: () => [...byId('#filelist').innerHTML.matchAll(/class="fpath">([^<]*)</g)].map(m => m[1]),
+    // The `data-file` each drawn row carries. A sort reorders the rows; it must NOT renumber them,
+    // because that number is the only thing telling a click which file it opened.
+    rowIds: () => [...byId('#filelist').innerHTML.matchAll(/data-file="(\d+)"/g)].map(m => m[1]),
     clickMark: ids => hit(target('.mark', { ids })),
     clickRef: fid => hit(target('.refbtn', { ref: fid })),
     clickTheme: () => byId('#theme').onclick(),
@@ -171,6 +239,24 @@ function openTab(file, store, hash, opts) {
     source: () => byId('#src').innerHTML,
     // Someone pasting a link into the address bar of an already-open report.
     paste: h => { location.hash = h; if (onhash) onhash(); },
+    clickDownload: () => byId('#dl').onclick(),
+    // How many entries the page has put in the history, and where the reader stands in them.
+    depth: () => stack.length,
+    cursor: () => cursor,
+    // The browser's OWN back button. Every entry this page creates differs from its neighbour by
+    // fragment, so a real browser fires `hashchange` on the move, which is what this does.
+    back: () => {
+      if (cursor === 0) return false;
+      cursor -= 1;
+      apply(stack[cursor]);
+      if (onhash) onhash();
+      return true;
+    },
+    // What the download button produced, resolved back through the object URL it was handed.
+    downloads: () => (drain(), downloads).map(d => {
+      const blob = blobs.get(d.url);
+      return { name: d.name, type: blob.type, text: blob.text, revoked: revoked.includes(d.url) };
+    }),
   };
 }
 
@@ -381,5 +467,118 @@ out.legend.multiBadge = badge ? badge[1] : null;
 const us = openTab(UNSCORED, {}, '');
 us.clickChip('[data-filter]', 'all');
 out.legend.unscored = us.legend();
+
+// ---- the header's rare-status counts ---------------------------------------------------------
+//
+// They live OUTSIDE `#body`, on `#head`, so a click on one has to travel a wiring the rest of the
+// page does not use. Clicked here through that real element, not by setting `filter` by hand.
+
+const rare = openTab(UNSCORED, {}, '');
+out.rare = { start: rare.pos() };
+for (const status of ['Ignored', 'CompileError', 'RuntimeError']) {
+  rare.clickHead('rare:' + status);
+  out.rare[status] = rare.pos();
+  // Whatever it selected must be a real position in the list it just filtered to, not a dash.
+  rare.press('ArrowRight');
+  out.rare[status + ':after-step'] = rare.pos();
+}
+// The three are genuinely different sets. A single count reaching "the unscored ones" lumped
+// together would be the failure worth catching here.
+rare.clickHead('rare:RuntimeError');
+out.rare.runtimeCard = rare.card();
+
+// Every click above leaves the operator chip at its default, so none of them can tell whether the
+// status filter is the only thing deciding what a header count reaches. Narrow the operator first,
+// to one that holds none of the counted mutants, then click the count. `RuntimeError` lives on
+// `numeric` in this report and `comparison` holds an `Ignored`, so the two genuinely disagree.
+const stale = openTab(UNSCORED, {}, '');
+stale.clickChip('[data-op]', 'comparison');
+out.staleOp = { afterOpChip: stale.pos() };
+stale.clickHead('rare:RuntimeError');
+out.staleOp.afterHeaderCount = stale.pos();
+out.staleOp.card = stale.card();
+
+// From the INDEX, where there is no source pane to filter at all: the click has to open a file.
+const rx = openTab(MULTI, {}, '');
+out.rareIndex = { openedOnIndex: isIndex(rx) };
+rx.clickHead('rare:Timeout');
+out.rareIndex.afterClick = { index: isIndex(rx), pos: rx.pos() };
+
+// ---- the file index's sortable columns -------------------------------------------------------
+//
+// Read off the rows the index actually drew, in order, so this observes the sort rather than the
+// state variable behind it.
+
+const sortTab = openTab(MULTI, {}, '');
+out.sort = { initial: sortTab.rows() };
+sortTab.clickSort('survived');            // the same column again flips the direction
+out.sort.survivedAsc = sortTab.rows();
+sortTab.clickSort('survived');
+out.sort.survivedBack = sortTab.rows();
+sortTab.clickSort('file');
+out.sort.file = sortTab.rows();
+sortTab.clickSort('file');
+out.sort.fileDesc = sortTab.rows();
+sortTab.clickSort('mutants');
+out.sort.mutants = sortTab.rows();
+sortTab.clickSort('caught');
+out.sort.caught = sortTab.rows();
+sortTab.clickSort('score');
+out.sort.score = sortTab.rows();
+// A sort reorders rows without renumbering them. That number is what a click reports back, so a
+// sort that renumbered would open the wrong file, silently, and only on a re-sorted index.
+sortTab.clickSort('file');
+out.sort.fileIds = sortTab.rowIds();
+sortTab.clickSort('file');
+out.sort.fileDescIds = sortTab.rowIds();
+sortTab.clickRow(sortTab.rowIds()[0]);           // the first row as DRAWN, which is now the last file
+out.sort.openedFirstDrawn = sortTab.hash();
+
+// ---- the JSON download -------------------------------------------------------------------------
+
+const dl = openTab(PAGE, {}, '');
+out.download = { before: dl.downloads().length };
+dl.clickDownload();
+const got = dl.downloads();
+out.download.count = got.length;
+out.download.name = got[0].name;
+out.download.type = got[0].type;
+out.download.revoked = got[0].revoked;
+// The bytes must be the report itself, parsed rather than string-matched.
+out.download.parsed = JSON.parse(got[0].text);
+
+// ---- the browser's own back button -------------------------------------------------------------
+//
+// Structural moves get a history entry; stepping does not. Observed as the depth of the history
+// and the reader's position in it, so "it pushed" and "it replaced" are told apart by what the
+// browser is left holding.
+
+const h = openTab(MULTI, {}, '');
+out.history = { onOpen: { depth: h.depth(), cursor: h.cursor(), index: isIndex(h) } };
+h.clickRow(0);                                   // index -> file: structural
+out.history.afterOpen = { depth: h.depth(), cursor: h.cursor(), index: isIndex(h) };
+h.press('ArrowRight');
+h.press('ArrowRight');
+h.clickSel('#next');
+out.history.afterSteps = { depth: h.depth(), cursor: h.cursor(), pos: h.pos() };
+h.back();                                        // the BROWSER's back button
+out.history.afterBack = { depth: h.depth(), cursor: h.cursor(), index: isIndex(h) };
+// ...and the in-page button pushes the same kind of entry, so the two agree.
+h.clickRow(0);
+h.clickSel('#back');
+out.history.afterInPageBack = { depth: h.depth(), cursor: h.cursor(), index: isIndex(h) };
+
+// A single-file report has no index and therefore no structural move, so its history must be
+// exactly what it was: one entry, however far the reader steps.
+const solo = openTab(PAGE, {}, '');
+out.history.solo = { onOpen: solo.depth() };
+for (let i = 0; i < 6; i++) solo.press('ArrowRight');
+solo.clickSel('#prev');
+solo.clickMark(KEYS[3].split(':').slice(1).join(':'));
+out.history.solo.afterSteps = { depth: solo.depth(), cursor: solo.cursor(), pos: solo.pos() };
+
+// A deep link still opens on its finding, and opening one costs no extra entry either.
+const deepHist = openTab(PAGE, {}, '#' + KEYS[3]);
+out.history.deepLink = { depth: deepHist.depth(), pos: deepHist.pos() };
 
 console.log(JSON.stringify(out));

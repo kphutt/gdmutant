@@ -62,6 +62,15 @@ The rule of thumb for every operator: your tests pass whether the code is the or
 mutant, so if the mutated behavior would be wrong, nothing guards against it. Only you know the
 intended result. gdmutant reports the gap, not the answer.
 
+The HTML report is also the machine-readable one. `--html` writes a page you read, and that same
+file carries the full `mutation-testing-elements` report inside it, in a
+`<script type="application/json" id="mutation-test-report">` block. So a report someone mailed you
+can be parsed directly, with no second file and no re-run. Pull that block's text out, parse it, and
+you get exactly the report `--json` writes. The bytes are not identical: the embedded copy is packed
+onto one line and writes `</` as `<\/` so it cannot end the `<script>` tag early, while `--json`
+pretty-prints. Parsed, the two are the same report, and a test pins that. The page offers it as a
+download too, from the arrow beside the light/dark toggle.
+
 Jump to an operator: [Arithmetic](#arithmetic) · [Boolean](#boolean) · [Comparison](#comparison) ·
 [Compound assign](#compound-assign) · [Constant](#constant) · [Logical not](#logical-not) ·
 [Modulo](#modulo) · [Numeric](#numeric) · [Statement deletion](#statement-deletion)

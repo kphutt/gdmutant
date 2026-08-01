@@ -72,14 +72,38 @@ def _report(mutants: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-#: A second file, so the run opens on the file index — the only place the index rows and the
-#: "all files" button exist to be clicked at all.
+#: More files, so the run opens on the file index, the only place the index rows, the "all files"
+#: button and the sortable column headings exist to be clicked at all.
+#:
+#: The three are shaped so that every column sorts them into a different order, which is the only
+#: way a test can tell a working sort from a list that never moved:
+#:
+#:   ============ ========= ======= ======= =====
+#:   file         survived  caught  mutants score
+#:   ============ ========= ======= ======= =====
+#:   ``a.gd``     5         2       7       28.6
+#:   ``b.gd``     1         0       1       0.0
+#:   ``c.gd``     0         3       3       100.0
+#:   ============ ========= ======= ======= =====
+#:
+#: ``c.gd`` also carries the run's only ``Timeout``, so the header's rare-status count has exactly
+#: one file to reach, and it is not the file the index opens on, which is what makes "the click
+#: went somewhere" a real observation.
 def _multi_report() -> dict[str, Any]:
     report = _report(_MUTANTS)
     report["files"]["b.gd"] = {
         "language": "gdscript",
         "source": _SOURCE,
         "mutants": [_mutant(2, 5, 6, "comparison", ">=", "Survived")],
+    }
+    report["files"]["c.gd"] = {
+        "language": "gdscript",
+        "source": _SOURCE,
+        "mutants": [
+            _mutant(2, 5, 6, "comparison", ">=", "Killed"),
+            _mutant(2, 17, 18, "comparison", "<=", "Killed"),
+            _mutant(4, 11, 12, "arithmetic", "-", "Timeout"),
+        ],
     }
     return report
 
@@ -406,6 +430,170 @@ def test_a_multi_finding_mark_says_how_many_and_what_a_click_does(
     assert observed["legend"]["multiMark"] == "2 findings here, click to switch between them"
     assert observed["legend"]["multiBadge"] == "2"
     assert "the badge is how many" in observed["legend"]["all"]
+
+
+# ---- the header's rare-status counts ------------------------------------------------------------
+
+
+def test_a_rare_status_count_in_the_header_reaches_the_mutants_behind_it(
+    observed: dict[str, Any],
+) -> None:
+    # On a real run these read 60 timeout, 8 compile errors and 204 runtime errors, with no way to
+    # get to any of them. The counts live outside `#body`, so this click travels a wiring nothing
+    # else on the page uses, which is exactly the wiring that could ship drawn and unconnected.
+    rare = observed["rare"]
+    assert rare["start"] == "no findings"  # this report has no survivors, and survivors is default
+    for status in ("Ignored", "CompileError", "RuntimeError"):
+        assert rare[status] == "1 of 1 finding", status
+        assert rare[f"{status}:after-step"] == "1 of 1 finding", status
+
+
+def test_the_three_rare_states_stay_three_things_and_do_not_collapse_into_one(
+    observed: dict[str, Any],
+) -> None:
+    # The distinction is the whole value of surfacing them. A runtime error is the actionable one:
+    # the mutant was valid, it ran, and the harness fell over, so it measured nothing, and a big
+    # count there is a blind spot in the score rather than a curiosity.
+    card = observed["rare"]["runtimeCard"]
+    assert "the run errored" in card
+    assert "did not parse" not in card and "never ran" not in card
+
+
+def test_a_rare_count_is_not_narrowed_by_an_operator_chip_left_from_an_earlier_click(
+    observed: dict[str, Any],
+) -> None:
+    # `matches()` ANDs the status filter with the operator chip. A header count is a claim about the
+    # whole report, so a chip still narrowed to some other operator could hide exactly the mutants
+    # the count promised: the header says "1 runtime error", the click lands on "no findings", and
+    # nothing on screen says an unrelated filter is why. Every other assertion in this section
+    # clicks a count with the operator left at its default, so none of them can see this.
+    stale = observed["staleOp"]
+    assert stale["afterOpChip"] == "no findings"  # `comparison` holds an Ignored, not a survivor
+    assert stale["afterHeaderCount"] == "1 of 1 finding"
+    # And it is the counted mutant that got opened, not merely some finding.
+    assert "numeric" in stale["card"]
+    assert "the run errored" in stale["card"]
+
+
+def test_a_rare_count_clicked_from_the_index_opens_a_file_that_actually_has_one(
+    observed: dict[str, Any],
+) -> None:
+    # A header count is a claim about the whole report, so it can be clicked with no source pane on
+    # screen at all. The only file holding a timeout is not the one the index opens on, so landing
+    # on a finding is proof the click went somewhere rather than merely setting a variable.
+    assert observed["rareIndex"]["openedOnIndex"] is True
+    assert observed["rareIndex"]["afterClick"] == {"index": False, "pos": "1 of 1 finding"}
+
+
+# ---- the file index's sortable columns ----------------------------------------------------------
+
+
+def test_the_index_still_opens_on_most_survivors_first(observed: dict[str, Any]) -> None:
+    # The default is the one order that answers "where do I start", and re-sorting must not become
+    # a reason to change it. Score would be a worse default: 1 survivor in 5 mutants and 100 in 500
+    # both read 80%.
+    assert observed["sort"]["initial"] == ["a.gd", "b.gd", "c.gd"]
+
+
+def test_clicking_a_column_re_sorts_and_clicking_it_again_reverses(
+    observed: dict[str, Any],
+) -> None:
+    sort = observed["sort"]
+    assert sort["survivedAsc"] == ["c.gd", "b.gd", "a.gd"]
+    assert sort["survivedBack"] == sort["initial"]
+    assert sort["file"] == ["a.gd", "b.gd", "c.gd"]
+    assert sort["fileDesc"] == ["c.gd", "b.gd", "a.gd"]
+
+
+def test_each_column_sorts_on_its_own_number_rather_than_re_drawing_the_same_order(
+    observed: dict[str, Any],
+) -> None:
+    # The fixture is built so no two of these agree; a sort that quietly did nothing would show up
+    # as one of them matching the default.
+    sort = observed["sort"]
+    assert sort["mutants"] == ["a.gd", "c.gd", "b.gd"]
+    assert sort["caught"] == ["c.gd", "a.gd", "b.gd"]
+    # Score's order is the argument against making it the default, written out: the file with
+    # nothing surviving sorts to the top and the file with five survivors sits below it.
+    assert sort["score"] == ["c.gd", "a.gd", "b.gd"]
+    assert sort["score"] != sort["initial"]
+
+
+def test_a_re_sorted_row_still_opens_the_file_it_names(observed: dict[str, Any]) -> None:
+    # The row carries the file's index into the report, not its position on screen. A sort that
+    # renumbered them would open the wrong file, silently, and only after someone re-sorted.
+    sort = observed["sort"]
+    assert sort["fileIds"] == ["0", "1", "2"]
+    assert sort["fileDescIds"] == ["2", "1", "0"]
+    assert sort["openedFirstDrawn"] == "#c.gd"
+
+
+# ---- the JSON download --------------------------------------------------------------------------
+
+
+def test_the_download_button_hands_back_the_report_the_page_is_carrying(
+    observed: dict[str, Any],
+) -> None:
+    # Clicked for real, and the bytes are parsed rather than string-matched, so a button wired to
+    # the wrong element would fail here instead of passing on a plausible-looking blob.
+    download = observed["download"]
+    assert download["before"] == 0
+    assert download["count"] == 1
+    assert download["name"] == "gdmutant-report.json"
+    assert download["type"] == "application/json"
+    assert download["parsed"] == _report(_MUTANTS)
+    # The object URL is released after the click; a reader may download more than once.
+    assert download["revoked"] is True
+
+
+# ---- the browser's own back button ---------------------------------------------------------------
+
+
+def test_opening_a_file_from_the_index_gives_the_browser_something_to_go_back_to(
+    observed: dict[str, Any],
+) -> None:
+    # Before this, the browser's back button left the report entirely and landed on whatever page
+    # preceded it. Every move replaced, so the report had put nothing in the history at all.
+    history = observed["history"]
+    assert history["onOpen"] == {"depth": 1, "cursor": 0, "index": True}
+    assert history["afterOpen"] == {"depth": 2, "cursor": 1, "index": False}
+
+
+def test_stepping_between_findings_still_leaves_the_history_alone(
+    observed: dict[str, Any],
+) -> None:
+    # The reason `replaceState` was chosen, and it has to survive the change: 197 findings must not
+    # become 197 back-presses between the reader and wherever they came from. Three moves here,
+    # two keypresses and a real click on the arrow, and the history is exactly as it was.
+    after = observed["history"]["afterSteps"]
+    assert after == {"depth": 2, "cursor": 1, "pos": "4 of 4 findings"}
+
+
+def test_the_browsers_back_button_returns_to_the_index_like_the_pages_own_does(
+    observed: dict[str, Any],
+) -> None:
+    history = observed["history"]
+    assert history["afterBack"] == {"depth": 2, "cursor": 0, "index": True}
+    # The in-page button pushes the same kind of entry, so the two controls agree instead of one
+    # of them doing something unrelated.
+    assert history["afterInPageBack"] == {"depth": 3, "cursor": 2, "index": True}
+
+
+def test_a_single_file_report_puts_nothing_in_the_history_at_all(
+    observed: dict[str, Any],
+) -> None:
+    # It has no index, so it has no structural move to record, and pushing an entry for one would
+    # create a state the page cannot render. Six keypresses, an arrow click and a mark click later,
+    # the history is untouched.
+    solo = observed["history"]["solo"]
+    assert solo["onOpen"] == 1
+    assert solo["afterSteps"] == {"depth": 1, "cursor": 0, "pos": "3 of 4 findings"}
+
+
+def test_a_deep_link_still_opens_on_its_finding_and_costs_no_entry(
+    observed: dict[str, Any],
+) -> None:
+    assert observed["history"]["deepLink"] == {"depth": 1, "pos": "3 of 4 findings"}
 
 
 def test_every_mark_is_a_real_button_so_tab_reaches_it() -> None:

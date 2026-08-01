@@ -115,15 +115,20 @@ def stryker_report(run: MutationRun, path: str, source: str, language: str) -> d
     return stryker_report_multi({path: (run, source)}, language)
 
 
-def html_report(report: dict[str, Any]) -> str:
+def html_report(report: dict[str, Any], project_dir: str | None = None) -> str:
     """A ready-to-open HTML report — **one self-contained file**, rendered by `htmlreport`.
 
     Everything the page needs is inlined: styles, script, and the mascot. It opens with no network
     at all, which is what makes it usable as a CI artifact, an email attachment, or an offline read.
     The full Stryker `report` dict rides along in a non-executable
     ``<script type="application/json">`` block so the file stays machine-readable for other tooling.
+
+    `project_dir` is the project root the run was made against. The page displays each file's path
+    relative to it, because an artifact meant to be mailed should not carry the author's username
+    and directory layout in every row. The `report` dict itself is untouched. Its keys are the
+    paths the run was given, and other tooling reads them.
     """
-    return render_html(report)
+    return render_html(report, project_dir)
 
 
 #: Below this many surviving mutants the all-survived warning stays quiet: a 1-of-1 survivor is too

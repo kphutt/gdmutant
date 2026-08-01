@@ -24,10 +24,18 @@ What it shows, and why it is not the stock viewer:
   across regeneration — so a finding can be linked to (`location.hash`) and remembered
   (`localStorage`) instead of only looked at. An earlier positional id renumbered on every run,
   which made both impossible.
+* Paths are shown relative to the project root. The report is made to travel (mailed, attached to
+  a review, handed to a colleague), and an absolute path from the machine that produced it is noise
+  to every reader but its author, whose username and directory layout it also carries. Given the
+  project root (`project_dir`), a file inside it is displayed as its project-relative path. A file
+  genuinely outside the project keeps its absolute one, because there is no shorter honest name for
+  it. The displayed path is what the page addresses findings by, so a run that moves between
+  machines keeps its links and its done-marks.
 
 The rendered page keeps the full ``mutation-testing-elements`` report in a
-``<script type="application/json">`` block, so the file stays machine-readable for other tooling
-even though nothing in the page reads it back.
+``<script type="application/json">`` block, so the file stays machine-readable for other tooling.
+A download button hands that block back as a ``.json`` file through a ``blob:`` URL, which is
+built in the page from bytes the page already carries, with no request and no new data.
 
 The view model (`report_view`) is built and typed here in Python, where it is testable; the inlined
 script is a thin renderer over it and derives no verdicts of its own. That split is deliberate — an
@@ -43,6 +51,7 @@ import html
 import json
 import re
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 from gdmutant.engine.explain import DOC_BASE_URL, _display_col, context_section
@@ -66,12 +75,23 @@ _OUTCOME: dict[str, tuple[str, str, str]] = {
 
 #: The rare statuses, surfaced in the header only when non-zero. ``NoCoverage`` (never emitted) and
 #: ``Undetected`` (identical to ``Survived`` here) are omitted entirely.
+#:
+#: Each header count is also a filter: the reader can click "204 runtime errors" and land on the
+#: mutants behind it. Those three numbers are not one thing, and the page must not let them read as
+#: one. A *timeout* is a kill and only ever a performance signal, a *compile error* is the re-parse
+#: guard working and the mutant never ran, but a *runtime error* is a mutant that was valid, did
+#: run, and whose harness then fell over. That last one measured nothing, so a big count there is a
+#: blind spot in the score, and it is the one a reader most needs to be able to reach.
 _RARE: tuple[tuple[str, str], ...] = (
     ("timeout", "Timeout"),
     ("ignored", "Ignored"),
     ("compile errors", "CompileError"),
     ("runtime errors", "RuntimeError"),
 )
+
+#: The statuses `_RARE` lets the reader filter by, as a set. Recorded per finding so the page can
+#: answer "which findings hold a runtime error?" without shipping a status on every angle.
+_RARE_STATUSES = frozenset(status for _, status in _RARE)
 
 TAGLINE = "Mutation testing for GDScript and Godot — find the bugs your green tests would miss."
 
@@ -155,6 +175,11 @@ class Finding:
     #: line the rule reads, and a page that showed "what a comparison survivor means" beside an
     #: explanation about asserts would contradict itself.
     ref: str = ""
+    #: The rare statuses (`_RARE_STATUSES`) among this finding's angles, deduped: what a clicked
+    #: header count filters on. Empty for the overwhelming majority of findings, which is why it
+    #: sits here rather than as a status on every `Angle`. One short list per finding costs a
+    #: fraction of one extra string per mutant, and it is already the question the filter asks.
+    rare: list[str] = field(default_factory=list)
     angles: list[Angle] = field(default_factory=list)
     gap: str = ""
     risk: str = ""
@@ -196,7 +221,9 @@ class ReportView:
     survived: int
     total: int
     score: float | None
-    rare: list[tuple[str, int]]
+    #: ``(label, count, status)`` per non-zero rare status. The status rides along because the
+    #: header renders each count as a filter button that has to name what it filters on.
+    rare: list[tuple[str, int, str]]
 
 
 def change_note(operator_id: str, original: str, replacement: str) -> str:
@@ -319,9 +346,13 @@ def _findings(
             )
             by_key[key] = finding
             findings.append(finding)
-        tag, cls, outcome = _OUTCOME.get(
-            str(mutant["status"]), (str(mutant["status"]).lower(), "ot", str(mutant["status"]))
-        )
+        status = str(mutant["status"])
+        # Recorded on the finding so a clicked header count can find the findings behind it. A
+        # list deduped with `not in`, not a set, so the order is the mutants' own and the rendered
+        # page is byte-identical run to run.
+        if status in _RARE_STATUSES and status not in finding.rare:
+            finding.rare.append(status)
+        tag, cls, outcome = _OUTCOME.get(status, (status.lower(), "ot", status))
         finding.angles.append(
             Angle(
                 change=change_note(operator, original, str(mutant.get("replacement", ""))),
@@ -360,9 +391,37 @@ def _render_inline_markdown(text: str) -> str:
     return re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", out)
 
 
-def report_view(report: dict[str, Any]) -> ReportView:
+def _display_path(path: str, project_dir: str | None) -> str:
+    """`path` as the report shows it: relative to `project_dir` when it sits inside it.
+
+    A report is made to travel. An absolute path is the author's own machine, their username and
+    their directory layout, carried into every row of an artifact meant to be mailed or attached to
+    a review, and it is noise to every reader but the one who produced it. It is also unreadable in
+    bulk: sixty identical leading characters before the part that distinguishes one row from the
+    next, in the one column a reader scans.
+
+    A file outside the project keeps its absolute path, and that is deliberate rather than a gap.
+    There is no shorter honest name for it, and a `..`-laden relative path would be worse on both
+    counts. `loop.SourceOutsideProject` already refuses that arrangement for parallel runs, so the
+    case is rare and is the one place a full path is genuinely the answer. Windows' separate drives
+    land here too, because `relative_to` raises `ValueError` for them just as it does for a file one
+    directory up.
+
+    With no `project_dir` at all (a report rendered by something other than the CLI) the path is
+    passed through unchanged, separators normalised.
+    """
+    if project_dir is not None:
+        try:
+            return Path(path).resolve().relative_to(Path(project_dir).resolve()).as_posix()
+        except ValueError:
+            pass
+    return path.replace("\\", "/")
+
+
+def report_view(report: dict[str, Any], project_dir: str | None = None) -> ReportView:
     """Build the typed view model the inlined renderer reads, from a ``mutation-testing-elements``
-    report dict."""
+    report dict. `project_dir` is the project root the CLI ran against, used to shorten displayed
+    paths (`_display_path`); without it paths are shown exactly as the report keys them."""
     files: list[FileView] = []
     counts: dict[str, int] = {}
     for path, entry in report.get("files", {}).items():
@@ -380,7 +439,7 @@ def report_view(report: dict[str, Any]) -> ReportView:
         ops: dict[str, int] = {}
         for finding in findings:
             ops[finding.op] = ops.get(finding.op, 0) + 1
-        shown_path = path.replace("\\", "/")
+        shown_path = _display_path(path, project_dir)
         files.append(
             FileView(
                 path=shown_path,
@@ -413,7 +472,7 @@ def report_view(report: dict[str, Any]) -> ReportView:
         survived=survived,
         total=sum(file.total for file in files),
         score=_score(detected, survived),
-        rare=[(label, counts[status]) for label, status in _RARE if counts.get(status)],
+        rare=[(label, counts[status], status) for label, status in _RARE if counts.get(status)],
     )
 
 
@@ -458,7 +517,7 @@ code,pre,.code,.mono{font-family:var(--mono)}
 .frank{width:44px;height:44px;flex:none}
 .mast h1{font:600 19px/1.2 var(--sans);margin:0;letter-spacing:-.01em}
 .mast p{margin:3px 0 0;font-size:12.5px;color:var(--text-muted);line-height:1.45}
-.mast .tbtn{margin-left:auto}
+.mast .acts{margin-left:auto;display:flex;align-items:center;gap:8px}
 
 /* ---- header: sparse by design. No score bar. ---- */
 .head{display:flex;align-items:flex-end;gap:34px;flex-wrap:wrap;
@@ -472,6 +531,16 @@ code,pre,.code,.mono{font-family:var(--mono)}
 .stat i{font-style:normal;font-size:11px;color:var(--text-muted);text-transform:uppercase;
   letter-spacing:.1em}
 .stat.sv b{color:var(--danger)} .stat.kd b{color:var(--good)}
+/* A rare-status count that is a FILTER, not a label. It has to keep the stat block's exact look.
+   The header is a row of numbers, and one of them suddenly wearing a chip's chrome would read as a
+   different kind of thing, so the button is reset to nothing and earns its affordance from the
+   pointer, the hover, and the pressed state. */
+.stat.jump{background:none;border:0;padding:0;margin:0;font-family:inherit;text-align:left;
+  cursor:pointer;border-bottom:1px dashed var(--border-strong);align-self:stretch}
+.stat.jump:hover{border-bottom-color:var(--accent)}
+.stat.jump:hover i{color:var(--text)}
+.stat.jump[aria-pressed="true"]{border-bottom:2px solid var(--accent)}
+.stat.jump[aria-pressed="true"] b,.stat.jump[aria-pressed="true"] i{color:var(--accent)}
 .tbtn{background:var(--surface);border:1px solid var(--border);color:var(--text);
   border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:14px;flex:none}
 
@@ -495,7 +564,17 @@ code,pre,.code,.mono{font-family:var(--mono)}
 .fhead{display:grid;grid-template-columns:96px 1fr repeat(3,72px);gap:10px;padding:10px 16px;
   background:var(--surface);font:600 10.5px/1 var(--mono);text-transform:uppercase;
   letter-spacing:.1em;color:var(--text-muted)}
-.fhead span:nth-child(n+3){text-align:right}
+/* Every heading is a real <button>, so re-sorting is reachable by Tab and Enter and not only by
+   mouse. Reset to inherit the row's own type, because a heading that changes size or weight when
+   it becomes clickable makes the table look like it moved. */
+.fhead button{background:none;border:0;padding:0;margin:0;cursor:pointer;font:inherit;
+  letter-spacing:inherit;text-transform:inherit;color:inherit;text-align:left}
+.fhead button:nth-child(n+3){text-align:right}
+.fhead button:hover{color:var(--text)}
+.fhead button[aria-pressed="true"]{color:var(--accent)}
+/* The direction marker. Only the sorted column has one, so the arrow itself says which column is
+   in charge, with no second highlight needed to carry that. */
+.fhead .dir{margin-left:4px}
 
 /* ---- controls ---- */
 .bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
@@ -664,6 +743,10 @@ const SEARCH_FROM = 8;
 
 let cur = 0, sel = null, filter = 'survived', op = 'all', refOpen = null, query = '';
 let view = MULTI ? 'index' : 'file';
+// The file index's order. The default is the generator's own, most survivors first, and it stays
+// the default deliberately: it is the only order that answers "where do I start". Score would be
+// worse, because 1 survivor in 5 mutants and 100 in 500 both read 80%.
+let sortBy = 'survived', sortDesc = true;
 // What the source pane currently has painted. The pane is rebuilt only when this changes —
 // selection moves repaint nothing but the few nodes that actually differ.
 let painted = null;
@@ -682,12 +765,24 @@ const keyOf = f => file().path + ':' + f.fid;
 // Split from the RIGHT: a path may contain `:` (`res://a.gd`, `C:/src/a.gd`), the four trailing
 // fields never can. `.*` is greedy, so the last legal split wins.
 const KEY_RE = /^(.*):(\d+:\d+:\d+:[^:]+)$/;
+// A `rare:<Status>` filter comes from a header count: "show me the 204 runtime errors". It is the
+// one filter that is a question about the WHOLE REPORT rather than about the file on screen, which
+// is why clicking one may move you to another file (see `onClick`).
+const RARE = 'rare:';
+function matches(f){
+  const ok = filter === 'all' ? true
+    : filter.indexOf(RARE) === 0 ? f.rare.indexOf(filter.slice(RARE.length)) >= 0
+    : filter === 'survived' ? isSv(f)
+    : f.cls === 'kd';
+  return ok && (op === 'all' || f.op === op);
+}
+// Takes the file explicitly, so "does any OTHER file match?" is answerable without moving `cur`
+// there first, which is what a header count clicked from the index has to ask.
+const shownIn = f => f.findings.filter(matches);
 // The stepper walks exactly what is on screen. Making it walk survivors while the source showed
 // everything meant selecting a caught mark reported "- of 6" — a live selection the stepper said
 // did not exist.
-const shown = () => file().findings.filter(f =>
-  (filter === 'all' || (filter === 'survived' ? isSv(f) : f.cls === 'kd')) &&
-  (op === 'all' || f.op === op));
+const shown = () => shownIn(file());
 
 // Escapes for BOTH text and attribute contexts: a quote inside a GDScript token would otherwise
 // close the `title="..."` it lands in.
@@ -726,13 +821,35 @@ function fromHash(){
 }
 
 let lastHash = null;    // what WE last put in the address bar, as the browser reports it back
+
+// PUSH ON STRUCTURAL MOVES, REPLACE ON STEPPING. That is the whole of this page's history policy.
+//
+// Opening a file from the index, and coming back from it, are the moves a reader means when they
+// reach for the browser's back button; those get a real history entry, so back means "back to the
+// file list" and agrees with the page's own `all files` button. Stepping between findings does
+// not, because 197 findings would otherwise become 197 back-presses standing between the reader
+// and wherever they came from. A report that hijacks the back button is worse than one that
+// ignores it, which is why every move used to replace.
+//
+// Set by the moves that are structural (`.frow`, `toIndex`, `toFirstMatch`) and consumed by the
+// very next `syncHash`. A single-file report has no index and therefore no structural move at all,
+// so nothing there ever sets it and its history behaves exactly as it did before.
+let pushEntry = false;
+
 function syncHash(){
   const want = view === 'file' ? '#' + encFrag(sel ? keyOf(sel) : file().path) : '';
+  const push = pushEntry;
+  pushEntry = false;             // consumed here whether or not the address actually moves
+  // No change of address, no entry: pushing a duplicate would give the reader a back press that
+  // visibly does nothing.
   if (want === lastHash) return;
   lastHash = want;
-  // replaceState, not `location.hash =`: stepping through 197 findings must not bury the page
-  // under 197 back-button presses. Some browsers refuse it on a `file://` page, so fall back.
-  try { history.replaceState(null, '', want || location.pathname + location.search); }
+  // Some browsers refuse either call on a `file://` page, so fall back to the assignment. That
+  // pushes, which is right for the structural case and the same compromise as before for the other.
+  try {
+    const url = want || location.pathname + location.search;
+    if (push) history.pushState(null, '', url); else history.replaceState(null, '', url);
+  }
   catch (e) { location.hash = want; }
   // Browsers may normalise what they stored. Remember THAT, so the hashchange guard compares like
   // with like rather than re-opening the page against its own write.
@@ -863,6 +980,7 @@ function onClick(e){
   const row = at('.frow');
   if (row) {
     cur = +row.dataset.file; sel = null; refOpen = null; view = 'file';
+    pushEntry = true;                 // structural: the browser's back button returns to the index
     renderFile();
     return;
   }
@@ -871,12 +989,43 @@ function onClick(e){
   if (at('#prev')) { step(-1); return; }
   if (at('#next')) { step(1); return; }
 
+  // A column heading on the file index. The same one again flips the direction; a different one
+  // takes over and starts at the end worth looking at: biggest numbers first for the counts, A to Z
+  // for the path, which is the only column where "largest" means nothing.
+  const head = at('[data-sort]');
+  if (head) {
+    const key = head.dataset.sort;
+    if (sortBy === key) sortDesc = !sortDesc;
+    else { sortBy = key; sortDesc = key !== 'file'; }
+    paintFiles();
+    return;
+  }
+
   const chip = at('[data-filter]') || at('[data-op]');
   if (chip) {
-    if (chip.dataset.filter !== undefined) filter = chip.dataset.filter;
+    const isFilterChip = chip.dataset.filter !== undefined;
+    if (isFilterChip) filter = chip.dataset.filter;
     else op = chip.dataset.op;
+    // A `rare:` filter came from a header count, which sits above BOTH views and counts the whole
+    // report, so it can be clicked from the index, or on a file holding none of what it counts.
+    // Either way it has to land where those mutants actually are. The in-file chips never move
+    // you: filtering the file you are reading must not carry you off to a different one.
+    const fromHeader = filter.indexOf(RARE) === 0;
+    // `matches()` ANDs the status filter with the operator chip, so an operator still narrowed from
+    // an earlier click in this file could hide the very mutants the header count just promised: the
+    // count says "1 runtime error", the click lands on "no findings", and nothing on screen says an
+    // unrelated filter is the reason. A count is a claim about the whole report, so answering it
+    // means clearing the operator too. Guarded on `isFilterChip` rather than on `fromHeader` alone,
+    // because `fromHeader` only asks what the filter IS: without the guard, clicking an operator
+    // chip while a rare filter is up would reset that chip to `all` the instant it was pressed.
+    if (isFilterChip && fromHeader) op = 'all';
+    if (fromHeader && (view !== 'file' || !shown().length)) { toFirstMatch(); return; }
     keepSelection();
     refresh();
+    // A header count is a request to SEE those mutants, so it opens one. Filtering to a list with
+    // nothing selected and leaving the reader to press an arrow answers a question they did not
+    // ask. The chips keep their own behaviour: they narrow what is already being read.
+    if (fromHeader && !sel) step(1);
     return;
   }
 
@@ -899,10 +1048,37 @@ function onClick(e){
 
 // ---- the file index ------------------------------------------------------------------------
 
+// The columns, in the order they are drawn, each with the value it sorts on. A file that could
+// not be scored sorts below 0%: it is not a good result, it is an absent one, and floating it to
+// the top of a score sort would put the least informative rows where the worst ones belong.
+const COLS = [
+  ['score', 'score', f => (f.score === null ? -1 : f.score)],
+  ['file', 'file', f => f.path],
+  ['survived', 'survived', f => f.survived],
+  ['caught', 'caught', f => f.detected],
+  ['mutants', 'mutants', f => f.total],
+];
+
+// `[file, its index in D.files]` pairs in the reader's chosen order. The index is carried through
+// rather than recomputed, because it is what a clicked row reports back as `data-file`.
+function sortedFiles(){
+  const key = COLS.find(c => c[0] === sortBy)[2];
+  const rows = D.files.map((f, i) => [f, i]);
+  rows.sort(([a], [b]) => {
+    const x = key(a), y = key(b);
+    const c = x < y ? -1 : x > y ? 1 : 0;
+    // The direction applies to the CHOSEN column only. Ties always break on the path ascending,
+    // the same tie-break the generator uses, so the default state here reproduces the order the
+    // report arrived in exactly, and equal rows never swap places between repaints.
+    if (c) return sortDesc ? -c : c;
+    return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+  });
+  return rows;
+}
+
 function paintFiles(){
   const q = query.trim().toLowerCase();
-  const rows = D.files
-    .map((f, i) => [f, i])
+  const rows = sortedFiles()
     .filter(([f]) => !q || f.path.toLowerCase().includes(q))
     .map(([f, i]) => `<button class="frow" data-file="${i}">
       <span class="fsc">${f.score === null ? '&ndash;'
@@ -912,9 +1088,14 @@ function paintFiles(){
       <span class="fn kd">${f.detected}</span>
       <span class="fn">${f.total}</span>
     </button>`).join('');
-  $('#filelist').innerHTML =
-    `<div class="fhead"><span>score</span><span>file</span><span>survived</span>`
-    + `<span>caught</span><span>mutants</span></div>`
+  const heads = COLS.map(([key, label]) => {
+    const on = sortBy === key;
+    return `<button type="button" data-sort="${key}" aria-pressed="${on}"`
+      + ` title="Sort by ${label}">${label}`
+      + (on ? `<span class="dir">${sortDesc ? '&#9662;' : '&#9652;'}</span>` : '')
+      + `</button>`;
+  }).join('');
+  $('#filelist').innerHTML = `<div class="fhead">${heads}</div>`
     + (rows || '<div class="empty">No file matches that filter.</div>');
 }
 
@@ -923,12 +1104,30 @@ function renderIndex(){
     ? `<input id="q" class="qbox" type="search" placeholder="filter files…"
          aria-label="Filter files by path">` : '';
   $('#body').innerHTML = `<p class="note">Most survivors first — that is where to start.
-      Choose a file to work through its findings.</p>
+      Choose a file to work through its findings, or click a column heading to re-sort.</p>
     ${box}<div class="files" id="filelist"></div>`;
   const input = $('#q');
   if (input) { input.value = query; input.oninput = () => { query = input.value; paintFiles(); }; }
   paintFiles();
+  // The header's rare-status counts are filters and live above this view too, so their pressed
+  // state is painted here as well as in the file view.
+  paintChips();
   syncHash();   // the index has no address of its own; drop whatever finding the URL still names
+}
+
+// Open the first file that holds something this filter shows. A header count is a claim about the
+// whole report ("204 runtime errors"), so the click has to reach them wherever they are; with no
+// file matching at all, stay put and let the file view say "no findings" rather than move for
+// nothing.
+function toFirstMatch(){
+  const hit = D.files.findIndex(f => shownIn(f).length);
+  // Structural only where it really moves you: out of the index, or across to a different file.
+  // Re-filtering the file already on screen is not a navigation and must not cost a back press,
+  // which is what keeps a single-file report's history exactly as it was.
+  if (view !== 'file' || (hit >= 0 && hit !== cur)) pushEntry = true;
+  if (hit >= 0) cur = hit;
+  sel = null; refOpen = null; view = 'file';
+  renderFile();
 }
 
 // ---- the source pane -----------------------------------------------------------------------
@@ -1187,7 +1386,14 @@ function refresh(){
 
 function pick(f){ sel = f || null; refOpen = null; paintSelection(); }
 
-function toIndex(){ view = 'index'; sel = null; refOpen = null; renderIndex(); }
+// Only ever reached on a multi-file report: the `all files` button is drawn only when `MULTI`, and
+// the Escape key that also lands here is guarded on it. So the entry this pushes always has an
+// index to go back to.
+function toIndex(){
+  view = 'index'; sel = null; refOpen = null;
+  pushEntry = true;                   // structural: back returns to the file you came from
+  renderIndex();
+}
 
 // Clamp, never wrap — and never scrollIntoView: the page must not move under you.
 function step(d){
@@ -1215,6 +1421,29 @@ $('#theme').onclick = () => {
   r.dataset.theme = r.dataset.theme === 'dark' ? 'light' : 'dark';
 };
 
+// ---- getting the JSON back out ---------------------------------------------------------------
+//
+// The full mutation-testing-elements report is already in the page, in the `application/json`
+// block, and has been since the file was first written, but nothing said so, so the only way to
+// reach it was View Source. This hands it back as a real download.
+//
+// It adds no data and touches no network: the bytes are the ones the page is already made of, and
+// the `blob:` URL is minted in the browser from them. Self-containment is exactly as it was.
+$('#dl').onclick = () => {
+  const url = URL.createObjectURL(
+    new Blob([$('#mutation-test-report').textContent], { type: 'application/json' }));
+  const a = document.createElement('a');
+  a.href = url;
+  // A fixed name, never the report's own path: the file is meant to travel, and naming it after
+  // somebody's directory layout is the very thing the displayed paths stopped doing.
+  a.download = 'gdmutant-report.json';
+  a.click();
+  // The blob is held alive by its URL until this runs, and a reader may download several times.
+  // Revoking in the same tick can pull the URL out from under a download that has only just
+  // started, so it waits for the click to finish being handled first.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+};
+
 // ---- boot ------------------------------------------------------------------------------------
 
 // Open on whatever the URL names, falling back to the ordinary default view whenever it names
@@ -1234,6 +1463,13 @@ function open_(){
 
 // Someone pasting a link into the address bar of an already-open report is the same-document case,
 // so nothing reloads — without this the URL would change and the page would not.
+//
+// This is ALSO the browser's back and forward buttons, and it is the only listener they need. Both
+// events fire on a history move between two entries that differ by fragment, and every entry this
+// page creates differs by fragment: a file's is `#path:line:col:colEnd:operator`, the index's is
+// no fragment at all. So a `popstate` listener beside this one would not add a case; it would
+// double-handle every one of them. (`replaceState` fires neither event, which is why stepping
+// stays invisible here.) The guard is what keeps the page from re-opening against its own write.
 window.addEventListener('hashchange', () => {
   if (String(location.hash || '') === String(lastHash || '')) return;   // our own write
   open_();
@@ -1241,6 +1477,10 @@ window.addEventListener('hashchange', () => {
 
 // `#body` belongs to the page shell and is never replaced, so this outlives every view switch.
 $('#body').onclick = onClick;
+// The header sits OUTSIDE `#body` (it spans both views), and its rare-status counts are filters.
+// Same handler, so a header count reaches the same filter path a chip does rather than a private
+// one of its own.
+$('#head').onclick = onClick;
 loadMarks();
 open_();
 """
@@ -1255,22 +1495,43 @@ def _escape_for_script(payload: str) -> str:
 
 
 def _head_stats(view: ReportView) -> str:
-    """The header's stat blocks: caught, survived, total, then any non-zero rare status."""
-    blocks = [
+    """The header's stat blocks: caught, survived, total, then any non-zero rare status.
+
+    The rare ones are buttons, not text. They were the only numbers on the page with nothing
+    behind them: a reader saw "204 runtime errors" and had no way to reach the 204, mutants that
+    were valid, that ran, and that measured nothing because the harness fell over. Each carries a
+    ``data-filter``, so it reaches the mutants through the filter the file view already has rather
+    than through a second view built to show the same thing.
+    """
+    plain = [
         ("kd", view.detected, "caught"),
         ("sv", view.survived, "survived"),
         ("", view.total, "mutants"),
-        *[("", count, label) for label, count in view.rare],
     ]
-    return "".join(
+    out = "".join(
         f'<div class="stat {cls}"><b>{count}</b><i>{html.escape(label)}</i></div>'
-        for cls, count, label in blocks
+        for cls, count, label in plain
+    )
+    # Both `label` and `status` come only from the hardcoded `_RARE` tuple, so neither can carry a
+    # quote today and nothing here is currently reachable by report content. They are escaped
+    # anyway, so that the day `_RARE` or `_head_stats` renders anything report-derived, this markup
+    # is already safe rather than one forgotten attribute away from an injection. The `<i>` below
+    # was already escaped, which made the attribute beside it the odd one out.
+    return out + "".join(
+        f'<button type="button" class="stat jump" data-filter="rare:{html.escape(status)}"'
+        f' aria-pressed="false" title="Show the {html.escape(label)} in the source">'
+        f"<b>{count}</b><i>{html.escape(label)}</i></button>"
+        for label, count, status in view.rare
     )
 
 
-def render_html(report: dict[str, Any]) -> str:
-    """Render `report` (a ``mutation-testing-elements`` dict) as the self-contained HTML page."""
-    view = report_view(report)
+def render_html(report: dict[str, Any], project_dir: str | None = None) -> str:
+    """Render `report` (a ``mutation-testing-elements`` dict) as the self-contained HTML page.
+
+    `project_dir` is the project root the run was made against; paths inside it are displayed
+    relative to it (`_display_path`). Omitting it renders the paths the report is keyed by.
+    """
+    view = report_view(report, project_dir)
     score = "n/a" if view.score is None else f"{view.score}"
     pct = "" if view.score is None else '<span class="pct">%</span>'
     caption = (
@@ -1291,10 +1552,14 @@ def render_html(report: dict[str, Any]) -> str:
   <div class="mast">
     {FRANK_SVG}
     <div><h1>gdmutant</h1><p>{html.escape(TAGLINE)}</p></div>
-    <button class="tbtn" id="theme" title="Toggle light / dark"
-      aria-label="Toggle light / dark">&#9680;</button>
+    <div class="acts">
+      <button class="tbtn" id="dl" title="Download the full report as JSON"
+        aria-label="Download the full report as JSON">&#11015;</button>
+      <button class="tbtn" id="theme" title="Toggle light / dark"
+        aria-label="Toggle light / dark">&#9680;</button>
+    </div>
   </div>
-  <div class="head">
+  <div class="head" id="head">
     <div class="score">{score}{pct}<span class="cap">{caption}</span></div>
     {_head_stats(view)}
   </div>

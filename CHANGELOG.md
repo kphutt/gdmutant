@@ -70,6 +70,27 @@ CLI.
   showing someone else's progress. A mark made against an earlier run of a finding that is *still
   surviving* is flagged "re-check" and is not counted as done. A stale tick must never hide a
   live survivor.
+- The HTML report shows each file by its project-relative path. A report is made to travel, and an
+  absolute path from the machine that produced it carries that machine's username and directory
+  layout into every row while telling a reader nothing they can act on. A file genuinely outside the
+  project keeps its absolute path, because there is no shorter honest name for it. This changes what
+  the page *displays*, and the displayed path is what a deep link and a done-mark are keyed on, so
+  marks made against an earlier report of the same project do not carry over. Note the limit: the
+  `--json` report and the copy of it embedded in the HTML file are both unchanged, because their
+  keys are identifiers other tooling resolves. A report file still contains the absolute paths, it
+  just no longer shows them.
+- The embedded report is downloadable from the page, so the JSON in a report someone mailed you is
+  reachable without View Source. No request and no new data, the bytes are the page's own.
+- The file index sorts on any column (score, file, survived, caught, mutants), ascending or
+  descending. Most survivors first stays the default, because it is the only order that answers
+  "where do I start". Score would rank 1 survivor in 5 mutants level with 100 in 500.
+- The header's rare-status counts are clickable, and reach the mutants behind them through the
+  filter the file view already has. The three stay three things: a timeout is a kill and only a
+  performance signal, a compile error is the re-parse guard working, and a runtime error is the
+  actionable one, a valid mutant that ran and measured nothing because the harness fell over.
+- The browser's back button returns to the file index instead of leaving the report. Structural
+  moves (opening a file, going back to the index) get a history entry. Stepping between findings
+  still does not, so a long file cannot bury the reader under a back press per finding.
 - `.gdmutant.toml` for persisted per-project flags, and `--dry-run` to list mutants without running
   Godot.
 - Live self-test against real Godot in CI, pinning both runner paths to exact per-mutant outcomes.
