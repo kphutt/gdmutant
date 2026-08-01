@@ -36,8 +36,8 @@ _WIDTH = 74  # rule width + prose wrap target
 #: Type-neutral wording (an operator may act on numbers *or* strings), so nothing over-claims.
 _EXPLAIN: dict[str, tuple[str, str, str]] = {
     "comparison": (
-        # Deliberately not "they differ only on equal operands": `==` and `!=` are in this
-        # operator's table too, and those two are complements that disagree on every input.
+        # Deliberately not "they differ only on equal operands": `==` and `!=` are in the
+        # comparison table too, and those two are complements that disagree on every input.
         "Your tests pass whether this says `{a}` or `{b}`. They run this line, but never with an "
         "input the two decide differently, so what this comparison decides is untested.",
         "Passing here is false confidence, not proof. A later refactor or merge that changes this "
