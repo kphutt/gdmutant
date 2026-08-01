@@ -35,9 +35,8 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
 ```
 
 - `--json -` streams the machine-readable report to stdout. The human summary and per-mutant
-  progress go to stderr. Capture stdout for parsing. Two flag combinations put something else on
-  stdout as well, so keep them out of a run you parse:
-  [Keeping stdout parseable](#keeping-stdout-parseable) lists them.
+  progress go to stderr. Capture stdout for parsing. One flag ignores `--json` and writes its own
+  text to stdout instead: [Keeping stdout parseable](#keeping-stdout-parseable) has it.
 - `--dry-run` lists the mutants gdmutant *would* generate, without Godot and without running any
   tests: a fast, dependency-free preview. It ignores `--json` and prints its list as plain text.
 - `--require-clean` refuses to run unless git holds a copy of the source file it could put
@@ -50,8 +49,12 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
 - `--report step-summary` writes the surviving mutants and their explanations as Markdown to the
   GitHub Actions job summary (the file named by `$GITHUB_STEP_SUMMARY`), so survivors show up in
   the run summary a reviewer already opens. With that variable unset it prints the same Markdown to
-  stdout instead. `step-summary` is the only value it takes, and repeating the flag changes
-  nothing. It is advisory: a failed write warns and changes neither the score nor the exit code.
+  stdout instead, so `> summary.md` works locally. That fallback is the one thing `--json -` cannot
+  live beside: two documents on one pipe leaves neither readable, so gdmutant refuses the
+  combination up front (exit 2) rather than interleaving them. Set `$GITHUB_STEP_SUMMARY` to a file
+  and both work together, which is what the GitHub Action does on every run. `step-summary` is the
+  only value it takes, and repeating the flag changes nothing. It is advisory: a failed write warns
+  and changes neither the score nor the exit code.
 - `--since <ref>` mutates only the lines changed since a git ref (e.g. `--since origin/main`), the
   fast per-PR mode for CI. When no line in the given paths changed since that ref, gdmutant runs no
   tests at all and exits 0, with a note on stderr. It still writes the report you asked for: every
@@ -89,17 +92,19 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
 
 ## Keeping stdout parseable
 
-With `--json -` the report is the only thing on stdout, as long as nothing else writes there.
-`--html <path>` is safe to combine with it: the report goes to stdout, the page goes to the file,
-and the `Wrote HTML report to ...` note goes to stderr with the rest of the human text. Two
-combinations do still break stdout:
+With `--json -` the report is the only thing on stdout. No flag can quietly append to it:
 
-- `--report step-summary` with `$GITHUB_STEP_SUMMARY` unset prints its Markdown to stdout. Set that
-  variable (GitHub Actions always does) and it goes to the file instead.
-- `--dry-run` ignores `--json` and prints its plain-text mutant list to stdout.
+- `--html <path>` is safe to combine. The report goes to stdout, the page goes to the file, and the
+  `Wrote HTML report to ...` note goes to stderr with the rest of the human text.
+- `--report step-summary` is safe whenever `$GITHUB_STEP_SUMMARY` is set, which is always true on
+  GitHub Actions. Unset, its Markdown would fall back to stdout, and gdmutant exits 2 with a message
+  naming both flags rather than mixing two documents into one stream.
+- `--dry-run` is the one case where stdout is not the report. It ignores `--json` and prints its
+  plain-text mutant list there, and says on stderr that it is doing so. Do not pair it with a run
+  you parse.
 
-`--json <path>`, a real path rather than `-`, sidesteps both: the report goes to that file and
-stdout carries only human text.
+`--json <path>`, a real path rather than `-`, sidesteps the question entirely: the report goes to
+that file and stdout carries only human text.
 
 ## Project config (`.gdmutant.toml`)
 
@@ -139,6 +144,8 @@ Every other key is read normally: none of them can decide what gets executed.
   - `--since` names a ref git cannot diff against
   - `--jobs` above 1 with a source file that does not sit inside `--project`
   - `--jobs` below 1
+  - `--json -` and `--report step-summary` together with `$GITHUB_STEP_SUMMARY` unset: two
+    documents, one stdout
   - a report file could not be written, or the source file could not be rewritten or put back
 
 ## Safety guarantee

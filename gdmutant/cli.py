@@ -734,6 +734,40 @@ def _report_path_problem(path: str | None, flag: str, *, stdout_ok: bool) -> str
     return None
 
 
+def _stdout_contention_problem(json_path: str | None, step_summary: bool) -> str | None:
+    """A message when ``--json -`` and ``--report step-summary`` would both put a *document* on
+    stdout, else None.
+
+    This is the one flag combination gdmutant cannot satisfy, and the reason it is refused rather
+    than rerouted. Everywhere else two things want stdout, one of them is human text and can simply
+    move: the ``Wrote HTML report to ...`` note does exactly that under ``--json -``. Here both are
+    payloads — the Stryker JSON a caller pipes into a parser, and the survivor Markdown a caller
+    redirects into a file with ``> summary.md``. Interleaved, the JSON stops parsing and the
+    Markdown stops being a document. Moving either to stderr is no better: it lands in the middle of
+    the progress lines and the console summary, which is not a place anything gets read from. There
+    is no destination that keeps both, so the run stops before it starts and names the two flags
+    that collided.
+
+    It fires only when the Markdown genuinely has nowhere else to go. Under GitHub Actions
+    ``$GITHUB_STEP_SUMMARY`` is always set, so `_emit_step_summary` writes to that file and stdout
+    stays the report's alone — the shipped action pairs these two flags on every run and never
+    reaches this. Without ``--json -`` the local stdout fallback is untouched.
+    """
+    if json_path != "-" or not step_summary:
+        return None
+    if os.environ.get(_STEP_SUMMARY_ENV_VAR):
+        return None
+    return (
+        "--json - and --report step-summary would both write to stdout, and neither is readable "
+        "mixed with the other.\n"
+        f"  --report step-summary writes to ${_STEP_SUMMARY_ENV_VAR} when that is set (GitHub "
+        "Actions always sets it) and\n"
+        "  falls back to stdout when it is not, which is the case here.\n"
+        f"  Set ${_STEP_SUMMARY_ENV_VAR} to a file to keep both, or send the report to a file with "
+        "--json <path>."
+    )
+
+
 def list_mutants(source_path: str, only_lines: set[int] | None = None) -> int:
     """Print every mutant gdmutant would generate for `source_path` **without running any tests** —
     a Godot-free way to see the tool work. With `only_lines` (diff-scoped) only mutants on
@@ -788,11 +822,13 @@ def run_mutation(
     if not Path(project_dir).is_dir():
         print(f"error: project directory not found: {project_dir}", file=sys.stderr)
         return 2
-    # Preflight the report paths up front: a run boots Godot per mutant for minutes, so an
-    # unwritable --json/--html target must fail now, not after the whole pass completes.
+    # Preflight the report targets up front: a run boots Godot per mutant for minutes, so an
+    # unwritable --json/--html target, or two reports contending for stdout, must fail now rather
+    # than after the whole pass has completed.
     for problem in (
         _report_path_problem(json_path, "--json", stdout_ok=True),
         _report_path_problem(html_path, "--html", stdout_ok=False),
+        _stdout_contention_problem(json_path, step_summary),
     ):
         if problem is not None:
             print(f"error: {problem}", file=sys.stderr)
@@ -851,6 +887,12 @@ def _emit_runner_warning(runner: Runner) -> None:
             print(warning, file=sys.stderr)
 
 
+#: The file GitHub Actions wants a job summary appended to. `_emit_step_summary` writes there, and
+#: `_stdout_contention_problem` reads it to decide whether the Markdown has anywhere to go besides
+#: stdout — one name, so the writer and the check on it cannot drift apart.
+_STEP_SUMMARY_ENV_VAR = "GITHUB_STEP_SUMMARY"
+
+
 def _emit_step_summary(run: MutationRun) -> None:
     """Emit the survivor explanations as Markdown for the ``--report step-summary`` reporter. The
     destination is the file named by ``$GITHUB_STEP_SUMMARY`` (appended, as GitHub Actions expects)
@@ -858,7 +900,7 @@ def _emit_step_summary(run: MutationRun) -> None:
     look — and stdout otherwise, so the reporter is useful locally too. Advisory output: a write
     failure warns but never changes the score or the exit code."""
     markdown = job_summary_markdown(run)
-    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    summary_path = os.environ.get(_STEP_SUMMARY_ENV_VAR)
     if not summary_path:
         print(markdown)
         return
@@ -983,6 +1025,7 @@ def run_mutation_paths(
     for problem in (
         _report_path_problem(json_path, "--json", stdout_ok=True),
         _report_path_problem(html_path, "--html", stdout_ok=False),
+        _stdout_contention_problem(json_path, step_summary),
     ):
         if problem is not None:
             print(f"error: {problem}", file=sys.stderr)
@@ -1271,7 +1314,9 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         metavar="KIND",
         help="emit an extra report (repeatable). 'step-summary' renders the surviving mutants and "
         "their explanations as Markdown to the GitHub Actions job summary ($GITHUB_STEP_SUMMARY) "
-        "when it's set, and to stdout otherwise.",
+        "when it's set, and to stdout otherwise. Falling back to stdout while --json - is also "
+        "streaming there is refused up front, since neither document survives being mixed with the "
+        "other.",
     )
     run_parser.add_argument(
         "--dry-run",

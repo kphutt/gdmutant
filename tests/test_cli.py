@@ -310,6 +310,141 @@ def test_the_html_note_stays_on_stdout_when_the_report_goes_to_a_file(
     assert "Wrote HTML report to" not in captured.err
 
 
+# --- --json - and --report step-summary: two documents, one stdout ----------------------------
+#
+# The `--html` note above is human text and simply moves to stderr. The step-summary Markdown is a
+# *document*: its stdout fallback exists so `> summary.md` works locally. There is no destination
+# that keeps both it and the JSON readable, so the combination is refused up front instead.
+
+
+def test_json_dash_with_step_summary_and_no_env_var_is_refused_before_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    path = _gd(tmp_path)
+    runner = RecordingRunner()
+    rc = run_mutation(str(path), str(tmp_path), runner, json_path="-", step_summary=True)
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "--json -" in captured.err and "--report step-summary" in captured.err
+    assert "GITHUB_STEP_SUMMARY" in captured.err  # the message names the way out
+    assert captured.out == ""  # nothing half-written to the stream the caller is parsing
+    assert runner.seen == []  # refused up front, not after minutes of booting Godot
+
+
+def test_json_dash_with_step_summary_is_allowed_once_the_env_var_is_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The other side, and the one that matters: the shipped GitHub Action pairs these two flags on
+    # every run, and Actions always sets the variable. The Markdown has a file to go to, so stdout
+    # stays the report's alone and both work together.
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    path = _gd(tmp_path)
+    rc = run_mutation(
+        str(path),
+        str(tmp_path),
+        MarkerRunner(str(path), "NEVER_IN_SOURCE"),  # everything survives, so there is Markdown
+        json_path="-",
+        step_summary=True,
+    )
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["schemaVersion"] == "2"
+    assert "Surviving mutants" in summary.read_text(encoding="utf-8")
+
+
+def test_step_summary_still_falls_back_to_stdout_without_json_dash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The refusal is scoped to the collision. With no report on stdout to collide with, the local
+    # fallback is untouched — `gdmutant run f.gd --report step-summary > summary.md` still works.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    path = _gd(tmp_path)
+    rc = run_mutation(
+        str(path),
+        str(tmp_path),
+        MarkerRunner(str(path), "NEVER_IN_SOURCE"),
+        step_summary=True,
+    )
+    assert rc == 0
+    assert "Surviving mutants" in capsys.readouterr().out
+
+
+def test_step_summary_with_a_json_file_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `--json <path>` is not `--json -`: the report goes to the file, so stdout is free for the
+    # Markdown and nothing collides.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    path = _gd(tmp_path)
+    report = tmp_path / "r.json"
+    rc = run_mutation(
+        str(path),
+        str(tmp_path),
+        MarkerRunner(str(path), "NEVER_IN_SOURCE"),
+        json_path=str(report),
+        step_summary=True,
+    )
+    assert rc == 0
+    assert "Surviving mutants" in capsys.readouterr().out
+    assert json.loads(report.read_text(encoding="utf-8"))["schemaVersion"] == "2"
+
+
+def test_json_dash_without_step_summary_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # ... and the reporter has to actually be asked for. `--json -` alone is the ordinary agent
+    # invocation and must never trip the refusal.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), ">="), json_path="-")
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["schemaVersion"] == "2"
+
+
+def test_the_step_summary_collision_is_refused_on_the_multi_file_path_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # run_mutation_paths preflights separately, so a guard added to only one of the two entry points
+    # would pass every single-file test above.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    first = _gd(tmp_path)
+    second = tmp_path / "g.gd"
+    second.write_text("func g(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+    runner = RecordingRunner()
+    rc = cli.run_mutation_paths(
+        [str(first), str(second)], str(tmp_path), runner, json_path="-", step_summary=True
+    )
+    assert rc == 2
+    assert "--report step-summary" in capsys.readouterr().err
+    assert runner.seen == []
+
+
+def test_main_refuses_the_step_summary_collision_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Through main(), which is where a real caller meets it: the flags as typed, and exit 2.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    path = _gd(tmp_path)
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
+    rc = main(
+        [
+            "run",
+            str(path),
+            "--project",
+            str(tmp_path),
+            "--json",
+            "-",
+            "--report",
+            "step-summary",
+        ]
+    )
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "--json -" in captured.err and "--report step-summary" in captured.err
+    assert captured.out == ""
+
+
 def test_run_mutation_baseline_failure_returns_one(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
