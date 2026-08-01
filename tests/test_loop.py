@@ -1358,6 +1358,51 @@ def test_a_read_only_source_is_refused_rather_than_replaced(tmp_path: Path) -> N
         os.chmod(path, stat.S_IWRITE | stat.S_IREAD)  # let tmp_path clean up
 
 
+def test_a_source_that_turns_read_only_mid_mutant_says_the_mutant_is_the_one_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The read-only refusal is the third thing that raises SourceWriteFailed, and it used to be the
+    # one that told the user nothing about what they were left with. It is reached from the restore
+    # write as readily as from the mutate write: _write_source runs twice per mutant, so a file
+    # whose read-only bit is set in the window between them fails on the way back, with the mutant
+    # sitting on disk. That window is not hypothetical on a machine where Perforce reverts a
+    # checkout or a build step marks generated sources read-only, and "your file is read-only" is
+    # a sentence a reader takes as being about their own source.
+    #
+    # Driven through the real two-write sequence, so the assertion is about the case a user hits
+    # rather than about one isolated call. os.access is forced rather than the bit being chmod'ed,
+    # because a real chmod proves nothing under an account that ignores permission bits, and the
+    # test above skips there. A test that skips where it matters is this change's own subject.
+    path = tmp_path / "checkedout.gd"
+    original = "func f(a, b) -> bool:\n\treturn a > b\n"
+    mutant = "func f(a, b) -> bool:\n\treturn a >= b\n"
+    path.write_text(original, encoding="utf-8", newline="")
+
+    _write_source(path, mutant, "\n")  # what _run_one does first: put the mutant in
+
+    real_access = os.access
+
+    def read_only_now(target: Any, mode: int) -> bool:
+        if Path(target) == path.resolve() and mode == os.W_OK:
+            return False
+        return real_access(target, mode)
+
+    monkeypatch.setattr("gdmutant.engine.loop.os.access", read_only_now)
+
+    with pytest.raises(SourceWriteFailed) as refusal:
+        _write_source(path, original, "\n")  # what _run_one does in its finally: put it back
+
+    assert path.read_text(encoding="utf-8") == mutant, (
+        "the premise of this test: the restore failed, so the MUTANT is what is sitting there"
+    )
+    message = str(refusal.value)
+    assert "the mutant is what is on disk now" in message, (
+        "the refusal must name what the user is actually left holding"
+    )
+    assert "not your original" in message, "and say plainly that it is not their own source"
+    assert "from git" in message, "and point at the one place the original can be got back"
+
+
 def test_a_missing_target_is_still_written(tmp_path: Path) -> None:
     # The permission check and the mode copy both only apply to a file that is actually there.
     # A target that does not exist yet is simply created -- no mode to preserve, nothing to refuse.

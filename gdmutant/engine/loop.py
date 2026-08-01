@@ -827,9 +827,16 @@ def _write_source(target: Path, text: str, eol: str) -> None:
     body = text if eol == "\n" else text.replace("\n", eol)
     exists = dest.exists()
     if exists and not os.access(dest, os.W_OK):
+        # The same disambiguation the other two refusals carry, and needed here for the same
+        # reason. This helper is also what restores the original after a mutant, so a file that
+        # turns read-only between those two writes fails on the restore, and the mutant is what is
+        # left sitting there. Nothing in "is read-only" tells the reader that.
         raise SourceWriteFailed(
             f"{dest} is read-only. gdmutant rewrites the files it mutates, so it will not "
-            "silently override that — make the file writable, or leave it out of the run."
+            "silently override that. Make the file writable, or leave it out of the run. "
+            "Nothing was written, so the file still holds whatever was in it a moment ago. "
+            "If gdmutant had already put a mutant there, the mutant is what is on disk now, "
+            "not your original. Restore the file from git before trusting it."
         )
     try:
         handle_fd, temp_name = tempfile.mkstemp(
