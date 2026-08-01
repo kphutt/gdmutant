@@ -7,7 +7,10 @@ created: 2026-07-24
 # A runner-agnostic adapter seam: GdUnit4 and GUT as peer JUnit adapters
 
 ## Status
-Accepted
+Accepted, corrected 2026-08-01: the `GdUnit4Runner` crash-safety bullet rested on a single
+observation, and described a `_result_from_report` that now exists. The decision itself stands. The
+bullet is restated below and the original wording preserved under
+[Correction](#correction-2026-08-01).
 
 ## Context
 gdmutant runs a project's test suite once per mutant and reads the outcome through a single seam,
@@ -56,8 +59,12 @@ the way *its* framework fails:
 
 - `CommandRunner`. A non-zero exit is a failure (killed), and a command that can't be executed at all
   raises (→ `error`).
-- `GdUnit4Runner`. A crash writes no report, caught by the report-reappear freshness guard
-  (raises → `error`). Its `_result_from_report` is the base's plain parse, so no override is needed.
+- `GdUnit4Runner`. GdUnit4 loads every suite in the scanned directory during discovery, so a suite
+  it cannot parse aborts the whole run and writes no report, caught by the report-reappear freshness
+  guard (raises → `error`). Measured at n>1, not assumed. Its `_result_from_report`
+  additionally raises on a report describing zero tests, so the contract does not rest on that
+  measurement holding for every future GdUnit4. Both points are restated from a weaker original
+  claim under [Correction](#correction-2026-08-01).
 - `GutRunner`. GUT does not fail a run when a test file fails to compile or load: it skips
   that suite, runs the rest green, and exits 0 (confirmed live, see below). Two shapes surface as
   an execution error (raises → `error`), never a pass, plus a third, symmetric warning (the
@@ -123,7 +130,9 @@ CI leg and prints which branch GUT took.
   and mutant-for-mutant agreement is the proof the seam is genuinely framework-agnostic rather than
   GdUnit4-shaped.
 - Any future JUnit-emitting framework is first-class by adding one small adapter subclassing
-  `_GodotJUnitRunner`: its `command()` and, if its crash mode differs, its `_result_from_report`.
+  `_GodotJUnitRunner`: its `command()` and its `_result_from_report`. Both are abstract, so a new
+  adapter has to state how its own framework fails rather than inheriting a permissive default (see
+  [Correction](#correction-2026-08-01)).
 - Per-runner defaults. `--report-path` defaults per runner (gdunit4 `reports/report_1/results.xml`,
   gut `reports/gut_results.xml`), resolved in the CLI, and `--tests` maps to GdUnit4's `-a` or GUT's
   `-gdir`.
@@ -132,3 +141,76 @@ CI leg and prints which branch GUT took.
 - Slightly more indirection in the GDScript adapter (a shared base plus two subclasses instead of one
   class). Accepted: it removes ~60 lines of duplicated warm-up and guard logic and makes the shared
   contract, crash-safety included, explicit and enforced identically for both.
+
+## Correction (2026-08-01)
+
+The `GdUnit4Runner` bullet in the crash-safety clause originally read:
+
+> `GdUnit4Runner`. A crash writes no report, caught by the report-reappear freshness guard
+> (raises → `error`). Its `_result_from_report` is the base's plain parse, so no override is needed.
+
+What it describes is right. The evidence behind it was not strong enough to carry it, and the last
+sentence is now out of date.
+
+"A crash writes no report" was observed once, against a corpus holding a single GdUnit4 suite. On a
+one-suite project, breaking the file under test breaks the only suite, so there is nothing left for
+the framework to run and report either way. That is the same n=1 evidence GUT passed before its own
+live probe, and GUT turned out to skip the broken suite, run the rest green, and exit 0, which is a
+false survivor. GdUnit4 is the default runner, so the weaker claim was sitting on the path most
+people take.
+
+### Proving GdUnit4's clause at n>1 (not just n=1)
+
+The corpus now carries a second GdUnit4 suite that does not reference `TurnOrder`,
+`corpus/test/test_independent.gd`, the exact peer of the GUT one. It compiles and passes on its own,
+so breaking `turn_order.gd` leaves one suite broken and one healthy, which is the shape a single-suite
+corpus could never produce.
+`tests/test_selftest_live.py::test_gdunit4_crash_safety_never_reports_a_false_survivor_at_n_gt_1`
+drives the same probe GUT gets: run a healthy baseline, make `turn_order.gd` uncompilable, run the
+same runner again, and assert the result is never a passing `SuiteResult`.
+
+> Measured (real GdUnit4 v6.1.3, Godot 4.7, 2026-08-01): abort at discovery. Healthy baseline first,
+> for comparison: both suites loaded, 5 tests, 0 failures, exit 0, report written. Then with
+> `turn_order.gd` uncompilable, GdUnit4 printed "Script errors were detected during test discovery!",
+> exited 105, and wrote no report at all. The healthy suite never ran. GdUnit4 loads every suite in
+> the scanned directory before running any of them, so the one it cannot parse stops the whole run.
+> It does not skip and continue the way GUT does. The report-reappear guard is what catches this,
+> and no drop-below-baseline guard is needed here, because there is no green report for a drop to be
+> measured against.
+
+So the claim now rests on n>1, and the probe is what keeps it there. If a future GdUnit4 starts
+skipping broken suites, that probe fails in gdmutant's own gate, which is when the guard gets
+widened. That is the same trigger `GutRunner`'s canary uses.
+
+The same run measured GdUnit4's empty-discovery behaviour, which turns out to be a different failure
+with the same symptom: pointed at a directory holding no GdUnit4 suites, or at one that does not
+exist, GdUnit4 exits 0, writes no report, and prints "No test cases found, abort test run!".
+`GdUnit4Runner` now reads that marker and reports it as test discovery rather than as a crash, so a
+wrong `--tests` path names the flag that fixes it instead of sending someone to debug a crash that is
+not happening. Matching on the marker is fail-safe: if a future GdUnit4 rewords it, the run still
+fails with the generic no-report error, only diagnosed less precisely.
+
+### What changed in the code
+
+`GdUnit4Runner` now has its own `_result_from_report`, which raises on a report describing zero tests
+instead of returning `SuiteResult(0, 0, 0)`, whose `failed` is False and would therefore read as a
+clean pass. No GdUnit4 version measured here writes such a report. The guard exists so the contract
+does not depend on that measurement holding, which is exactly the assumption that made the GUT false
+survivor possible. The base's parse-only default is gone with it. `_result_from_report` is abstract
+now, so an adapter that forgets to say how its framework fails raises `NotImplementedError` the first
+time it runs, rather than quietly returning a pass for a run that never happened.
+
+The zero-test check also moved up into the engine. A baseline that ran no tests is a property of a
+baseline, not of a framework, and it is reachable under any runner pointed at the wrong directory.
+`engine/loop.py` now refuses a zero-test baseline outright, and marks a zero-test mutant run as an
+error rather than a survivor, so all three runners are covered instead of only the one that happened
+to have the check. The adapters keep their own zero-test guards, and that is not duplication: the
+engine states the condition, an adapter can state the cause and the cure, and whichever raises first
+wins with the better message.
+
+One limit of the engine backstop is worth stating plainly, because it is not a gap that can be
+closed. The backstop reads test counts, and `CommandRunner` has none. It reports `tests=1` for any
+exit-0 run, because an exit code cannot say how many tests ran, so a harness that discovers nothing
+and exits 0 is indistinguishable from one that passed. A command used with `--runner command` has to
+exit non-zero when it finds no tests. Nothing downstream can recover that distinction once the exit
+code is 0. The two JUnit adapters have real counts and are fully covered.

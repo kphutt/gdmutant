@@ -82,11 +82,26 @@ class Runner(Protocol):
     Each concrete adapter upholds this in the way its framework fails:
       * ``CommandRunner`` — a non-zero exit is a failure (killed); a command that can't be executed
         at all raises (the engine tallies ``error``).
-      * ``GdUnit4Runner`` — a crash writes *no* report, caught by the "the report must reappear"
-        freshness guard (it raises → ``error``).
+      * ``GdUnit4Runner`` — GdUnit4 loads every suite during discovery, so one that fails to parse
+        aborts the whole run and writes *no* report, caught by the "the report must reappear"
+        freshness guard (it raises → ``error``). Measured at n>1 against a two-suite corpus, not
+        assumed. It also raises on a zero-test report, so the contract does not depend on that
+        measurement holding for every future GdUnit4.
       * ``GutRunner`` — GUT *skips* a suite that fails to load and runs the rest green (exit 0), so
         it raises on both ``tests == 0`` *and* a drop below the healthy baseline's test count (a
         skipped suite) → ``error``, never a false survivor.
+
+    **The engine backstops all of them, and covers the one hole an adapter cannot.** A run reporting
+    zero tests is refused by the engine itself — as a `loop.BaselineFailed` for the baseline, and
+    as ``error`` (never SURVIVED) for a mutant — because "nothing ran" is a property of a result,
+    not of a framework, and a per-adapter check would leave every runner that lacks one unguarded.
+
+    That backstop is **counts-based, so the exit-code path is outside it**: `CommandRunner` reports
+    ``tests=1`` for any exit-0 run, because an exit code cannot say how many tests ran. A harness
+    that discovers no tests and exits 0 is therefore indistinguishable from one that passed, and
+    nothing gdmutant can read tells them apart. This is an irreducible limit of the exit-code
+    contract rather than a gap to be closed: a harness used with ``--runner command`` must exit
+    non-zero when it finds no tests. The JUnit adapters have real counts and are fully covered.
     """
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult: ...
@@ -138,6 +153,12 @@ class CommandRunner:
     harness itself *erroring* (both are non-zero), so a mutant that makes the run crash counts as
     killed. The NF-5 re-parse guard still filters mutants that don't parse before they ever run, and
     a command that can't be executed at all raises (the engine tallies that as ERROR).
+
+    It also can't count tests, which is why ``tests=1`` is reported for a passing run: one suite as
+    one pass/fail unit. That number is a placeholder, not a measurement, so the engine's zero-test
+    guards (see `Runner`) can never fire for this runner — a harness that finds no tests and exits 0
+    looks exactly like one that passed. **A command used here must exit non-zero when it discovers
+    no tests**; nothing downstream can recover that distinction once the exit code is 0.
     """
 
     command: Sequence[str]
