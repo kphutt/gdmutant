@@ -264,6 +264,187 @@ def test_run_mutation_json_dash_writes_pure_json_to_stdout(
     assert "Mutation score:" not in captured.out
 
 
+def test_json_dash_with_html_leaves_stdout_parseable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The defect this pins: `--json -` streams the report to stdout, and `--html` used to append
+    # "Wrote HTML report to ..." there too. A caller piping the run into json.loads got a parse
+    # error pointing at a column of trailing prose, with nothing to say that --html had caused it.
+    # The note is human text, so with `--json -` it belongs on stderr beside the summary.
+    path = _gd(tmp_path)
+    html_file = tmp_path / "report.html"
+    rc = run_mutation(
+        str(path),
+        str(tmp_path),
+        MarkerRunner(str(path), ">="),
+        json_path="-",
+        html_path=str(html_file),
+    )
+    assert rc == 0
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)  # the whole of stdout parses — nothing trails the JSON
+    assert data["schemaVersion"] == "2"
+    assert "Wrote HTML report to" not in captured.out
+    assert "Wrote HTML report to" in captured.err  # the user still learns where the page went
+    assert "<html" in html_file.read_text(encoding="utf-8")  # ... and it really was written
+
+
+def test_the_html_note_stays_on_stdout_when_the_report_goes_to_a_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The stderr routing above is *only* for `--json -`. With the report in a file, stdout is the
+    # human channel, and moving the confirmations off it wholesale would hide them from the person
+    # who ran the command.
+    path = _gd(tmp_path)
+    rc = run_mutation(
+        str(path),
+        str(tmp_path),
+        MarkerRunner(str(path), ">="),
+        json_path=str(tmp_path / "report.json"),
+        html_path=str(tmp_path / "report.html"),
+    )
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "Wrote report to" in captured.out
+    assert "Wrote HTML report to" in captured.out
+    assert "Wrote HTML report to" not in captured.err
+
+
+# --- --json - and --report step-summary: two documents, one stdout ----------------------------
+#
+# The `--html` note above is human text and simply moves to stderr. The step-summary Markdown is a
+# *document*: its stdout fallback exists so `> summary.md` works locally. There is no destination
+# that keeps both it and the JSON readable, so the combination is refused up front instead.
+
+
+def test_json_dash_with_step_summary_and_no_env_var_is_refused_before_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    path = _gd(tmp_path)
+    runner = RecordingRunner()
+    rc = run_mutation(str(path), str(tmp_path), runner, json_path="-", step_summary=True)
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "--json -" in captured.err and "--report step-summary" in captured.err
+    assert "GITHUB_STEP_SUMMARY" in captured.err  # the message names the way out
+    assert captured.out == ""  # nothing half-written to the stream the caller is parsing
+    assert runner.seen == []  # refused up front, not after minutes of booting Godot
+
+
+def test_json_dash_with_step_summary_is_allowed_once_the_env_var_is_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The other side, and the one that matters: the shipped GitHub Action pairs these two flags on
+    # every run, and Actions always sets the variable. The Markdown has a file to go to, so stdout
+    # stays the report's alone and both work together.
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    path = _gd(tmp_path)
+    rc = run_mutation(
+        str(path),
+        str(tmp_path),
+        MarkerRunner(str(path), "NEVER_IN_SOURCE"),  # everything survives, so there is Markdown
+        json_path="-",
+        step_summary=True,
+    )
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["schemaVersion"] == "2"
+    assert "Surviving mutants" in summary.read_text(encoding="utf-8")
+
+
+def test_step_summary_still_falls_back_to_stdout_without_json_dash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The refusal is scoped to the collision. With no report on stdout to collide with, the local
+    # fallback is untouched — `gdmutant run f.gd --report step-summary > summary.md` still works.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    path = _gd(tmp_path)
+    rc = run_mutation(
+        str(path),
+        str(tmp_path),
+        MarkerRunner(str(path), "NEVER_IN_SOURCE"),
+        step_summary=True,
+    )
+    assert rc == 0
+    assert "Surviving mutants" in capsys.readouterr().out
+
+
+def test_step_summary_with_a_json_file_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `--json <path>` is not `--json -`: the report goes to the file, so stdout is free for the
+    # Markdown and nothing collides.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    path = _gd(tmp_path)
+    report = tmp_path / "r.json"
+    rc = run_mutation(
+        str(path),
+        str(tmp_path),
+        MarkerRunner(str(path), "NEVER_IN_SOURCE"),
+        json_path=str(report),
+        step_summary=True,
+    )
+    assert rc == 0
+    assert "Surviving mutants" in capsys.readouterr().out
+    assert json.loads(report.read_text(encoding="utf-8"))["schemaVersion"] == "2"
+
+
+def test_json_dash_without_step_summary_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # ... and the reporter has to actually be asked for. `--json -` alone is the ordinary agent
+    # invocation and must never trip the refusal.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    path = _gd(tmp_path)
+    rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), ">="), json_path="-")
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["schemaVersion"] == "2"
+
+
+def test_the_step_summary_collision_is_refused_on_the_multi_file_path_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # run_mutation_paths preflights separately, so a guard added to only one of the two entry points
+    # would pass every single-file test above.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    first = _gd(tmp_path)
+    second = tmp_path / "g.gd"
+    second.write_text("func g(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+    runner = RecordingRunner()
+    rc = cli.run_mutation_paths(
+        [str(first), str(second)], str(tmp_path), runner, json_path="-", step_summary=True
+    )
+    assert rc == 2
+    assert "--report step-summary" in capsys.readouterr().err
+    assert runner.seen == []
+
+
+def test_main_refuses_the_step_summary_collision_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Through main(), which is where a real caller meets it: the flags as typed, and exit 2.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    path = _gd(tmp_path)
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
+    rc = main(
+        [
+            "run",
+            str(path),
+            "--project",
+            str(tmp_path),
+            "--json",
+            "-",
+            "--report",
+            "step-summary",
+        ]
+    )
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "--json -" in captured.err and "--report step-summary" in captured.err
+    assert captured.out == ""
+
+
 def test_run_mutation_baseline_failure_returns_one(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -2205,6 +2386,285 @@ def test_main_since_no_changes_is_a_clean_noop(
     assert "no lines changed since HEAD" in capsys.readouterr().err
 
 
+def test_main_since_no_changes_writes_an_empty_report_to_stdout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The defect this pins: `--since` with nothing changed exited 0 having written no report at all,
+    # and its one explanation went to stderr. A CI script capturing stdout for json.loads got an
+    # empty string, so "nothing to mutate" and "the tool broke" arrived looking identical. It now
+    # answers on the channel the caller is reading.
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    assert main(["run", path, "--since", "HEAD", "--json", "-"]) == 0
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["schemaVersion"] == "2"
+    entry = data["files"][path]  # the file is present, so `files[<path>]` needs no special case
+    assert entry["mutants"] == []
+    assert entry["language"] == "gdscript"
+    assert entry["source"] == Path(path).read_text(encoding="utf-8")
+    assert "no lines changed since HEAD" in captured.err  # the human note is unchanged
+
+
+def test_main_since_no_changes_lists_every_given_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Every file the run was pointed at appears, not just the first — a report that dropped files
+    # would read as "these were mutated and nothing survived", which is a different claim.
+    first = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    second = tmp_path / "g.gd"
+    second.write_text(_TWO_LINE_SRC, encoding="utf-8")
+    _git(tmp_path, "add", "g.gd")
+    _git(tmp_path, "commit", "-m", "add g.gd")
+    assert main(["run", first, str(second), "--since", "HEAD", "--json", "-"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert set(data["files"]) == {first, str(second)}
+    assert all(entry["mutants"] == [] for entry in data["files"].values())
+
+
+def test_main_since_no_changes_writes_an_empty_report_to_a_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `--json <path>` and `--html <path>` are honoured on this path too: a CI step that always
+    # uploads its report artifact must not find the file missing on the no-change runs.
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    report = tmp_path / "r.json"
+    page = tmp_path / "r.html"
+    assert main(["run", path, "--since", "HEAD", "--json", str(report), "--html", str(page)]) == 0
+    assert json.loads(report.read_text(encoding="utf-8"))["files"][path]["mutants"] == []
+    assert "<html" in page.read_text(encoding="utf-8")
+    assert "Wrote report to" in capsys.readouterr().out
+
+
+def test_main_since_no_changes_relativizes_the_html_report_to_the_project(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The empty report is a real report, so it gets the same `--project` treatment: paths on the
+    # page are relative to the project root, not absolute ones carrying the author's directory
+    # layout. This is also what pins that the no-change path resolves the project dir at all.
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    source = tmp_path / "src" / "f.gd"
+    source.parent.mkdir()
+    source.write_text(_TWO_LINE_SRC, encoding="utf-8")
+    _git(tmp_path, "add", "src/f.gd")
+    _git(tmp_path, "commit", "-m", "base")
+    page = tmp_path / "r.html"
+    assert (
+        main(
+            [
+                "run",
+                str(source),
+                "--project",
+                str(tmp_path),
+                "--since",
+                "HEAD",
+                "--html",
+                str(page),
+            ]
+        )
+        == 0
+    )
+    assert '"path": "src/f.gd"' in page.read_text(encoding="utf-8")
+
+
+# --- the no-change path enforces the same contract as a real run ------------------------------
+#
+# `_no_changes_report` is gdmutant's third report-producing path, and it was written with a subset
+# of the preflights the two real ones enforce. A caller cannot tell from the outside which path
+# served their run, so a guarantee that holds on two paths out of three is not a guarantee. These
+# pin each check on the path that was missing it; `_setup_problem` is the shared preflight that
+# stops the three from drifting again.
+
+
+def test_main_since_no_changes_refuses_the_step_summary_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Was: exit 0 with the JSON on stdout and the Markdown silently dropped, on the one path where
+    # this PR's own documented refusal did not run.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    rc = main(["run", path, "--since", "HEAD", "--json", "-", "--report", "step-summary"])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "--json -" in captured.err and "--report step-summary" in captured.err
+    assert captured.out == ""
+
+
+def test_main_since_no_changes_emits_the_job_summary_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The other half: with somewhere to write it, the empty run still reports. A CI job that shows
+    # survivors on every run gets "nothing to mutate" in the place reviewers look, rather than a
+    # blank section indistinguishable from a step that never ran.
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    assert main(["run", path, "--since", "HEAD", "--json", "-", "--report", "step-summary"]) == 0
+    assert json.loads(capsys.readouterr().out)["files"][path]["mutants"] == []
+    written = summary.read_text(encoding="utf-8")
+    assert "gdmutant — mutation report" in written
+    assert "No surviving mutants" in written
+
+
+def test_main_since_no_changes_without_the_flag_writes_no_job_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # ... and only when asked. The env var being set is not a request for a summary.
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    assert main(["run", path, "--since", "HEAD", "--json", "-"]) == 0
+    assert not summary.exists()
+
+
+def test_main_since_no_changes_rejects_a_project_dir_that_does_not_exist(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Was: exit 0 with a clean-looking empty report. Both real-run paths exit 2 here, and the guide
+    # names a bad --project as an exit-2 cause without qualifying it by path.
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    rc = main(["run", path, "--since", "HEAD", "--project", str(tmp_path / "nope"), "--json", "-"])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "project directory not found" in captured.err
+    assert captured.out == ""  # no report, so nothing looks like a successful empty run
+
+
+def test_main_since_no_changes_warns_about_a_malformed_ignore_pragma(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Was: the warning blinked in and out depending on whether the diff happened to touch anything.
+    # A typo'd pragma is a fact about the file, not about the diff.
+    source = "func f(a, b) -> bool:\n\treturn a > b  # gdmutant: ignore[no_such_op]\n"
+    path = _repo_with_committed(tmp_path, "f.gd", source)
+    assert main(["run", path, "--since", "HEAD", "--json", "-"]) == 0
+    assert "names an unknown operator" in capsys.readouterr().err
+
+
+#: A source whose ignore pragma names an operator that does not exist — the warning is about the
+#: file itself, so every path that reads the file owes it to the user regardless of what else is
+#: wrong with the invocation.
+_BAD_PRAGMA_SRC = "func f(a, b) -> bool:\n\treturn a > b  # gdmutant: ignore[no_such_op]\n"
+
+
+def test_main_since_no_changes_warns_about_the_pragma_even_with_a_bad_project(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The combination is the case that got through: the pragma alone was covered, and a bad
+    # --project alone was covered, so a path that reported only the second passed both tests. Order
+    # decides it — sources are read and warned about before the setup is validated, so one
+    # invocation reports everything wrong rather than one thing per round trip.
+    path = _repo_with_committed(tmp_path, "f.gd", _BAD_PRAGMA_SRC)
+    rc = main(["run", path, "--since", "HEAD", "--project", str(tmp_path / "nope"), "--json", "-"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "names an unknown operator" in err
+    assert "project directory not found" in err
+    # ... and in that order: the file the user named, then the flag around it.
+    assert err.index("names an unknown operator") < err.index("project directory not found")
+
+
+def test_run_mutation_warns_about_the_pragma_even_with_a_bad_project(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The reference path, pinned so the ordering the no-change path matches cannot drift out from
+    # under it. Without this, a future reorder here would silently make the two disagree again and
+    # only the no-change test would fail, pointing at the wrong file.
+    path = tmp_path / "f.gd"
+    path.write_text(_BAD_PRAGMA_SRC, encoding="utf-8")
+    rc = run_mutation(str(path), str(tmp_path / "nope"), MarkerRunner(str(path), ">="))
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.index("names an unknown operator") < err.index("project directory not found")
+
+
+def test_run_mutation_paths_warns_about_the_pragma_even_with_a_bad_project(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The third path, same reason. All three now agree, and all three are pinned.
+    first = tmp_path / "f.gd"
+    first.write_text(_BAD_PRAGMA_SRC, encoding="utf-8")
+    second = tmp_path / "g.gd"
+    second.write_text("func g(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+    rc = cli.run_mutation_paths(
+        [str(first), str(second)], str(tmp_path / "nope"), MarkerRunner(str(first), ">=")
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.index("names an unknown operator") < err.index("project directory not found")
+
+
+def test_main_since_no_changes_does_not_run_the_require_clean_check(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A deliberate omission, not an oversight. `--require-clean` guards a file this tool is about to
+    # rewrite in place; this path writes no mutant to any file, so refusing here would block a run
+    # that carries none of the risk, and the warning it prints ("gdmutant mutates it in place ...")
+    # would simply be false. A dirty tree therefore passes, quietly.
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    assert main(["run", path, "--since", "HEAD", "--require-clean", "--json", "-"]) == 0
+    err = capsys.readouterr().err
+    assert "--require-clean" not in err
+    assert "mutates it in place" not in err
+
+
+def test_setup_problem_reports_the_project_dir_before_a_report_target(tmp_path: Path) -> None:
+    # Ordering inside the shared preflight: with both wrong, the project dir is named first — it is
+    # the one a caller is more likely to have mistyped, and the report target is moot without it.
+    problem = cli._setup_problem(str(tmp_path / "nope"), "-", "-", False)
+    assert problem is not None
+    assert "project directory not found" in problem
+
+
+def test_setup_problem_is_clean_when_everything_checks_out(tmp_path: Path) -> None:
+    assert cli._setup_problem(str(tmp_path), "-", str(tmp_path / "r.html"), False) is None
+
+
+def test_main_since_no_changes_writes_nothing_to_stdout_without_a_report_flag(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Only a caller that asked for a report gets one. Run without `--json`/`--html`, the no-change
+    # case stays what it was: the note on stderr, and stdout untouched.
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    assert main(["run", path, "--since", "HEAD"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no lines changed since HEAD" in captured.err
+
+
+def test_main_since_no_changes_under_dry_run_writes_no_report(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --dry-run runs no tests and ignores --json, so the no-change path keeps its plain exit-0 note
+    # there rather than emitting a report the flag has already said it would ignore.
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    assert main(["run", path, "--since", "HEAD", "--dry-run", "--json", "-"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no lines changed since HEAD" in captured.err
+
+
+def test_main_since_no_changes_still_rejects_html_on_stdout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The no-change path runs the same report-target preflight as a real run, so `--html -` is
+    # refused by name here too instead of quietly writing a file called "-".
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    assert main(["run", path, "--since", "HEAD", "--html", "-"]) == 2
+    assert "--html needs a file path" in capsys.readouterr().err
+
+
+def test_main_since_no_changes_reports_an_unreadable_source(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Building the empty report still reads each file, so one gdtoolkit cannot parse is the same
+    # exit-2 setup error it is on a real run — never a report quietly missing that file.
+    path = _repo_with_committed(tmp_path, "f.gd", "func f( ->\n")
+    assert main(["run", path, "--since", "HEAD", "--json", "-"]) == 2
+    assert "not valid GDScript" in capsys.readouterr().err
+
+
 def test_main_since_bad_ref_exits_two(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
     assert main(["run", path, "--since", "no-such-ref"]) == 2
@@ -2354,6 +2814,88 @@ def test_main_threads_the_resolved_progress_style_to_the_run(
 def test_progress_defaults_to_auto_in_the_parser() -> None:
     args = build_parser().parse_args(["run", "x.gd"])
     assert args.progress_style == "auto"
+
+
+def test_none_gets_no_progress_emitter_at_all() -> None:
+    # `ProgressStyle` governs the periodic heartbeat only — the plan line, the per-mutant lines and
+    # the closing wall-clock reach the emitter whatever the style is. Withholding the emitter is
+    # what makes `--progress none` mean no progress rather than a tenth less of it.
+    assert cli._progress_emitter(ProgressStyle.NONE) is None
+
+
+def test_every_other_style_emits_to_stderr(capsys: pytest.CaptureFixture[str]) -> None:
+    for style in (ProgressStyle.RICH, ProgressStyle.PLAIN):
+        emit = cli._progress_emitter(style)
+        assert emit is not None
+        emit(f"beat {style.value}")
+    captured = capsys.readouterr()
+    assert "beat rich" in captured.err and "beat plain" in captured.err
+    assert captured.out == ""  # never stdout: that channel belongs to the --json - report
+
+
+def test_progress_none_prints_no_progress_during_a_real_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The measured defect: `--progress none` still printed two lines per mutant (one "running", one
+    # verdict), 36 of them on an 18-mutant file. Silence now means silence — while the summary and
+    # the survivors, which are the run's result rather than progress about it, are untouched.
+    path = _gd(tmp_path)  # 3 mutants
+    rc = run_mutation(
+        str(path),
+        str(tmp_path),
+        MarkerRunner(str(path), ">="),
+        progress_style=ProgressStyle.NONE,
+    )
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "[1/3]" not in captured.err  # no per-mutant line
+    assert "mutants to run" not in captured.err  # no opening plan line
+    assert "Done in" not in captured.err  # no closing wall-clock
+    # The baseline notices go too, and that is the deliberate part: they are the anti-"looks hung"
+    # signal, so a carve-out for them is exactly the "none means almost none" ambiguity this fix
+    # exists to remove. Somebody watching a terminal uses auto or plain.
+    assert "baseline" not in captured.err
+    assert "Mutation score:" in captured.out  # the result itself still prints
+
+
+def test_the_default_style_still_prints_the_plan_and_closing_lines(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The other half of the pair: only `none` is silent. Without this, silencing every style would
+    # pass the test above.
+    path = _gd(tmp_path)
+    run_mutation(
+        str(path),
+        str(tmp_path),
+        MarkerRunner(str(path), ">="),
+        progress_style=ProgressStyle.RICH,
+    )
+    err = capsys.readouterr().err
+    assert "mutants to run" in err
+    assert "[1/3]" in err
+    assert "Done in" in err
+    assert "running the unmutated (baseline) suite" in err  # the notice `none` deliberately drops
+
+
+def test_progress_none_is_silent_on_the_multi_file_path_too(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `run_mutation_paths` builds its own emitter, so the directory path needs its own guard: a fix
+    # applied to only one of the two call sites would pass every single-file test above.
+    first = _gd(tmp_path)
+    second = tmp_path / "g.gd"
+    second.write_text("func g(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+    rc = cli.run_mutation_paths(
+        [str(first), str(second)],
+        str(tmp_path),
+        MarkerRunner(str(first), ">="),
+        progress_style=ProgressStyle.NONE,
+    )
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "mutants to run" not in err
+    assert "Done in" not in err
+    assert "mutating" not in err
 
 
 # --- .gdmutant.toml may not decide what gets executed --------------------------------------
