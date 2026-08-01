@@ -99,6 +99,22 @@ def main() -> int:
     for pkg in sorted(packages, key=lambda p: p.get("Name", "").lower()):
         print(f"  {pkg.get('Name', '?'):<26} {pkg.get('License', '?')}")
 
+    if not packages:
+        # `if problems: return 1` is vacuously true-less on an empty list, so a `pip-licenses` call
+        # that returns `[]` (a broken `--no-dev` sync, or an output-shape change) would otherwise
+        # print "License gate passed" having checked nothing. A gate that measures zero packages
+        # has not passed -- it hasn't run.
+        print(
+            "\nLicense gate FAILED: pip-licenses reported zero shipped packages.", file=sys.stderr
+        )
+        print(
+            "A gate that checks nothing is not a passing gate. This usually means a broken "
+            "`--no-dev` sync or a change to pip-licenses' output shape -- investigate before "
+            "merging; do not treat this as a clean run.",
+            file=sys.stderr,
+        )
+        return 1
+
     if problems:
         print("\nLicense gate FAILED:", file=sys.stderr)
         for name, license_text, why in problems:

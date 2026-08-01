@@ -13,6 +13,7 @@ this file adds no coverage obligation; it is here because the logic earns a test
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -96,3 +97,59 @@ def test_blank_metadata_is_not_silently_allowed(blank: str) -> None:
     which treats it as its own failure. Guard the split so neither side quietly drops the case."""
     assert check_licenses.denied_reason(blank) is None
     assert "UNKNOWN" in check_licenses.UNKNOWN
+
+
+class _FakeCompletedProcess:
+    """Stands in for `subprocess.run(...).stdout` -- only `.stdout` is ever read."""
+
+    def __init__(self, stdout: str) -> None:
+        self.stdout = stdout
+
+
+def test_main_fails_when_pip_licenses_reports_zero_packages(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`main`'s gate logic is `if problems: return 1`, which is vacuously true-less on an empty
+    list -- a `pip-licenses` call returning `[]` (a broken `--no-dev` sync, or a change to its
+    output shape) produced no problems and therefore a green "License gate passed" having checked
+    nothing. Demonstrated by making `pip-licenses` return an empty package list.
+    """
+    monkeypatch.setattr(
+        check_licenses.subprocess, "run", lambda *a, **k: _FakeCompletedProcess("[]")
+    )
+
+    assert check_licenses.main() == 1
+    err = capsys.readouterr().err
+    assert "zero shipped packages" in err
+    assert "not a passing gate" in err
+
+
+def test_main_passes_when_packages_are_present_and_permissive(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The zero-packages guard must not fire on a normal, non-empty, clean run."""
+    payload = json.dumps([{"Name": "gdtoolkit", "License": "MIT"}])
+    monkeypatch.setattr(
+        check_licenses.subprocess, "run", lambda *a, **k: _FakeCompletedProcess(payload)
+    )
+
+    assert check_licenses.main() == 0
+    out = capsys.readouterr().out
+    assert "License gate passed" in out
+
+
+def test_main_still_fails_on_a_real_copyleft_hit_alongside_other_packages(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The new zero-packages guard must not swallow the pre-existing copyleft failure path."""
+    payload = json.dumps(
+        [{"Name": "gdtoolkit", "License": "MIT"}, {"Name": "copyleft-dep", "License": "GPL-3.0"}]
+    )
+    monkeypatch.setattr(
+        check_licenses.subprocess, "run", lambda *a, **k: _FakeCompletedProcess(payload)
+    )
+
+    assert check_licenses.main() == 1
+    err = capsys.readouterr().err
+    assert "License gate FAILED" in err
+    assert "copyleft-dep" in err

@@ -322,6 +322,40 @@ def test_write_proceeds_when_the_spec_covers_every_live_check(
 
 
 @pytest.mark.usefixtures("_has_gh")
+def test_main_fails_when_every_gh_api_write_fails(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`main`'s only signal to the operator is its exit code, and until now `_apply` only warned
+    on a failed write -- nothing recorded the failure anywhere `main` checked. Reproduces the
+    exact demonstration: every `gh api` write refused, and the run must not still claim success.
+    """
+    monkeypatch.setattr(harden_github, "_gh", lambda args, stdin=None: (False, "boom"))
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 1
+    out = capsys.readouterr().out
+    assert "Branch protection NOT set" in out
+    assert "setting(s) failed to apply" in out
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_main_fails_when_one_write_fails_among_otherwise_successful_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial failure must be caught too, not just the all-fail case -- a mutant that swaps
+    `all()` for `any()` (or only tracks the last call) would still pass the all-fail test above."""
+    fake = _FakeGh(list(EXPECTED_CONTEXTS))
+
+    def flaky(args: list[str], *, stdin: str | None = None) -> tuple[bool, str]:
+        if "vulnerability-alerts" in " ".join(args):
+            return False, "rate limited"
+        return fake(args, stdin=stdin)
+
+    monkeypatch.setattr(harden_github, "_gh", flaky)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 1
+
+
+@pytest.mark.usefixtures("_has_gh")
 def test_dry_run_sends_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeGh(list(EXPECTED_CONTEXTS))
     monkeypatch.setattr(harden_github, "_gh", fake)
