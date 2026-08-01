@@ -35,9 +35,11 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
 ```
 
 - `--json -` streams the machine-readable report to stdout. The human summary and per-mutant
-  progress go to stderr. Capture stdout for parsing. Stdout stays pure JSON.
+  progress go to stderr. Capture stdout for parsing. Three flag combinations put something else on
+  stdout as well, so keep them out of a run you parse:
+  [Keeping stdout parseable](#keeping-stdout-parseable) lists them.
 - `--dry-run` lists the mutants gdmutant *would* generate, without Godot and without running any
-  tests: a fast, dependency-free preview.
+  tests: a fast, dependency-free preview. It ignores `--json` and prints its list as plain text.
 - `--require-clean` refuses to run unless git holds a copy of the source file it could put
   back (exit 2). Uncommitted changes fail it, and so does anything gdmutant could not
   confirm: a file git ignores, a file outside any repository, or a machine with no git.
@@ -48,10 +50,17 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
 - `--report step-summary` writes the surviving mutants and their explanations as Markdown to the
   GitHub Actions job summary (the file named by `$GITHUB_STEP_SUMMARY`), so survivors show up in
   the run summary a reviewer already opens. With that variable unset it prints the same Markdown to
-  stdout, so don't combine it with `--json -` unless you want both on one stream. The flag is
-  repeatable and advisory: a failed write warns and changes neither the score nor the exit code.
+  stdout instead. `step-summary` is the only value it takes, and repeating the flag changes
+  nothing. It is advisory: a failed write warns and changes neither the score nor the exit code.
 - `--since <ref>` mutates only the lines changed since a git ref (e.g. `--since origin/main`), the
-  fast per-PR mode for CI. `--jobs N` evaluates mutants in parallel.
+  fast per-PR mode for CI. When no line in the given paths changed since that ref, gdmutant prints
+  a note to stderr and exits 0 *before generating any report*, so with `--json -` stdout is empty.
+  Read empty stdout on exit 0 as "nothing to mutate", never as a parse failure. A PR that touches
+  no `.gd` file hits this every time, so a CI script has to handle it.
+- `--jobs N` evaluates mutants in parallel, each worker inside its own copy of the project. That
+  copy is what keeps your own file untouched (see [Safety guarantee](#safety-guarantee)), and it
+  brings one restriction: every file to mutate has to sit inside `--project`, or the run exits 2.
+  That bites whenever an explicit `--project` names a directory that does not contain the sources.
 - Other flags: `--tests res://test`, `--godot <path>`, `--report-path <rel>`, `--timeout <seconds>`.
   `gdmutant run --help` lists them all.
 - Runner selection. `--runner gdunit4` (default) and `--runner gut` are first-class peer JUnit
@@ -71,24 +80,91 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
   per-mutant cap. During it, a heartbeat reports what has finished. After it, one line gives the
   wall-clock with the timeout cost broken out. Parse the closing `Done in ...` line for the real
   duration. Do not try to reconstruct a schedule from the opening one. `--progress plain` (the
-  automatic choice off a TTY and under `CI=true`) heartbeats every 60s or 10% of mutants, whichever
-  is rarer. `--progress none` silences it while keeping the plan and closing lines.
+  automatic choice off a TTY and when `CI=true` or `CONTINUOUS_INTEGRATION=true`) heartbeats every
+  60s or 10% of mutants, whichever is rarer. `--progress none` drops the *heartbeat* only. The plan
+  line, the closing line, and a line per mutant as it finishes all still go to stderr, so this
+  trims the stderr volume rather than bounding it.
+
+## Keeping stdout parseable
+
+With `--json -` the report is the only thing on stdout, as long as nothing else writes there. Three
+combinations break that:
+
+- `--html <path>` prints `Wrote HTML report to ...` to stdout, after the JSON. Parsing the two
+  together fails on the trailing text.
+- `--report step-summary` with `$GITHUB_STEP_SUMMARY` unset prints its Markdown to stdout.
+- `--dry-run` ignores `--json` and prints its plain-text mutant list to stdout.
+
+`--json <path>`, a real path rather than `-`, sidesteps all three: the report goes to that file and
+stdout carries only human text. Use it when a run needs the HTML report as well.
+
+## Project config (`.gdmutant.toml`)
+
+gdmutant reads `.gdmutant.toml` from the directory it runs in, and its keys seed the defaults of the
+flags of the same name (`project`, `runner`, `command`, `godot`, `tests`, `report-path`, `timeout`,
+`require-clean`, `exclude`). An explicit flag still wins.
+
+Two of those keys name a program gdmutant would execute: `command` and `godot`. In a checkout you
+did not write, that file is somebody else's instruction about what runs on your machine, so
+gdmutant refuses to act on those two and exits 2 instead. The refusal fires on any run, `--dry-run`
+included, and it is the exit-2 cause most likely to surprise an agent working in a directory it did
+not create. Two ways past it:
+
+- `--trust-config` acts on the file's `command` and `godot`. Use it only where the checkout is
+  trusted.
+- Pass the value yourself (`--command ...`, `--godot ...`). An explicit flag wins over the file and
+  needs no trust, because the program is then one you named.
+
+Every other key is read normally: none of them can decide what gets executed.
 
 ## Exit codes (the contract)
 
-- `0`: the run completed. Survivors are normal output, not a failure. Parse them.
+- `0`: the run completed. Survivors are normal output, not a failure. Parse them. One exit-0 path
+  writes no report at all: `--since <ref>` with no changed lines returns before generating
+  anything, so check stdout for emptiness before parsing it.
 - `1`: the unmutated *baseline* suite failed. Fix your tests first. Mutation-testing a red
   suite is meaningless.
-- `2`: a setup/input error. The source is unreadable or not valid GDScript, `--project`
-  doesn't exist, `--require-clean` was set on a dirty tree, the test-runner executable (`godot`)
-  wasn't found, or the report couldn't be written. The stderr message says which.
+- `2`: a setup or input error. The stderr message says which one. The causes:
+  - the source is unreadable or not valid GDScript, or no given path holds a parseable `.gd` file
+  - `--project` does not name an existing directory
+  - `--require-clean` was set and gdmutant could not confirm git holds a copy of the source: a
+    dirty tree, a file git ignores, a file outside any repository, or a machine with no git
+  - `.gdmutant.toml` sets `command` or `godot` and `--trust-config` was not passed, or that file
+    cannot be read or holds a value of the wrong type
+  - the test-runner executable was not found: `godot`, or the program named by `--command`
+  - `--runner command` with no `--command`, or a `--command` string that cannot be split into words
+  - `--since` names a ref git cannot diff against
+  - `--jobs` above 1 with a source file that does not sit inside `--project`
+  - `--jobs` below 1
+  - a report file could not be written, or the source file could not be rewritten or put back
 
 ## Safety guarantee
 
-gdmutant mutates the source file in place, then restores it to its original bytes in a
-`finally`, after every mutant and on a normal exit or Ctrl-C. Your working tree is returned
-unchanged. The only way a swap can persist is a hard kill (SIGKILL / power loss), so commit or
-stash first, or pass `--require-clean`.
+What gdmutant does to the file you point it at depends on `--jobs`.
+
+With `--jobs 1`, the default, gdmutant mutates the source file in place and writes the original back
+in a `finally`, after every mutant and on a normal exit or Ctrl-C.
+
+With `--jobs` above 1, each worker copies the whole project and mutates the file inside its own
+copy. The file you point at is never written at all, so nothing in your working tree can change and
+`--require-clean` guards against a risk this mode does not carry.
+
+A serial run has two ways to leave a mutant on disk:
+
+- A hard kill (SIGKILL, power loss) between the mutating write and the restore.
+- A failed restore. gdmutant writes through a temporary file and a rename, and keeps no degraded
+  fallback: when that staged write cannot be made (no room for the temporary file, a failed flush
+  to disk, a Windows lock that outlasts its retries) it refuses rather than write in a way that
+  could truncate the file. On the *restore* write, that refusal ends the run with exit 2 and leaves
+  the mutant in your file. No crash is involved.
+
+So on a serial run, commit or stash first, or pass `--require-clean`. Treat exit 2 as a reason to
+inspect the source file rather than only to retry: the message names the path gdmutant could not
+write, and `git checkout -- <path>` puts the original back.
+
+The restore is byte-exact for a file whose lines all end the same way. gdmutant rewrites the file
+with CRLF when the original holds any CRLF at all, and with LF otherwise, so a file that mixes the
+two comes back entirely CRLF.
 
 ## Output schema (Stryker `mutation-testing-elements`, v2)
 
@@ -108,7 +184,9 @@ stash first, or pass `--require-clean`.
           "mutatorName": "comparison",
           "replacement": ">=",
           "location": {"start": {"line": 8, "column": 17}, "end": {"line": 8, "column": 18}},
-          "status": "Survived"
+          "status": "Survived",
+          "description": "Your tests pass whether this says `>` or `>=` ...",
+          "statusReason": "Passing here is false confidence, not proof ... Add a test that ..."
         }
       ]
     }
@@ -118,9 +196,14 @@ stash first, or pass `--require-clean`.
 
 - `status` is one of `Killed`, `Survived`, `Timeout` (the mutation hung the suite: a detection, so
   it counts as killed), `Ignored` (a `# gdmutant: ignore` annotation suppressed it, excluded
-  from the score. Its reason, if any, is in `statusReason`), `CompileError` (the mutant didn't
-  parse, never counted as killed), or `RuntimeError` (the runner failed to execute it, e.g. a
-  Godot crash).
+  from the score), `CompileError` (the mutant didn't parse, never counted as killed), or
+  `RuntimeError` (the runner failed to execute it, e.g. a Godot crash).
+- Every `Survived` mutant carries two prose fields, and they are the reason to read this report
+  rather than only its locations: `description` states the gap, what no test pins, and
+  `statusReason` states why that matters and where to start a test. Relay both to whoever writes
+  the test. Read them, do not pattern-match on them: the wording is prose, not an interface.
+- An `Ignored` mutant reuses `statusReason` for the reason its annotation gave, if it gave one, and
+  carries no `description`. No other status carries either field.
 - Locations are 1-based. The `end` `column` is exclusive.
 - Actionable survivors are the mutants with `"status": "Survived"`. Those are the gaps a test
   should close.
@@ -134,9 +217,10 @@ Same loop the [README's workflow section](../README.md#the-workflow) walks a hum
 console:
 
 1. Run with `--json -`, capture stdout, and read `files[<path>].mutants`.
-2. For each `"Survived"` mutant: it gives you a `location` and the `replacement` (the exact change
-   no test caught). Write or strengthen a test that *fails* under that change, usually an
-   assertion pinned to the boundary or value the mutation moves.
+2. For each `"Survived"` mutant: it gives you a `location`, the `replacement` (the exact change
+   no test caught), and the `description` / `statusReason` pair explaining the gap. Write or
+   strengthen a test that *fails* under that change, usually an assertion pinned to the boundary or
+   value the mutation moves.
 3. Re-run and confirm that mutant is now `"Killed"`.
 4. If a survivor is a genuine equivalent mutant, one that *cannot* change observable behavior
    (e.g. a clamp whose boundary can't be reached), annotate its line so it becomes `Ignored`
@@ -187,7 +271,7 @@ func test_clamp_initiative_lower_boundary() -> void:
 ### A genuine equivalent
 
 The comparison mutant `> -> >=` on the *upper* clamp
-(`if value >= max_value`) can never be caught: at `value == max_value` the original falls through to
+(`if value > max_value`) can never be caught: at `value == max_value` the original falls through to
 `return value` (which is `max_value`) while the mutant returns `max_value` directly. Every other
 input already agrees. Suppress it with a reason:
 
