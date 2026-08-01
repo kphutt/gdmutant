@@ -4,9 +4,16 @@
 #
 # poodle mutates a temp copy of the whole repo (never the real tree in place), so a killed run
 # can't leave a mutation on disk the way an in-place tool can. `only_files` is left unset here —
-# scripts/check_mutation_baseline.py passes `--only <file>` per file changed vs origin/main, so a
-# local run stays to single-digit minutes for a typical change, not the ~100 minutes a full-package
-# sweep would take (~2,600 mutants at poodle's measured ~2.3s/mutant with 6 workers).
+# scripts/check_mutation_baseline.py passes `--only <file>` per file changed vs origin/main, plus a
+# mutant cap (default 50 -- see GDMUTANT_MUTATION_BASELINE_MAX_MUTANTS in that script), so a local
+# run stays inside single-digit minutes even when a changed file is almost entirely string literals
+# (every literal is its own mutant), not the ~100 minutes a full-package sweep would take. That
+# script measured this repo's real per-mutant rate on a Windows dev machine at about 6 seconds
+# (slower than the ~2.3s/mutant this comment used to cite, which was not a Windows measurement --
+# process-spawn overhead per mutant runs higher here, the same reason mutmut has no native Windows
+# support at all). A change over the cap prints which files it dropped instead of running long
+# with no output -- PR #186's diff included gdmutant/engine/survivor_reference.py this way and ran
+# about fifty minutes before the environment killed it.
 
 [poodle]
 source_folders = ["."]
