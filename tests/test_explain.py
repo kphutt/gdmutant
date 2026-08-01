@@ -325,6 +325,10 @@ def test_a_paren_inside_a_string_does_not_hide_the_assert_it_sits_in() -> None:
     assert context_section(">", 2, double[1].index(">") + 1, double) == ASSERT_SECTION
     single = ["func f(x, a, b):", "\tassert(x == '(' and a > b)"]
     assert context_section(">", 2, single[1].index(">") + 1, single) == ASSERT_SECTION
+    # The whole literal is masked, not just its first character. A message an assert checks reads
+    # like prose, so its paren is usually somewhere in the middle rather than up against the quote.
+    mid = ["func f(msg, a, b):", '\tassert(msg == "missing (" and a > b)']
+    assert context_section(">", 2, mid[1].index(">") + 1, mid) == ASSERT_SECTION
 
 
 def test_a_backslash_escaped_quote_does_not_end_a_string_early() -> None:
