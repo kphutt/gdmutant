@@ -82,15 +82,24 @@ function, with `@staticmethod` and `@classmethod` the only exemptions, because c
 definition for the trampoline can re-run the decorator.
 
 That distinction matters here because gdmutant is built almost entirely out of frozen dataclasses.
-Of its 25 classes, 22 carry a decorator, and the 3 that do not (`BaselineFailed`, `Verdict`,
-`SuiteTimeout`) declare no methods at all. So the blind spot this ADR set out to close is real and
-is still exactly as wide as recorded, for a reason this record misnames.
+Of its 30 classes, 24 carry a decorator, and the 6 that do not (`BaselineFailed`,
+`SourceOutsideProject`, `Verdict`, `ProgressStyle`, `SourceWriteFailed`, `SuiteTimeout`) declare no
+methods at all. So the blind spot this ADR set out to close is real and is still exactly as wide as
+recorded, for a reason this record misnames.
 
 Measured on 2026-07-31 against the tree of the day: mutmut 3.6.0 generates 3,773 mutants across
-`gdmutant/`, and 0 of them fall inside a class-method body. Replaying the same measurement against
-the tree as it stood when this repo first recorded a mutant total gives 781, again with 0 inside a
-class-method body. The count grew with the package (1,197 lines of `gdmutant/` then, 6,143 now)
-rather than with mutmut's reach, which has been pinned at 3.6.0 throughout.
+`gdmutant/`, and 0 of them fall inside a class-method body. That figure has reproduced for every
+reader who has re-run it.
+
+A draft of this correction also carried a mutant count for the tree as it stood when this repo first
+recorded a total, and used the two figures together to argue that the count had grown with the
+package rather than with mutmut's reach. That row is withdrawn rather than corrected. Three attempts
+to reproduce it returned three different answers, and a number nobody can reproduce has no place in
+a record whose whole purpose is fact-checking. Do not reinstate it without a figure that reproduces.
+
+Nothing above depends on it. mutmut has been pinned at 3.6.0 from the first recorded run to this
+one, which `uv.lock` shows at both ends, so its reach did not change over that span whatever the
+counts were.
 
 The decision this ADR reached is untouched. It declined to put a second, far slower mutation job in
 CI and reached for an on-demand check instead, and that argument rests on the gap being real and on

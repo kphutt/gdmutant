@@ -116,7 +116,7 @@ The Context opens on a claim about mutmut that this record inherited from [ADR-0
 Not so, and not when this was written either. mutmut 3.6.0 descends into a class body and mutates
 its methods (`mutmut/mutation/file_mutation.py`). What it actually skips is a *decorated* class or
 function, with `@staticmethod` and `@classmethod` excepted. gdmutant is built out of frozen
-dataclasses, so nearly every class here is decorated, and the three that are not declare no methods
+dataclasses, so nearly every class here is decorated, and the six that are not declare no methods
 to mutate. [ADR-0008's correction](0008-method-body-mutation-manual-spotcheck.md#correction-2026-07-31)
 carries the measurement in full.
 
