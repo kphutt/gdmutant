@@ -37,9 +37,17 @@ on:
       - "docs/**" # the guide-consistency test reads docs/
       - "AGENTS.md" # the link-resolution test reads it
       - "README.md" # the doc-sync guard test reads it
+      - "CONTRIBUTING.md" # a test reads it (also_copy in pyproject.toml)
+      - "CHANGELOG.md" # a test reads it (also_copy in pyproject.toml)
+      - "CODE_OF_CONDUCT.md" # a test reads it (also_copy in pyproject.toml)
+      - "CLAUDE.md" # a test reads it (also_copy in pyproject.toml)
+      - "scripts/**" # verify_local.py, read by tests (also_copy in pyproject.toml)
+      - ".pre-commit-config.yaml" # read by a test (also_copy in pyproject.toml)
+      - "poodle.toml" # read by a test (also_copy in pyproject.toml)
+      - "action.yml" # read by a test (also_copy in pyproject.toml)
+      - ".github/**" # workflows and templates read by tests, plus this workflow itself
       - "pyproject.toml" # mutmut config + dependencies
       - "uv.lock" # locked dependencies
-      - ".github/workflows/mutation.yml" # this workflow itself
   push:
     branches: [main]
     paths: *mutation-paths

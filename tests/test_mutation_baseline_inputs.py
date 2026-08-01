@@ -4,7 +4,8 @@ mutmut runs the suite from a generated copy of the project (`mutants/`) and take
 test mapping from one unmutated run of it — the *baseline*. If that run does not come out clean,
 mutmut aborts and evaluates **zero** mutants: the score does not go down, it stops existing, and
 nothing about the test that caused it looks wrong. It has happened four times now, from two
-distinct causes — one guard each below.
+distinct causes — one guard each below. A third guard covers the way the score goes missing without
+any baseline failing at all: the run never starts.
 
 **Cause one: reading a file that was never copied.** mutmut copies into `mutants/` only what
 `[tool.mutmut] also_copy` names, plus its own defaults. A test that reads a file at the repository
@@ -40,11 +41,14 @@ import tomllib
 from pathlib import Path
 
 import pytest
+import yaml
 from mutmut.configuration import _load_config
 
 REPO = Path(__file__).resolve().parent.parent
 
 _PYPROJECT = REPO / "pyproject.toml"
+
+_MUTATION_WORKFLOW = REPO / ".github" / "workflows" / "mutation.yml"
 
 #: The one expression every test module in this suite uses to reach the repository root.
 _REPO_ROOT_EXPR = "Path(__file__).resolve().parent.parent"
@@ -107,7 +111,14 @@ def _root_entries_read_by(module: Path) -> set[str]:
             and isinstance(node.args[0].value, str)
         ):
             entries.add(_first_segment(node.args[0].value))
-    return entries
+    # A first segment holding a wildcard (`REPO.glob("*.md")`) names a set of root entries rather
+    # than one copyable path, so no `also_copy` line could ever satisfy it and the failure message
+    # would ask for something impossible. The entries such a glob matches are still caught wherever
+    # a test names one directly, which is how `CODE_OF_CONDUCT.md` and `CLAUDE.md` got here. What is
+    # left uncovered is a glob whose matches are all uncopied: it returns fewer files instead of
+    # raising, so it weakens a check quietly rather than aborting the baseline. That is the same
+    # class of gap the docstring's "neither is a proof" note already describes.
+    return {entry for entry in entries if "*" not in entry and "?" not in entry}
 
 
 def _reads_by_module() -> dict[str, set[str]]:
@@ -169,6 +180,43 @@ def test_no_also_copy_entry_names_a_file_that_is_gone() -> None:
     declared = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))["tool"]["mutmut"]["also_copy"]
     gone = [entry for entry in declared if not (REPO / entry).exists()]
     assert not gone, f"`[tool.mutmut] also_copy` names paths that no longer exist: {gone}"
+
+
+def _mutation_workflow_paths() -> list[str]:
+    """The `paths:` filter the mutation workflow runs under, read off the workflow itself."""
+    workflow = yaml.safe_load(_MUTATION_WORKFLOW.read_text(encoding="utf-8"))
+    paths = workflow[True]["pull_request"]["paths"]
+    assert isinstance(paths, list)
+    return [str(entry) for entry in paths]
+
+
+def test_every_also_copy_entry_can_trigger_the_mutation_workflow() -> None:
+    # `also_copy` names the repository files the suite reads, and the workflow's `paths:` filter
+    # decides which changes start a mutation run at all. They are two hand-written lists saying the
+    # same thing, and the entries have drifted apart before. When they drift, a change to a file the
+    # suite genuinely reads starts no run, so the advisory score for that change never exists and
+    # nothing reports its absence: the PR is simply green with one fewer signal than it looks like.
+    #
+    # The direction pinned is one-way on purpose. `paths:` must cover every `also_copy` entry, and
+    # is allowed to be wider, because it also lists the source and the lockfile, which mutmut copies
+    # without being told to.
+    declared = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))["tool"]["mutmut"]["also_copy"]
+    covered = {entry.rstrip("/*") for entry in _mutation_workflow_paths()}
+    uncovered = sorted(entry for entry in declared if entry.rstrip("/") not in covered)
+    assert not uncovered, (
+        f"`[tool.mutmut] also_copy` names {uncovered}, which no `paths:` entry in "
+        f"{_MUTATION_WORKFLOW.relative_to(REPO).as_posix()} covers. A change touching only those "
+        "files starts no mutation run, so the dogfood score silently goes missing for it. Add a "
+        "matching line to the `&mutation-paths` anchor."
+    )
+
+
+def test_the_workflow_paths_scan_reads_a_real_list() -> None:
+    # The check above passes vacuously if the `paths:` lookup ever returns nothing, which is exactly
+    # what a restructured workflow would do. Pin that it found the real filter.
+    paths = _mutation_workflow_paths()
+    assert len(paths) > 10
+    assert "gdmutant/**" in paths
 
 
 def _chdir_lines(module: Path) -> list[int]:

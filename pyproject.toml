@@ -213,5 +213,7 @@ also_copy = [
     "action.yml",
     "CONTRIBUTING.md",
     "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "CLAUDE.md",
 ]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]

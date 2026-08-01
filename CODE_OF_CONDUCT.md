@@ -76,7 +76,7 @@ open a private report with
 private channel
 [`SECURITY.md`](https://github.com/kphutt/gdmutant/blob/main/.github/SECURITY.md) names, and it is
 the project's only private
-inbox — it carries conduct reports as well as security ones, and a report sent there is visible only
+inbox. It carries conduct reports as well as security ones, and a report sent there is visible only
 to the maintainers. Please do not open a public issue for a conduct problem.
 
 Where this Code of Conduct says **Community Moderators**, read *the maintainers of this project*.
