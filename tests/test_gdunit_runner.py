@@ -1,6 +1,7 @@
 """Tests for the GdUnit4 runner (subprocess mocked — no real Godot)."""
 
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,22 @@ def _report(tmp_path: Path) -> Path:
     path = tmp_path / "reports" / "report_1" / "results.xml"
     path.parent.mkdir(parents=True)
     return path
+
+
+def _writes(report: Path, xml: str, stderr: str = "") -> Callable[..., subprocess.CompletedProcess]:
+    """A fake `subprocess.run` that writes `xml` as this invocation's report (the `--import` warm-up
+    writes nothing, as the real one doesn't) and returns a real `CompletedProcess` — the runner
+    reads its captured output when a guard fires, so a stand-in that returns anything else hides
+    the very branch these tests exercise."""
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text(xml, encoding="utf-8")
+        return subprocess.CompletedProcess([], 0, "", stderr)
+
+    return fake_run
 
 
 def test_command_construction(tmp_path: Path) -> None:
@@ -146,13 +163,157 @@ def test_run_surfaces_godot_output_when_no_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # When Godot writes no report, its captured stderr is included in the error so the failure can
-    # be diagnosed instead of vanishing.
+    # be diagnosed instead of vanishing. Pinned as `endswith(":\n" + output)` rather than a bare
+    # substring match, so the join itself is tested: a substring match still passes when the
+    # separator is mangled and the output is buried mid-sentence.
     monkeypatch.setattr(
         runner_mod.subprocess,
         "run",
         lambda *a, **k: subprocess.CompletedProcess([], 1, "", "SCRIPT ERROR: boom"),
     )
-    with pytest.raises(RuntimeError, match="SCRIPT ERROR: boom"):
+    with pytest.raises(RuntimeError) as excinfo:
+        GdUnit4Runner().run(str(tmp_path))
+    assert str(excinfo.value).endswith(":\nSCRIPT ERROR: boom"), excinfo.value
+
+
+def test_the_no_report_error_ends_cleanly_when_godot_captured_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Both of this runner's error paths append ":\n<tail of Godot's output>" only when there IS
+    # output. With none, the message has to end at its own last word. This is what
+    # `test_loop.py::test_baseline_failure_raises` pins for the engine's baseline message, and the
+    # runner had no equivalent: a mutant that turned the empty-output fallback into junk appended
+    # ":\njunk" with the whole suite still green (found by the line-scoped mutation run for this
+    # change).
+    monkeypatch.setattr(
+        runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, "", "")
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        GdUnit4Runner().run(str(tmp_path))
+    assert str(excinfo.value).endswith("Godot may have failed to run"), excinfo.value
+
+
+def test_the_zero_test_report_error_ends_cleanly_when_godot_captured_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The peer of the test above, for the other error path. Same empty-output branch, same
+    # requirement: no dangling ":" and no junk after the last word.
+    report = _report(tmp_path)
+    monkeypatch.setattr(
+        runner_mod.subprocess, "run", _writes(report, '<testsuite tests="0" failures="0"/>')
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        GdUnit4Runner().run(str(tmp_path))
+    assert str(excinfo.value).endswith("off a run that never happened"), excinfo.value
+
+
+def test_run_treats_a_zero_test_report_as_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SuiteResult(0, 0, 0).failed is False, so a zero-test report would read as a clean pass and
+    # mark the mutant SURVIVED off a run in which nothing executed — gdmutant's worst failure mode.
+    # No measured GdUnit4 writes this report (it writes none at all), which is exactly why the
+    # contract must not depend on that observation: GUT was assumed safe on the same evidence.
+    report = _report(tmp_path)
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        _writes(report, '<testsuite tests="0" failures="0" errors="0"/>'),
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        GdUnit4Runner(test_path="res://mysuites").run(str(tmp_path))
+    message = str(excinfo.value)
+    assert "0 tests" in message, message
+    # Names the directory it actually scanned, the way the discovery error below does. Without this
+    # the message could stop identifying which path came back empty and no test would notice.
+    assert "res://mysuites" in message, message
+
+
+def test_run_treats_a_report_with_no_testsuite_as_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The other zero shape: XML that parses but describes no suite at all. parse_junit_xml raises
+    # ValueError on it, which must become the same crash-safety error, never a leaked ValueError.
+    report = _report(tmp_path)
+    monkeypatch.setattr(runner_mod.subprocess, "run", _writes(report, '<testsuites tests="0"/>'))
+    with pytest.raises(RuntimeError, match="0 tests"):
+        GdUnit4Runner().run(str(tmp_path))
+
+
+def test_zero_test_report_error_surfaces_godot_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The captured output is what makes the error diagnosable rather than a bare assertion. Same
+    # `endswith(":\n" + output)` shape as the no-report peer above, for the same reason.
+    report = _report(tmp_path)
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        _writes(report, '<testsuite tests="0" failures="0"/>', stderr="SCRIPT ERROR: boom"),
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        GdUnit4Runner().run(str(tmp_path))
+    assert str(excinfo.value).endswith(":\nSCRIPT ERROR: boom"), excinfo.value
+
+
+def test_empty_discovery_is_reported_as_discovery_not_a_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GdUnit4 exits 0 and writes NO report when discovery finds no suites under -a, printing "No
+    # test cases found". The generic "Godot may have failed to run" would send the user to debug a
+    # crash that is not happening and never name the flag that fixes it.
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            [], 0, "No test cases found, abort test run!", ""
+        ),
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        GdUnit4Runner(test_path="res://wrong").run(str(tmp_path))
+    message = str(excinfo.value)
+    assert "discovered no test suites" in message
+    assert "res://wrong" in message  # names the path it actually scanned
+    assert "--tests" in message  # names the flag that fixes it
+    # Quotes GdUnit4's own words. The whole claim "this is discovery, not a crash" rests on the
+    # framework having said so, so the message has to show the evidence rather than assert it.
+    assert runner_mod._GDUNIT_NO_TESTS_MARKER in message
+    # Must NOT match cli._gdunit4_addon_hint's trigger: printing this marker proves the addon
+    # loaded, so "install the GdUnit4 addon" would be actively wrong advice.
+    assert "wrote no report" not in message
+
+
+def test_empty_discovery_is_recognised_on_stderr_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The marker is looked for in stdout AND stderr, because which stream Godot lands it on is not
+    # gdmutant's to decide: it moves with the build, the platform, and any console redirection.
+    # v6.1.3 put it on stdout, so only that half was pinned, and the stderr half of the
+    # concatenation could be deleted with the whole suite still green — caught by the line-scoped
+    # mutation run for this change, which is exactly the "one path enforces less" shape.
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            [], 0, "", "No test cases found, abort test run!"
+        ),
+    )
+    with pytest.raises(RuntimeError, match="discovered no test suites"):
+        GdUnit4Runner(test_path="res://wrong").run(str(tmp_path))
+
+
+def test_a_no_report_run_without_the_discovery_marker_keeps_the_generic_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The discovery hint is a special case, not a replacement: a genuine crash (no marker) must
+    # still raise the hedged "wrote no report" error, which is what cli._gdunit4_addon_hint keys on
+    # to offer the missing-addon advice.
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess([], 1, "", "SCRIPT ERROR: crashed"),
+    )
+    with pytest.raises(RuntimeError, match="wrote no report"):
         GdUnit4Runner().run(str(tmp_path))
 
 

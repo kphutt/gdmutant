@@ -301,8 +301,13 @@ def _read_source_lines(path: str) -> list[str] | None:
 
     Files are restored to their original source by the time the summary is rendered, so this reads
     the real line the mutant sat on. A survivor whose file has since moved still gets its
-    narrative — only the code + caret + enclosing-function slots are dropped."""
+    narrative — only the code + caret + enclosing-function slots are dropped.
+
+    Split on literal ``\\n`` only (`_file_entry`'s split, and `engine.spans._NEWLINE`'s), not
+    ``str.splitlines()``: the latter also breaks on vertical tab, form feed, ``\\x1c``-``\\x1e``,
+    NEL, and U+2028/U+2029, which desyncs this list's line numbers from the parser's whenever any
+    of those appear earlier in the file."""
     try:
-        return Path(path).read_text(encoding="utf-8").splitlines()
+        return Path(path).read_text(encoding="utf-8").split("\n")
     except OSError:
         return None
