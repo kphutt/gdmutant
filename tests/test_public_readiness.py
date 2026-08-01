@@ -121,8 +121,18 @@ RULES: tuple[Rule, ...] = (
         # Case-insensitive, because Windows paths are: `C:\\users\\...` names exactly the same
         # directory as `C:\\Users\\...` and is exactly as private, and the case-sensitive version
         # of this rule waved it through.
+        #
+        # The one exemption is CI's own home directory, and it is spelled out twice over, because
+        # ignoring case widens what a negative lookahead *excuses* just as much as it widens what
+        # the rule catches. `(?!runner\b)` excused every path that merely *starts* with those six
+        # letters, since `\b` only asks for a word boundary and `-` and `.` are boundaries:
+        # `/home/runner-fixes-the-thing/` is a person's home and went unreported. So the exemption
+        # ends at a `/`, which makes it a whole path segment, and `(?-i:...)` holds it to lower
+        # case, because `/home/` is a Linux path and `/home/Runner/` there is not CI, it is
+        # somebody called Runner.
         pattern=re.compile(
-            r"~/dev/|[A-Za-z]:\\Users\\|/Users/[A-Za-z0-9._-]+/|/home/(?!runner\b)[A-Za-z0-9._-]+/",
+            r"~/dev/|[A-Za-z]:\\Users\\|/Users/[A-Za-z0-9._-]+/"
+            r"|/home/(?!(?-i:runner)/)[A-Za-z0-9._-]+/",
             re.IGNORECASE,
         ),
         fix=(
@@ -233,6 +243,17 @@ _CLOSES_UP_AFTER = ("-", "/", "\\", "~")
 #: read with the wrong endianness decodes without error into CJK-range noise, so "it decoded" is
 #: not evidence on its own. Genuine binaries fall below this too, which is what keeps them out of
 #: the scan instead of turning them into meaningless hits.
+#:
+#: This is an exclusion, so it is worth saying plainly what it excludes: a *wide file written
+#: mostly in a non-Latin script* falls under the floor and is not scanned, even though it is text
+#: and could carry a leak. Using "is it English" as the test for "is it a binary" is the wrong
+#: proxy, and the honest fix is to sort text from binary by control characters rather than by
+#: alphabet. That is left alone here on purpose: this floor is also the endianness tie-break above,
+#: and changing both at once is how a scanner starts reporting noise. The limit is not silent,
+#: which is what makes it tolerable. Such a file comes back unread, and
+#: `test_every_tracked_file_but_the_declared_binaries_is_actually_read` then fails and names it
+#: (checked, with a UTF-16 Japanese file holding a Windows home path). So it announces itself the
+#: first time it matters instead of quietly narrowing the scan.
 _ASCII_SHARE_OF_TEXT = 0.5
 
 #: The encodings tried when a file holds NUL bytes. UTF-16 is the one text encoding that puts NUL
@@ -406,12 +427,21 @@ class _GitCannotAnswer(Exception):
     """`git ls-files` could not be asked, or refused to answer. Never a reason to pass."""
 
 
-#: The directories a mutation-testing tool copies this tree into before running the suite from
-#: the copy: mutmut writes `mutants/`, poodle writes `.poodle-temp/run-N/` (and drops `.git`
-#: while copying). Git tracks nothing there, correctly, and the suite must not fail there either:
-#: a failing check aborts the mutation baseline, which does not lower the dogfood score so much
-#: as delete it (see tests/test_mutation_baseline_inputs.py for how that goes wrong).
-_MUTATION_COPY_DIRECTORIES = ("mutants", ".poodle-temp")
+#: Where a mutation-testing tool puts its copy of this tree. Git tracks nothing there, correctly,
+#: and the suite must not fail there either: a failing check aborts the mutation baseline, which
+#: does not lower the dogfood score so much as delete it (see tests/test_mutation_baseline_inputs
+#: .py for how that goes wrong).
+#:
+#: These name a *layout*, not a word to look for anywhere in the path. mutmut copies into
+#: `<repo>/mutants/`, so the copy's own root is the directory called `mutants`. poodle copies into
+#: `<repo>/.poodle-temp/run-N/` (`work_folder / ("run-" + run_id)` in its own source), so the
+#: copy's root is `run-N` *and* its parent is the temp directory. Both halves are required,
+#: because either on its own is a word that an ordinary checkout could sit under. Searching every
+#: path component, which is what this did first, excused any checkout living below a folder of
+#: that name: the same silent pass S7 was about, reached through a different door.
+_MUTMUT_COPY = "mutants"
+_POODLE_COPY = ".poodle-temp"
+_POODLE_RUN = "run-"
 
 #: What makes an unpacked source distribution recognisable from the inside. The packaging spec
 #: requires `PKG-INFO` at the root of every sdist and hatchling writes it; a git checkout never
@@ -430,10 +460,10 @@ def _why_this_tree_tracks_nothing() -> str | None:
     that reports clean because it never ran is worse than no guard, because somebody trusts it.
     So the skip has to be able to say which known copy of the tree this is.
     """
-    for part in REPO_ROOT.parts:
-        for directory in _MUTATION_COPY_DIRECTORIES:
-            if part == directory or part.startswith(f"{directory}-"):
-                return f"{part!r} is a mutation-testing tool's copy of the tree"
+    if REPO_ROOT.name == _MUTMUT_COPY:
+        return f"this tree is mutmut's copy of the repository, a {_MUTMUT_COPY!r} directory"
+    if REPO_ROOT.name.startswith(_POODLE_RUN) and REPO_ROOT.parent.name.startswith(_POODLE_COPY):
+        return f"this tree is a poodle run inside {REPO_ROOT.parent.name!r}"
     if (REPO_ROOT / _SDIST_MARKER).is_file():
         return f"this tree is an unpacked source distribution (it has a {_SDIST_MARKER})"
     return None
@@ -921,7 +951,8 @@ def test_a_mutation_tools_copy_of_the_tree_still_skips(
     monkeypatch.setattr(_MODULE, "REPO_ROOT", tmp_path / "mutants")
     monkeypatch.setattr(_MODULE, "_tracked_files", list)
     outcome, said = _outcome_of_scanning()
-    assert (outcome, "mutation-testing" in said) == ("skip", True), said
+    # It names which copy it thinks this is, so a skip can be argued with rather than trusted.
+    assert (outcome, "mutmut" in said) == ("skip", True), said
 
 
 def test_a_mutation_tools_copy_skips_even_when_git_cannot_answer(
@@ -933,7 +964,7 @@ def test_a_mutation_tools_copy_skips_even_when_git_cannot_answer(
     monkeypatch.setattr(_MODULE, "REPO_ROOT", tmp_path / ".poodle-temp" / "run-1")
     monkeypatch.setattr(_MODULE, "_tracked_files", refuse)
     outcome, said = _outcome_of_scanning()
-    assert (outcome, "mutation-testing" in said) == ("skip", True), said
+    assert (outcome, ".poodle-temp" in said) == ("skip", True), said
 
 
 def test_an_unpacked_source_distribution_skips(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -946,15 +977,36 @@ def test_an_unpacked_source_distribution_skips(tree: Path, monkeypatch: pytest.M
 
 
 @pytest.mark.parametrize(
-    "directory",
-    ["mutants", ".poodle-temp", ".poodle-temp-manual"],
-    ids=["mutmut", "poodle", "a poodle run kept for inspection"],
+    ("where", "excused"),
+    [
+        ("mutants", True),
+        (".poodle-temp/run-1", True),
+        (".poodle-temp-manual/run-2", True),
+        # A layout, not a word to find somewhere in the path. Each of these is an ordinary
+        # checkout that happens to sit under a folder with a familiar name, and excusing it
+        # would put back the silent pass this whole module exists to stop.
+        ("mutants/gdmutant", False),
+        (".poodle-temp/run-1/gdmutant", False),
+        ("dev/mutants/checkouts/gdmutant", False),
+        (".poodle-temp-manual/gdmutant", False),
+        (".poodle-temp/gdmutant", False),
+    ],
+    ids=[
+        "mutmut's copy",
+        "a poodle run",
+        "a poodle run kept for inspection",
+        "a checkout under a folder called mutants",
+        "a checkout under a poodle run",
+        "a checkout further under one",
+        "a checkout parked in a poodle temp folder",
+        "the same, without the run- directory",
+    ],
 )
-def test_the_known_copies_of_the_tree_are_named_positively(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory: str
+def test_only_a_real_mutation_copy_is_excused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str, excused: bool
 ) -> None:
-    monkeypatch.setattr(_MODULE, "REPO_ROOT", tmp_path / directory / "run-1")
-    assert _why_this_tree_tracks_nothing() is not None
+    monkeypatch.setattr(_MODULE, "REPO_ROOT", tmp_path.joinpath(*where.split("/")))
+    assert (_why_this_tree_tracks_nothing() is not None) is excused
 
 
 def test_an_ordinary_checkout_has_no_reason_to_track_nothing(tree: Path) -> None:
@@ -974,8 +1026,27 @@ def test_an_ordinary_checkout_has_no_reason_to_track_nothing(tree: Path) -> None
         ("the checkout is at ~/dev/a-project", True),
         ("the checkout is at /home/somebody/code", True),
         ("the workspace is at /home/runner/work/a-project", False),
+        # The exemption is one directory, not a prefix. A person whose account merely begins with
+        # those six letters has a home directory like anybody else, and `\b` used to excuse it.
+        ("the checkout is at /home/runner-fixes-the-thing/code", True),
+        ("the checkout is at /home/Runner-fixes-the-thing/code", True),
+        ("the checkout is at /home/runner.smith/code", True),
+        ("the checkout is at /home/runnerbot/code", True),
+        # `/home/` is a Linux path, and Linux tells these apart. This one is not CI.
+        ("the checkout is at /home/Runner/work/a-project", True),
     ],
-    ids=["windows", "posix", "a shorthand home", "a linux home", "a CI runner, which is nobody's"],
+    ids=[
+        "windows",
+        "posix",
+        "a shorthand home",
+        "a linux home",
+        "a CI runner, which is nobody's",
+        "a person whose name starts with the runner's",
+        "the same person, capitalised",
+        "the same, dotted",
+        "the same, with no separator at all",
+        "somebody actually called Runner",
+    ],
 )
 def test_a_home_directory_is_a_hit_however_it_is_spelled(
     tree: Path, line: str, leaks: bool
