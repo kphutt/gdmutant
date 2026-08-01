@@ -2,7 +2,7 @@
 
 Both read from the same intent (`ci.yml`'s `verify`/`license-check` jobs) but through two
 independent paths: `verify_local.py` parses the job's `run:` steps out of the YAML, and
-`.pre-commit-config.yaml` restates the same commands as separate hooks (Precedent review,
+`.pre-commit-config.yaml` restates the same commands as separate hooks (raised in review on
 2026-07-29 — verify_local.py's single dynamic read couldn't itself catch the config drifting
 away from it). This is the cheap alternative to unifying them onto one mechanism: as long as
 this test passes, the duplication is provably harmless; the moment it doesn't, that's the

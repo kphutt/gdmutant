@@ -101,8 +101,8 @@ Google (["State of Mutation Testing at Google"][google-mt], ICSE-SEIP 2018) and 
   and it was deleted four days later for being an unrun recipe. This hook is different in kind, not
   just in tool, because it's a named, invocable pre-commit hook (`gdmutant-mutation`) rather than a
   "run this by hand" instruction, but that alone doesn't guarantee it gets used. The trigger that's
-  supposed to make it get run is already this operator's own definition-of-done for advisory
-  mutation checks: on any new or changed pure logic, run it before merge and drive survivors to zero.
+  supposed to make it get run is already the standing definition of done for advisory mutation
+  checks here: on any new or changed pure logic, run it before merge and drive survivors to zero.
   If this hook is still going unused at the next review, the honest move is the one considered and
   rejected tonight: drop the local leg, accept the class-method gap as documented-but-unmeasured,
   same as mutmut's own scope note already does for the rest of it.
