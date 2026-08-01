@@ -81,8 +81,8 @@ that point. It stays the authoritative check regardless of whether `ci.yml` also
   now.
 - Merge-time correctness is no longer mechanically enforced. A bad commit CAN reach `main` if
   a contributor skips or doesn't install the pre-commit hooks. Accepted: nothing ships on merge, and
-  the release gate catches it before anything does. This is the same trade other private,
-  nothing-ships repos in this operator's fleet already made.
+  the release gate catches it before anything does. This is the standard trade for a private repo
+  that ships nothing on merge, and it is the one made here.
 - A release now costs more Actions time than the old gate did (six live jobs against one API call),
   but pays for itself immediately given how rare releases are relative to merges, which is the
   entire point of moving the expensive checks to the rare event instead of the frequent one.
