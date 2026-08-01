@@ -2542,6 +2542,59 @@ def test_main_since_no_changes_warns_about_a_malformed_ignore_pragma(
     assert "names an unknown operator" in capsys.readouterr().err
 
 
+#: A source whose ignore pragma names an operator that does not exist — the warning is about the
+#: file itself, so every path that reads the file owes it to the user regardless of what else is
+#: wrong with the invocation.
+_BAD_PRAGMA_SRC = "func f(a, b) -> bool:\n\treturn a > b  # gdmutant: ignore[no_such_op]\n"
+
+
+def test_main_since_no_changes_warns_about_the_pragma_even_with_a_bad_project(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The combination is the case that got through: the pragma alone was covered, and a bad
+    # --project alone was covered, so a path that reported only the second passed both tests. Order
+    # decides it — sources are read and warned about before the setup is validated, so one
+    # invocation reports everything wrong rather than one thing per round trip.
+    path = _repo_with_committed(tmp_path, "f.gd", _BAD_PRAGMA_SRC)
+    rc = main(["run", path, "--since", "HEAD", "--project", str(tmp_path / "nope"), "--json", "-"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "names an unknown operator" in err
+    assert "project directory not found" in err
+    # ... and in that order: the file the user named, then the flag around it.
+    assert err.index("names an unknown operator") < err.index("project directory not found")
+
+
+def test_run_mutation_warns_about_the_pragma_even_with_a_bad_project(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The reference path, pinned so the ordering the no-change path matches cannot drift out from
+    # under it. Without this, a future reorder here would silently make the two disagree again and
+    # only the no-change test would fail, pointing at the wrong file.
+    path = tmp_path / "f.gd"
+    path.write_text(_BAD_PRAGMA_SRC, encoding="utf-8")
+    rc = run_mutation(str(path), str(tmp_path / "nope"), MarkerRunner(str(path), ">="))
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.index("names an unknown operator") < err.index("project directory not found")
+
+
+def test_run_mutation_paths_warns_about_the_pragma_even_with_a_bad_project(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The third path, same reason. All three now agree, and all three are pinned.
+    first = tmp_path / "f.gd"
+    first.write_text(_BAD_PRAGMA_SRC, encoding="utf-8")
+    second = tmp_path / "g.gd"
+    second.write_text("func g(a, b) -> bool:\n\treturn a > b\n", encoding="utf-8")
+    rc = cli.run_mutation_paths(
+        [str(first), str(second)], str(tmp_path / "nope"), MarkerRunner(str(first), ">=")
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.index("names an unknown operator") < err.index("project directory not found")
+
+
 def test_main_since_no_changes_does_not_run_the_require_clean_check(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

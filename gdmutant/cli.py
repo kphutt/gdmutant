@@ -1018,7 +1018,17 @@ def _no_changes_report(
     as the two real ones. It shares their preflight (`_setup_problem`), warns about the same
     malformed ignore pragmas, and honours ``--report step-summary`` — because a caller cannot tell
     from the outside which path served their run, so a guarantee that holds on two paths out of
-    three is not a guarantee. What it does **not** do is `_unbacked_source_problem` /
+    three is not a guarantee.
+
+    **In the same order**, which is the part that is easy to get wrong: sources are read and warned
+    about *first*, and only then is the setup validated. The two orders differ only when a source
+    problem and a setup problem are present at once — both exit 2 either way — but reading first is
+    what lets one invocation report both, instead of making the user fix a mistyped ``--project``
+    just to discover the file it pointed at never parsed. `_report_path_problem`'s "check before the
+    run" rationale is about the minutes of Godot that follow, not about the milliseconds of reading
+    a handful of files, so nothing is lost by ordering it second.
+
+    What it does **not** do is `_unbacked_source_problem` /
     ``--require-clean``: that check exists to protect a file this tool is about to rewrite in place,
     and this path writes no mutant to any file, so its warning ("gdmutant mutates it in place ...")
     would be false. Nor does it print a `console_summary`: the stderr note the caller already got
@@ -1031,10 +1041,6 @@ def _no_changes_report(
     ever be the value nothing passes — and a silent default is how this path came to enforce less
     than the real ones. A future second caller now has to decide.
     """
-    problem = _setup_problem(project_dir, json_path, html_path, step_summary)
-    if problem is not None:
-        print(f"error: {problem}", file=sys.stderr)
-        return 2
     empty: dict[str, tuple[MutationRun, str]] = {}
     for source_path in files:
         source = _load_gdscript(source_path)
@@ -1042,6 +1048,10 @@ def _no_changes_report(
             return 2
         _warn_unknown_ignore_operators(source)
         empty[str(Path(source_path))] = (MutationRun(()), source)
+    problem = _setup_problem(project_dir, json_path, html_path, step_summary)
+    if problem is not None:
+        print(f"error: {problem}", file=sys.stderr)
+        return 2
     if step_summary:
         # An empty job summary, not a missing one: a CI job that reports survivors on every run
         # should say "nothing to mutate" in the place reviewers look, rather than leaving the
