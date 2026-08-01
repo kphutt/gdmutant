@@ -70,27 +70,34 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
         ),
         (
             "Why it survived",
-            "`>` and `>=` (and their kin) differ on exactly one input: when the two sides are "
-            "equal. Your tests run this line but never with equal operands, so the boundary is "
-            "untested.",
+            "which pair was swapped decides what your tests are missing. `>` against `>=`, or `<` "
+            "against `<=`, differ on exactly one input, when the two sides are equal, and your "
+            "tests run this line but never with equal operands. `==` against `!=` is the other "
+            "case: those two are opposites and disagree on every input, so a survivor there "
+            "means nothing your tests assert reads this comparison at all.",
         ),
         (
             "How to kill it",
             "add a test that reaches this line with two equal operands (a value compared to "
-            "itself) and assert the result you intend. That case fails under the mutant.",
+            "itself) and assert the result you intend. Equal operands separate every swap this "
+            "operator makes, the boundary pair and the equality pair alike, so that one test "
+            "kills any of them.",
         ),
         (
             "Equivalent mutant?",
-            "Rare here, but possible if the equal case is genuinely unreachable (e.g. the two "
-            "operands can never be equal by construction). If so, the survivor is legitimate.",
+            "Rare here. A boundary swap is one when the equal case is genuinely unreachable (e.g. "
+            "the two operands can never be equal by construction). An `==` against `!=` swap "
+            "disagrees on every input, so it is one only when nothing observable depends on the "
+            "comparison at all.",
         ),
     ),
     "compound-assign": (
         (
             "The change",
             "gdmutant swapped a compound-assignment operator (e.g. `+=` → `-=`). A `+=` that "
-            "appends a string literal is not mutated at all: `String` has no `-=`, so the swap "
-            "would be invalid code rather than a test gap.",
+            "appends a string literal gets no compound-assign mutant: `String` has no `-=`, so the "
+            "swap would be invalid code rather than a test gap. That line can still get a "
+            "statement-deletion mutant, which is a real gap when it survives.",
         ),
         (
             "Why it survived",
@@ -154,23 +161,31 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
         ),
         (
             "Why it survived",
-            "every test input is a clean multiple, where `%`, `*`, and `/` can produce "
-            "indistinguishable results.",
+            "nothing pins the exact result, so the two operators produce values your tests treat "
+            "the same. A clean multiple is not the cause: `6 % 3` is 0 where `6 * 3` is 18 and "
+            "`6 / 3` is 2, so once a test asserts the number, even a clean multiple tells the two "
+            "apart.",
         ),
         (
             "How to kill it",
-            "add a test with a non-multiple input (one that leaves a remainder) and assert the "
-            "exact result.",
+            "add a test with concrete inputs and assert the exact result. An input that leaves a "
+            "remainder makes the gap between the operators widest, but any input does once the "
+            "result is pinned.",
         ),
         (
             "Equivalent mutant?",
-            "Rare, but possible if the operand is always a multiple by construction.",
+            "Rare. It needs a left operand that is always 0, where `0 % n`, `0 * n` and `0 / n` "
+            "all come out the same. An operand that is merely always a multiple does not make the "
+            "mutant equivalent.",
         ),
     ),
     "numeric": (
         (
             "The change",
-            "gdmutant changed a numeric literal (e.g. `0` → `1`, bumped a bound).",
+            "gdmutant changed an integer literal (e.g. `0` → `1`, bumped a bound). Only bare "
+            "decimal integers are mutated today: a float, a hex literal or a digit-separated form "
+            "(`0.5`, `0xFF`, `1_000`) produces no mutant, so a bound written one of those ways is "
+            "not covered by this operator.",
         ),
         (
             "Why it survived",
@@ -248,7 +263,8 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
     "enum-member": (
         (
             "The change",
-            "gdmutant changed the number assigned to a member of an `enum` declaration.",
+            "gdmutant changed a member of an `enum` declaration: usually the number assigned to "
+            "it, and on a computed value like `A = 1 + 0` the arithmetic operator instead.",
         ),
         (
             "Why it survived",

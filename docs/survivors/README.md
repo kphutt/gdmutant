@@ -36,17 +36,19 @@ show in the summary but never enter that formula:
 ### What is never generated, and why that moves the score
 
 A few token positions produce a mutant
-that is not a *changed program* at all but an invalid one: code GDScript rejects, so no test
-could ever have disagreed with it. gdmutant does not generate those, which means they appear in no
+that is not a *changed program* at all. In the first three shapes below the mutant is code GDScript
+rejects, so no test could ever have disagreed with it. In the fourth it is valid GDScript that is
+*inert*: it stores a value nothing can read back, so it behaves exactly like the original whatever
+your tests do. gdmutant does not generate any of them, which means they appear in no
 category above: they leave the denominator entirely, and the score is higher than it would be if
 they were counted as survivors. That is the honest number, not a flattering one. A mutant the
-language forbids measures nothing about your tests, and counting it as a gap would say your suite
-misses something it cannot possibly catch. The excluded shapes:
+language has already settled measures nothing about your tests, and counting it as a gap would say
+your suite misses something it cannot possibly catch. The excluded shapes:
 
 - a `%` that is string formatting (`"%s" % name`), not modulo
 - a `+` that concatenates strings, because GDScript's `String` defines no `-`
 - a `+=` that appends to a string, for the same reason
-- a property declaration's initializer whose stored value no getter can read back
+- a property declaration's initializer whose stored value no getter can read back (the inert shape)
 
 Each is decided from the parse tree, and only where the shape is certain: a `String`-typed
 *variable* is still mutated, because nothing in the source proves what it holds. The bias is
@@ -101,15 +103,15 @@ Not an operator: [Assert](#assert) · [Enum member](#enum-member)
 
 **The change:** gdmutant swapped a comparison operator (e.g. `>` → `>=`, `<` → `<=`, `==` → `!=`).
 
-**Why it survived:** `>` and `>=` (and their kin) differ on exactly one input: when the two sides are equal. Your tests run this line but never with equal operands, so the boundary is untested.
+**Why it survived:** which pair was swapped decides what your tests are missing. `>` against `>=`, or `<` against `<=`, differ on exactly one input, when the two sides are equal, and your tests run this line but never with equal operands. `==` against `!=` is the other case: those two are opposites and disagree on every input, so a survivor there means nothing your tests assert reads this comparison at all.
 
-**How to kill it:** add a test that reaches this line with two equal operands (a value compared to itself) and assert the result you intend. That case fails under the mutant.
+**How to kill it:** add a test that reaches this line with two equal operands (a value compared to itself) and assert the result you intend. Equal operands separate every swap this operator makes, the boundary pair and the equality pair alike, so that one test kills any of them.
 
-**Equivalent mutant?** Rare here, but possible if the equal case is genuinely unreachable (e.g. the two operands can never be equal by construction). If so, the survivor is legitimate.
+**Equivalent mutant?** Rare here. A boundary swap is one when the equal case is genuinely unreachable (e.g. the two operands can never be equal by construction). An `==` against `!=` swap disagrees on every input, so it is one only when nothing observable depends on the comparison at all.
 
 ## Compound assign
 
-**The change:** gdmutant swapped a compound-assignment operator (e.g. `+=` → `-=`). A `+=` that appends a string literal is not mutated at all: `String` has no `-=`, so the swap would be invalid code rather than a test gap.
+**The change:** gdmutant swapped a compound-assignment operator (e.g. `+=` → `-=`). A `+=` that appends a string literal gets no compound-assign mutant: `String` has no `-=`, so the swap would be invalid code rather than a test gap. That line can still get a statement-deletion mutant, which is a real gap when it survives.
 
 **Why it survived:** nothing pins the accumulated value, so the two updates look the same to your tests.
 
@@ -141,15 +143,15 @@ Not an operator: [Assert](#assert) · [Enum member](#enum-member)
 
 **The change:** gdmutant swapped `%` with another operator (e.g. `*`, `/`).
 
-**Why it survived:** every test input is a clean multiple, where `%`, `*`, and `/` can produce indistinguishable results.
+**Why it survived:** nothing pins the exact result, so the two operators produce values your tests treat the same. A clean multiple is not the cause: `6 % 3` is 0 where `6 * 3` is 18 and `6 / 3` is 2, so once a test asserts the number, even a clean multiple tells the two apart.
 
-**How to kill it:** add a test with a non-multiple input (one that leaves a remainder) and assert the exact result.
+**How to kill it:** add a test with concrete inputs and assert the exact result. An input that leaves a remainder makes the gap between the operators widest, but any input does once the result is pinned.
 
-**Equivalent mutant?** Rare, but possible if the operand is always a multiple by construction.
+**Equivalent mutant?** Rare. It needs a left operand that is always 0, where `0 % n`, `0 * n` and `0 / n` all come out the same. An operand that is merely always a multiple does not make the mutant equivalent.
 
 ## Numeric
 
-**The change:** gdmutant changed a numeric literal (e.g. `0` → `1`, bumped a bound).
+**The change:** gdmutant changed an integer literal (e.g. `0` → `1`, bumped a bound). Only bare decimal integers are mutated today: a float, a hex literal or a digit-separated form (`0.5`, `0xFF`, `1_000`) produces no mutant, so a bound written one of those ways is not covered by this operator.
 
 **Why it survived:** no test pins the exact value or the boundary this number sets.
 
@@ -182,10 +184,11 @@ operator, is why the mutant survived.
 
 ## Enum member
 
-Not an operator. A `numeric` mutant lands on an `enum` member's value, and the reason it survived is
-the enum, not the operator.
+Not an operator. A mutant lands inside an `enum` declaration, and the reason it survived is the
+enum, not the operator. Most are `numeric` mutants on a member's value, but every mutant whose line
+falls in that block is explained here, whichever operator made it.
 
-**The change:** gdmutant changed the number assigned to a member of an `enum` declaration.
+**The change:** gdmutant changed a member of an `enum` declaration: usually the number assigned to it, and on a computed value like `A = 1 + 0` the arithmetic operator instead.
 
 **Why it survived:** most enums are used symbolically. `if cell == Cell.FLOOR` compares a name to a name, and both sides move together when the number behind it changes, so nothing your tests observe reads the number at all.
 

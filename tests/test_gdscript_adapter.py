@@ -9,7 +9,7 @@ from gdmutant.adapters.gdscript import (
     unknown_ignore_operators,
 )
 from gdmutant.engine.mutants import Mutant
-from gdmutant.engine.operators import TableOperator
+from gdmutant.engine.operators import CATALOG, TableOperator
 
 
 def test_find_sites_locates_operators_and_literals() -> None:
@@ -94,6 +94,36 @@ def test_unknown_ignore_operator_is_a_no_op_and_reported() -> None:
     src = "func f(a, b):\n\treturn a > b  # gdmutant: ignore[comparson]\n"  # typo
     assert all(m.ignore_reason is None for m in generate_mutants("f.gd", src))  # nothing suppressed
     assert unknown_ignore_operators(src) == [(2, "comparson")]
+
+
+def test_a_statement_deletion_scope_suppresses_and_is_not_called_a_typo() -> None:
+    # `unknown_ignore_operators` validated names against the token CATALOG alone, so this
+    # annotation was warned about as an unknown operator ("it suppresses nothing") while in fact
+    # suppressing the mutant exactly as documented. Statement deletion is structural, so it lives
+    # here rather than in the catalog, and the validator has to know that.
+    src = "func f():\n\tprint(1)  # gdmutant: ignore[statement-deletion] structural\n"
+    marks = {m.operator_id: m.ignore_reason for m in generate_mutants("f.gd", src)}
+    assert marks[STATEMENT_DELETION_ID] == "structural"  # the annotation works,
+    assert marks["numeric"] is None  # scoped to the one operator it names,
+    assert unknown_ignore_operators(src) == []  # so there is nothing to warn about
+
+
+def test_every_operator_id_a_mutant_can_carry_is_a_valid_ignore_scope() -> None:
+    # The set of names an ignore scope may use is exactly the set `_mark_ignored` matches against:
+    # every id a generated mutant can carry. Anything narrower tells a user their working
+    # annotation does nothing.
+    for operator_id in sorted({op.id for op in CATALOG} | {STATEMENT_DELETION_ID}):
+        src = f"func f(a, b):\n\treturn a > b  # gdmutant: ignore[{operator_id}]\n"
+        assert unknown_ignore_operators(src) == [], operator_id
+
+
+def test_a_string_append_keeps_its_statement_deletion_mutant() -> None:
+    # The compound-assign operator skips `s += "y"` (`String` has no `-=`), but the line is not
+    # left unmutated: deleting the whole statement is still a real, killable change. The reference
+    # page's "not mutated at all" wording overreached.
+    src = 'func f():\n\tvar s = "a"\n\ts += "y"\n\treturn s\n'
+    line_three = {m.operator_id for m in generate_mutants("f.gd", src) if m.span.line == 3}
+    assert line_three == {STATEMENT_DELETION_ID}
 
 
 def test_empty_ignore_brackets_are_reported_but_a_bare_marker_is_not() -> None:

@@ -36,13 +36,15 @@ _WIDTH = 74  # rule width + prose wrap target
 #: Type-neutral wording (an operator may act on numbers *or* strings), so nothing over-claims.
 _EXPLAIN: dict[str, tuple[str, str, str]] = {
     "comparison": (
-        "Your tests pass whether this says `{a}` or `{b}`. They run this line, but never the one "
-        "input where the two disagree — equal operands. That case is untested.",
-        "Passing here is false confidence, not proof. A later refactor or merge that changes the "
-        "equal case slips through green. If the equal case has a right answer, no test guards it.",
+        # Deliberately not "they differ only on equal operands": `==` and `!=` are in this
+        # operator's table too, and those two are complements that disagree on every input.
+        "Your tests pass whether this says `{a}` or `{b}`. They run this line, but never with an "
+        "input the two decide differently, so what this comparison decides is untested.",
+        "Passing here is false confidence, not proof. A later refactor or merge that changes this "
+        "comparison slips through green. If it has a right answer, no test guards it.",
         "Add a test that reaches this line with two equal operands (a value compared to "
-        "itself) and assert the result you expect. Only you know that result — gdmutant "
-        "reports the gap, not it.",
+        "itself) and assert the result you expect. Equal operands separate every comparison swap "
+        "gdmutant makes. Only you know the result, gdmutant reports the gap, not it.",
     ),
     "boolean": (
         "Your tests pass whether this needs both sides (`and`) or just one (`or`). No test covers "
@@ -86,10 +88,14 @@ _EXPLAIN: dict[str, tuple[str, str, str]] = {
         "Add a test that drives several updates and asserts the exact accumulated value.",
     ),
     "modulo": (
-        "Your tests pass whether this uses `{a}` or `{b}`. Every test input is a clean multiple, "
-        "where `%`, `*`, and `/` can look alike.",
-        "A swapped operator here would pass every test that only uses clean multiples.",
-        "Add a test with a non-multiple input (one that leaves a remainder) and assert the result.",
+        # Arithmetic's reason, because it is the same one. A clean multiple is not why a modulo
+        # mutant lives: 6 % 3 is 0 where 6 * 3 is 18 and 6 / 3 is 2. What is missing is the
+        # assertion, and saying otherwise talks a reader out of the test that works.
+        "Your tests pass whether this uses `{a}` or `{b}`. Nothing pins the exact result, so the "
+        "number this line computes is one your tests never look at.",
+        "A swapped operator here ships a wrong number that every test calls fine.",
+        "Add a test with concrete inputs and assert the exact expected result. An input that "
+        "leaves a remainder makes the difference widest.",
     ),
     "statement-deletion": (
         "Your tests pass with this line removed entirely. Nothing they assert depends on it "
