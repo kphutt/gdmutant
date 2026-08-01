@@ -279,7 +279,131 @@ def test_rare_statuses_appear_only_when_they_happened() -> None:
             ],
         )
     )
-    assert mixed.rare == [("ignored", 1), ("runtime errors", 1)]
+    # The status rides along with the label because the header renders each count as a filter
+    # button, and a button has to name what it filters on.
+    assert mixed.rare == [("ignored", 1, "Ignored"), ("runtime errors", 1, "RuntimeError")]
+
+
+def test_a_finding_records_which_rare_statuses_it_holds_so_a_header_count_can_reach_it() -> None:
+    # A header count is only a number until the reader can get to the mutants behind it. This is
+    # what the click filters on, and the three states must stay distinguishable: a timeout is a
+    # kill, a compile error never ran, and a runtime error ran and measured nothing.
+    view = report_view(
+        _report(
+            "return a > b\nreturn 0\nreturn 1\n",
+            [
+                _mutant(1, 10, 11, "comparison", ">=", "Timeout"),
+                _mutant(2, 8, 9, "numeric", "1", "RuntimeError"),
+                _mutant(3, 8, 9, "numeric", "1", "Survived"),
+            ],
+        )
+    )
+    assert [f.rare for f in view.files[0].findings] == [["Timeout"], ["RuntimeError"], []]
+
+
+def test_a_findings_rare_statuses_are_deduped_and_keep_the_mutants_own_order() -> None:
+    # Two runtime errors on one token are one entry, not two. The list answers "does this finding
+    # hold one?", and a stable order is what keeps the rendered page byte-identical run to run.
+    view = report_view(
+        _report(
+            "return 0\n",
+            [
+                _mutant(1, 8, 9, "numeric", "1", "RuntimeError"),
+                _mutant(1, 8, 9, "numeric", "-1", "Timeout"),
+                _mutant(1, 8, 9, "numeric", "2", "RuntimeError"),
+            ],
+        )
+    )
+    (finding,) = view.files[0].findings
+    assert finding.rare == ["RuntimeError", "Timeout"]
+
+
+def test_the_header_renders_each_rare_count_as_a_filter_and_the_common_ones_as_text() -> None:
+    # Only the rare counts are clickable: they were the numbers with nothing behind them.
+    page = render_html(
+        _report(
+            "return 0\nreturn 1\n",
+            [
+                _mutant(1, 8, 9, "numeric", "1", "Survived"),
+                _mutant(2, 8, 9, "numeric", "1", "RuntimeError"),
+            ],
+        )
+    )
+    head = page.split('<div class="head"', 1)[1].split("</div>\n  <div id=", 1)[0]
+    assert 'data-filter="rare:RuntimeError"' in head
+    assert '<div class="stat sv"><b>1</b><i>survived</i></div>' in head
+    assert head.count("<button") == 1  # the one rare status this run produced, and nothing else
+
+
+# ---- paths a reader can act on -----------------------------------------------------------------
+
+
+def test_a_file_inside_the_project_is_shown_by_its_project_relative_path(tmp_path: Path) -> None:
+    # The report is made to travel. An absolute path is the author's own machine, their username
+    # and their directory layout, in every row of an artifact meant to be mailed, and it is noise
+    # to every reader but the one who made it. It also puts ~60 identical characters in front of
+    # the only part that distinguishes one row from the next, in the one column a reader scans.
+    source = tmp_path / "src" / "core" / "diff.gd"
+    source.parent.mkdir(parents=True)
+    source.write_text("return 0\n", encoding="utf-8")
+    view = report_view(
+        _report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Survived")], path=str(source)),
+        str(tmp_path),
+    )
+    assert view.files[0].path == "src/core/diff.gd"
+
+
+def test_a_file_outside_the_project_keeps_its_absolute_path(tmp_path: Path) -> None:
+    # There is no shorter honest name for it, and a `..`-laden relative path would be worse on both
+    # counts. The fallback is stated rather than assumed, because a silently absolute row in an
+    # otherwise relative index is exactly the thing a reader would misread.
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "elsewhere" / "stray.gd"
+    outside.parent.mkdir()
+    view = report_view(
+        _report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Survived")], path=str(outside)),
+        str(project),
+    )
+    # `as_posix`, never a hand-written separator: the page draws every path with forward slashes so
+    # a Windows run and a POSIX one of the same project agree, and the expectation has to say that
+    # rather than depend on which platform runs the test.
+    assert view.files[0].path == outside.as_posix()
+
+
+def test_without_a_project_root_the_path_is_shown_exactly_as_the_report_keys_it() -> None:
+    # A report rendered by something other than the CLI has no root to shorten against, and
+    # inventing one from the current directory would produce a path relative to wherever the
+    # renderer happened to run.
+    view = report_view(_report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Survived")]))
+    assert view.files[0].path == "a.gd"
+
+
+def test_the_displayed_path_is_what_findings_are_addressed_by(tmp_path: Path) -> None:
+    # The path is not decoration: it is half of a finding's address, so it is what a deep link and
+    # a done-mark are keyed on. Shortening it in the index and addressing by something else would
+    # give the page two names for one file.
+    source = tmp_path / "src" / "diff.gd"
+    source.parent.mkdir()
+    report = _report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Survived")], path=str(source))
+    page = render_html(report, str(tmp_path))
+    assert '"path": "src/diff.gd"' in page
+    # …and nothing the reader can see carries the absolute one. The data block is the deliberate
+    # exception, pinned by the test below, so the check stops where it starts.
+    visible = page.split('<script type="application/json"', 1)[0]
+    assert str(tmp_path).replace("\\", "/") not in visible
+
+
+def test_the_embedded_json_still_carries_the_paths_the_run_was_given(tmp_path: Path) -> None:
+    # The display is what changed; the data block is not. Its keys are the report's identifiers and
+    # other tooling resolves them, so they stay exactly what the run was handed. Pinned here so the
+    # split is deliberate and visible rather than a surprise to whoever parses the block.
+    source = tmp_path / "src" / "diff.gd"
+    source.parent.mkdir()
+    report = _report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Survived")], path=str(source))
+    page = render_html(report, str(tmp_path))
+    block = page.split('id="mutation-test-report">', 1)[1].split("</script>", 1)[0]
+    assert json.loads(block) == report
 
 
 def test_operator_chips_count_findings_of_that_file() -> None:
@@ -460,12 +584,25 @@ def test_frank_matches_the_repo_asset_he_was_traced_from() -> None:
 
 
 def test_the_report_json_is_embedded_and_parses_back_exactly() -> None:
-    # Genuinely useful for other tooling, so it survives the move off the stock viewer even though
-    # nothing in the page reads it back.
+    # Genuinely useful for other tooling, so it survives the move off the stock viewer.
     report = _report("return a > b\n", [_mutant(1, 10, 11, "comparison", ">=", "Survived")])
     page = render_html(report)
     block = page.split('id="mutation-test-report">', 1)[1].split("</script>", 1)[0]
     assert json.loads(block) == report
+
+
+def test_the_embedded_report_is_offered_as_a_download_without_leaving_the_page() -> None:
+    # It had been in every report from the first one, and nothing said so: the only way to reach it
+    # was View Source. The button adds no data and no request. The bytes are the page's own and
+    # the `blob:` URL is minted in the browser from them, so self-containment is untouched.
+    page = _page()
+    assert 'id="dl"' in page
+    script = page.rsplit("<script>", 1)[1]
+    assert "URL.createObjectURL" in script and "new Blob(" in script
+    assert "$('#mutation-test-report').textContent" in script
+    # A fixed name. Naming the file after the run's own path would put somebody's directory layout
+    # back into an artifact that just stopped carrying it.
+    assert "a.download = 'gdmutant-report.json'" in script
 
 
 def test_source_containing_a_script_close_cannot_break_out_of_either_data_block() -> None:

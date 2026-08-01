@@ -194,6 +194,34 @@ def test_run_mutation_writes_html_report(
     assert "Wrote HTML report to" in capsys.readouterr().out
 
 
+def test_run_mutation_shows_paths_relative_to_the_project_in_the_html_report(
+    tmp_path: Path,
+) -> None:
+    # The project root only exists at this level, so this is the seam where it has to be handed
+    # over. A report is made to travel; without this the page carries the author's username and
+    # directory layout in every row of the one column a reader scans.
+    source = tmp_path / "src" / "f.gd"
+    source.parent.mkdir()
+    source.write_text("func f(a, b) -> bool:\n\treturn a > b and a < b\n", encoding="utf-8")
+    html_file = tmp_path / "report.html"
+    json_file = tmp_path / "report.json"
+    rc = run_mutation(
+        str(source),
+        str(tmp_path),
+        MarkerRunner(str(source), ">="),
+        html_path=str(html_file),
+        json_path=str(json_file),
+    )
+    assert rc == 0
+    page = html_file.read_text(encoding="utf-8")
+    assert '"path": "src/f.gd"' in page
+    # Nothing a reader sees carries the absolute path.
+    visible = page.split('<script type="application/json"', 1)[0]
+    assert str(tmp_path).replace("\\", "/") not in visible
+    # The JSON report is deliberately unchanged: its keys are identifiers other tooling resolves.
+    assert str(source) in json.loads(json_file.read_text(encoding="utf-8"))["files"]
+
+
 def test_run_mutation_emits_per_mutant_progress_to_stderr(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
