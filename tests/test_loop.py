@@ -1245,7 +1245,7 @@ def test_a_rename_that_never_unblocks_refuses_rather_than_writing_unsafely(
 
     monkeypatch.setattr("gdmutant.engine.loop.os.replace", always_blocked)
     monkeypatch.setattr("gdmutant.engine.loop._REPLACE_BACKOFF", 0.0)
-    with pytest.raises(SourceWriteFailed, match="left exactly as it was"):
+    with pytest.raises(SourceWriteFailed, match="This write changed nothing"):
         _write_source(path, "func f(a, b) -> bool:\n\treturn a >= b\n", "\n")
 
     assert path.read_text(encoding="utf-8") == original
