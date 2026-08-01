@@ -9,10 +9,27 @@
 # real release) — not GitHub Actions running on every push, which is what this comment used to say
 # and is no longer true. If ci.yml's automatic triggers come back (e.g. once this repo is public),
 # these hooks return to being a convenience mirror rather than the only gate.
-# Two stages, matching the tradeoff CI already makes:
+#
+# Three stages:
 #   - pre-commit (every commit): gitleaks only — cheap, catches a secret before it's even committed.
-#   - pre-push (before it leaves the machine): the full Verify job, mirrored 1:1 from ci.yml so
-#     local and CI can't drift apart — same commands, not a reimplementation.
+#   - pre-push (before it leaves the machine): every Verify command except the test suite, mirrored
+#     1:1 from ci.yml so local and CI can't drift apart: the same commands, not a reimplementation.
+#     Measured together at six seconds.
+#   - manual (you run it): the test suite, plus the Godot self-tests and the mutation check.
+#
+# Why the suite is not a push hook. It is the only slow leg: 35 seconds on the maintainer's machine
+# and 2:40 measured elsewhere, against six seconds for everything else combined. That is long enough
+# to exceed the tool timeout an automated contributor runs under, and a gate that reliably times out
+# is a gate that gets bypassed with `--no-verify`. The bypass is silent and it skips EVERY hook,
+# including the secret scan, so an honest split beats a theoretical one. Run it before you open a
+# pull request, with the one command that runs the whole Verify job, tests included:
+#
+#   uv run python scripts/verify_local.py
+#
+# (or `uv run pytest` for the suite alone, or `pre-commit run --hook-stage manual pytest`).
+# `tests/test_local_check_parity.py` pins this split: the suite is the single named exemption there,
+# and it must still exist as a manual-stage hook running ci.yml's own command.
+#
 # always_run: true on every hook — these mirror CI's Verify job, which always runs the full suite
 # regardless of which files changed, so file-based filtering here would silently under-check.
 #
@@ -79,12 +96,16 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # Deliberately NOT at the push stage. See the header for why, and
+      # `tests/test_local_check_parity.py`'s DEFERRED_TO_MANUAL_STAGE for the exemption that lets
+      # the local-vs-CI parity check stay strict about everything else.
       - id: pytest
-        name: pytest
+        name: pytest (manual, the slow leg of Verify)
         entry: uv run pytest
         language: system
         pass_filenames: false
         always_run: true
+        stages: [manual]
 
       - id: pip-audit
         name: pip-audit

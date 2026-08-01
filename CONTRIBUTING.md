@@ -31,8 +31,12 @@ They run the same commands CI would, not a reimplementation. Install them:
 uv run pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-Once installed, a secret scan runs on every commit and the full checks (lint, format, GDScript lint,
-types, tests, audit, license check) run before every push.
+Once installed, a secret scan runs on every commit, and lint, format, GDScript lint, types, audit
+and the license check run before every push. That takes six seconds.
+
+The test suite is deliberately not in that set. It is the only slow leg, and a push hook that takes
+minutes gets bypassed with `--no-verify`, which silently skips every other hook too, secret scan
+included. Run it yourself before you open a pull request, with the command in the next section.
 
 Install `gitleaks` too. Every other hook runs out of the synced virtualenv, but `gitleaks` is a
 standalone binary that `uv sync` does not provide, and `scripts/run_gitleaks.py` prints a skip
@@ -54,7 +58,8 @@ gate (`publish.yml`), which re-runs everything live before a real release, not o
 
 ## Before you open a PR
 
-If you didn't install the hooks above, run the same checks by hand:
+Run this whether or not you installed the hooks. It is the only local command that runs the whole
+Verify job, the test suite included:
 
 ```sh
 uv run python scripts/verify_local.py                       # lint, format, GDScript lint, types, tests, audit
@@ -78,8 +83,9 @@ GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-
 
 - One focused change per PR, with a clear description of what and why.
 - Lint, types, tests, audit, and secret scan all pass. The pre-commit and pre-push hooks
-  enforce this automatically if you installed both above (the secret scan runs at commit time, the
-  rest before a push). Otherwise run the commands by hand before opening the PR. The checks that do
+  enforce most of this automatically if you installed both above (the secret scan runs at commit
+  time, the rest before a push, except the test suite, which you run yourself). Otherwise run the
+  commands by hand before opening the PR. The checks that do
   run in the cloud on a pull request cover none of this (see "Install the local checks" above), so
   it is on you.
 - New behavior comes with tests. This is a testing tool, and we hold ourselves to it.

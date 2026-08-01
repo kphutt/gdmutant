@@ -72,3 +72,30 @@ and its dispatch and trust-gate machinery entirely (PR #73 closed unmerged, supe
   the install command.
 - The old global mechanism is not removed by this decision. It simply stops being what gdmutant
   relies on, so this repo's checks no longer depend on anything outside this repo.
+
+## Correction (2026-07-31)
+
+The Decision above lists the `pre-push` stage as
+
+> the same commands CI's Verify job runs (ruff check/format, gdlint, mypy, pytest, pip-audit)
+
+`pytest` has since moved to the `manual` stage. Everything else in that list still runs before every
+push, and still comes from `ci.yml` rather than a restatement of it.
+
+The reason is the one this record already argues from: a check nobody runs is not a check. The
+suite is the only slow leg of the chain, 35 seconds on the maintainer's machine and 2:40 measured
+elsewhere, against six seconds for every other hook combined. That is long enough to exceed
+the tool timeout an automated contributor runs under, and two of them hit it. One pushed with
+`--no-verify` after running the identical gate by hand, so nothing went unchecked that time, but
+`--no-verify` skips *every* hook, secret scan included, and it leaves no trace. A hook that reliably
+times out trades a ten-second gate for a silent one.
+
+So the suite runs by hand instead, through `uv run python scripts/verify_local.py`, which replays
+the whole Verify job out of `ci.yml`. It also still runs unconditionally in `publish.yml`'s
+release-time gate, on both Linux and Windows, before anything ships. That gate is unchanged and
+remains the one no local state can skip ([ADR-0012](0012-merge-time-local-ship-time-cloud.md)).
+
+The mirroring property this record was written to protect is intact and is now checked directly.
+`tests/test_local_check_parity.py` holds one named exemption, with the reason written beside it, and
+a second test proving the exempt hook still exists and still runs `ci.yml`'s own command. Removing
+the check rather than moving it fails that test.
