@@ -52,7 +52,15 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   - comparison (`>`↔`>=`, `<`↔`<=`, `==`↔`!=`)
   - arithmetic (`+`↔`-`, `*`↔`/`)
   - constant (e.g. `true`↔`false`, bump an int literal)
-  - statement deletion (drop a `return`/call)
+  - statement deletion (replace a whole statement with `pass`)
+
+  The first four are token swaps and live in the language-neutral catalog. Statement deletion does
+  not. It rewrites a whole statement instead of swapping one token, and deciding which statements are
+  safe to delete needs the language's own rules, so it lives in the GDScript adapter
+  ([ADR-0007](../decisions/0007-statement-deletion-with-a-return-path-guard.md)). It refuses to delete
+  a typed function's return unless a later return still guarantees a value, because Godot rejects a
+  typed function that can fall off its end. That is a real dent in G-3: a second language adapter has
+  to reimplement statement deletion rather than inherit it.
 - FG-2.2: An operator declares *what* it matches and *how* it rewrites, with no language specifics. The
   adapter maps operators onto a concrete language's AST nodes.
 
@@ -67,9 +75,23 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   ([ADR-0005](../decisions/0005-exit-code-test-runner-convention.md)) as the fallback for any harness
   without JUnit output (a hand-rolled `SceneTree` runner, a bespoke CLI). Every runner upholds the
   crash-safety clause: a load/compile crash surfaces as a kill or error, never a silent zero-test
-  pass. GdUnit4 upholds it via the "report must reappear" guard, GUT via a `tests == 0` → error guard,
-  the command runner via its exit code. Any future JUnit-emitting framework is first-class by adding one
-  small adapter, with no engine change.
+  pass. GdUnit4 upholds it via the "report must reappear" guard, the command runner via its exit code.
+  GUT needs more. It skips a suite that fails to compile, runs the remaining ones green and exits 0,
+  so the report still carries the healthy files' passes and the test count is not zero. What catches
+  that case is a drop below the healthy baseline's test count, which a live probe proved necessary. A
+  `tests == 0` guard covers only the narrower shape where the whole run collects nothing. Any future
+  JUnit-emitting framework is first-class by adding one small adapter, with no engine change.
+
+  The seam is three protocols, not one. `Runner` is the required one: run the suite once, report the
+  aggregate result. `Preparable` is optional and covers a slow one-time setup. The engine calls
+  `prepare` before it starts timing the baseline, so setup cost never inflates the per-mutant timeout
+  derived from that baseline. Both Godot runners implement it, because each needs a cold-checkout
+  import scan before its framework's command-line tool will load. `RunWarning` is optional too and
+  lets a runner raise a single run-level warning once the whole pass ends, which never changes the
+  mutation score or the exit code. The engine tests for `Preparable` by type. `RunWarning` lives in
+  the same contract module but the front desk is what tests for it, because printing a warning to
+  the user is a CLI job and not an engine one. Neither test names what the setup or the warning
+  actually is, so both stay language-neutral (NF-3).
 - FG-3.3: The original (unmutated) suite must pass first. If it doesn't, the run aborts with a clear
   error (mutation testing a red suite is meaningless).
 
@@ -78,11 +100,16 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   - killed (a test failed)
   - survived (all tests passed)
   - timeout (the mutation hung the suite, a detection counted as killed, Stryker's `Timeout` status)
-  - no-coverage (no test exercised the line, which v0.1 folds into *survived* until coverage exists)
+  - ignored (a `# gdmutant: ignore` annotation suppresses it, so it is generated for the report but
+    never run, Stryker's `Ignored` status, see
+    [ADR-0004](../decisions/0004-equivalent-mutant-ignore-annotation.md) and
+    [ADR-0006](../decisions/0006-operator-scoped-ignore-and-ignored-status.md))
   - invalid (the mutant didn't parse, per NF-5)
   - error (the runner failed to execute it, e.g. a crash)
 
-  Invalid and error mutants are excluded from the score.
+  Ignored, invalid and error mutants are excluded from the score. There is no separate no-coverage
+  verdict: v0.1 gathers no coverage data, so a mutant on a line no test exercises is classified
+  *survived*, which is where no-coverage folds until coverage-gated selection exists.
 - FG-4.2: The system shall compute the mutation score = (killed + timeout) /
   (killed + timeout + survived), and totals. Timeouts count as detected (Stryker convention).
 
@@ -107,11 +134,19 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
 - NF-1: Deterministic & reproducible. The operator core is fully deterministic: same inputs → same
   mutants → same verdicts. This is what lets a report be trusted and diffed over time. (Any future
   LLM-semantic mode is nondeterministic and stays out of this core.)
-- NF-2: Standalone / no AI. No runtime dependency on any AI service. Prerequisites are exactly
+- NF-2: Standalone / no AI. No runtime dependency on any AI service. The core prerequisites are
   *Godot (already installed by a Godot dev) + the gdmutant CLI*, installed from PyPI with `pip`,
-  `pipx` or `uv` (see the README).
+  `pipx` or `uv` (see the README). Two things sit just outside that core. The JUnit runners need the
+  project's test-framework addon present, which any project already using GdUnit4 or GUT has, and
+  `--since` and `--require-clean` call git, so they need git on the path and the file in a repo.
 - NF-3: Engine ⊥ adapter decoupling. `engine/` contains no GDScript-specific assumptions. Everything
   language-specific lives in `adapters/<lang>/`. A new language must not require touching the engine.
+
+  The requirement scopes structure, not wording. Nothing under `engine/` imports the adapter,
+  gdtoolkit or lark, and the GDScript adapter reaches the engine only as an injected `Adapter` value.
+  A few user-facing strings the engine prints do name GDScript and Godot: the HTML report's tagline,
+  the markdown report's code fence, and the survivor explanations. Those are copy. No engine logic
+  branches on them, and a second language adapter would restate them rather than fight them.
 - NF-4: Language-neutral operators. The operator catalog is expressed against an abstract notion of
   nodes/tokens. Adapters bind operators to a real AST.
 - NF-5: Mutant validity. The adapter must never hand the runner un-parseable source. A mutation that
@@ -123,16 +158,46 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   mutant gdtoolkit accepts but Godot rejects at load fails toward score-*inflation* (the suite errors →
   `error`, or writes no report → `error` via the runner's freshness guard), never toward a false
   survivor. The live self-test (`tests/test_selftest_live.py`) bounds this for the corpus: it boots
-  all 16 gdtoolkit-accepted mutants into real Godot and asserts zero `RuntimeError` outcomes, so
-  for that mutant set, gdtoolkit and Godot's parsers are confirmed to agree (a Godot-rejected mutant
-  would surface as `error`, failing the assertion). A dedicated `godot --check-only` parse-agreement
-  probe over arbitrary mutants is a fast-follow.
+  all 18 gdtoolkit-accepted mutants (16 token swaps plus 2 statement deletions) into real Godot and
+  asserts zero `RuntimeError` outcomes, so for that mutant set, gdtoolkit and Godot's parsers are
+  confirmed to agree (a Godot-rejected mutant would surface as `error`, failing the assertion). A
+  dedicated `godot --check-only` parse-agreement probe over arbitrary mutants is a fast-follow.
+
+  Generation-time exclusions: the re-parse check is only the second half of the validity story, and
+  it cannot see the first. gdtoolkit's grammar carries no type information, so it accepts source
+  Godot later rejects. The GDScript adapter therefore refuses to generate four shapes at all: a `%`
+  that formats a string, a `+` that joins strings, a `+=` that appends to one, and a property
+  initializer whose stored value can never be read back. GDScript's `String` defines no `-`, so each
+  of the first three would yield a mutant Godot rejects rather than one a test could disagree with.
+  The fourth is inert by language rule: GDScript does not run a property's setter on the initializer
+  in its own declaration, so when a custom getter means nothing ever reads the backing field again,
+  no change to that initializer can alter behavior. FG-2.1's return-path guard on statement deletion
+  is the same policy applied to a whole statement. An excluded mutant is never generated, so it never
+  reaches the denominator, and the score reads higher than a run that emitted it. That is the honest
+  direction, because the excluded shapes are broken or inert mutants rather than gaps a test could
+  have closed, but it does mean a score is not comparable across a version that added an exclusion.
 - NF-6: Performance headroom. v0.1 runs the full suite per mutant (simple, correct). Booting Godot
   per mutant is slow, so the design leaves clean seams for two speedups. Both have since shipped:
   `--jobs N` evaluates mutants in parallel, each on its own copy of the project, and `--since
   <ref>` mutates only the lines a diff changed. The remaining, still-deferred lever is
   coverage-gated selection (only run tests that cover the mutated line), which the seam preserves
   without reshaping the engine.
+- NF-7: Safe source writes. Every write to a source file either lands whole or does not happen at
+  all. gdmutant rewrites the user's own file twice per mutant (§4), and a plain in-place write empties
+  the file before putting anything back, so a crash inside that window would destroy the file instead
+  of leaving a readable mutant on it. Instead the new text goes to a temporary file in the target's
+  own directory, is flushed all the way to the disk, and is then moved onto the target with a rename,
+  which is a single filesystem operation. Staying inside one directory is what keeps it single: across
+  a filesystem boundary the move would degrade into a copy, the very non-atomic write being avoided. A
+  symbolic link is resolved first, so the real file is the one rewritten rather than the link
+  replaced, and a file the user marked read-only is refused rather than quietly replaced. There is no
+  degraded path. Anything that stops the staged write, a full disk or a lock that never clears, raises
+  an error and changes nothing, so the file still holds exactly what it held before that particular
+  write. That is an atomicity guarantee, not a promise that the original survives. gdmutant writes
+  each file twice per mutant (§4), so when the write that fails is the restore, the mutant is what
+  stays on disk. The error message says so plainly, and the fix is to restore the file from git. A
+  fallback that wrote in place would be worse still, having already emptied the file by the time its
+  own write failed, which is the outcome this requirement exists to prevent.
 
 ---
 
@@ -180,6 +245,23 @@ graph TD
 | tally (in engine) | The jury foreman | Classify each mutant (FG-4) and compute the score. |
 | reporter (in engine) | The court record | Emit the `mutation-testing-elements` JSON + the console summary (FG-5). |
 
+### Where a mutant is applied
+
+gdmutant mutates the project's real source files in place. For each mutant the engine writes the
+mutated text over the file itself, runs the suite against it, and writes the original back in a
+`finally` ([ADR-0003](../decisions/0003-mutation-application-strategy.md)). The suite loads code from
+disk through `res://`, so there is nowhere else to put a mutant the tests would actually see. The
+engine restores the file whenever it is still running to do so, but a process killed outright cannot
+restore anything, so a hard kill can leave a mutant on disk. A failed restore does the same thing with
+no crash at all: when a full disk or a lock that outlasts the retries stops that second write, it
+raises and the mutant stays where it is. This is why gdmutant warns when git holds no copy of a file
+it is about to mutate, and why `--require-clean` refuses to start without one. NF-7 governs what each
+individual write guarantees, and what it does not.
+
+Under `--jobs N` this changes. Each worker gets its own copy of the whole project and mutates the file
+inside that copy, so workers can never collide on one file and the real source is never written to on
+that path.
+
 ### Mutation mechanism: the one open design question
 
 Whether the adapter re-emits by *unparsing the
@@ -187,11 +269,20 @@ gdtoolkit tree* or by *precise AST-guided source-span edits* is settled by a sho
 implementation (fidelity: does a round-trip preserve formatting/comments?). NF-5's re-parse guard makes
 either choice safe. This is the only piece deliberately left for the spike. Everything else above is fixed.
 
+Settled by [ADR-0002](../decisions/0002-mutation-mechanism-source-span-editing.md), which chose
+AST-guided source-span editing. The spike found that gdtoolkit offers no way to unparse an arbitrary
+mutated tree, and that its formatter reflows whole files, which would bury a survivor's diff in
+unrelated reformatting. The tree only locates the token span, and the engine replaces exactly that
+span in the original text, so everything around the mutation stays as the author wrote it. The
+question is kept as written above because this document records the design as it stood.
+
 ---
 
 ## 5. Build plan
 
 ### Tier A: the minimal runnable milestone (v0.1)
+
+All five shipped.
 
 1. Adapter spike: decide the mutation mechanism (unparse vs. source-span), prove a single `>`→`>=` mutant
    round-trips to valid GDScript.
