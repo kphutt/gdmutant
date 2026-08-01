@@ -250,13 +250,7 @@ def test_console_summary_survives_a_form_feed_earlier_in_the_file(tmp_path: Path
     # physical line the survivor block shows. The parser (gdtoolkit/lark, matching engine.spans's
     # `_NEWLINE = "\n"`) counts line 3 as `\tif x > y:`; splitlines() would instead insert a phantom
     # blank line and report line 3 as `func foo(x, y):` -- the wrong line, with no `>` on it at all.
-    source = (
-        "const A = 1  # note\x0c\n"
-        "func foo(x, y):\n"
-        "\tif x > y:\n"
-        "\t\treturn x\n"
-        "\treturn y\n"
-    )
+    source = "const A = 1  # note\x0c\nfunc foo(x, y):\n\tif x > y:\n\t\treturn x\n\treturn y\n"
     path = tmp_path / "example.gd"
     path.write_text(source, encoding="utf-8")
     mutant = Mutant(str(path), Span(3, 7, 3, 8), "comparison", ">", ">=")
@@ -274,13 +268,7 @@ def test_job_summary_markdown_survives_a_form_feed_earlier_in_the_file(tmp_path:
     # Same desync as the console block, through the Markdown job-summary surface
     # (`_read_source_lines` feeds both, plus the assert/enum classification — all three go wrong
     # together).
-    source = (
-        "const A = 1  # note\x0c\n"
-        "func foo(x, y):\n"
-        "\tif x > y:\n"
-        "\t\treturn x\n"
-        "\treturn y\n"
-    )
+    source = "const A = 1  # note\x0c\nfunc foo(x, y):\n\tif x > y:\n\t\treturn x\n\treturn y\n"
     path = tmp_path / "example.gd"
     path.write_text(source, encoding="utf-8")
     mutant = Mutant(str(path), Span(3, 7, 3, 8), "comparison", ">", ">=")
