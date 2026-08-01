@@ -260,6 +260,82 @@ def test_baseline_failure_message_includes_suite_detail(tmp_path: Path) -> None:
         run(str(tmp_path), path, src, DetailRunner())
 
 
+def test_a_zero_test_baseline_is_refused(tmp_path: Path) -> None:
+    # SuiteResult(0, 0, 0).failed is False, so a baseline that ran NOTHING reads exactly like one
+    # that passed — and then every mutant survives, producing a whole report of false survivors with
+    # no error anywhere. The quietest way this tool can lie, and reachable from a typo in --tests.
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path = _write(tmp_path, "f.gd", src)
+    # Pinned the way its sibling `test_baseline_failure_raises` pins the red-baseline message: the
+    # whole opening clause including the project-dir repr, not just the distinctive words. Matching
+    # on "reported 0 tests" alone left the prefix untested, so a mutant that stopped naming *which*
+    # project failed survived (caught by the line-scoped mutation run for this change).
+    with pytest.raises(
+        BaselineFailed, match=r"the unmutated \(baseline\) test suite for '.+' reported 0 tests"
+    ):
+        run(str(tmp_path), path, src, ScriptedRunner([SuiteResult(tests=0, failures=0, errors=0)]))
+    assert Path(path).read_text(encoding="utf-8") == src
+
+
+def test_the_zero_test_baseline_guard_is_language_neutral(tmp_path: Path) -> None:
+    # It lives in the engine (NF-3), so its message must describe the CONDITION and never a
+    # framework: naming GdUnit4/GUT/-gdir here would be a GDScript assumption in engine/, and the
+    # check exists precisely because it must cover every runner, including ones not written yet.
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path = _write(tmp_path, "f.gd", src)
+    with pytest.raises(BaselineFailed) as excinfo:
+        run(str(tmp_path), path, src, ScriptedRunner([SuiteResult(tests=0, failures=0, errors=0)]))
+    message = str(excinfo.value)
+    for framework_word in ("GdUnit4", "GUT", "-gdir", "godot", "Godot", "GDScript"):
+        assert framework_word not in message, f"engine message names {framework_word}: {message}"
+
+
+def test_a_zero_test_baseline_is_refused_by_run_paths(tmp_path: Path) -> None:
+    # The multi-file entry point shares `_run_baseline`, so it must refuse identically — a guard
+    # that covered only `run` would leave the directory path (the common CLI invocation) exposed.
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path = _write(tmp_path, "f.gd", src)
+    with pytest.raises(BaselineFailed, match="reported 0 tests"):
+        run_paths(
+            str(tmp_path), {path: src}, ScriptedRunner([SuiteResult(tests=0, failures=0, errors=0)])
+        )
+
+
+def test_a_zero_test_mutant_run_is_an_error_not_a_survivor(tmp_path: Path) -> None:
+    # The mutant-side half of the same guard. The baseline proved this project collects tests, so a
+    # later run collecting none did not "pass" — collection collapsed, most likely because the
+    # mutant broke a file the suites load. SURVIVED there is a false survivor; ERROR is honest, and
+    # is excluded from the score rather than inflating it.
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"  # one mutant: '>'
+    path = _write(tmp_path, "f.gd", src)
+    runner = ScriptedRunner(
+        [
+            SuiteResult(tests=3, failures=0, errors=0),  # healthy baseline
+            SuiteResult(tests=0, failures=0, errors=0),  # mutant: nothing collected
+        ]
+    )
+    result = run(str(tmp_path), path, src, runner)
+    assert [o.verdict for o in result.outcomes] == [Verdict.ERROR]
+    assert (result.survived, result.errors) == (0, 1)
+    assert result.mutation_score is None  # errors are excluded, never scored as detected
+
+
+def test_a_zero_test_mutant_run_that_also_failed_stays_a_kill(tmp_path: Path) -> None:
+    # The zero-test check must not steal a genuine detection: a run reporting no tests but a real
+    # error/failure already surfaced the mutation, so it stays KILLED. Guards the check's `and not
+    # result.failed` clause, which a naive `tests == 0` would drop.
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    path = _write(tmp_path, "f.gd", src)
+    runner = ScriptedRunner(
+        [
+            SuiteResult(tests=3, failures=0, errors=0),  # healthy baseline
+            SuiteResult(tests=0, failures=0, errors=2),  # mutant: the suite errored out
+        ]
+    )
+    result = run(str(tmp_path), path, src, runner)
+    assert [o.verdict for o in result.outcomes] == [Verdict.KILLED]
+
+
 def test_baseline_runner_exception_becomes_baseline_failed(tmp_path: Path) -> None:
     # A runner that can't even run the unmutated suite (e.g. a missing godot binary) surfaces as
     # BaselineFailed, not a raw traceback.

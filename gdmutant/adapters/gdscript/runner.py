@@ -6,7 +6,10 @@ command-line tool, then parse the JUnit report it writes (via `engine.runner.par
 is framework-neutral). Neither is privileged in the engine — the engine only ever sees a `Runner`.
 The shared machinery (the import warm-up, the report-freshness guard, timeout handling, JUnit
 parsing) lives in `_GodotJUnitRunner`; each concrete adapter supplies only its own command flags and
-its own **crash-safety** enforcement (see the class docstrings and `engine.runner.Runner`).
+its own **crash-safety** enforcement (see the class docstrings and `engine.runner.Runner`). Each
+framework fails differently, so each adapter's enforcement is shaped to *its* failure — GdUnit4
+aborts the whole run at discovery, GUT skips the broken suite and runs the rest green — and both are
+pinned by a live n>1 probe rather than assumed (`tests/test_selftest_live.py`).
 
 For a framework that emits no JUnit XML, the generic exit-code `CommandRunner` (ADR-0005) is the
 documented fallback — so the seam is *two* first-class JUnit adapters plus one universal exit-code
@@ -30,6 +33,15 @@ from gdmutant.engine.runner import SuiteResult, SuiteTimeout, parse_junit_xml, w
 
 _GDUNIT_CMD_TOOL = "res://addons/gdUnit4/bin/GdUnitCmdTool.gd"
 _GUT_CMD_TOOL = "res://addons/gut/gut_cmdln.gd"
+
+#: What GdUnit4 prints, and then exits 0 writing no report, when discovery finds no test suites
+#: under ``-a`` — a wrong ``--tests`` path, or a directory holding no suites (verified live against
+#: GdUnit4 v6.1.3 + Godot 4.7, both for a real directory with no suites and for one that does not
+#: exist). Matching on it is what lets `GdUnit4Runner` tell "you pointed me at the wrong directory"
+#: apart from "Godot crashed", which the bare absence of a report cannot distinguish. Matching is
+#: **fail-safe**: if a future GdUnit4 reworded this, the hint simply stops appearing and the generic
+#: no-report error is raised as before — the run still fails, it is only diagnosed less precisely.
+_GDUNIT_NO_TESTS_MARKER = "No test cases found"
 
 # The runners' defaults, exposed so the CLI can present them (and its --report-path/--timeout
 # defaults) from one source, without reading them off a class at parse time (which breaks when a
@@ -61,8 +73,11 @@ class _GodotJUnitRunner:
       * `command` — its own ``godot --headless`` invocation (different flags per framework);
       * `_result_from_report` — its **crash-safety** enforcement (`engine.runner.Runner`): the
         property that a load/compile crash surfaces as a kill or error, never a silent zero-test
-        pass. The base default just parses (GdUnit4 relies on the report-reappear guard); GUT
-        overrides it to reject a zero-test report.
+        pass. Abstract, with no permissive default (see the method): both adapters reject a
+        zero-test report, and GUT additionally rejects a drop below its healthy baseline count (the
+        shape only GUT produces — see the two class docstrings).
+      * `_missing_report_error` — optionally, a better error for "this run wrote no report", when
+        the framework names the cause in its own output (GdUnit4 does, for empty discovery).
     """
 
     # Attributes each concrete adapter dataclass provides. Declared here (no value) so the base's
@@ -128,14 +143,38 @@ class _GodotJUnitRunner:
         """The ``godot --headless`` command that runs this framework's suite for `project_dir`."""
         raise NotImplementedError
 
-    def _result_from_report(
+    def _result_from_report(  # pragma: no cover - overridden per adapter
         self, report_text: str, completed: subprocess.CompletedProcess[str]
     ) -> SuiteResult:
         """Parse this run's report into a `SuiteResult`, enforcing the adapter's **crash-safety**
-        contract (`engine.runner.Runner`) as it does. The base default just parses (GdUnit4 upholds
-        the contract via the report-reappear guard in `run`, so a crash never reaches here). GUT
-        overrides this to make a zero-test report an explicit error."""
-        return parse_junit_xml(report_text)
+        contract (`engine.runner.Runner`) as it does.
+
+        **Abstract on purpose, with no parse-only default.** There used to be one, and GdUnit4
+        inherited it — which is how the default runner ended up with no crash-safety enforcement of
+        its own, resting entirely on a claim measured once. A permissive default is the wrong shape
+        for this method: forgetting to override it produces no error, just a runner that quietly
+        returns a pass for a run that never happened. Making it abstract turns that omission into a
+        `NotImplementedError` the first time the adapter is used, so every new adapter has to state
+        how *its* framework fails.
+        """
+        raise NotImplementedError
+
+    def _missing_report_error(
+        self, report: Path, completed: subprocess.CompletedProcess[str]
+    ) -> RuntimeError:
+        """The error `run` raises when this invocation wrote no report at all.
+
+        Overridable so an adapter can name a cause it can actually *recognise* in the captured
+        output. The base wording is deliberately hedged ("may have failed to run") because from the
+        report's absence alone the cause is genuinely unknown: a Godot crash, a missing addon, or a
+        mutant that broke loading all look identical here. `GdUnit4Runner` overrides it for the one
+        case GdUnit4 announces by name.
+        """
+        detail = (completed.stderr or completed.stdout or "").strip()
+        return RuntimeError(
+            f"{self._framework} wrote no report at {report} — Godot may have failed to run"
+            + (f":\n{detail[-1000:]}" if detail else "")
+        )
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         # Warm Godot's import cache once (before the very first suite run) so the framework's
@@ -174,13 +213,9 @@ class _GodotJUnitRunner:
         except FileNotFoundError as error:
             raise with_filename(error, self.godot) from error
         if not report.exists():
-            detail = (completed.stderr or completed.stdout or "").strip()
-            raise RuntimeError(
-                f"{self._framework} wrote no report at {report} — Godot may have failed to run"
-                + (f":\n{detail[-1000:]}" if detail else "")
-            )
-        # Parse under the adapter's crash-safety contract: GdUnit4 just parses; GUT rejects a
-        # zero-test report (its empty-report-on-compile-crash form) rather than returning a pass.
+            raise self._missing_report_error(report, completed)
+        # Parse under the adapter's crash-safety contract — both adapters reject a zero-test report
+        # rather than returning a pass; GUT additionally rejects a drop below its baseline count.
         return self._result_from_report(report.read_text(encoding="utf-8"), completed)
 
 
@@ -191,9 +226,34 @@ class GdUnit4Runner(_GodotJUnitRunner):
     `test_path` is the GdUnit4 test directory (a ``res://`` path). `report_path` is where GdUnit4
     writes its JUnit XML, relative to the project dir. `godot` is the Godot executable.
 
-    Crash-safety (`engine.runner.Runner`): GdUnit4 writes *no* report when a test file fails to
-    load, which the base's report-reappear guard raises on — so the base's plain
-    ``_result_from_report`` (which just parses) suffices; no override is needed.
+    **Crash-safety (`engine.runner.Runner`) — and why it is shaped differently from GUT's.**
+    GdUnit4 loads every suite in the scanned directory *up front*, during discovery, and a suite it
+    cannot parse aborts the **whole run**: it prints "Script errors were detected during test
+    discovery!", exits 105, and writes **no report**. It does not skip the broken suite and run the
+    rest, which is exactly what GUT does. So the base's report-reappear guard is what catches a
+    compile crash here, and no baseline-test-count-drop guard is needed: there is no
+    healthy-suites-still-green report for a drop to be measured against.
+
+    That is now **measured at n>1, not assumed**. ADR-0011 originally justified the guard with "a
+    crash writes no report" observed against a single-suite corpus, which is the same n=1 evidence
+    GUT also passed before its live probe proved it skips-and-continues. The corpus now carries a
+    second, independent GdUnit4 suite (``corpus/test/test_independent.gd``) and
+    ``tests/test_selftest_live.py`` runs the same probe GUT gets: healthy baseline, break
+    ``turn_order.gd``, run again. Observed against GdUnit4 v6.1.3 + Godot 4.7 (2026-08-01): the run
+    aborted at discovery with **no report**, and the healthy suite never ran.
+
+    Two guards nonetheless, because "the version we measured" is not "the contract":
+      * **``tests == 0`` (or an unparseable report) → error.** ``SuiteResult(0, 0, 0).failed`` is
+        False, so a zero-test report reads as a clean pass and would mark the mutant SURVIVED. No
+        GdUnit4 version we have run writes such a report — this exists so the *contract* does not
+        rest on that, and it costs one comparison. A zero-test **report** is different from
+        zero-test **discovery**: discovery writes nothing at all and is handled by
+        `_missing_report_error` below, which is where a misconfigured ``--tests`` actually lands.
+      * **No drop guard, deliberately.** GUT needs one because it skips-and-continues; GdUnit4 does
+        not, on the evidence above, and inventing one would risk erroring on benign variance for a
+        failure mode this framework does not have. The live probe is the trigger: if a future
+        GdUnit4 starts skipping broken suites, the probe fails in gdmutant's own gate and *that* is
+        when the guard gets widened — the same discipline `GutRunner`'s canary uses.
     """
 
     test_path: str = "res://test"
@@ -236,6 +296,60 @@ class GdUnit4Runner(_GodotJUnitRunner):
             "1",
             "--ignoreHeadlessMode",
         ]
+
+    def _result_from_report(
+        self, report_text: str, completed: subprocess.CompletedProcess[str]
+    ) -> SuiteResult:
+        """Crash-safety (see the class docstring): a report GdUnit4 *did* write, but describing zero
+        tests, is an error rather than a pass.
+
+        ``SuiteResult(0, 0, 0).failed`` is False, so returning it would mark the mutant SURVIVED off
+        a run in which nothing executed. No GdUnit4 version measured here writes that report — it
+        writes none at all when discovery comes up empty (`_missing_report_error`) and none at all
+        when a suite fails to parse. The guard exists so the crash-safety contract holds by
+        construction rather than by that observation, which is the assumption that made the GUT
+        false-survivor possible in the first place.
+        """
+        try:
+            result = parse_junit_xml(report_text)
+        except ValueError:
+            result = None  # a report with no <testsuite> at all — a run that described nothing
+        if result is None or result.tests == 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise RuntimeError(
+                f"GdUnit4 wrote a report describing 0 tests under {self.test_path}, so nothing "
+                "actually ran. That cannot be a passing suite, and treating it as one would report "
+                "this mutant as SURVIVED off a run that never happened"
+                + (f":\n{detail[-1000:]}" if detail else "")
+            )
+        return result
+
+    def _missing_report_error(
+        self, report: Path, completed: subprocess.CompletedProcess[str]
+    ) -> RuntimeError:
+        """The base's no-report error, except when GdUnit4 said *why* — then say that instead.
+
+        GdUnit4 exits **0** and writes no report when discovery finds no suites under ``-a``,
+        printing `_GDUNIT_NO_TESTS_MARKER`. The base's wording ("Godot may have failed to run")
+        sends that user to debug a crash that is not happening and never names the flag that fixes
+        it — the same wrong-diagnosis problem `GutRunner` solves for its own zero-test baseline.
+        Here the framework announces the cause, so this reads it rather than guessing from run
+        order.
+
+        Deliberately does **not** contain "wrote no report": `cli._gdunit4_addon_hint` keys on that
+        phrase to offer "install the GdUnit4 addon", which would be wrong advice here — printing
+        this marker at all proves the addon loaded.
+        """
+        output = (completed.stdout or "") + (completed.stderr or "")
+        if _GDUNIT_NO_TESTS_MARKER not in output:
+            return super()._missing_report_error(report, completed)
+        return RuntimeError(
+            f"GdUnit4 discovered no test suites under {self.test_path}, so it ran nothing and "
+            "produced no report. This is test discovery rather than a crash — GdUnit4 said so "
+            f"itself ({_GDUNIT_NO_TESTS_MARKER!r}). Point gdmutant at the directory holding your "
+            "suites with --tests res://<your test dir>, and check they are GdUnit4 suites "
+            "(extending GdUnitTestSuite)"
+        )
 
 
 @dataclass
