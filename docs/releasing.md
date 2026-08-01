@@ -81,26 +81,38 @@ Verify the result at https://test.pypi.org/p/gdmutant.
 6. Review the draft on GitHub and press Publish. The generated notes are a raw commit list. Edit
    them into something worth reading, with this version's `CHANGELOG.md` entry as the source.
    Publishing is what fires `publish.yml`, and only then does anything reach PyPI.
-7. *Automatic.* `publish.yml` re-runs the two provenance guards and adds five more: a full-history
-   secret scan, `verify` on Linux *and* Windows, the license gate, and both Godot self-tests, every
-   one of them before the upload job is granted its OIDC token ([ADR-0012](decisions/0012-merge-time-local-ship-time-cloud.md)).
-   The Godot legs make this a slow run, not a quick one. A guard that fails stops the upload while
+7. *Automatic.* `publish.yml` runs the release gate. Remember the structure rather than a list of
+   job names: every job in `publish-pypi`'s `needs:` is a guard, each one is a hard dependency with
+   no `if: always()` to soften it, and GitHub skips a job whose `needs:` failed or was itself
+   skipped, so a red guard stops the upload before the OIDC token is minted and no guard can be
+   waved through ([ADR-0012](decisions/0012-merge-time-local-ship-time-cloud.md)). The workflow's
+   header comment names each guard and says what it is for, and
+   `gh run view --workflow publish.yml` shows the live set with the result of each. Real Godot runs
+   in there, so this is a slow run, not a quick one. A guard that fails stops the upload while
    leaving the Release published. Fix the cause and re-run the failed jobs from the Actions tab
    (a re-run replays the same `release: published` event), or cut a new version if the fix needs a
    code change.
-8. Verify what shipped. The project page is at https://pypi.org/p/gdmutant, and the checklist
+8. *Automatic, and after the upload.* `verify-published` installs the released version from the
+   index and runs it. It sits outside the gate on purpose, so a red result there reports on a
+   version that is already public rather than stopping a release. Details are under
+   [Recurring](#recurring-every-release), item 1.
+9. Verify what shipped. The project page is at https://pypi.org/p/gdmutant, and the checklist
    below covers what a green upload does not prove.
 
 ## After the release
 Almost everything that can be wrong with a release is invisible from the inside. The maintainer's
 browser is signed in, their machine already has the source, and their clone already has the tag, so
 the page 404s for a stranger, the install pulls files nobody else receives, and the `uses:` line
-resolves to a ref only this account can see. A green publish run says the upload succeeded. It says
-nothing about any of that.
+resolves to a ref only this account can see. A green publish run proves more than a successful
+upload. It proves the package installs from the index and runs there, and that every image in the
+long description resolves. What it cannot prove is what a stranger sees: a signed-out project page,
+a published action ref resolving from somebody else's repository, and the links and badges on the
+repository front page.
 
 Each item below is one action and the result that counts as a pass. Recurring items belong to
 every release. One-time items are setup: do them once, confirm them once, and never re-check them
-at release time.
+at release time. Where a job in `publish.yml` already answers an item, the item says so and the
+manual version becomes the way to reproduce a failure by hand.
 
 ### Recurring: every release
 
@@ -118,9 +130,15 @@ at release time.
    An editable install, a `pip install dist/*.whl`, or any command run from a checkout proves none
    of it, because each reads files a stranger never receives. The install has to resolve by name,
    from the index. Index propagation takes a few minutes, so a `404` straight after the upload means
-   wait, not fail. *Automatable:* a job in `publish.yml` gated on the upload, installing
-   `gdmutant==X.Y.Z` from the index with a retry and asserting `gdmutant --version`, turns this into
-   a gate.
+   wait, not fail. *Automated:* `publish.yml`'s `verify-published` job does this for every release.
+   It installs the released version from the index into a throwaway virtualenv outside the
+   workspace, retries while the index propagates, asserts the version, asserts that `gdmutant`
+   imported from that virtualenv rather than from a checkout on the path, and mutates a scratch file
+   with `--dry-run`. Run the commands above by hand when that job goes red and you want to watch the
+   failure yourself. It is not a gate and no ordering can make it one: it has to run after the
+   upload, because the only way to ask what the index serves is to publish first, and by then the
+   version number is spent. Its own comment in `publish.yml` says exactly that, so nobody reads the
+   green check as permission.
 
 2. Open the project page signed out. https://pypi.org/p/gdmutant in a private window.
 
@@ -131,9 +149,12 @@ at release time.
    PyPI renders the description with its own renderer and fetches images through its own proxy, so a
    banner that is fine on the repo front page can still fail here. A release's description is
    frozen at upload, so the only fix for a broken one is another version number. `twine check`, in
-   the build job, proves the description *renders*. It never fetches an image. *Automatable:* a
-   release-time step that pulls the image URLs out of the built long description and fails on a
-   non-200 makes this a gate instead of a look.
+   the build job, proves the description *renders*. It never fetches an image. *Automated:*
+   `publish.yml`'s `readme-images` job pulls the image URLs out of the built distribution's
+   long-description metadata, not out of `README.md`, which deliberately differs because the build
+   rewrites the banner into a tag-pinned absolute URL. A non-200 fails the job, and the job is in
+   `publish-pypi`'s `needs:`, so this half really is a gate. The rest of the pass line above, the
+   formatting and the version and the sidebar links, is still a look.
 
 3. Run the action from a consumer's seat. In a *separate* repository, add a workflow that pins
    the published ref the action's documentation tells consumers to use, passes the documented inputs,
@@ -175,9 +196,12 @@ at release time.
 - Private vulnerability reporting is on. `SECURITY.md` sends reporters to GitHub's private
   advisory form, and that form exists only where the setting is enabled. It is an option for public
   repositories, found in the repository's settings among the security options. *Pass:*
-  `gh api repos/<owner>/<repo>/private-vulnerability-reporting` answers instead of returning `404`,
-  and the repository's Security tab offers "Report a vulnerability". Nothing ever signals this
-  is broken: a reporter who finds no form does not fall back to email, they give up quietly.
+  `gh api repos/<owner>/<repo>/private-vulnerability-reporting --jq .enabled` prints `true`, and the
+  repository's Security tab offers "Report a vulnerability". Judge the body, never the status code.
+  On a public repository that endpoint answers either way, returning `{"enabled": false}` when the
+  setting is off, so treating any non-404 as a pass reports success whether the form exists or not.
+  A `404` there is a different fact altogether, that the repository is private. Nothing ever signals
+  this is broken: a reporter who finds no form does not fall back to email, they give up quietly.
   *Automatable:* `scripts/harden_github.py` already converges repository settings through `gh api`,
   and this belongs in it.
 
@@ -202,9 +226,13 @@ at release time.
   reverse, by design". Follow them there rather than from here, so the two cannot drift. *Pass:*
   signed out, the badge on the repository front page shows a real result, passing or failing, instead
   of "no status". One knock-on to know about: this changes which checks report on a pull request, and
-  `scripts/harden_github.py` converges branch protection, so the required-check list it applies has to
-  match the checks that really report. A required check nothing reports blocks every pull request
-  forever.
+  `scripts/harden_github.py` converges branch protection off the back of that. The script carries no
+  hand-written list. It reads the workflow files, derives each context string including the matrix
+  suffixes GitHub appends, and refuses to require a job whose workflow no pull request triggers, so
+  the usual version of this mistake is caught for you. Run
+  `uv run python scripts/harden_github.py --check` after the change and read what it reports anyway,
+  because the stake is worth a second look: a required check that nothing reports blocks every pull
+  request forever.
 
 ### What is still fixable afterwards
 - The GitHub Release's title and notes: editable at any time.
