@@ -332,9 +332,9 @@ class GdUnit4Runner(_GodotJUnitRunner):
         GdUnit4 exits **0** and writes no report when discovery finds no suites under ``-a``,
         printing `_GDUNIT_NO_TESTS_MARKER`. The base's wording ("Godot may have failed to run")
         sends that user to debug a crash that is not happening and never names the flag that fixes
-        it — the
-        same wrong-diagnosis problem `GutRunner` solves for its own zero-test baseline. Here the
-        framework announces the cause, so this reads it rather than guessing from run order.
+        it — the same wrong-diagnosis problem `GutRunner` solves for its own zero-test baseline.
+        Here the framework announces the cause, so this reads it rather than guessing from run
+        order.
 
         Deliberately does **not** contain "wrote no report": `cli._gdunit4_addon_hint` keys on that
         phrase to offer "install the GdUnit4 addon", which would be wrong advice here — printing
