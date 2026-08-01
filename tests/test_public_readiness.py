@@ -128,7 +128,69 @@ _WINDOWS_HOME = _spelled("C:", "\\", "users", "\\")
 _MAC_HOME = _spelled("/", "users", "/")
 _LINUX_HOME = _spelled("/", "home", "/")
 
+#: Prefixes that legitimately sit in front of a number in this repository. Every one is public:
+#: this project's own requirement and decision ids, character encodings, SPDX licence ids, the two
+#: supported test frameworks, ruff's rule codes, public standards bodies, and the made-up prefix
+#: this module's own tests use. Naming them leaks nothing, which is the whole point: an allowlist
+#: of *public* prefixes lets the rule below name no private one.
+#:
+#: A new legitimate prefix appearing in the tree fails this rule until it is added here. That is
+#: the intended direction. The failure is loud and the fix is one line, whereas the opposite
+#: default -- a rule that only knows the private prefixes it was told about -- is the thing this
+#: rule replaced, and it caught exactly one.
+_PUBLIC_ID_PREFIXES = (
+    "ADR",  # this repo's decision records
+    "FG",
+    "NF",  # this repo's requirement ids in DESIGN.md
+    "UTF",  # character encodings
+    "BSD",
+    "GPL",
+    "LGPL",
+    "SSPL",
+    "BUSL",
+    "PSF",
+    "MIT",
+    "APACHE",  # SPDX licence ids
+    "GUT",
+    "GDUNIT",  # the two supported test frameworks
+    "BLE",
+    "RUF",  # ruff rule codes
+    "RFC",
+    "ISO",
+    "CVE",
+    "SHA",
+    "PEP",  # public standards
+    "WDG",  # the invented prefix this module's own tests use
+)
+
+#: A tracker id is a shape, not a word: a short uppercase prefix and a number. Writing the rule
+#: structurally, and excusing only the *public* prefixes above, means it needs no private word list
+#: and therefore runs on every machine -- including a CI runner, which has no private word list at
+#: all. It replaces a deleted rule that matched one hardcoded private prefix, so it is strictly
+#: wider: any tracker's ids are caught, including ones nobody has thought of yet.
+#:
+#: Upper case only. The lowercase shape (`utf-8`, `ubuntu-24`, `mypy-1`) matched 925 times across
+#: this tree against 210 for the uppercase one, so a case-insensitive version would be noise, and
+#: a rule that fails on innocent text gets switched off. A lowercased ticket id is left to the
+#: private vocabulary, which is the right place for a spelling that only a word list can tell from
+#: an ordinary word.
+_TRACKER_REFERENCE = re.compile(
+    r"\b(?!(?:" + "|".join(_PUBLIC_ID_PREFIXES) + r")-?\d)[A-Z]{2,6}-?\d+\b"
+)
+
 RULES: tuple[Rule, ...] = (
+    Rule(
+        name="a tracker ticket reference",
+        # Kept in RULES, not moved into the private vocabulary, precisely because it names nothing.
+        # The vocabulary half does not run on a machine with no word list, so a rule that lives
+        # only there is a rule a CI runner never applies. This one applies everywhere.
+        pattern=_TRACKER_REFERENCE,
+        fix=(
+            "the tracker is private and its ids mean nothing to a reader here. Link a GitHub "
+            "issue, or write the requirement out. If the prefix is a public standard or one of "
+            "this project's own id schemes, add it to _PUBLIC_ID_PREFIXES instead."
+        ),
+    ),
     Rule(
         name="a possessive that can only mean a person",
         # A demonstrative or a first-person pronoun in front of `operator's` never describes a
@@ -1673,6 +1735,103 @@ def test_a_home_directory_is_a_hit_however_it_is_spelled(
     rule = _rule_named("a path inside somebody's home directory")
     planted = _plant(tree, "docs/setup.md", "the checkout is at " + tail + "\n")
     assert bool(_matches(rule.pattern, [planted])) is leaks
+
+
+# The tracker rule. It replaced a deleted one that named a single private prefix, and it is here
+# rather than in the private vocabulary because a tracker id is a *shape*. The vocabulary half does
+# not run on a machine with no word list, so anything that can be structural has to stay structural
+# or it stops being checked exactly where nobody is looking.
+
+#: A ticket id whose prefix is on no allowlist. Assembled, because this module is scanned by the
+#: rule it is testing, and a real-looking id written out here would be reported by it.
+_A_TICKET_ID = _spelled("ZQX", "-", "77")
+
+
+def test_a_tracker_id_with_an_unknown_prefix_is_a_hit(tree: Path) -> None:
+    rule = _rule_named("a tracker ticket reference")
+    planted = _plant(tree, "docs/notes.md", "tracked as " + _A_TICKET_ID + " on the board\n")
+    assert [match.matched for match in _matches(rule.pattern, [planted])] == [_A_TICKET_ID]
+
+
+def test_a_tracker_id_is_caught_whatever_tracker_it_came_from(tree: Path) -> None:
+    # The rule the deleted one could not be: it knew one private prefix, so a second tracker's ids
+    # walked straight past it. A shape does not have that problem.
+    rule = _rule_named("a tracker ticket reference")
+    for prefix in ("ZQX", "QQ", "ABCDEF"):
+        planted = _plant(tree, "docs/notes.md", f"see {prefix}-12 for the history\n")
+        assert _matches(rule.pattern, [planted]), f"{prefix}-12 walked past the rule"
+
+
+def test_a_tracker_id_written_without_its_dash_is_still_a_hit(tree: Path) -> None:
+    rule = _rule_named("a tracker ticket reference")
+    planted = _plant(tree, "docs/notes.md", "tracked as " + _spelled("ZQX", "77") + " somewhere\n")
+    assert _matches(rule.pattern, [planted])
+
+
+@pytest.mark.parametrize("prefix", _PUBLIC_ID_PREFIXES)
+def test_every_public_prefix_is_excused(tree: Path, prefix: str) -> None:
+    # Parametrised over the constant itself, so adding a prefix without meaning it fails here.
+    rule = _rule_named("a tracker ticket reference")
+    planted = _plant(tree, "docs/notes.md", f"see {prefix}-3 for the details\n")
+    assert not _matches(rule.pattern, [planted]), f"{prefix}-3 should be excused"
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        _spelled("ADRX", "-", "12"),
+        _spelled("NFC", "-", "9"),
+        _spelled("UTFX", "-", "8"),
+        _spelled("GUTS", "-", "1"),
+    ],
+    ids=["longer than ADR", "longer than NF", "longer than UTF", "longer than GUT"],
+)
+def test_a_prefix_that_merely_starts_with_a_public_one_is_not_excused(
+    tree: Path, spelling: str
+) -> None:
+    """The trap #196 fell into, in the other rule, applied here before it can be fallen into again.
+
+    That fix ended a negative lookahead at a word boundary, which excused every account merely
+    *starting* with the six letters it meant to excuse. This lookahead ends at the digits instead,
+    so the excused prefix has to be the whole prefix: a decision record is excused, a ticket whose
+    prefix merely opens with those same three letters is not.
+
+    The spellings are assembled rather than written, because this module is scanned by the rule
+    under test and a bare one of these would be reported as a real finding.
+    """
+    rule = _rule_named("a tracker ticket reference")
+    planted = _plant(tree, "docs/notes.md", f"see {spelling} for the details\n")
+    assert _matches(rule.pattern, [planted]), f"{spelling} was wrongly excused"
+
+
+def test_the_tracker_rule_is_deliberately_upper_case_only(tree: Path) -> None:
+    """A documented limit, pinned so nobody removes it by accident and nobody trusts it too far.
+
+    Lowercased, this shape is `utf-8`, `ubuntu-24`, `mypy-1`: 925 matches across this tree against
+    210 for the uppercase one. A rule that fails on innocent text gets switched off, so the
+    lowercase spelling of a ticket id is left to the private vocabulary instead -- which means it
+    is one of the things a machine with no word list does not check.
+    """
+    rule = _rule_named("a tracker ticket reference")
+    planted = _plant(tree, "docs/notes.md", "see " + _A_TICKET_ID.lower() + " for the history\n")
+    assert not _matches(rule.pattern, [planted])
+
+
+def test_the_tracker_rule_runs_without_any_private_word_list(
+    tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole reason this rule is in RULES rather than in the word list.
+
+    With the variable unset -- a CI runner, a fresh clone, and right now every machine -- the
+    vocabulary rule skips. This one still has to bite, or moving the vocabulary out of source
+    would have quietly stopped tracker ids being checked anywhere they are most likely to be
+    missed.
+    """
+    _declared(monkeypatch, None)
+    assert vocabulary_state()[0] == UNDECLARED
+    rule = _rule_named("a tracker ticket reference")
+    planted = _plant(tree, "docs/notes.md", "tracked as " + _A_TICKET_ID + " on the board\n")
+    assert [match.matched for match in _matches(rule.pattern, [planted])] == [_A_TICKET_ID]
 
 
 def test_the_tilde_home_the_rule_looks_for_is_the_real_one(tree: Path) -> None:
