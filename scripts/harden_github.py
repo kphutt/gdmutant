@@ -586,6 +586,18 @@ def _apply(desc: str, args: list[str], payload: dict | None, on_fail: str, dry_r
     return succeeded
 
 
+def _failure_count(results: list[bool]) -> int:
+    """How many of `_apply`'s results were not a genuine success.
+
+    Written as "not truthy" rather than ``results.count(False)`` on purpose. `_apply` is contracted
+    to return a real ``bool``, but this must not depend on that contract holding at every call site
+    forever: ``results.count(False)`` only catches a literal ``False`` — if some future edit ever
+    made `_apply` return ``None`` (or any other falsy stand-in) on a real failure, ``count(False)``
+    would silently treat it as a success, which is the exact failure mode this file exists to close.
+    """
+    return sum(1 for ok in results if not ok)
+
+
 def protection_payload(workflows: pathlib.Path | None = None) -> dict:
     """The branch-protection spec for `main`.
 
@@ -764,7 +776,7 @@ def main(argv: list[str] | None = None) -> int:
         print()
         report_state(args.repo, contexts)
 
-    failed = applied.count(False)
+    failed = _failure_count(applied)
     if failed:
         _warn(
             f"{failed} of {len(applied)} setting(s) failed to apply — see the [skip] lines above. "

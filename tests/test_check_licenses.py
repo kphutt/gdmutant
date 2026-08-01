@@ -119,9 +119,16 @@ def test_main_fails_when_pip_licenses_reports_zero_packages(
     )
 
     assert check_licenses.main() == 1
-    err = capsys.readouterr().err
-    assert "zero shipped packages" in err
-    assert "not a passing gate" in err
+    lines = capsys.readouterr().err.splitlines()
+    # Exact-line equality, not a substring check: a mutation that only pollutes the string's edges
+    # (e.g. wrapping the whole literal) still contains "zero shipped packages" as a substring, so
+    # only pinning the line verbatim closes that gap.
+    assert "License gate FAILED: pip-licenses reported zero shipped packages." in lines
+    assert (
+        "A gate that checks nothing is not a passing gate. This usually means a broken "
+        "`--no-dev` sync or a change to pip-licenses' output shape -- investigate before "
+        "merging; do not treat this as a clean run."
+    ) in lines
 
 
 def test_main_passes_when_packages_are_present_and_permissive(
