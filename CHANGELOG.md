@@ -156,5 +156,8 @@ CLI.
   the mutation never reached the project the tests ran against.
 - `.gdmutant.toml` cannot decide what gdmutant executes. Its `command` and `godot` keys name a
   program to run, and the file is read from the project directory, so in a project you cloned,
-  somebody else wrote it. Both keys are skipped, with an explanation, unless you add
-  `--trust-config` or name the program on the command line yourself. Every other key is unaffected.
+  somebody else wrote it. Either key makes gdmutant refuse the whole run, with an explanation, and
+  exit 2 without running anything, unless you add `--trust-config` or name the program on the
+  command line yourself, which always wins over the file. The refusal fires only where the file
+  would change what happens, so a key repeating a value you already passed, or the one gdmutant
+  would have used anyway, goes through in silence.
