@@ -123,9 +123,29 @@ ALLOWED_EMAIL_DOMAINS = (
 
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 
-#: Local git identities too generic to search a whole tree for without matching prose.
+#: Local git identities too generic to search a whole tree for without matching prose, plus the
+#: tool identities that legitimately appear all over this tree. A name only leaks privacy when it
+#: belongs to a person, so when the commits are authored by a bot or an assistant, that same name
+#: showing up in a file is the tool being discussed, not somebody being named. `claude` is here
+#: because this repo is developed largely through Claude Code sessions, whose git identity is
+#: `Claude`, and `CLAUDE.md` and the docs mention it throughout: without the entry the check
+#: fails the whole suite on its own primary contribution path.
 _GENERIC_GIT_NAMES = frozenset(
-    {"root", "user", "test", "admin", "build", "runner", "github-actions", "github-actions[bot]"}
+    {
+        "root",
+        "user",
+        "test",
+        "admin",
+        "build",
+        "runner",
+        "github-actions",
+        "github-actions[bot]",
+        "claude",
+        "claude code",
+        "claude[bot]",
+        "dependabot",
+        "dependabot[bot]",
+    }
 )
 
 
