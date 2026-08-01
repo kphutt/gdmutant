@@ -2300,6 +2300,39 @@ def test_main_since_no_changes_writes_an_empty_report_to_a_file(
     assert "Wrote report to" in capsys.readouterr().out
 
 
+def test_main_since_no_changes_relativizes_the_html_report_to_the_project(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The empty report is a real report, so it gets the same `--project` treatment: paths on the
+    # page are relative to the project root, not absolute ones carrying the author's directory
+    # layout. This is also what pins that the no-change path resolves the project dir at all.
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    source = tmp_path / "src" / "f.gd"
+    source.parent.mkdir()
+    source.write_text(_TWO_LINE_SRC, encoding="utf-8")
+    _git(tmp_path, "add", "src/f.gd")
+    _git(tmp_path, "commit", "-m", "base")
+    page = tmp_path / "r.html"
+    assert (
+        main(
+            [
+                "run",
+                str(source),
+                "--project",
+                str(tmp_path),
+                "--since",
+                "HEAD",
+                "--html",
+                str(page),
+            ]
+        )
+        == 0
+    )
+    assert '"path": "src/f.gd"' in page.read_text(encoding="utf-8")
+
+
 def test_main_since_no_changes_writes_nothing_to_stdout_without_a_report_flag(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
