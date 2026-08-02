@@ -7,6 +7,32 @@ import pytest
 
 from gdmutant.engine.runner import SuiteResult
 
+
+def pytest_report_header() -> str:
+    """Say, before the first test runs, whether the private-vocabulary half of the public-readiness
+    guard is going to run at all.
+
+    This is the loud half of `tests/test_public_readiness.py`'s three-state contract. That guard has
+    two halves: shape rules, which name nothing and run on every machine, and a vocabulary rule,
+    which needs a private word list that cannot ship with a repository meant to go public. On a CI
+    runner or a fresh clone there is no list, and the vocabulary rule legitimately does not run.
+
+    The hazard is not that it does not run. It is that a green suite then *looks* like a fully
+    checked one, and somebody flips the repository public on the strength of it. pytest prints this
+    line at the top of every run on every machine, so the state is on screen in the CI log and in
+    the terminal, whether or not anybody reads a skip reason at the bottom.
+
+    Deliberately not a failure: making CI fail for lacking a file it must never be given would just
+    get the guard deleted. Announced, not enforced.
+    """
+    # Imported here rather than at module scope: a collection-time error in the guard should be
+    # reported as that test module failing to import, not as conftest taking the whole run down.
+    from tests.test_public_readiness import vocabulary_state
+
+    state, said = vocabulary_state()
+    return f"public-readiness vocabulary [{state}]: {said}"
+
+
 # Location vars git exports into a hook's environment (e.g. pre-push). If pytest is spawned from
 # such a hook, inheriting them makes EVERY git call — the test helpers AND gdmutant's production git
 # calls (`_git_backup`, `_changed_lines` in cli.py, exercised by the --since /

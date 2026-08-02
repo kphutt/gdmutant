@@ -44,3 +44,10 @@ Thumbs.db
 # Agent scratch output — never commit ad-hoc dumps or agent-local config
 *_dump.txt
 .claude/
+
+# The private word list tests/test_public_readiness.py scans for (GDMUTANT_PRIVATE_TERMS).
+# It belongs outside this tree entirely, and committing it would publish the exact list of words
+# the guard exists to keep unpublished. This is the belt to that guard's braces: a copy dropped
+# in here by accident cannot be staged at all. tests/test_public_readiness.py pins that this
+# pattern is here and that git really does honour it.
+*private-terms*
