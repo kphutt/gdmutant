@@ -322,6 +322,62 @@ def test_write_proceeds_when_the_spec_covers_every_live_check(
 
 
 @pytest.mark.usefixtures("_has_gh")
+def test_main_fails_when_every_gh_api_write_fails(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`main`'s only signal to the operator is its exit code, and until now `_apply` only warned
+    on a failed write -- nothing recorded the failure anywhere `main` checked. Reproduces the
+    exact demonstration: every `gh api` write refused, and the run must not still claim success.
+    """
+    monkeypatch.setattr(harden_github, "_gh", lambda args, stdin=None: (False, "boom"))
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 1
+    out = capsys.readouterr().out
+    assert "Branch protection NOT set" in out
+    # Pins the exact "N of M" wording (not just a substring) -- all six `_apply` calls fail here,
+    # so a mutation that corrupts the literal joining them ("of") must change this exact count.
+    assert "6 of 6 setting(s) failed to apply" in out
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_main_fails_when_one_write_fails_among_otherwise_successful_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial failure must be caught too, not just the all-fail case -- a mutant that swaps
+    `all()` for `any()` (or only tracks the last call) would still pass the all-fail test above."""
+    fake = _FakeGh(list(EXPECTED_CONTEXTS))
+
+    def flaky(args: list[str], *, stdin: str | None = None) -> tuple[bool, str]:
+        if "vulnerability-alerts" in " ".join(args):
+            return False, "rate limited"
+        return fake(args, stdin=stdin)
+
+    monkeypatch.setattr(harden_github, "_gh", flaky)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("results", "expected"),
+    [
+        ([True, True, True], 0),
+        ([True, False, True], 1),
+        ([False, False], 2),
+        ([True, None, True], 1),  # a stray falsy non-bool must still count as a failure
+    ],
+)
+def test_failure_count_treats_any_falsy_result_as_a_failure(
+    results: list[object], expected: int
+) -> None:
+    """`_apply` is contracted to return `bool`, but the count must not rely on that holding
+    forever: a plain `results.count(False)` would treat a stray `None` as a success, which is
+    exactly the shape of bug this file exists to close. Caught by a mutation run over the new
+    aggregation logic: mutating `_apply`'s dry-run `return True` to `return None` survived against
+    `applied.count(False)` because `None != False`, and `main` kept exiting 0."""
+    assert harden_github._failure_count(results) == expected  # type: ignore[arg-type]
+
+
+@pytest.mark.usefixtures("_has_gh")
 def test_dry_run_sends_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeGh(list(EXPECTED_CONTEXTS))
     monkeypatch.setattr(harden_github, "_gh", fake)

@@ -2,8 +2,11 @@
 """GitHub repo settings as config-as-code — not hand-clicked in the web UI.
 
 Idempotent: re-run any time to converge the remote repo settings to this spec. Each setting is
-applied independently and tolerates plan-tier limits (some private-repo protections need a paid plan
-— those are reported, not fatal). Re-run after upgrading the plan to pick them up.
+applied independently: one failed write (a plan-tier limit — some private-repo protections need a
+paid plan — an expired token, a changed API shape) does not stop the rest from being attempted. But
+the exit code always reflects whether every setting actually landed: any failed write makes the run
+exit non-zero, because the exit code is the only signal the operator has that this converged for
+real. Re-run after upgrading the plan (or fixing whatever else failed) to pick the rest up.
 
     python scripts/harden_github.py                 # converge settings
     python scripts/harden_github.py --check         # read live settings + drift, write nothing
@@ -552,12 +555,23 @@ def report_state(
 # ---------------------------------------------------------------------------------------------
 
 
-def _apply(desc: str, args: list[str], payload: dict | None, on_fail: str, dry_run: bool) -> None:
+def _apply(desc: str, args: list[str], payload: dict | None, on_fail: str, dry_run: bool) -> bool:
+    """Apply one setting via ``gh api``; return whether it succeeded.
+
+    Never raises: a failed setting is reported (a warn), not fatal to the run — each setting is
+    still applied independently, matching the old script's ``set -uo pipefail`` (no ``-e``). But
+    "the run continues" is not "the failure is forgotten": the return value lets `main` track every
+    attempted write, so a run where every write failed can no longer report success — `main`'s
+    exit code is the operator's only signal, and a swallowed failure here left a bad run looking
+    identical to a clean one.
+
+    A dry run attempts nothing, so it cannot fail: it always returns True.
+    """
     if dry_run:
         body = json.dumps(payload) if payload is not None else "(no body)"
         _warn(f"[dry-run] would set: {desc}")
         print(f"         gh api {' '.join(args)}  {body}")
-        return
+        return True
     stdin = None
     if payload is not None:
         args = [*args, "--input", "-"]
@@ -569,6 +583,19 @@ def _apply(desc: str, args: list[str], payload: dict | None, on_fail: str, dry_r
         _warn(on_fail)
         if out:
             print(f"         gh: {out.splitlines()[0][:140]}")
+    return succeeded
+
+
+def _failure_count(results: list[bool]) -> int:
+    """How many of `_apply`'s results were not a genuine success.
+
+    Written as "not truthy" rather than ``results.count(False)`` on purpose. `_apply` is contracted
+    to return a real ``bool``, but this must not depend on that contract holding at every call site
+    forever: ``results.count(False)`` only catches a literal ``False`` — if some future edit ever
+    made `_apply` return ``None`` (or any other falsy stand-in) on a real failure, ``count(False)``
+    would silently treat it as a success, which is the exact failure mode this file exists to close.
+    """
+    return sum(1 for ok in results if not ok)
 
 
 def protection_payload(workflows: pathlib.Path | None = None) -> dict:
@@ -629,57 +656,72 @@ def main(argv: list[str] | None = None) -> int:
     _log(f"Hardening {args.repo}{' (dry run)' if args.dry_run else ''}")
     _log(f"Required status checks, derived from the workflows: {contexts}")
 
-    _apply(
-        "Merge hygiene: squash-only, delete-branch-on-merge, auto-merge allowed.",
-        ["-X", "PATCH", f"repos/{args.repo}"],
-        {
-            "delete_branch_on_merge": True,
-            "allow_squash_merge": True,
-            "allow_merge_commit": False,
-            "allow_rebase_merge": False,
-            "allow_auto_merge": True,
-        },
-        "Could not set merge hygiene (permissions?).",
-        args.dry_run,
+    # Every `_apply` call's success is tracked here so `main`'s exit code reflects whether the
+    # writes actually landed — collecting failures, not just warning about them, is what lets a
+    # run where every write failed be told apart from a clean one.
+    applied: list[bool] = []
+
+    applied.append(
+        _apply(
+            "Merge hygiene: squash-only, delete-branch-on-merge, auto-merge allowed.",
+            ["-X", "PATCH", f"repos/{args.repo}"],
+            {
+                "delete_branch_on_merge": True,
+                "allow_squash_merge": True,
+                "allow_merge_commit": False,
+                "allow_rebase_merge": False,
+                "allow_auto_merge": True,
+            },
+            "Could not set merge hygiene (permissions?).",
+            args.dry_run,
+        )
     )
 
-    _apply(
-        "Actions default token set read-only.",
-        ["-X", "PUT", f"repos/{args.repo}/actions/permissions/workflow"],
-        {"default_workflow_permissions": "read", "can_approve_pull_request_reviews": False},
-        "Could not set Actions token permissions.",
-        args.dry_run,
+    applied.append(
+        _apply(
+            "Actions default token set read-only.",
+            ["-X", "PUT", f"repos/{args.repo}/actions/permissions/workflow"],
+            {"default_workflow_permissions": "read", "can_approve_pull_request_reviews": False},
+            "Could not set Actions token permissions.",
+            args.dry_run,
+        )
     )
 
-    _apply(
-        "Dependabot vulnerability alerts enabled.",
-        ["-X", "PUT", f"repos/{args.repo}/vulnerability-alerts"],
-        None,
-        "Could not enable vulnerability alerts.",
-        args.dry_run,
+    applied.append(
+        _apply(
+            "Dependabot vulnerability alerts enabled.",
+            ["-X", "PUT", f"repos/{args.repo}/vulnerability-alerts"],
+            None,
+            "Could not enable vulnerability alerts.",
+            args.dry_run,
+        )
     )
-    _apply(
-        "Dependabot automated security fixes enabled.",
-        ["-X", "PUT", f"repos/{args.repo}/automated-security-fixes"],
-        None,
-        "Could not enable automated security fixes.",
-        args.dry_run,
+    applied.append(
+        _apply(
+            "Dependabot automated security fixes enabled.",
+            ["-X", "PUT", f"repos/{args.repo}/automated-security-fixes"],
+            None,
+            "Could not enable automated security fixes.",
+            args.dry_run,
+        )
     )
 
     # Nested JSON, so it goes in on stdin via `--input -`: `--raw-field` expects key=value and
     # cannot round-trip a nested object.
-    _apply(
-        "Native secret scanning + push protection enabled.",
-        ["-X", "PATCH", f"repos/{args.repo}"],
-        {
-            "security_and_analysis": {
-                "secret_scanning": {"status": "enabled"},
-                "secret_scanning_push_protection": {"status": "enabled"},
-            }
-        },
-        "Secret scanning/push protection unavailable (private repos need GitHub Advanced "
-        "Security). gitleaks in CI is the backstop.",
-        args.dry_run,
+    applied.append(
+        _apply(
+            "Native secret scanning + push protection enabled.",
+            ["-X", "PATCH", f"repos/{args.repo}"],
+            {
+                "security_and_analysis": {
+                    "secret_scanning": {"status": "enabled"},
+                    "secret_scanning_push_protection": {"status": "enabled"},
+                }
+            },
+            "Secret scanning/push protection unavailable (private repos need GitHub Advanced "
+            "Security). gitleaks in CI is the backstop.",
+            args.dry_run,
+        )
     )
 
     # The ratchet, in both directions. Removing a live check and adding a check nothing reports are
@@ -713,24 +755,34 @@ def main(argv: list[str] | None = None) -> int:
     if live.gates_nothing and contexts:
         _log(f"'main' currently requires no status checks; this write adds {len(contexts)}.")
 
-    _apply(
-        "Branch protection on 'main': PR required, CI checks required, no force-push.",
-        [
-            "-X",
-            "PUT",
-            f"repos/{args.repo}/branches/main/protection",
-            "-H",
-            "Accept: application/vnd.github+json",
-        ],
-        protection_payload(),
-        "Branch protection NOT set — private-repo protection needs a paid GitHub plan. "
-        "Until then, PR discipline is convention-only. Upgrade, then re-run this script.",
-        args.dry_run,
+    applied.append(
+        _apply(
+            "Branch protection on 'main': PR required, CI checks required, no force-push.",
+            [
+                "-X",
+                "PUT",
+                f"repos/{args.repo}/branches/main/protection",
+                "-H",
+                "Accept: application/vnd.github+json",
+            ],
+            protection_payload(),
+            "Branch protection NOT set — private-repo protection needs a paid GitHub plan. "
+            "Until then, PR discipline is convention-only. Upgrade, then re-run this script.",
+            args.dry_run,
+        )
     )
 
     if not args.dry_run:
         print()
         report_state(args.repo, contexts)
+
+    failed = _failure_count(applied)
+    if failed:
+        _warn(
+            f"{failed} of {len(applied)} setting(s) failed to apply — see the [skip] lines above. "
+            "This run did NOT fully converge; exiting non-zero so that isn't mistaken for success."
+        )
+        return 1
     return 0
 
 
