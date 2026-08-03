@@ -53,6 +53,15 @@ the run) for real. See `.github/workflows/mutation.yml`'s header comment for why
 and why the job deliberately has no job-level `continue-on-error`. It complements the coverage gate:
 coverage says a line *ran*, mutation says a bug there would be *caught*.
 
+mutmut has no incremental mode, so a full sweep costs the same ~15-20 minutes regardless of how
+small the change is. A pull request never gets one, even when the diff touches `gdmutant/` or
+`tests/`: a PR is pushed to repeatedly during review, and paying that cost on every push for a
+number that mostly doesn't move isn't worth it. Only a push to `main` (a change that already
+landed) can trigger the full sweep, and even then only if that diff touches `gdmutant/`, `tests/`,
+`corpus/`, `pyproject.toml`, or `uv.lock` — the only paths that can move the score at all. Every
+other push or PR gets a plain `pytest` run instead, which still catches a doc file (`also_copy` in
+`pyproject.toml`) breaking a test that reads it.
+
 A second, narrower mutation run happens locally: the manual pre-commit hook (`gdmutant-mutation`)
 runs [poodle](https://github.com/WiredNerd/poodle), diff-scoped to files changed vs `origin/main`.
 It's local rather than a second CI job partly because mutmut can't run on the maintainer's Windows
@@ -73,9 +82,10 @@ uv run mutmut run        # rebuild the score
 uv run mutmut results    # list current survivors
 ```
 
-CI measures the same thing on every push and prints the score to the job summary as a
-non-blocking signal (see [Running it](#running-it) above), so the current number is always one CI
-run away rather than a hand-updated line in this doc.
+CI measures the same thing on every push to `main` that touches `gdmutant/`, `tests/`, `corpus/`,
+`pyproject.toml`, or `uv.lock`, and prints the score to the job summary as a non-blocking signal
+(see [Running it](#running-it) above), so the current number is always one merged, score-relevant
+change away rather than a hand-updated line in this doc.
 
 Survivors are not triaged as a full set; working through them and deciding which are real gaps and
 which are equivalents is outstanding work. The 18 below are the ones already confirmed equivalent:
