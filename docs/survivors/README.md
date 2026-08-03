@@ -17,7 +17,7 @@ survivor points to that operator's section here. Two sections, [Assert](#assert)
 [Enum member](#enum-member), are not operators: each explains a whole class of survivor that is
 unkillable by where it sits rather than by which operator produced it, and gdmutant links a survivor
 there instead when that is the real story. Every one of those mutants still runs and still counts
-toward the score; only its explanation differs.
+toward the score. Only its explanation differs.
 
 ### The score
 

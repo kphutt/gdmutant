@@ -74,17 +74,20 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   neither is privileged), plus the framework-neutral exit-code command runner
   ([ADR-0005](../decisions/0005-exit-code-test-runner-convention.md)) as the fallback for any harness
   without JUnit output. Every runner upholds one crash-safety clause: a load/compile crash surfaces
-  as a kill or error, never a silent zero-test pass. Each framework fails differently (GdUnit4 aborts
-  the whole run and writes no report; GUT skips only the broken suite and can exit 0 with the rest
-  green), so each adapter enforces the clause in the shape its own framework needs, measured live at
-  n>1 rather than assumed. ADR-0011 has the per-adapter mechanism, the live measurements, and the
-  correction history.
+  as a kill or error, never a silent zero-test pass. Each framework fails differently. GdUnit4
+  aborts the whole run and writes no report, while GUT skips only the broken suite and can exit 0
+  with the rest green, so each adapter enforces the clause in the shape its own framework needs,
+  measured live at n>1 rather than assumed. ADR-0011 has the per-adapter mechanism, the live
+  measurements, and the correction history.
 
-  The seam is three protocols: `Runner` (required — run the suite once, report the aggregate
-  result), `Preparable` (optional — a slow one-time setup the engine times outside the baseline, so
-  it never inflates the per-mutant timeout; both Godot runners need it for their cold-checkout import
-  scan), and `RunWarning` (optional — one run-level warning that never changes the score or exit
-  code). Full protocol shapes: ADR-0011.
+  The seam is three protocols: `Runner` (required: run the suite once, report the aggregate
+  result), `Preparable` (optional: a slow one-time setup the engine times outside the baseline, so
+  it never inflates the per-mutant timeout, since both Godot runners need it for their
+  cold-checkout import scan), and `RunWarning` (optional: one run-level warning that never changes
+  the score or exit code). The engine tests for `Preparable` by type, but `RunWarning` is tested for
+  by the CLI instead, since printing a warning is a CLI job, not an engine one. Neither test names
+  what the setup or the warning actually is, so both stay language-neutral (NF-3). Per-adapter
+  mechanism and live measurements: ADR-0011 (`RunWarning` itself is not documented there).
 - FG-3.3: The original (unmutated) suite must pass first, and must actually have run tests. If it
   fails, or if it reports zero tests, the run aborts with a clear error: a suite nobody ran reads as a
   pass, and every mutant then comes back survived with no error anywhere in the run. This check lives
