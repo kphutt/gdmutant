@@ -16,6 +16,11 @@ loaded and parsed real source. Those are the failures a wheel actually ships -- 
 dependency, a package that did not get included, an entry point pointing at a module that is not
 there -- and a version string catches none of them.
 
+It also runs ``gdmutant example`` and checks the file it claims to write actually landed. That is a
+narrower, separate claim from the one above: a wheel's Python modules and its non-Python package
+data (``gdmutant/examples/gdmutant-hello-world.gd``) are included by different packaging rules, so
+the smoke test parsing real GDScript has never been proof the bundled example file shipped too.
+
 ISOLATION. Everything happens in a throwaway virtual environment inside a temporary directory, and
 every subprocess runs with its working directory set there. That matters: if the checked-out source
 tree were the working directory, ``import gdmutant`` would find the repo's own package and the test
@@ -58,6 +63,12 @@ DEFAULT_INDEX = "https://pypi.org/simple"
 #: A minimal GDScript file with one comparison and one number in it, so the adapter has something
 #: to find. Tabs, because GDScript wants tabs.
 SMOKE_SOURCE = "extends Node\n\nfunc is_ready(hp: int) -> bool:\n\treturn hp > 10\n"
+
+#: `gdmutant/cli.py`'s `_EXAMPLE_NAME`, restated rather than imported: this script never imports
+#: `gdmutant` (see ISOLATION above -- it only ever runs the *installed console script*, so the
+#: package under test is never the repo's own checkout). Keep the two in sync by hand; a mismatch
+#: here would make `example_problem` look for a file the real command never writes.
+EXAMPLE_NAME = "gdmutant-hello-world.gd"
 
 #: What pip says when the index has heard of the project but not (yet) this version, or not at all.
 #: A fresh upload is briefly invisible while the index's caches catch up, and reporting that as
@@ -234,6 +245,22 @@ def smoke_problem(result: Result) -> str | None:
     return None
 
 
+def example_problem(result: Result, written: Path) -> str | None:
+    """An error message unless ``gdmutant example`` exited 0 and `written` now exists, else None.
+
+    `smoke_problem` proves the console script, its dependencies and the parser all arrived --
+    everything a wheel needs to run at all. This proves something narrower and separate: that
+    package *data* shipped too. `gdmutant/examples/gdmutant-hello-world.gd` ships alongside the
+    Python source under the same `packages = ["gdmutant"]` wheel target, but a data file and a
+    module are included by different rules, so one arriving has never been proof the other did.
+    """
+    if result.returncode != 0:
+        return f"`gdmutant example` exited {result.returncode}:\n{result.output}"
+    if not written.is_file():
+        return f"`gdmutant example` exited 0 but did not write {written.name}:\n{result.output}"
+    return None
+
+
 def check(
     version: str,
     workdir: Path,
@@ -288,6 +315,14 @@ def check(
         "  it parsed real GDScript and listed mutants - entry point, dependencies and parser "
         "all arrived"
     )
+
+    problem = example_problem(
+        run([str(console_script), "example"], workdir), workdir / EXAMPLE_NAME
+    )
+    if problem is not None:
+        return BROKEN, problem
+    print(f"  `gdmutant example` wrote {EXAMPLE_NAME} - the packaged example data arrived too")
+
     return OK, f"the published gdmutant {version} installs from {index_url} and runs"
 
 

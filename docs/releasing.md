@@ -123,9 +123,10 @@ manual version becomes the way to reproduce a failure by hand.
    gdmutant --version
    ```
 
-   *Pass:* the printed version is the one just tagged, and saving the README quickstart's
-   `scratch.gd` into an empty folder and running `gdmutant run scratch.gd --dry-run` lists mutants.
-   That proves the entry point, the declared dependencies, and the parser all arrived.
+   *Pass:* the printed version is the one just tagged, and running `gdmutant example` followed by
+   `gdmutant run gdmutant-hello-world.gd --dry-run` in an empty folder lists mutants. That proves
+   the entry point, the declared dependencies, the packaged example file, and the parser all
+   arrived.
 
    An editable install, a `pip install dist/*.whl`, or any command run from a checkout proves none
    of it, because each reads files a stranger never receives. The install has to resolve by name,

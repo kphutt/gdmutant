@@ -67,22 +67,19 @@ CLI.
   not moved. The selected finding lives in the URL, so a reload keeps your place and "look at this
   survivor" is a link you can send. A link that no longer resolves falls back to the file it named,
   or to the file index, and never to the wrong finding.
-- Findings can be marked done as you work through them, with a "k of n done" count. The marks
-  live in your browser, for that report file, so a copy that travels opens unmarked rather than
-  showing someone else's progress. A mark made against an earlier run of a finding that is *still
-  surviving* is flagged "re-check" and is not counted as done. A stale tick must never hide a
-  live survivor.
 - The HTML report shows each file by its project-relative path. A report is made to travel, and an
   absolute path from the machine that produced it carries that machine's username and directory
   layout into every row while telling a reader nothing they can act on. A file genuinely outside the
   project keeps its absolute path, because there is no shorter honest name for it. This changes what
-  the page *displays*, and the displayed path is what a deep link and a done-mark are keyed on, so
-  marks made against an earlier report of the same project do not carry over. Note the limit: the
+  the page *displays*, and the displayed path is what a deep link is keyed on. Note the limit: the
   `--json` report and the copy of it embedded in the HTML file are both unchanged, because their
   keys are identifiers other tooling resolves. A report file still contains the absolute paths, it
   just no longer shows them.
 - The embedded report is downloadable from the page, so the JSON in a report someone mailed you is
-  reachable without View Source. No request and no new data, the bytes are the page's own.
+  reachable without View Source. No request and no new data, the bytes are the page's own. The
+  toolbar button now says `JSON`, not just a bare down-arrow, and the download itself is indented
+  (`json.dumps(..., indent=2)`), matching what `--json <path>` writes to disk instead of one
+  unreadable line.
 - The file index sorts on any column (score, file, survived, caught, mutants), ascending or
   descending. Most survivors first stays the default, because it is the only order that answers
   "where do I start". Score would rank 1 survivor in 5 mutants level with 100 in 500.
@@ -100,6 +97,9 @@ CLI.
   hand-rolled install step: it sets up Python and Godot, installs gdmutant, runs it against the
   consumer's project, and writes the surviving mutants (with their explanations) to the job
   summary, right where a reviewer already looks.
+- `gdmutant example` writes a small bundled GDScript file (`gdmutant-hello-world.gd`) to try
+  `--dry-run` on, so the Quickstart no longer asks a first-time reader to hand-copy a snippet into
+  a file themselves. Refuses to overwrite an existing file of the same name.
 
 ### Changed
 

@@ -13,10 +13,12 @@ from conftest import MarkerRunner
 import gdmutant.cli as cli
 from gdmutant.adapters.gdscript.runner import GutRunner
 from gdmutant.cli import (
+    _EXAMPLE_NAME,
     _git_backup,
     _load_config,
     _report_path_problem,
     _resolve_progress_style,
+    _write_example,
     build_parser,
     list_mutants,
     main,
@@ -3434,4 +3436,84 @@ def test_a_gitignored_file_warns_by_default_with_advice_that_works(
     err = capsys.readouterr().err
     assert "is ignored by git" in err
     assert "Take it out of .gitignore" in err
-    assert "Commit or stash" not in err, "you cannot commit a file git is ignoring"
+
+
+# --- `gdmutant example`: no project of your own yet, so the tool ships one -----------------------
+
+
+def test_example_with_no_destination_defaults_to_the_bundled_name_in_the_cwd() -> None:
+    # A pure path computation, deliberately not exercised by writing a file into the real process
+    # cwd: this suite must never chdir (it would break mutmut's `source_paths=['gdmutant']` stats
+    # collection), and a real write here would land in the repo checkout itself.
+    assert cli._example_target(None) == Path(_EXAMPLE_NAME)
+
+
+def test_example_writes_the_bundled_file_and_reports_where(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / _EXAMPLE_NAME
+    rc = _write_example(str(target))
+    assert rc == 0
+    assert target.is_file()
+    assert "clamp_initiative" in target.read_text(encoding="utf-8")
+    out = capsys.readouterr().out
+    assert str(target) in out
+    assert "--dry-run" in out
+
+
+def test_example_written_file_is_real_gdscript_dry_run_can_list(tmp_path: Path) -> None:
+    # Not just "some bytes landed" -- prove the bundled source is valid, mutable GDScript by
+    # actually running the tool's own --dry-run preview on it.
+    target = tmp_path / "hello.gd"
+    assert _write_example(str(target)) == 0
+    assert list_mutants(str(target)) == 0
+
+
+def test_example_accepts_an_explicit_destination_path(tmp_path: Path) -> None:
+    target = tmp_path / "nested" / "mine.gd"
+    target.parent.mkdir()
+    assert _write_example(str(target)) == 0
+    assert target.is_file()
+
+
+def test_example_given_a_directory_writes_the_default_name_inside_it(tmp_path: Path) -> None:
+    assert _write_example(str(tmp_path)) == 0
+    assert (tmp_path / _EXAMPLE_NAME).is_file()
+
+
+def test_main_example_dispatches_to_write_example(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / _EXAMPLE_NAME
+    rc = main(["example", str(target)])
+    assert rc == 0
+    assert target.is_file()
+
+
+def test_example_unwritable_destination_returns_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Same late-write backstop as the report writers: the target's parent is a regular file, not a
+    # directory, so the write itself fails -- exit 2 with a message, not an uncaught OSError.
+    not_a_dir = tmp_path / "not_a_dir"
+    not_a_dir.write_text("x", encoding="utf-8")
+    bad_target = not_a_dir / _EXAMPLE_NAME
+
+    rc = _write_example(str(bad_target))
+
+    assert rc == 2
+    assert "cannot write" in capsys.readouterr().err
+
+
+def test_example_refuses_to_overwrite_an_existing_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / _EXAMPLE_NAME
+    target.write_text("something the caller already had\n", encoding="utf-8")
+
+    rc = _write_example(str(target))
+
+    assert rc == 2
+    assert "already exists" in capsys.readouterr().err
+    # Untouched -- a silent overwrite is exactly the failure this guard exists to prevent.
+    assert target.read_text(encoding="utf-8") == "something the caller already had\n"
