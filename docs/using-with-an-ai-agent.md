@@ -59,7 +59,7 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
   fast per-PR mode for CI. When no line in the given paths changed since that ref, gdmutant runs no
   tests at all and exits 0, with a note on stderr. It still writes the report you asked for, and
   emits the job summary if you asked for one: every given file is there with an empty `mutants`
-  list, and no score is reported — exactly as for any other run with nothing to score, since the
+  list, and no score is reported, exactly as for any other run with nothing to score, since the
   report carries no score key in either case. So `--json -` stays parseable and needs no special
   case. A PR that touches no `.gd` file hits this every time.
 - `--jobs N` evaluates mutants in parallel, each worker inside its own copy of the project. That
@@ -77,8 +77,8 @@ gdmutant run <file.gd> --project <godot-project-dir> --json -
   Under `--runner command` the executable comes from the `--command` string itself. `--godot` is
   not read in that mode, so put the full path inside `--command`.
 - Import the project once before the first run. On a checkout Godot has never opened, it imports
-  every asset before it runs anything, which on a real game is minutes with no output at all, long
-  enough to look like a hang and get killed. `--runner gdunit4` / `--runner gut` do this warm-up
+  every asset before it runs anything, which on a real project is minutes with no output at all,
+  long enough to look like a hang and get killed. `--runner gdunit4` / `--runner gut` do this warm-up
   themselves. `--runner command` cannot, and prints a note when the project has no `.godot/`
   directory. Run `godot --headless --path <project> --import` once in setup.
 - Nothing predicts a finish time. Before the run gdmutant states the mutant count and the
@@ -132,7 +132,7 @@ Every other key is read normally: none of them can decide what gets executed.
 
 - `0`: the run completed. Survivors are normal output, not a failure. Parse them. Every exit-0 path
   except `--dry-run` writes the report you asked for, including `--since <ref>` with no changed
-  lines — that one is an empty report, not an empty stdout. `--dry-run` writes no `--json`/`--html`
+  lines: that one is an empty report, not an empty stdout. `--dry-run` writes no `--json`/`--html`
   report at all, says so on stderr, and prints its mutant list to stdout instead.
 - `1`: the unmutated *baseline* suite failed. Fix your tests first. Mutation-testing a red
   suite is meaningless.

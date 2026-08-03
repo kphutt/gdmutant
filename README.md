@@ -46,56 +46,86 @@ Mutation score: 61.1%
 ──────────────────────────────────────────────────────────────────────────
 ```
 
-Coverage tells you a line *ran*. Mutation tells you a bug there would be *caught*. Those are
-not the same question, and the more code a project ships (whoever or whatever wrote it), the
-more of it rides on the answer. A standalone CLI, no AI required.
+Coverage tells you a line *ran*. Mutation tells you whether a bug there would be *caught*: a
+killed mutant means yes, a survivor means no. Those are not the same question, and the more code
+a project ships (whoever or whatever wrote it), the more of it rides on the answer. A standalone
+CLI, no AI required.
+
+Same idea, other languages: [mutmut](https://github.com/boxed/mutmut) for Python,
+[Stryker](https://stryker-mutator.io/) for JS/TS, [PIT](https://pitest.org/) for Java.
 
 ## Is this for you?
 
 - You write GDScript and test with GUT, gdUnit4, or any `godot --headless` command.
-- You already have a Godot project whose tests pass, however you run them (with GUT or gdUnit4 that
-  means its addon is installed and enabled). gdmutant grades those tests, it doesn't replace them.
-  No project yet? Try `--dry-run` below first.
-- Not GDScript? gdmutant reads GDScript and nothing else. Same idea, other languages:
-  [mutmut](https://github.com/boxed/mutmut) for Python, [Stryker](https://stryker-mutator.io/) for
-  JS/TS, [PIT](https://pitest.org/) for Java.
+- You already have a Godot project whose tests pass, however you run them. gdmutant grades those
+  tests, it doesn't replace them.
+  No project yet? See it find a real bug first, using gdmutant's own test fixture. No project
+  required.
 
 ## Prerequisites
 
-Godot 4.3+, a test suite that already passes, and the GUT or gdUnit4 addon if you use either.
+- [Godot](https://godotengine.org/) 4.3+ (see [Compatibility](#compatibility) for exact versions).
+- The GUT or gdUnit4 addon, already installed and enabled in your project, if you use either.
+- Python 3.12+. If you don't have it, don't go install it yourself: get
+  [uv](https://docs.astral.sh/uv/) instead, which fetches its own.
 
-A project Godot has already imported. On a checkout Godot has never opened, it imports every
-asset before it will run anything: minutes of total silence on a real game, which is easy to read
-as a hung tool. `--runner gdunit4` and `--runner gut` do that warm-up for you and say so.
-`--runner command` cannot: it only knows the command you hand it. Do it once yourself, and every
-later run starts in seconds:
+  ```sh
+  # Windows (PowerShell)
+  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
-```sh
-godot --headless --path path/to/your-game --import
-```
+  # macOS / Linux
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
 
-Python 3.12+, and if you don't have Python, don't go install it. Install
-[uv](https://docs.astral.sh/uv/) instead: it fetches its own Python and runs gdmutant on it.
+## Compatibility
 
-```sh
-# Windows (PowerShell)
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+| | Verified at every release | Expected to work |
+|---|---|---|
+| Godot | 4.7.0 | 4.3+ |
+| Runner | GUT 9.7.1, gdUnit4 6.1.3 | GUT 9.x, gdUnit4 6.x, any headless command |
 
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Already have Python 3.12+? `pip install gdmutant` works just as well: drop the `uv run` prefix
-from every command below.
+gdmutant is `0.x`, so anything can change between minor versions: flags, exit codes, console output.
+Pin `gdmutant==0.1.*` in CI so a new minor is a version you move to on purpose, and take a `1.0` as
+the point where the CLI surface and exit codes stop moving.
 
 ## Quickstart
 
-Make gdmutant a small uv project in a folder beside your game, never inside it: `uv init` drops
-`.git`, `.gitignore`, `.python-version`, `pyproject.toml`, a `README.md` of its own and a starter
-Python file wherever you run it, and none of that belongs in a game repo. Which starter file
-depends on your uv version, `main.py` at the root through 0.11 and `src/<name>/__init__.py` from
-0.12, so treat the list as the shape of the mess rather than an exact manifest. Pin the
-interpreter: `uv init` alone floors on whatever it finds, and gdmutant needs 3.12+.
+### See it find a real bug, right now
+
+No project of your own needed yet. gdmutant tests itself, and its own `corpus/` fixture is a real
+Godot project with real GUT and gdUnit4 tests. Cloning the repo and running against that fixture
+is the fastest way to see a genuine survivor report, the kind at the top of this page:
+
+```sh
+git clone https://github.com/kphutt/gdmutant
+cd gdmutant
+uv sync --frozen
+uv run python scripts/install_gdunit4.py   # the addon isn't vendored in git; this fetches it
+uv run gdmutant run corpus/turn_order.gd --project corpus --html report.html
+```
+
+~30 seconds on a cold checkout, most of it Godot's one-time project import. The console prints
+each survivor as it's found, the same explanation shown at the top of this page: what's
+untested, why it matters, where to start a test. No report file is needed to see it. `--html`
+writes that same explanation to `report.html` too: one self-contained file to open, keep, or send
+someone, with every survivor on its own source line and the same `61.1%` shown at the top of this
+page. This is `report.html` from the run above, on `return 0`, where two different mutants (a
+numeric change and a whole-line deletion) land on the same token: the badge shows how many, and
+clicking it switches between them.
+
+<p align="center">
+  <img src=".github/assets/html-report.png" alt="The gdmutant HTML report open on turn_order.gd, showing the 61.1% score header and the return 0 line marked with a badge for two overlapping findings: a numeric change and a statement deletion, both caught" width="900">
+</p>
+
+### Point it at your own project
+
+Make gdmutant a small uv project in a folder beside your Godot project, never inside it: `uv init`
+drops `.git`, `.gitignore`, `.python-version`, `pyproject.toml`, a `README.md` of its own and a
+starter Python file wherever you run it, and none of that belongs in your project's own
+repository. Which starter file depends on your uv version, `main.py` at the root through 0.11 and
+`src/<name>/__init__.py` from 0.12, so treat the list as the shape of the mess rather than an
+exact manifest. Pin the interpreter: `uv init` alone floors on whatever it finds, and gdmutant
+needs 3.12+.
 
 ```sh
 uv init --python 3.12 gdmutant-workspace
@@ -103,25 +133,13 @@ cd gdmutant-workspace
 uv add gdmutant
 ```
 
-`gdmutant example` writes a small bundled GDScript file, `gdmutant-hello-world.gd`, so there's
-something to point the tool at before you have a project of your own:
+Already have Python 3.12+ yourself? `pip install gdmutant` works just as well: drop the `uv run`
+prefix from every command below.
 
-```sh
-uv run gdmutant example
-```
+A real run reruns your tests once per mutant and reports the survivors: lines where a bug could
+live that no test catches. Finding those is what the tool is for.
 
-then preview its mutants. `--dry-run` lists what *would* be mutated and stops there (no test run,
-no Godot):
-
-```sh
-uv run gdmutant run gdmutant-hello-world.gd --dry-run
-```
-
-Point it at your own file instead once you have one. The preview is not the payoff. A real run
-reruns your tests once per mutant and reports the survivors: lines where a bug could live that
-no test catches. Finding those is what the tool is for.
-
-For a real run, pick your runner. [GUT](https://github.com/bitwes/Gut) and
+Pick your runner. [GUT](https://github.com/bitwes/Gut) and
 [gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) are peer JUnit-XML readers (gdUnit4 is the
 default). Both need their addon already installed and Godot itself on PATH, or `--godot <path>`.
 The exit-code runner further down needs neither. `--tests` names the one directory holding your
@@ -130,49 +148,25 @@ not search subdirectories:
 
 ```sh
 # GUT
-uv run gdmutant run ../my-game/src/module.gd --project ../my-game \
+uv run gdmutant run ../my-project/src/module.gd --project ../my-project \
   --runner gut --tests res://test/unit --json report.json
 
 # gdUnit4 (the default)
-uv run gdmutant run ../my-game/src/module.gd --project ../my-game --json report.json
+uv run gdmutant run ../my-project/src/module.gd --project ../my-project --json report.json
 ```
 
-No JUnit XML? Point the exit-code runner at any headless command that exits non-zero on
-failure. `--godot` doesn't reach inside this string. Put the Godot path in `--command` itself:
+`--json` writes the
+[`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema,
+for feeding a dashboard.
+
+No JUnit XML? Point the exit-code runner at any headless command that exits non-zero on failure.
+`--godot <path>` only applies to the GUT/gdUnit4 runners above. Under `--runner command`,
+gdmutant runs your `--command` string exactly as given and never edits it, so if `godot` isn't on
+your PATH, write its full path directly into the command yourself:
 
 ```sh
-uv run gdmutant run ../my-game/src/module.gd --project ../my-game \
+uv run gdmutant run ../my-project/src/module.gd --project ../my-project \
   --runner command --command "godot --headless --script res://tests/run_tests.gd" --json report.json
-```
-
-## What it does
-
-- Mutates the AST (your code's parsed structure), not text. Nine re-parse-guarded operators
-  ([full list](docs/survivors/README.md)), so every mutant that runs is valid GDScript. A
-  text-level edit can produce code that does not compile, and a run that measures nothing. One
-  file, many, or a whole directory in one pass, with a per-file breakdown and one aggregate score.
-- Runs your existing tests: gdUnit4, GUT, or any headless `godot` exit-code command.
-- Explains every survivor: not just a location, but what's untested, why it matters, and where
-  to start a test.
-- Interoperates and fits CI. `--json` emits the
-  [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements)
-  schema for dashboards. `--html` writes one self-contained page (no network, no CDN) that marks
-  every survivor on its own source line and explains the gap beside it. `--since <ref>` mutates
-  only a PR's changed lines, for a fast, advisory check, never a hard gate. `--exclude` globs.
-  `.gdmutant.toml` holds per-project defaults. There's a [GitHub Action](#github-action) too.
-
-gdmutant scores every run. The counts behind the block above come from this repo's `corpus/`
-fixture. The wheel you `pip install` leaves it out, so reproducing this takes a checkout or the
-source distribution, which does carry it:
-
-```
-Mutation score: 61.1%
-  killed:   11
-  timeout:  0  (counted as killed)
-  survived: 7
-  ignored:  0  (suppressed, excluded from score)
-  invalid:  0
-  error:    0
 ```
 
 Mutation score isn't a target, it's a direction. There's no universal "good" number. Watch
@@ -205,22 +199,11 @@ Done in 6m 32s — 18 mutants, 8 timed out (4m 0s of that). Baseline suite 1.4s.
 ```
 
 The heartbeat lands every 30s on a terminal, and less often in a log or in CI. `--progress plain`
-forces the quieter cadence. `--progress none` turns the whole progress stream off — heartbeat, plan
+forces the quieter cadence. `--progress none` turns the whole progress stream off: heartbeat, plan
 line, closing line, the line each mutant prints as it finishes, and the `preparing the project` /
 `running the unmutated (baseline) suite` notices too, so a slow first run says nothing at all until
 it is done. Use `auto` or `plain` if you want that signal. The summary and the report are
 unaffected either way.
-
-## Compatibility
-
-| | Verified at every release | Expected to work |
-|---|---|---|
-| Godot | 4.7.0 | 4.3+ |
-| Runner | GUT 9.7.1, gdUnit4 6.1.3 | GUT 9.x, gdUnit4 6.x, any headless command |
-
-gdmutant is `0.x`, so anything can change between minor versions: flags, exit codes, console output.
-Pin `gdmutant==0.1.*` in CI so a new minor is a version you move to on purpose, and take a `1.0` as
-the point where the CLI surface and exit codes stop moving.
 
 ## Configuration
 
@@ -244,67 +227,10 @@ trustworthy:
 gdmutant run scripts --trust-config
 ```
 
-Without `--trust-config` gdmutant names the keys the file decided, exits 2, and runs nothing. Not
-even a `--dry-run` preview gets through, because the refusal comes first. It fires only where the
-file actually decides the program: a key whose value matches gdmutant's own default, or one you
-also passed as a flag, decides nothing, so the run goes ahead without a word. Passing the value as
-a flag (`--command ...`, `--godot ...`) needs no trust, since then you named the program yourself.
-Every other key (`project`, `runner`, `tests`, `report-path`, `timeout`, `require-clean`,
-`exclude`) is read normally: none of them can decide what gets executed.
-
-## GitHub Action
-
-gdmutant ships as a GitHub Action, so a workflow can run it without installing Python, Godot or
-gdmutant itself:
-
-```yaml
-- uses: kphutt/gdmutant@REPLACE_WITH_THE_RELEASE_COMMIT_SHA  # v0.1.0
-  with:
-    godot-version: "4.7.0"      # the only required input
-    project-path: ./            # gdmutant's --project
-    paths: scripts              # what to mutate (default: the whole project)
-    runner: gdunit4             # gdunit4 | gut | command
-    tests: res://test/unit      # the one directory holding your suites
-    since: ${{ github.event.pull_request.base.sha }}   # mutate only this PR's changed lines
-    args: --jobs 4              # any extra gdmutant flags, verbatim
-```
-
-`since` reads the base commit out of your clone, so the workflow's `actions/checkout` step needs
-`fetch-depth: 0`. Its default fetches one commit, the base commit is not among them, and the
-gdmutant step then fails on a git error rather than mutating anything.
-
-It sets up Python and Godot, installs gdmutant, runs it, and writes every survivor (with its
-`gap` / `risk` / `start` explanation) to the workflow's job summary, where reviewers already look
-(`job-summary: false` skips that). The `report-json` output holds the path to the
-`mutation-testing-elements` report, ready to hand to an upload-artifact step.
-`godot-use-dotnet: true` picks the .NET build of Godot. Survivors are output, not failure: the step
-exits non-zero only on a real error, such as a red baseline suite. The project and a suite that
-already passes must be there, plus the GUT or gdUnit4 addon if you use either. The action installs
-none of that.
-
-If your project's `.gdmutant.toml` sets `command` or `godot`, add `args: --trust-config`. Without
-it gdmutant refuses to run at all and the step fails, for the reason given under
-[Configuration](#configuration).
-
-Pin the commit SHA. There is no `@v1` or `@v0`. Every published tag names a full version
-(`v0.1.0`) and never moves: a tag ruleset blocks deleting or re-pointing any tag, and the release
-guard rejects a tag that doesn't equal the packaged version, so a floating major tag is not
-something this repo can produce. Pinning `@v0.1.0` works and is just as stable, for the same
-reason. Replace the placeholder above with the 40-character commit SHA the release was cut from,
-and keep the version in the trailing comment so the line stays readable.
-
-The bumps a floating tag would have handed you come from Dependabot instead, as PRs you can read
-before taking:
-
-```yaml
-# .github/dependabot.yml
-version: 2
-updates:
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: weekly
-```
+Without `--trust-config`, gdmutant names the offending keys, exits 2, and runs nothing. It only
+refuses when the file actually decides the program. A value that matches gdmutant's default, or
+that you also passed as a flag, decides nothing. Passing `--command`/`--godot` yourself always
+needs no trust. Every other key is just a setting, never a program to run.
 
 ## Troubleshooting
 
@@ -331,25 +257,30 @@ updates:
   being dropped: on an even workload it tracked the true finish to within 5%, but on a run whose
   hanging mutants arrived late it read 3.2s at 25% done for a run that took 58s. A mutant that
   hangs costs its whole timeout, and nothing before it hints that it will.
-- The first run sits there for minutes and never starts. The project has not been imported. See
-  [Prerequisites](#prerequisites). Run `godot --headless --path <project> --import` once. Under
-  `--runner command` gdmutant says so up front when the project has no `.godot/` directory.
+- The first run goes quiet for minutes right after it starts. gdmutant does warn you first (the
+  GUT/gdUnit4 runners print a "preparing the project" notice, and `--runner command` warns too
+  when the project has no `.godot/` directory), but the wait itself is silent: that's Godot
+  importing every asset in the project, once, which gdmutant can't see into or report on. Run
+  `godot --headless --path <project> --import` yourself first so every later run starts in
+  seconds.
+- Want to see what gdmutant would touch before committing to a full run? `--dry-run` lists the
+  mutants without running your tests: a scoping check on a large file, or before wiring up
+  `--exclude`, not a substitute for a real run (it can't tell you anything your tests would catch).
+  `gdmutant example` writes a small bundled file if you want to see the shape of the output first:
+  `gdmutant example && gdmutant run gdmutant-hello-world.gd --dry-run`.
 - Most survivors are on `assert` lines. Expected, and not noise you have to fix: a failed `assert`
   kills the Godot process, so no in-process test can catch a weakened one. gdmutant explains each
   one and counts them under the survivor list rather than hiding them
   ([the full story](docs/survivors/README.md#assert)).
 
-## How it works
+## Is it safe to run against my real files?
 
-A language-neutral loop (select → mutate → run → tally → score) with two language-specific
-pieces behind an adapter: mutating the AST (via
-[gdtoolkit](https://github.com/Scony/godot-gdscript-toolkit)) and running the tests.
-
-Safety: in a serial run gdmutant edits your source file where it lies, then restores its exact
-original bytes after every mutant and on exit, including Ctrl-C. Under `--jobs N` with N above 1
-each worker mutates its own copy of the project, so your own file is never touched. Every write
-goes to a temporary file beside the source and is then renamed over it, so the path always holds
-one whole file or the other, never half of each.
+Yes, by construction, not by promise. See [Design & architecture](docs/design/DESIGN.md) for how
+the mutate/run/restore loop itself is built. In a serial run gdmutant edits your source file where
+it lies, then restores its exact original bytes after every mutant and on exit, including Ctrl-C.
+Under `--jobs N` with N above 1 each worker mutates its own copy of the project, so your own file
+is never touched. Every write goes to a temporary file beside the source and is then renamed over
+it, so the path always holds one whole file or the other, never half of each.
 
 Two things can still leave the mutant sitting on disk. A hard kill (a crash, a power loss) stops
 the restore before it can run, and if it lands between the temporary write and the rename it also
@@ -363,10 +294,30 @@ a committed copy of every file it is about to mutate. That is stricter than a cl
 project not in git, a file git ignores, and git not being installed all fail it too, because none
 of them leave a copy to put back.
 
+## GitHub Action
+
+gdmutant ships as a GitHub Action too, so a workflow can run it with no Python, Godot or gdmutant
+install step:
+
+```yaml
+- uses: kphutt/gdmutant@REPLACE_WITH_THE_RELEASE_COMMIT_SHA  # v0.1.0
+  with:
+    godot-version: "4.7.0"   # the only required input
+    project-path: ./
+    tests: res://test/unit
+```
+
+Pin that commit SHA, or a full `vX.Y.Z` tag. There is no `@v1` or `@v0`. Every published tag
+names a full version and never moves, so a floating major tag is not something this repo can
+produce. Bumps come from Dependabot instead, as PRs you review before taking. Full input
+reference, the `since`/`fetch-depth` requirement, and what the step writes to the job summary:
+[docs/github-action.md](docs/github-action.md).
+
 ## Documentation
 
 - [Survivor reference](docs/survivors/README.md): every operator explained, the score formula, how to kill or justify each.
 - [Design & architecture](docs/design/DESIGN.md): the engine and the "Saboteur & the Jury" design.
+- [The GitHub Action](docs/github-action.md): full input reference.
 - [Driving gdmutant from an AI agent](docs/using-with-an-ai-agent.md): invocation, JSON schema, the loop for a script.
 - [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Credits](docs/credits.md)
 

@@ -5,6 +5,7 @@ import os
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -13,10 +14,13 @@ from conftest import MarkerRunner
 import gdmutant.cli as cli
 from gdmutant.adapters.gdscript.runner import GutRunner
 from gdmutant.cli import (
+    _DEFAULT_REPORT,
     _EXAMPLE_NAME,
+    _default_report_stem,
     _git_backup,
     _load_config,
     _report_path_problem,
+    _resolve_default_report_paths,
     _resolve_progress_style,
     _write_example,
     build_parser,
@@ -1116,7 +1120,8 @@ def test_parser_help_text(
         "JUnit-XML report path, relative to the project dir (default: per runner — gdunit4 reports/report_1/results.xml, gut reports/gut_results.xml)",  # noqa: E501
         "per-mutant test-run timeout, in seconds (default: derived from the baseline run — 10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",  # noqa: E501
         "refuse to run if the source file has uncommitted git changes (default: warn only)",
-        "write the Stryker JSON report here (use - for stdout)",
+        "write the Stryker JSON report here (use - for stdout; bare --json defaults to a "
+        "timestamped filename)",
         "list the mutants without running any tests (no Godot needed)",
     ):
         assert f"{expected}\n" in run_help
@@ -1351,6 +1356,82 @@ def test_main_threads_json_path_to_run_mutation(
     rc = main(["run", str(path), "--project", str(tmp_path), "--json", str(report)])
     assert rc == 0
     assert report.exists()
+
+
+# --- bare --json/--html: a default, timestamped filename instead of a required path -------------
+
+
+def test_default_report_stem_is_deterministic_and_filesystem_safe() -> None:
+    stem = _default_report_stem(datetime(2026, 8, 2, 23, 55, 54))
+    assert stem == "gdmutant-report-20260802-235554"
+    assert ":" not in stem, "Windows forbids a colon in a filename"
+
+
+def test_resolve_default_report_paths_leaves_none_and_explicit_values_alone() -> None:
+    assert _resolve_default_report_paths(None, None) == (None, None)
+    assert _resolve_default_report_paths("out.json", "out.html") == ("out.json", "out.html")
+    # "-" (stdout) is an explicit value a caller typed, never the bare-flag sentinel.
+    assert _resolve_default_report_paths("-", None) == ("-", None)
+
+
+def test_resolve_default_report_paths_only_resolves_the_sentinel() -> None:
+    json_path, html_path = _resolve_default_report_paths(_DEFAULT_REPORT, "explicit.html")
+    assert (
+        json_path is not None
+        and json_path.startswith("gdmutant-report-")
+        and json_path.endswith(".json")
+    )
+    assert html_path == "explicit.html"
+
+    # ...and the reverse: only --html was bare, so only html_path resolves.
+    json_path, html_path = _resolve_default_report_paths(None, _DEFAULT_REPORT)
+    assert json_path is None
+    assert html_path is not None and html_path.startswith("gdmutant-report-")
+    assert html_path.endswith(".html")
+
+
+def test_resolve_default_report_paths_shares_one_stem_when_both_are_bare() -> None:
+    # So a --json --html run's two files visibly pair up rather than landing under two different
+    # timestamps seconds apart.
+    json_path, html_path = _resolve_default_report_paths(_DEFAULT_REPORT, _DEFAULT_REPORT)
+    assert json_path is not None and html_path is not None
+    assert json_path[: -len(".json")] == html_path[: -len(".html")]
+
+
+def test_main_bare_json_and_html_resolve_to_paired_timestamped_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Resolution must happen inside main(), before run_mutation is ever called -- captured here by
+    # replacing run_mutation itself, rather than writing real files, so this needs no chdir (a real
+    # write of a *bare* --json/--html would otherwise land relative to the real process cwd, which
+    # this suite must never change -- see test_mutation_baseline_inputs.py's hard rule on that).
+    path = _gd(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_run_mutation(*args: object, **kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli, "run_mutation", fake_run_mutation)
+    rc = main(["run", str(path), "--project", str(tmp_path), "--json", "--html"])
+    assert rc == 0
+    json_path, html_path = captured["json_path"], captured["html_path"]
+    assert isinstance(json_path, str) and isinstance(html_path, str)
+    assert json_path.startswith("gdmutant-report-") and json_path.endswith(".json")
+    assert json_path[: -len(".json")] == html_path[: -len(".html")]
+
+
+def test_main_dry_run_reports_a_bare_json_flag_as_ignored_without_crashing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The sentinel is resolved before the --dry-run "ignored flags" note reads args.json_path, so
+    # this must show a real (if never-written) filename, never a raw sentinel object repr.
+    path = _gd(tmp_path)
+    rc = main(["run", str(path), "--dry-run", "--json"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "--json" in err and "object at 0x" not in err
+    assert not list(tmp_path.glob("gdmutant-report-*"))
 
 
 def test_main_command_runner_builds_from_shlex_split_command(
