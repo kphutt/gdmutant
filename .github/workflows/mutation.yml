@@ -118,14 +118,21 @@ jobs:
         # either. If the base commit is missing or unreachable (a force-push, a shallow history
         # gap, the branch's very first commit) this defaults to the full run — an unknown diff is
         # treated as "could have changed," never as "skip it," so a gap here fails loud (a slow run)
-        # rather than silently (a score that never gets checked).
+        # rather than silently (a score that never gets checked). GH_EVENT_NAME/GH_EVENT_BEFORE
+        # come in via `env:` rather than `${{ }}` interpolated straight into the script, so the
+        # values pass through the shell as plain data instead of expanded template text (zizmor's
+        # template-injection check) — no such payload could actually be attacker-controlled here,
+        # but the safe pattern costs nothing to use anyway.
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_EVENT_BEFORE: ${{ github.event.before }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "$GH_EVENT_NAME" = "pull_request" ]; then
             echo "Pull request — the full sweep only runs once a change lands on main."
             echo "run_full=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          BASE="${{ github.event.before }}"
+          BASE="$GH_EVENT_BEFORE"
           if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE" 2>/dev/null; then
             echo "No usable previous commit to diff against — running the full mutation sweep to be safe."
             echo "run_full=true" >> "$GITHUB_OUTPUT"
