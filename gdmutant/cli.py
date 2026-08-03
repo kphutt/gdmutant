@@ -18,6 +18,7 @@ import sys
 import tomllib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
@@ -725,6 +726,41 @@ def _warn_unknown_ignore_operators(source: str) -> None:
         )
 
 
+#: `--json`/`--html` given bare (no path). A real object, not a string, so it can never collide
+#: with a path a caller actually typed — `argparse`'s `const=` for `nargs='?'` accepts any object,
+#: and this one is resolved to a real filename by `_resolve_default_report_paths` before anything
+#: downstream (validation, writing) ever sees it. `run_mutation`/`_write_reports` keep their plain
+#: ``str | None`` contract; only argument parsing knows this sentinel exists.
+_DEFAULT_REPORT = object()
+
+
+def _default_report_stem(now: datetime | None = None) -> str:
+    """A timestamped, filesystem-safe basename (no extension) for a default report name.
+
+    No colons: Windows forbids them in filenames, and this CLI treats Windows as a deployment
+    target (see AGENTS.md), not just a dev machine. Second resolution is enough — a real run takes
+    at least the baseline suite's wall-clock, so two runs cannot land the same stamp by accident.
+    """
+    return f"gdmutant-report-{(now or datetime.now()).strftime('%Y%m%d-%H%M%S')}"
+
+
+def _resolve_default_report_paths(
+    json_path: str | None, html_path: str | None
+) -> tuple[str | None, str | None]:
+    """`(json_path, html_path)` with any `_DEFAULT_REPORT` sentinel replaced by a real, timestamped
+    filename. Both flags share one stem when both are bare, so a `--json --html` run's two output
+    files visibly pair up (`gdmutant-report-<stamp>.json` / `.html`) instead of landing seconds
+    apart under two different stamps."""
+    if json_path is not _DEFAULT_REPORT and html_path is not _DEFAULT_REPORT:
+        return json_path, html_path
+    stem = _default_report_stem()
+    if json_path is _DEFAULT_REPORT:
+        json_path = f"{stem}.json"
+    if html_path is _DEFAULT_REPORT:
+        html_path = f"{stem}.html"
+    return json_path, html_path
+
+
 def _report_path_problem(path: str | None, flag: str, *, stdout_ok: bool) -> str | None:
     """A human message (naming `flag`) if a report `path` can't be written, else None — checked
     *before* the run so a long pass (minutes of booting Godot per mutant) never ends on an avoidable
@@ -1360,13 +1396,23 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",
     )
     run_parser.add_argument(
-        "--json", dest="json_path", help="write the Stryker JSON report here (use - for stdout)"
+        "--json",
+        dest="json_path",
+        nargs="?",
+        const=_DEFAULT_REPORT,
+        default=None,
+        help="write the Stryker JSON report here (use - for stdout; bare --json defaults to a "
+        "timestamped filename)",
     )
     run_parser.add_argument(
         "--html",
         dest="html_path",
+        nargs="?",
+        const=_DEFAULT_REPORT,
+        default=None,
         help="write a ready-to-open HTML report here — one self-contained file (no network "
-        "needed) showing each survivor on its own source line, with the gap explained",
+        "needed) showing each survivor on its own source line, with the gap explained (bare "
+        "--html defaults to a timestamped filename)",
     )
     run_parser.add_argument(
         "--require-clean",
@@ -1533,6 +1579,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(_untrusted_config_message(decided), file=sys.stderr)
                 return 2
             args = trusted
+        # Resolve a bare --json/--html (no path given) into a real, timestamped filename now, once,
+        # before anything else reads args.json_path/args.html_path (the --dry-run "ignored flags"
+        # note included) — every reader downstream sees a plain path or None, never the sentinel.
+        args.json_path, args.html_path = _resolve_default_report_paths(
+            args.json_path, args.html_path
+        )
         if args.jobs < 1:
             print("error: --jobs must be a positive integer", file=sys.stderr)
             return 2
