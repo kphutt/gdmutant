@@ -68,46 +68,31 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
 - FG-3.1: For each mutant, the system shall run the target project's test suite against a tree in which
   only that mutant is applied, and capture the pass/fail outcome.
 - FG-3.2: For the GDScript adapter, execution runs the project's tests headless via the pluggable
-  Runner seam, a runner-agnostic adapter contract ([ADR-0011](../decisions/0011-runner-agnostic-adapter-seam.md)):
-  the engine knows only the contract, never a framework. Two peer JUnit adapters ship
-  first-class, GdUnit4 and GUT (both run via `godot --headless` and parse JUnit-XML for
-  per-test detail, and neither is privileged), plus the framework-neutral exit-code command runner
+  Runner seam, a runner-agnostic adapter contract ([ADR-0011](../decisions/0011-runner-agnostic-adapter-seam.md)).
+  The engine knows only the contract, never a framework. Two peer JUnit adapters ship first-class,
+  GdUnit4 and GUT (both run via `godot --headless` and parse JUnit-XML for per-test detail, and
+  neither is privileged), plus the framework-neutral exit-code command runner
   ([ADR-0005](../decisions/0005-exit-code-test-runner-convention.md)) as the fallback for any harness
-  without JUnit output (a hand-rolled `SceneTree` runner, a bespoke CLI). Every runner upholds the
-  crash-safety clause: a load/compile crash surfaces as a kill or error, never a silent zero-test
-  pass. Each framework fails differently, so each adapter's enforcement is shaped to its own failure,
-  and both shapes are measured live against a two-suite corpus rather than assumed. GdUnit4 loads
-  every suite during discovery, so one it cannot parse aborts the whole run and writes no report,
-  which the "report must reappear" guard catches. The command runner upholds the clause via its exit
-  code. GUT needs more. It skips a suite that fails to compile, runs the remaining ones green and
-  exits 0, so the report still carries the healthy files' passes and the test count is not zero. What
-  catches that case is a drop below the healthy baseline's test count, which a live probe proved
-  necessary. A `tests == 0` guard covers only the narrower shape where the whole run collects
-  nothing, so both JUnit adapters carry one of those too. Any future JUnit-emitting framework is
-  first-class by adding one small adapter, with no engine change, and both of that adapter's hooks
-  are abstract so it has to state how its own framework fails.
+  without JUnit output. Every runner upholds one crash-safety clause: a load/compile crash surfaces
+  as a kill or error, never a silent zero-test pass. Each framework fails differently (GdUnit4 aborts
+  the whole run and writes no report; GUT skips only the broken suite and can exit 0 with the rest
+  green), so each adapter enforces the clause in the shape its own framework needs, measured live at
+  n>1 rather than assumed. ADR-0011 has the per-adapter mechanism, the live measurements, and the
+  correction history.
 
-  The seam is three protocols, not one. `Runner` is the required one: run the suite once, report the
-  aggregate result. `Preparable` is optional and covers a slow one-time setup. The engine calls
-  `prepare` before it starts timing the baseline, so setup cost never inflates the per-mutant timeout
-  derived from that baseline. Both Godot runners implement it, because each needs a cold-checkout
-  import scan before its framework's command-line tool will load. `RunWarning` is optional too and
-  lets a runner raise a single run-level warning once the whole pass ends, which never changes the
-  mutation score or the exit code. The engine tests for `Preparable` by type. `RunWarning` lives in
-  the same contract module but the front desk is what tests for it, because printing a warning to
-  the user is a CLI job and not an engine one. Neither test names what the setup or the warning
-  actually is, so both stay language-neutral (NF-3).
+  The seam is three protocols: `Runner` (required — run the suite once, report the aggregate
+  result), `Preparable` (optional — a slow one-time setup the engine times outside the baseline, so
+  it never inflates the per-mutant timeout; both Godot runners need it for their cold-checkout import
+  scan), and `RunWarning` (optional — one run-level warning that never changes the score or exit
+  code). Full protocol shapes: ADR-0011.
 - FG-3.3: The original (unmutated) suite must pass first, and must actually have run tests. If it
-  fails, or if it reports zero tests, the run aborts with a clear error. Mutation testing a red suite
-  is meaningless, and a suite nobody ran is worse than meaningless: it reads as a pass, and then
-  every mutant comes back survived with no error anywhere in the run. The zero-test check lives in the
-  engine rather than in an adapter, because "the baseline ran nothing" is a property of a result, not
-  of a language or a framework, and it has to hold for every runner. A mutant run that reports zero
-  tests without failing is tallied as an error for the same reason, never as a survivor. The check
-  reads only the aggregate test count, so it stays language-neutral (NF-3). An adapter that can name
-  the cause and the cure still raises first with the better message. The one runner outside the
-  check's reach is the exit-code command runner, which has no test count to read, so a harness used
-  with it must exit non-zero when it discovers no tests
+  fails, or if it reports zero tests, the run aborts with a clear error: a suite nobody ran reads as a
+  pass, and every mutant then comes back survived with no error anywhere in the run. This check lives
+  in the engine, not an adapter, because "the baseline ran nothing" is a property of a result, not of
+  a language or a framework, and it has to hold for every runner (NF-3). A mutant run that reports
+  zero tests without failing is tallied as an error for the same reason, never as a survivor. The one
+  runner outside the check's reach is the exit-code command runner, which has no test count to read,
+  so a harness used with it must exit non-zero when it discovers no tests
   ([ADR-0011](../decisions/0011-runner-agnostic-adapter-seam.md)).
 
 ### FG-4: Verdict tally
