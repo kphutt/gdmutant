@@ -3436,6 +3436,7 @@ def test_a_gitignored_file_warns_by_default_with_advice_that_works(
     err = capsys.readouterr().err
     assert "is ignored by git" in err
     assert "Take it out of .gitignore" in err
+    assert "Commit or stash" not in err, "you cannot commit a file git is ignoring"
 
 
 # --- `gdmutant example`: no project of your own yet, so the tool ships one -----------------------

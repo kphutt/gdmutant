@@ -228,6 +228,19 @@ def test_example_exiting_zero_but_writing_nothing_fails(tmp_path: Path) -> None:
     assert problem is not None and "did not write" in problem
 
 
+def test_example_name_matches_the_cli_constant() -> None:
+    # This script deliberately never imports gdmutant (see ISOLATION at the top of the module under
+    # test), so EXAMPLE_NAME is a hand-kept copy of gdmutant/cli.py's _EXAMPLE_NAME rather than a
+    # shared import. Nothing else would catch the two drifting: a future rename in cli.py that
+    # forgets this constant would leave the real `gdmutant example` command working fine while this
+    # post-release gate looks for a file that no longer exists and reports a healthy package BROKEN.
+    # This test itself is dev-time code, not something the released package runs, so it's free to
+    # import gdmutant directly for the comparison.
+    from gdmutant.cli import _EXAMPLE_NAME
+
+    assert check.EXAMPLE_NAME == _EXAMPLE_NAME
+
+
 # --- Installing, with the index catching up ------------------------------------------------------
 
 
