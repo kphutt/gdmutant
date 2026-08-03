@@ -64,26 +64,29 @@ change just go untested," not "match CI's number."
 
 ## Current result
 
-3,275 of 3,773 mutants killed: 86.8%, with 498 survivors, measured 2026-07-31 at commit `10fdb48`.
-A mutation score is a snapshot: it is only true at the commit it was measured against, so read that
-commit and date as part of the number, not as decoration. `main` has moved since. Re-measure rather
-than trust this line past that commit.
+A score on this page would be a snapshot the moment it was written, and stale the moment `main`
+moves without anyone re-measuring it — which is every commit after this one. So this doc does not
+pin one. Run it yourself:
 
-The first real number this project had, right after the baseline was repaired, was 3,088 of 3,560
-mutants killed (86.7%, 472 survivors), measured on CI. The figure above is a full local rebuild of
-that same measurement, done later on a codebase that had grown in the meantime: mutmut stayed
-pinned at 3.6.0 across both runs, so the larger mutant count is codebase growth, not the tool
-widening its reach. The percentage barely moved, 86.7% to 86.8%.
+```sh
+uv run mutmut run        # rebuild the score
+uv run mutmut results    # list current survivors
+```
 
-Those 498 survivors are not triaged. The 18 below are equivalent mutants: changes that cannot
-alter observable behavior, so no test *can* catch them (the well-known [equivalent mutant
-problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)), and they are still
-equivalent. But they were enumerated against a much smaller codebase, over a run whose own mutant
-total is withdrawn as unreproducible ([ADR-0008's
-correction](decisions/0008-method-body-mutation-manual-spotcheck.md#correction-2026-07-31)), and
-they do not account for the rest. Working through the remaining survivors, and deciding which are
-real gaps and which are equivalents, is outstanding work. Until it is done, read the 86.8% as a
-measurement and not as a claim that every behavioral mutant is killed.
+CI measures the same thing on every push and prints the score to the job summary as a
+non-blocking signal (see [Running it](#running-it) above), so the current number is always one CI
+run away rather than a hand-updated line in this doc.
+
+Survivors are not triaged as a full set; working through them and deciding which are real gaps and
+which are equivalents is outstanding work. The 18 below are the ones already confirmed equivalent:
+changes that cannot alter observable behavior, so no test *can* catch them (the well-known
+[equivalent mutant problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)).
+That finding holds regardless of what the current total is — each was verified against the code
+doing the mutating, not against a score. What they do *not* do is account for the rest: they were
+enumerated over a run whose own mutant total is withdrawn as unreproducible ([ADR-0008's
+correction](decisions/0008-method-body-mutation-manual-spotcheck.md#correction-2026-07-31)). Read
+whatever score you measure as that measurement only, never as a claim that every behavioral mutant
+is killed.
 
 ### Scope: the method bodies this run never reaches
 
