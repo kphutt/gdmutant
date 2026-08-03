@@ -1757,7 +1757,7 @@ def _dirty_warning(source: str) -> str:
     return (
         f"warning: {source} has uncommitted changes — gdmutant mutates it in place "
         "(restoring it when done), so a hard kill could leave it modified. Commit or stash "
-        "first to be safe. Continuing ..."
+        "first to be safe."
     )
 
 
@@ -1929,15 +1929,16 @@ def test_run_mutation_read_error_precedes_dirty_warning(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # Ordering (the re-review nit): a tracked-but-deleted source is BOTH dirty (git sees the
-    # deletion) and unreadable. The read error must come first, with no misleading "Continuing ..."
-    # dirty-warning printed ahead of it. Guards the git check sitting after _load_gdscript.
+    # deletion) and unreadable. The read error must come first, with no dirty-tree warning about a
+    # run that was never going to start printed ahead of it. Guards the git check sitting after
+    # _load_gdscript.
     repo = _committed_repo(tmp_path)
     (repo / "f.gd").unlink()  # deleted => dirty AND unreadable
     rc = run_mutation(str(repo / "f.gd"), str(repo), MarkerRunner("x", "y"))
     assert rc == 2
     err = capsys.readouterr().err
     assert "cannot read" in err
-    assert "Continuing ..." not in err  # no dirty-warning before the read error
+    assert "uncommitted changes" not in err  # no dirty-warning before the read error
 
 
 def test_main_threads_require_clean_to_run_mutation(

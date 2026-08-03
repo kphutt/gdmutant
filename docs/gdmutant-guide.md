@@ -282,7 +282,7 @@ two comes back entirely CRLF.
 
 ### The survivor → killing-test loop
 
-Same loop the [README's survivors section](../README.md#working-through-survivors) walks a human through
+Same loop the [README's survivors section](../README.md#killing-survivors) walks a human through
 (pick a target, kill or annotate every survivor, re-run, move on), driven from JSON instead of the
 console:
 

@@ -224,12 +224,14 @@ def test_readme_shows_the_current_console_format_not_the_retired_one() -> None:
 
 
 def test_console_summary_wraps_each_survivor_block_exactly() -> None:
-    # Pin console_summary's own wrapper (the blank separators around "Survivors" and the newline
-    # join) around the render_survivor block. f.gd is not on disk, so the block renders source-less.
+    # Pin console_summary's own wrapper (the blank separator after "Survivors" and the newline
+    # join) around the render_survivor block. Survivors lead the output, so this is a prefix, not a
+    # suffix: the scorecard ("Results") follows after. f.gd is not on disk, so the block renders
+    # source-less.
     m = Mutant("no_such_dir/f.gd", Span(2, 15, 2, 18), "boolean", "and", "or")
     run = MutationRun((MutantOutcome(m, Verdict.SURVIVED),))
     block = "\n".join(render_survivor(m, None))
-    assert console_summary(run).endswith("\n\nSurvivors (1):\n\n" + block + "\n")
+    assert console_summary(run).startswith("Survivors (1):\n\n" + block + "\n")
 
 
 def test_console_summary_reads_the_real_source_for_the_code_and_caret(tmp_path: Path) -> None:

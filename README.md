@@ -61,7 +61,7 @@ gdmutant run corpus/turn_order.gd --project corpus --runner gdunit4 --html
 Output:
 
 ```
-Mutation score: 61.1%
+Survivors (7):
 
   corpus\turn_order.gd:27   func can_act
 
@@ -80,6 +80,11 @@ Mutation score: 61.1%
 
   more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#boolean
 ──────────────────────────────────────────────────────────────────────────
+  ...
+
+Results
+
+Mutation score: 61.1%
 ```
 
 ## Point it at your own project
@@ -115,7 +120,7 @@ gdmutant run ../my-project/src/module.gd --project ../my-project --runner gdunit
 See the [survivor reference](docs/survivors/README.md) for what
 `ignored`, `invalid` and `error` mean.
 
-## Working through survivors
+## Killing Survivors
 
 Kill each survivor with a real test, or mark a genuine equivalent with `# gdmutant: ignore` and a
 reason ([details](docs/survivors/README.md)). Re-run until nothing survives. A mutation score

@@ -295,6 +295,12 @@ def _unbacked_source_problem(source_path: str, *, require_clean: bool) -> str | 
     * ``--require-clean`` is someone asking for a guarantee, so anything short of a confirmed
       copy is refused. Passing because git was missing or the file was not in a repo would hand
       back exactly the assurance the flag exists to provide, without ever having checked.
+
+    The default-mode warning does not say "Continuing ..." — it used to, but that promises a
+    forward step this function has no way to back: it fires before the baseline suite has even
+    run, so the very next thing printed can be an unrelated baseline failure, making "Continuing"
+    read as a broken promise instead of a fact. The warning states the risk and the advice; whether
+    the run actually goes anywhere is for what happens next to say, not this message.
     """
     backup = _git_backup(source_path)
     if backup.backed_up is True:
@@ -311,7 +317,7 @@ def _unbacked_source_problem(source_path: str, *, require_clean: bool) -> str | 
         return None  # cannot tell, and nobody asked for a guarantee — stay quiet
     return (
         f"warning: {backup.reason} — gdmutant mutates it in place (restoring it when done), so a "
-        f"hard kill could leave it modified. {advice} Continuing ..."
+        f"hard kill could leave it modified. {advice}"
     )
 
 
@@ -965,7 +971,7 @@ def run_mutation(
     # In-place-mutation safety: the run edits the source file per mutant. Warn (or, with
     # require_clean, refuse) on a dirty tree so a hard interrupt can't lose uncommitted work.
     # Ordered after the read/parse validation above so a genuine read error is reported first,
-    # not preceded by a "Continuing ..." warning.
+    # not preceded by a dirty-tree warning about a run that was never going to start.
     problem = _unbacked_source_problem(source_path, require_clean=require_clean)
     if problem is not None:
         print(problem, file=sys.stderr)
@@ -1392,7 +1398,7 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         choices=("auto", "plain", "none"),
         default="auto",
         dest="progress_style",
-        help="how much the run says about itself while it works: auto (a heartbeat every 30s on a "
+        help="how much the run says about itself while it works: auto (a heartbeat every 3s on a "
         "terminal, rarer in a log or CI), plain (the rarer cadence always), or none (nothing at "
         "all — no heartbeat, no per-mutant line, no plan or closing line, and not the 'preparing "
         "the project' / 'running the baseline suite' notices either, so a slow first run is "

@@ -430,30 +430,26 @@ def test_runner_error_on_a_later_mutant_preserves_earlier_verdicts(tmp_path: Pat
 
 
 def test_progress_has_no_per_mutant_line_only_plan_heartbeat_and_close(tmp_path: Path) -> None:
-    # No "[i/N] path:line  a -> b  ... verdict" line per mutant anymore — on purpose, so the
-    # per-mutant timeout budget the plan line already states doesn't get repeated over and over.
-    # Progress is just: the baseline notice, the pre-run plan, a heartbeat (`_Progress.beat`), and
-    # the closing wall-clock. A fast synthetic run finishes well inside one heartbeat interval, so
-    # only the forced end-of-file beat fires — pinned exactly so a mutated separator, count, or
-    # verdict tally is caught. Source has 3 mutants: >, and, <. Explicit timeout keeps the budget
-    # deterministic.
+    # No "[i/N] path:line  a -> b  ... verdict" line per mutant anymore — on purpose. Progress is
+    # just: the baseline notice, the pre-run plan, and the closing wall-clock. A single file's
+    # forced end-of-file heartbeat is suppressed (`_mutate_file`'s `is_last_file`, default True): it
+    # would restate the same numbers `finish` is about to print right after it. Source has 3
+    # mutants: >, and, <. Explicit timeout keeps the run deterministic.
     src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"
     path = _write(tmp_path, "f.gd", src)
     lines: list[str] = []
     runner = MarkerRunner(target=path, kill_marker=">=")
     run(str(tmp_path), path, src, runner, timeout=10.0, progress=lines.append)
     assert lines[0] == "running the unmutated (baseline) suite ..."
-    # The baseline's own wall-clock is nondeterministic, so pin only the parts that aren't.
-    assert lines[1].startswith("3 mutants to run.") and lines[1].endswith("capped at 10.0s.")
-    assert lines[2].startswith("… 3/3 done in ") and "2 survived, 0 timed out." in lines[2]
-    assert lines[3].startswith("Done in ") and "3 mutants, none timed out." in lines[3]
-    assert len(lines) == 4  # nothing per-mutant: just the plan, one heartbeat, and the close
+    assert lines[1] == "3 mutants to run."
+    assert lines[2].startswith("Done in ") and lines[2].endswith("3 mutants.")
+    assert len(lines) == 3  # nothing per-mutant, no redundant close-of-file beat: plan, then close
 
 
 def test_progress_counts_invalid_and_error_verdicts_without_naming_them(tmp_path: Path) -> None:
-    # Every verdict still reaches the tally (checked via the closing/heartbeat counts), but no
-    # per-mutant line names which specific one was invalid or errored anymore — that detail now
-    # lives only in the post-run report, not the live progress stream.
+    # Every verdict still reaches the tally (checked via the closing count), but no per-mutant line
+    # names which specific one was invalid or errored anymore — that detail now lives only in the
+    # post-run report, not the live progress stream.
     src = "func f(a, b) -> bool:\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
     invalid: list[str] = []
@@ -465,17 +461,15 @@ def test_progress_counts_invalid_and_error_verdicts_without_naming_them(tmp_path
     # never reached the suite would make the closing wall-clock's "N mutants" a fiction.
     assert invalid[0] == "running the unmutated (baseline) suite ..."
     assert invalid[1].startswith("1 mutant to run.")
-    assert invalid[2].startswith("… 0/1 done in ") and "0 survived, 0 timed out." in invalid[2]
-    assert invalid[-1].startswith("Done in ") and "0 mutants, none timed out." in invalid[-1]
+    assert invalid[-1].startswith("Done in ") and invalid[-1].endswith("0 mutants.")
 
-    # An erroring mutant DID run (and DOES count as a sample), so it reaches the heartbeat's done
-    # count even though nothing names it as the one that errored.
+    # An erroring mutant DID run (and DOES count as a sample), so it reaches the closing tally even
+    # though nothing names it as the one that errored.
     errored: list[str] = []
     run(str(tmp_path), path, src, RaiseAfterBaselineRunner(), timeout=10.0, progress=errored.append)
     assert errored[0] == "running the unmutated (baseline) suite ..."
     assert errored[1].startswith("1 mutant to run.")
-    assert errored[2].startswith("… 1/1 done in ") and "0 survived, 0 timed out." in errored[2]
-    assert errored[-1].startswith("Done in ") and "1 mutant, none timed out." in errored[-1]
+    assert errored[-1].startswith("Done in ") and errored[-1].endswith("1 mutant.")
 
 
 def test_format_duration_scales_seconds_minutes_hours() -> None:
@@ -487,67 +481,50 @@ def test_format_duration_scales_seconds_minutes_hours() -> None:
     assert _format_duration(3780) == "1h 3m"
 
 
-def test_progress_plan_states_the_work_and_the_cap_without_forecasting() -> None:
-    # The pre-run line is facts only. "each mutant is capped at 30s" is the load-bearing clause: it
-    # tells someone at a still terminal how long silence is normal, which is the pacing job the old
-    # `estimated ≈` figure was doing badly. No total duration appears anywhere in it.
-    line = _progress_plan(runnable=18, total=18, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=1)
-    assert line == "18 mutants to run. Baseline suite 1.4s; each mutant is capped at 30.0s."
+def test_progress_plan_states_the_work_without_forecasting() -> None:
+    # The pre-run line is facts only: what will run, nothing about how long it will take. It used to
+    # also state the baseline wall-clock and the per-mutant timeout cap, as the fact that paced the
+    # wait while nothing else did — now that the heartbeat itself fires every few seconds
+    # (`_HEARTBEAT_SECS`), that job is live and repeated instead of a static number stated once.
+    line = _progress_plan(runnable=18, total=18, jobs=1)
+    assert line == "18 mutants to run."
 
 
 def test_progress_plan_counts_ignored_separately() -> None:
-    line = _progress_plan(runnable=18, total=21, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=1)
-    assert line.startswith("18 mutants to run (3 ignored). ")
+    line = _progress_plan(runnable=18, total=21, jobs=1)
+    assert line == "18 mutants to run (3 ignored)."
 
 
 def test_progress_plan_names_the_worker_count() -> None:
-    line = _progress_plan(runnable=18, total=18, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=4)
+    line = _progress_plan(runnable=18, total=18, jobs=4)
     assert line.endswith(" Running 4 at a time.")
 
 
-def test_progress_plan_names_the_cap_the_parallel_path_really_enforces() -> None:
-    # Under `--jobs N` the run scales each mutant's budget by the worker count, so the unscaled
-    # figure this line used to print understated the real worst case by up to N times — in the one
-    # clause whose whole job is telling someone at a still terminal how long silence is normal.
-    # Derived, never a literal: a hardcoded number is exactly how the message drifted from the code.
-    expected = _contention_budget(30.0, min(4, 18))
-    line = _progress_plan(runnable=18, total=18, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=4)
-    assert f"each mutant is capped at {expected:.1f}s." in line
-    assert expected == 120.0  # and the scaling is real: 4 workers, not the 30s serial figure
-
-
-def test_progress_plan_still_names_a_real_cap_when_nothing_is_runnable() -> None:
-    # A file whose mutants are all `# gdmutant: ignore`d reaches this line with a runnable count of
-    # zero, and zero workers would scale the budget to "capped at 0s" — a figure that is not just
-    # useless but visibly wrong, in the line a first-time user reads before the silence starts.
-    line = _progress_plan(runnable=0, total=3, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=1)
-    assert line.startswith("0 mutants to run (3 ignored). ")
-    assert "each mutant is capped at 30.0s." in line
-
-
-def test_progress_plan_never_names_a_scaled_cap_the_serial_path_will_not_apply() -> None:
-    # The mirror of the case above. Serial runs enforce the unscaled budget, and one worker cannot
-    # contend with itself — so `--jobs 4` on a single runnable mutant is a serial run wearing a
-    # flag, and the announcement must not inflate its cap fourfold.
-    line = _progress_plan(runnable=1, total=1, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=4)
-    assert "each mutant is capped at 30.0s." in line
-
-
 def test_progress_plan_is_singular_for_one_mutant() -> None:
-    line = _progress_plan(runnable=1, total=1, baseline_secs=2.0, per_mutant_timeout=20.0, jobs=1)
-    assert line.startswith("1 mutant to run. ")
+    line = _progress_plan(runnable=1, total=1, jobs=1)
+    assert line == "1 mutant to run."
 
 
 def test_progress_plan_never_predicts_a_finish_time() -> None:
     # The whole point of the change. Nine surveyed mutation testers forecast an absolute duration
     # before the work starts; none of them do. Pin the absence so it cannot creep back.
-    line = _progress_plan(runnable=99, total=99, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=1)
+    line = _progress_plan(runnable=99, total=99, jobs=1)
     for forecast in ("estimated", "≈", "at least", "left", "ETA"):
         assert forecast not in line
 
 
+def test_contention_budget_scales_by_worker_count() -> None:
+    # The per-mutant time budget `_run_mutants_parallel` actually enforces under `--jobs N`. No
+    # longer announced anywhere in the progress stream, but still real, load-bearing arithmetic:
+    # under-scaling it would let CPU/RAM contention turn a genuinely-passing suite into a false
+    # TIMEOUT (see `_run_mutants_parallel`).
+    assert _contention_budget(30.0, workers=4) == 120.0
+    assert _contention_budget(30.0, workers=1) == 30.0  # serial: can't contend with itself
+    assert _contention_budget(30.0, workers=0) == 30.0  # never scale to zero
+
+
 def _clock(style: ProgressStyle, total: int, lines: list[str]) -> _Progress:
-    clock = _Progress(emit=lines.append, style=style, baseline_secs=1.4)
+    clock = _Progress(emit=lines.append, style=style)
     clock.begin_file(total)
     return clock
 
@@ -566,7 +543,8 @@ def test_heartbeat_reports_measured_progress_and_no_finish_time() -> None:
 
 
 def test_heartbeat_waits_for_its_interval(monkeypatch: pytest.MonkeyPatch) -> None:
-    # At most one line every 30s, so the heartbeat can never become the noise it exists to prevent.
+    # At most one line every _HEARTBEAT_SECS, so the heartbeat can never become the noise it exists
+    # to prevent.
     from gdmutant.engine import loop as loop_mod
 
     now = [1000.0]
@@ -577,7 +555,7 @@ def test_heartbeat_waits_for_its_interval(monkeypatch: pytest.MonkeyPatch) -> No
     assert lines == []  # far too soon
     now[0] += loop_mod._HEARTBEAT_SECS
     clock.record(Verdict.KILLED, 1.0)
-    assert lines == ["… 2/100 done in 30s — 0 survived, 0 timed out."]
+    assert lines == [f"… 2/100 done in {int(loop_mod._HEARTBEAT_SECS)}s — 0 survived, 0 timed out."]
 
 
 def test_plain_style_needs_both_the_slower_clock_and_a_tenth_of_the_file(
@@ -633,7 +611,7 @@ def test_progress_style_none_silences_the_heartbeat_but_not_the_closing_line() -
 
 
 def test_a_clock_with_no_emitter_does_nothing() -> None:
-    clock = _Progress(emit=None, style=ProgressStyle.RICH, baseline_secs=1.0)
+    clock = _Progress(emit=None, style=ProgressStyle.RICH)
     clock.begin_file(3)
     clock.record(Verdict.TIMEOUT, 5.0)
     clock.beat(force=True)
@@ -657,12 +635,15 @@ def test_closing_line_breaks_out_the_timeout_cost(monkeypatch: pytest.MonkeyPatc
         clock.record(Verdict.TIMEOUT, 30.0)
     now[0] += 392.0
     clock.finish()
-    assert lines == [
-        "Done in 6m 32s — 18 mutants, 8 timed out (4m 0s of that). Baseline suite 1.4s."
-    ]
+    assert lines == ["Done in 6m 32s — 18 mutants, 8 timed out (4m 0s of that)."]
 
 
-def test_closing_line_says_so_when_nothing_timed_out(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_closing_line_adds_nothing_extra_when_nothing_timed_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `timeout: 0` already lives in the per-verdict tally, so the zero case earns no clause here —
+    # only a real, nonzero cost does, since that figure (the wall-clock those timeouts cost) exists
+    # nowhere else.
     from gdmutant.engine import loop as loop_mod
 
     now = [1000.0]
@@ -672,13 +653,13 @@ def test_closing_line_says_so_when_nothing_timed_out(monkeypatch: pytest.MonkeyP
     clock.record(Verdict.KILLED, 2.0)
     now[0] += 25.0
     clock.finish()
-    assert lines == ["Done in 25s — 1 mutant, none timed out. Baseline suite 1.4s."]
+    assert lines == ["Done in 25s — 1 mutant."]
 
 
 def test_timeout_cost_is_measured_not_multiplied_out() -> None:
     # `timeouts × budget` would be wrong on the --jobs path, where the budget is scaled by the
     # worker count and the waits overlap. Only the real elapsed time is true on both paths.
-    clock = _Progress(emit=None, style=ProgressStyle.NONE, baseline_secs=1.0)
+    clock = _Progress(emit=None, style=ProgressStyle.NONE)
     clock.begin_file(2)
     clock.record(Verdict.TIMEOUT, 12.5)
     clock.record(Verdict.TIMEOUT, 7.5)
@@ -691,7 +672,7 @@ def test_a_run_ends_with_the_closing_wall_clock(tmp_path: Path) -> None:
     lines: list[str] = []
     run(str(tmp_path), path, src, MarkerRunner(path, ">="), timeout=10.0, progress=lines.append)
     assert lines[1].startswith("1 mutant to run.")
-    assert lines[-1].startswith("Done in ") and "1 mutant, none timed out." in lines[-1]
+    assert lines[-1].startswith("Done in ") and lines[-1].endswith("1 mutant.")
 
 
 def test_a_multi_file_run_closes_once_for_the_whole_run(tmp_path: Path) -> None:
@@ -712,7 +693,27 @@ def test_a_multi_file_run_closes_once_for_the_whole_run(tmp_path: Path) -> None:
         line for line in lines if line.startswith("Done in ")
     ][:1]
     assert sum(line.startswith("Done in ") for line in lines) == 1
-    assert sum(line.endswith("capped at 10.0s.") for line in lines) == 2  # one plan line per file
+    assert sum(line.startswith("1 mutant to run.") for line in lines) == 2  # one plan line per file
+
+
+def test_only_a_non_last_file_gets_the_forced_end_of_file_beat(tmp_path: Path) -> None:
+    # The first file's forced beat still fires (it closes out that file before "mutating <next> ..."
+    # announces the next one), but the last file's would only restate what `finish` is about to say,
+    # so `_mutate_file` skips it there.
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    first = _write(tmp_path, "a.gd", src)
+    second = _write(tmp_path, "b.gd", src)
+    lines: list[str] = []
+    run_paths(
+        str(tmp_path),
+        {first: src, second: src},
+        MarkerRunner(first, ">="),
+        timeout=10.0,
+        progress=lines.append,
+    )
+    beats = [line for line in lines if line.startswith("… ")]
+    assert len(beats) == 1
+    assert beats[0].startswith("… 1/1 done in ")
 
 
 def test_progress_defaults_to_silent(tmp_path: Path) -> None:
@@ -910,20 +911,19 @@ def test_parallel_scales_the_per_mutant_timeout_by_worker_count(tmp_path: Path) 
     assert all(t == 5.0 * 2 for t in mutant_timeouts)
 
 
-def test_the_announced_cap_is_the_cap_the_run_hands_the_runner(tmp_path: Path) -> None:
-    # The two facts, compared against each other in one real run: what the pre-run line PROMISES and
-    # what the runner is actually GIVEN. Asserting the promise on its own is what let the message
-    # drift to a quarter of the enforced value — the number was checked, the agreement never was.
+def test_the_runner_is_given_the_contention_scaled_cap(tmp_path: Path) -> None:
+    # `_contention_budget` is the single source of this arithmetic (see its own docstring on why a
+    # second, separately-computed figure is how a past version of this drifted to a quarter of the
+    # enforced value). Verify the runner actually receives that scaled figure, not a hand-derived
+    # one.
     src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"  # 3 runnable mutants
     path = _write(tmp_path, "f.gd", src)
     runner = TimeoutRecordingRunner()
-    lines: list[str] = []
-    run(str(tmp_path), path, src, runner, timeout=5.0, jobs=2, progress=lines.append)
+    run(str(tmp_path), path, src, runner, timeout=5.0, jobs=2)
 
-    plan = next(line for line in lines if "each mutant is capped at" in line)
-    announced = float(plan.split("each mutant is capped at ")[1].split("s.")[0])
+    expected = _contention_budget(5.0, workers=2)  # min(jobs=2, runnable=3) workers
     _, *mutant_timeouts = runner.seen  # drop the baseline, which uses the runner's own budget
-    assert mutant_timeouts and all(t == announced for t in mutant_timeouts)
+    assert mutant_timeouts and all(t == expected for t in mutant_timeouts)
 
 
 def test_parallel_classifies_an_invalid_mutant_like_serial(tmp_path: Path) -> None:

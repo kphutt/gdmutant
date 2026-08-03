@@ -119,6 +119,18 @@ path = "README.md"
 pattern = 'src="\.github/assets/'
 replacement = 'src="https://raw.githubusercontent.com/kphutt/gdmutant/v$HFPR_VERSION/.github/assets/'
 
+# Every relative markdown link (`](docs/...)`, `](LICENSE)`, ...) needs the same treatment as the
+# image src above, for the same reason: PyPI resolves neither. One generic pattern rather than one
+# entry per link, so a link added to README.md later is covered automatically instead of silently
+# reintroducing this gap. Excludes anchor-only links (`#compatibility`) and already-absolute ones
+# (badges, external references) via the negative lookahead. Pinned to `main`, not a release tag,
+# since these point at docs and license text that should read as they are today, not as they were
+# at release time. tests/test_packaging.py asserts this pattern still matches what README.md
+# actually contains.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://|#|mailto:)([^)]+)\)'
+replacement = '](https://github.com/kphutt/gdmutant/blob/main/\1)'
+
 [tool.hatch.build.targets.wheel]
 packages = ["gdmutant"]
 

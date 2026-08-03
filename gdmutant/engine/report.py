@@ -164,20 +164,12 @@ def all_survived_warning(run: MutationRun) -> str | None:
 
 
 def console_summary(run: MutationRun) -> str:
-    """A human-readable summary: score, per-verdict counts, and each survivor's location."""
-    score = run.mutation_score
-    score_str = "n/a" if score is None else f"{score * 100:.1f}%"
-    lines = [
-        f"Mutation score: {score_str}",
-        f"  killed:   {run.killed}",
-        f"  timeout:  {run.timeouts}  (counted as killed)",
-        f"  survived: {run.survived}",
-        f"  ignored:  {run.ignored}  (suppressed, excluded from score)",
-        f"  invalid:  {run.invalid}",
-        f"  error:    {run.errors}",
-    ]
+    """A human-readable summary: each survivor's location and explanation first, the score and
+    per-verdict counts last. Survivors are what needs fixing; the scorecard is the takeaway once
+    you've seen them, not a headline to read before you know what it's scoring."""
+    lines: list[str] = []
     if run.survivors:
-        lines += ["", f"Survivors ({len(run.survivors)}):", ""]
+        lines += [f"Survivors ({len(run.survivors)}):", ""]
         source_cache: dict[str, list[str] | None] = {}
         on_asserts = 0
         for m in run.survivors:
@@ -191,6 +183,19 @@ def console_summary(run: MutationRun) -> str:
         note = _assert_survivor_note(on_asserts, len(run.survivors))
         if note is not None:
             lines += [note, ""]
+    score = run.mutation_score
+    score_str = "n/a" if score is None else f"{score * 100:.1f}%"
+    lines += [
+        "Results",
+        "",
+        f"Mutation score: {score_str}",
+        f"  killed:   {run.killed}",
+        f"  timeout:  {run.timeouts}  (counted as killed)",
+        f"  survived: {run.survived}",
+        f"  ignored:  {run.ignored}  (suppressed, excluded from score)",
+        f"  invalid:  {run.invalid}",
+        f"  error:    {run.errors}",
+    ]
     return "\n".join(lines)
 
 

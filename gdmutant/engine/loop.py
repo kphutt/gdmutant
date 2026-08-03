@@ -157,7 +157,7 @@ class ProgressStyle(Enum):
     NONE = "none"
 
 
-_HEARTBEAT_SECS = 30.0  # RICH: never more often than this, so the heartbeat can't become the noise
+_HEARTBEAT_SECS = 3.0  # RICH: never more often than this, so the heartbeat can't become the noise
 _HEARTBEAT_SECS_PLAIN = 60.0  # PLAIN: Infection's CI cadence
 _HEARTBEAT_FRACTION_PLAIN = 0.10  # …and at least a tenth of the mutants, whichever is rarer
 #: gdmutant forecasts **no** finish time — not up front, and not from measured throughput either. A
@@ -185,9 +185,7 @@ def _contention_budget(per_mutant_timeout: float, workers: int) -> float:
     return per_mutant_timeout * max(workers, 1)
 
 
-def _progress_plan(
-    runnable: int, total: int, baseline_secs: float, per_mutant_timeout: float, jobs: int
-) -> str:
+def _progress_plan(runnable: int, total: int, jobs: int) -> str:
     """The pre-run line: **what the run is**, with no prediction of how long it will take.
 
     gdmutant used to print ``estimated ≈ 24s`` here, from mutant count × baseline time. No other
@@ -198,27 +196,18 @@ def _progress_plan(
     run), and — because it never took `jobs` — roughly N× too high under ``--jobs N``. An estimate
     whose error direction is not even stable is worse than no estimate.
 
-    What it must keep doing is **pace the wait**. "Looks hung" is the #1 documented reason people
-    abandon mutation testing, and the first Godot boot is real silence. So the budget clause stays,
-    and does the job better than a total ever did: *how long silence is normal* is exactly what
-    someone staring at a still terminal needs, and unlike a forecast it is a fact.
-
-    Which is why the cap it names is the **contention-scaled** one under ``--jobs``: that is what
-    the run enforces (`_contention_budget`), and naming the unscaled figure instead understated the
-    real worst case by up to N times — turning the one clause that paces the wait into the reason a
-    healthy run looks hung. `min(jobs, runnable)` is the worker count the parallel path will pick;
-    it can only over-count (a mutant that turns out invalid never takes a worker), which errs toward
-    naming a longer silence than will happen — the safe direction for this particular fact.
+    This line used to also state the baseline's wall-clock and the per-mutant timeout cap, as the
+    fact that paced the wait while nothing else did: "looks hung" is the #1 documented reason people
+    abandon mutation testing, and a static number stated once was better than silence. It no longer
+    carries that job: the heartbeat (`_HEARTBEAT_SECS`) now fires every few seconds instead of every
+    30, so a still terminal gets live, repeated proof of life instead of one number to do the math
+    on. The cap is still enforced exactly as before (`_contention_budget`), just not announced here.
     """
     unit = "mutant" if runnable == 1 else "mutants"
     ignored = total - runnable
     ignored_note = f" ({ignored} ignored)" if ignored else ""
     jobs_note = f" Running {jobs} at a time." if jobs > 1 else ""
-    budget = _contention_budget(per_mutant_timeout, min(jobs, runnable))
-    return (
-        f"{runnable} {unit} to run{ignored_note}. Baseline suite {baseline_secs:.1f}s; "
-        f"each mutant is capped at {budget:.1f}s.{jobs_note}"
-    )
+    return f"{runnable} {unit} to run{ignored_note}.{jobs_note}"
 
 
 @dataclass
@@ -242,7 +231,6 @@ class _Progress:
 
     emit: Callable[[str], None] | None
     style: ProgressStyle
-    baseline_secs: float
     #: Whole-run: when the first mutant work started, and what it cost.
     # A lambda, not `time.monotonic` itself: the bare function would be captured at class
     # definition, leaving `started` on a different clock from every other reading here the
@@ -317,20 +305,23 @@ class _Progress:
     def finish(self) -> None:
         """Emit the closing wall-clock line — the number every other test runner prints and this one
         did not, with the timeout cost broken out because that is the cost nobody can see. On the
-        measured run, eight timeouts were four minutes of six and a half, invisible at both ends."""
+        measured run, eight timeouts were four minutes of six and a half, invisible at both ends.
+
+        No baseline figure here: the plan line already stated it, and this line's job is the wall
+        clock and the timeout cost, not a repeat of a fact from the top of the run. And no "none
+        timed out" either, when there is nothing to add: the per-verdict tally already says
+        `timeout: 0`, so restating the zero case here is the same fact a third time for no reason —
+        only a real, nonzero cost earns a clause, since that figure exists nowhere else."""
         if self.emit is None:
             return
         elapsed = time.monotonic() - self.started
         unit = "mutant" if self.ran == 1 else "mutants"
         cost = (
-            f"{self.timeouts} timed out ({_format_duration(self.timeout_secs)} of that)"
+            f", {self.timeouts} timed out ({_format_duration(self.timeout_secs)} of that)"
             if self.timeouts
-            else "none timed out"
+            else ""
         )
-        self.emit(
-            f"Done in {_format_duration(elapsed)} — {self.ran} {unit}, {cost}. "
-            f"Baseline suite {self.baseline_secs:.1f}s."
-        )
+        self.emit(f"Done in {_format_duration(elapsed)} — {self.ran} {unit}{cost}.")
 
 
 def _plain_beat_every(total: int) -> int:
@@ -378,8 +369,8 @@ def run(
     special case here — the heartbeat only ever reports aggregate counts, which climb the same way
     whether one worker or several produced them.
     """
-    per_mutant_timeout, baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
-    clock = _Progress(emit=progress, style=progress_style, baseline_secs=baseline_secs)
+    per_mutant_timeout, _baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
+    clock = _Progress(emit=progress, style=progress_style)
     result = _mutate_file(
         project_dir,
         path,
@@ -387,7 +378,6 @@ def run(
         runner,
         adapter,
         per_mutant_timeout,
-        baseline_secs,
         catalog,
         progress,
         jobs,
@@ -472,21 +462,29 @@ def _mutate_file(
     runner: Runner,
     adapter: Adapter,
     per_mutant_timeout: float,
-    baseline_secs: float,
     catalog: tuple[Operator, ...],
     progress: Callable[[str], None] | None,
     jobs: int,
     clock: _Progress,
+    *,
+    is_last_file: bool = True,
 ) -> MutationRun:
     """Generate and run every mutant for a single file (the baseline is assumed already green). The
     file at `path` must hold `source`; it is restored before returning. `jobs > 1` evaluates mutants
-    concurrently on per-worker project copies, then reassembles them in generation order."""
+    concurrently on per-worker project copies, then reassembles them in generation order.
+
+    `is_last_file` (default `True`, since `run()`'s single-file caller has nothing after it) gates
+    the forced end-of-file heartbeat: `run_paths` passes `False` for every file but the last, since
+    that beat's job is proving the file reached n/n before the *next* file's plan line, and reaching
+    the whole run's actual end is `_Progress.finish`'s job — a forced beat immediately followed by
+    `finish` on the same numbers is pure restatement, not a second fact.
+    """
     mutants = adapter.generate_mutants(path, source, catalog)
     total = len(mutants)
     runnable = sum(1 for m in mutants if m.ignore_reason is None)
     clock.begin_file(runnable)
     if progress is not None:
-        progress(_progress_plan(runnable, total, baseline_secs, per_mutant_timeout, jobs))
+        progress(_progress_plan(runnable, total, jobs))
     if jobs > 1 and total > 0:
         outcomes = _run_mutants_parallel(
             project_dir,
@@ -503,7 +501,8 @@ def _mutate_file(
         outcomes = _run_mutants_serial(
             project_dir, path, source, runner, adapter, mutants, per_mutant_timeout, clock
         )
-    clock.beat(force=True)  # every file ends on a line that shows it reached n/n
+    if not is_last_file:
+        clock.beat(force=True)  # a non-last file ends on a line that shows it reached n/n
     return MutationRun(tuple(outcomes))
 
 
@@ -702,9 +701,10 @@ def run_paths(
     `jobs` parallelizes each file's mutants exactly as `run` does. Returns ``{path: MutationRun}``
     in `sources` order. Raises `BaselineFailed` (like `run`) if the baseline can't run or is red.
     """
-    per_mutant_timeout, baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
-    clock = _Progress(emit=progress, style=progress_style, baseline_secs=baseline_secs)
+    per_mutant_timeout, _baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
+    clock = _Progress(emit=progress, style=progress_style)
     runs: dict[str, MutationRun] = {}
+    last_path = next(reversed(sources), None)
     for path, source in sources.items():
         if progress is not None:
             progress(f"mutating {path} ...")
@@ -715,11 +715,11 @@ def run_paths(
             runner,
             adapter,
             per_mutant_timeout,
-            baseline_secs,
             catalog,
             progress,
             jobs,
             clock,
+            is_last_file=path == last_path,
         )
     # One closing line for the whole run, not one per file: the wall-clock a user takes away is
     # "how long did that take", and every file's mutants are part of the same wait.

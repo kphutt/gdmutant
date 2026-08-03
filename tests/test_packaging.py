@@ -92,3 +92,48 @@ def test_pypi_image_urls_are_absolute_and_tag_pinned() -> None:
     assert (
         f"https://raw.githubusercontent.com/kphutt/gdmutant/v{version}/.github/assets/" in built
     ), "the banner URL is not pinned to this version's release tag"
+
+
+def test_no_relative_markdown_link_survives_into_the_pypi_long_description() -> None:
+    # THE GUARD THAT MATTERS, for links: PyPI resolves neither an image src nor a markdown link
+    # relative to the repo, so `[survivor reference](docs/survivors/README.md)` renders as a 404 on
+    # the project page, invisible until after an irreversible upload. README.md is expected to keep
+    # its links relative (so they still work for someone reading a fork) — the substitution is what
+    # makes the *published* copy absolute instead.
+    readme = (_ROOT / "README.md").read_text(encoding="utf-8")
+    relative_targets = [
+        target
+        for target in re.findall(r"\]\(([^)]+)\)", readme)
+        if not target.startswith(("http://", "https://", "#", "mailto:"))
+    ]
+    assert relative_targets, (
+        "README.md has no relative markdown link left for this test to exercise — if that's "
+        "deliberate, this test (and the substitution it guards) can be deleted"
+    )
+    built = _built_long_description()
+    for target in relative_targets:
+        assert f"]({target})" not in built, f"a relative link reaches PyPI unrewritten: {target}"
+
+
+def test_pypi_markdown_links_are_absolute_and_repo_pinned() -> None:
+    # Every markdown link in the built text must be absolute (or a pure in-page anchor) — no
+    # allowlist of "known" external links here, since that would need updating every time README.md
+    # gains a new one, exactly the kind of drift this test exists to catch instead of cause.
+    # Separately, each relative link README.md actually has must land on the exact absolute GitHub
+    # URL expected: the failure mode for a regex mistake here is not an exception, it's a silently
+    # broken href on the one page a reader can't ask to be fixed.
+    built = _built_long_description()
+    for target in re.findall(r"\]\(([^)]+)\)", built):
+        assert target.startswith(("http://", "https://", "#", "mailto:")), (
+            f"a markdown link in the PyPI long description is still relative: {target}"
+        )
+    readme = (_ROOT / "README.md").read_text(encoding="utf-8")
+    relative_targets = [
+        target
+        for target in re.findall(r"\]\(([^)]+)\)", readme)
+        if not target.startswith(("http://", "https://", "#", "mailto:"))
+    ]
+    for target in relative_targets:
+        assert f"](https://github.com/kphutt/gdmutant/blob/main/{target})" in built, (
+            f"{target} was not rewritten to the expected absolute GitHub URL"
+        )
