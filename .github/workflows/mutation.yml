@@ -10,6 +10,18 @@ name: Mutation
 # on every push/PR that touches the source, tests, or anything the suite reads, exactly as before.
 # This is a path filter on *which files changed*, NOT a shift to merge-time or a label gate.
 #
+# Two questions hide inside one job, and they don't need the same amount of work to answer.
+# "Did I just break the suite" only needs the tests to run once (seconds). "What's the mutation
+# score" needs every mutant re-run against them (~15-20 minutes, the whole point of the full
+# `mutmut run`). The trigger `paths` above are deliberately broad — a doc file the tests read
+# (also_copy in pyproject.toml) can break the baseline just as easily as a source change — but only
+# `gdmutant/**` (what mutmut mutates), `tests/**` (what kills a mutant), `corpus/**` (what the
+# suite's own end-to-end tests read), `pyproject.toml`, and `uv.lock` can move the SCORE itself. A
+# docs-only or CI-config-only PR can trigger this job without ever being able to change one
+# survivor count, so the "Determine..." step below checks the actual diff against that narrower
+# list and skips straight to a plain `pytest` run when nothing in it changed — same baseline
+# guarantee, without paying for a mutant sweep that's guaranteed to reproduce the last score.
+#
 # Two outcomes look similar (mutmut exits non-zero, the step could fail) but mean very different
 # things, and this workflow now reports them differently on purpose:
 #   - Survivors exist, or the score is low: genuinely advisory. Nobody should be blocked on a
@@ -71,6 +83,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # this job never uses git creds — don't leave them on the runner
+          fetch-depth: 0 # full history — the next step diffs against the base/previous commit
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -84,7 +97,34 @@ jobs:
       - name: Install deps (frozen lockfile)
         run: uv sync --frozen
 
+      - name: Determine whether the mutation score can have moved
+        id: scope
+        # Compares the diff against the narrower score-relevant list (see the top-of-file comment),
+        # not the trigger's broad `paths:` list. If the base commit is missing or unreachable (a
+        # force-push, a shallow history gap, the branch's very first commit) this defaults to the
+        # full run — an unknown diff is treated as "could have changed," never as "skip it," so a gap
+        # here fails loud (a slow run) rather than silently (a score that never gets checked).
+        run: |
+          BASE="${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE" 2>/dev/null; then
+            echo "No usable base commit to diff against — running the full mutation sweep to be safe."
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$BASE" HEAD -- gdmutant tests corpus pyproject.toml uv.lock | grep -q .; then
+            echo "A score-relevant path changed — running the full mutation sweep."
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing under gdmutant/, tests/, corpus/, pyproject.toml, or uv.lock changed — the score can't have moved."
+            echo "run_full=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run tests only (no score-relevant path changed)
+        if: steps.scope.outputs.run_full == 'false'
+        run: uv run pytest
+
       - name: Run mutmut (report mode)
+        if: steps.scope.outputs.run_full == 'true'
         # Surviving mutants make `mutmut run` exit non-zero — expected here (documented equivalents),
         # so that alone must not fail the step. But a *baseline* failure (the suite doesn't run
         # cleanly unmutated) ALSO aborts mutmut with a non-zero exit, and a bare `|| true` would mask
