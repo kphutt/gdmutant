@@ -1,8 +1,9 @@
 """The distributed action must never advertise a `@v1`-style floating tag.
 
-`action.yml` makes gdmutant consumable as a GitHub Action, and its header comment plus the README's
-"GitHub Action" section are where a consumer copies the `uses:` line from. Both used to be able to
-drift toward the convenient-looking `kphutt/gdmutant@v1`, which this repo cannot produce:
+`action.yml` makes gdmutant consumable as a GitHub Action, and its header comment plus the CLI
+reference's "GitHub Actions" section are where a consumer copies the `uses:` line from. Both used
+to be able to drift toward the convenient-looking `kphutt/gdmutant@v1`, which this repo cannot
+produce:
 
 * `scripts/check_release_tag.py` fails any tag that does not equal the version in `pyproject.toml`,
   so a `v1` tag would demand a packaged version of literally `1` — asserted below rather than
@@ -21,6 +22,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -36,7 +38,10 @@ _USES = re.compile(r"kphutt/gdmutant@(?P<ref>[^\s\"'`]+)")
 #: A floating major/minor tag: `v1`, `v0`, `v1.2` — anything short of a full version.
 _FLOATING = re.compile(r"^v\d+(\.\d+)?$")
 
-DOCS_SHOWING_A_USES_LINE = [REPO / "action.yml", REPO / "README.md"]
+DOCS_SHOWING_A_USES_LINE = [
+    REPO / "action.yml",
+    REPO / "docs" / "gdmutant-guide.md",
+]
 
 
 @pytest.mark.parametrize("path", DOCS_SHOWING_A_USES_LINE, ids=lambda p: p.name)
@@ -56,8 +61,24 @@ def test_a_floating_major_tag_really_is_unsatisfiable() -> None:
     assert check_release_tag.mismatch("v1", check_release_tag.packaged_version()) is not None
 
 
-def test_the_readme_says_there_is_no_floating_tag() -> None:
+def test_the_guide_says_there_is_no_floating_tag() -> None:
     # The claim a consumer needs, in the place they will look for it.
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    assert "## GitHub Action" in readme
-    assert "There is no `@v1` or `@v0`" in readme
+    guide = (REPO / "docs" / "gdmutant-guide.md").read_text(encoding="utf-8")
+    assert "## GitHub Actions" in guide
+    assert "`@v1` or `@v0`" in guide
+
+
+def test_the_ref_inputs_own_default_is_not_a_floating_tag() -> None:
+    # The bug this test exists to catch shipped in exactly this input's `default:` value (a literal
+    # `v1`, a ref this repo can never produce) and was invisible to every check above: those only
+    # scan `kphutt/gdmutant@<ref>` strings in prose/docs, never an input's own default. A consumer
+    # who never overrides `ref` gets whatever this default resolves to, so it must never itself be a
+    # floating tag — an empty string (falls back to `github.action_ref`, always real at
+    # invocation-time for a remote `uses: owner/repo@ref`), a real branch, or a full version tag are
+    # all fine; a bare `v1`/`v0`/`v1.2` is exactly the unsatisfiable shape this repo cannot produce.
+    action = yaml.safe_load((REPO / "action.yml").read_text(encoding="utf-8"))
+    default = action["inputs"]["ref"]["default"]
+    assert not _FLOATING.match(default), (
+        f"action.yml's 'ref' input defaults to `{default}`, a floating tag this repo cannot "
+        "publish — a consumer who never overrides `ref` would get an install that 404s"
+    )

@@ -255,11 +255,14 @@ mutated text over the file itself, runs the suite against it, and writes the ori
 `finally` ([ADR-0003](../decisions/0003-mutation-application-strategy.md)). The suite loads code from
 disk through `res://`, so there is nowhere else to put a mutant the tests would actually see. The
 engine restores the file whenever it is still running to do so, but a process killed outright cannot
-restore anything, so a hard kill can leave a mutant on disk. A failed restore does the same thing with
-no crash at all: when a full disk or a lock that outlasts the retries stops that second write, it
-raises and the mutant stays where it is. This is why gdmutant warns when git holds no copy of a file
-it is about to mutate, and why `--require-clean` refuses to start without one. NF-7 governs what each
-individual write guarantees, and what it does not.
+restore anything, so a hard kill can leave a mutant on disk. If that kill lands between the staged
+write and the rename (NF-7), it also leaves the stray temp file behind instead of the rename ever
+completing: `tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")` names it
+`.<name>.<random>.tmp`, beside the source it was headed for — safe to delete on sight. A failed
+restore does the same thing with no crash at all: when a full disk or a lock that outlasts the
+retries stops that second write, it raises and the mutant stays where it is. This is why gdmutant
+warns when git holds no copy of a file it is about to mutate, and why `--require-clean` refuses to
+start without one. NF-7 governs what each individual write guarantees, and what it does not.
 
 Under `--jobs N` this changes. Each worker gets its own copy of the whole project and mutates the file
 inside that copy, so workers can never collide on one file and the real source is never written to on

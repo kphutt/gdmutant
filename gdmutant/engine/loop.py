@@ -128,16 +128,6 @@ class MutationRun:
         return self.detected / scored if scored else None
 
 
-def _progress_start(index: int, total: int, mutant: Mutant, timeout: float) -> str:
-    """Heartbeat emitted *before* a mutant runs: shows which mutant is running and its time budget,
-    so a slow or hanging mutant reads as "running mutant N (<=Ns)" rather than a frozen terminal —
-    the #1 first-run complaint. The verdict line follows once it resolves.
-    """
-    loc = f"{mutant.path}:{mutant.span.line}:{mutant.span.column}"
-    head = f"[{index}/{total}] {loc}  {mutant.describe_change()}"
-    return f"{head}  running (<={timeout:g}s) ..."
-
-
 def _format_duration(secs: float) -> str:
     """A compact human duration: ``9s``, ``2m 15s``, ``1h 3m``. Rounds to whole seconds."""
     whole = int(round(secs))
@@ -227,7 +217,7 @@ def _progress_plan(
     budget = _contention_budget(per_mutant_timeout, min(jobs, runnable))
     return (
         f"{runnable} {unit} to run{ignored_note}. Baseline suite {baseline_secs:.1f}s; "
-        f"each mutant is capped at {budget:g}s.{jobs_note}"
+        f"each mutant is capped at {budget:.1f}s.{jobs_note}"
     )
 
 
@@ -348,18 +338,6 @@ def _plain_beat_every(total: int) -> int:
     return max(1, math.ceil(total * _HEARTBEAT_FRACTION_PLAIN))
 
 
-def _progress_line(index: int, total: int, outcome: MutantOutcome) -> str:
-    """One human-readable progress line for a finished mutant.
-
-    Format: ``[i/N] path:line:col  original -> replacement  ... verdict`` — which mutant just
-    resolved and how. The engine formats it; the caller (the CLI) decides where it goes — always
-    stderr, so ``--json -`` keeps stdout pure JSON.
-    """
-    m = outcome.mutant
-    loc = f"{m.path}:{m.span.line}:{m.span.column}"
-    return f"[{index}/{total}] {loc}  {m.describe_change()}  ... {outcome.verdict.value}"
-
-
 def run(
     project_dir: str,
     path: str,
@@ -392,12 +370,13 @@ def run(
     the per-mutant time budget is scaled by the worker count so CPU/RAM contention can't turn a
     genuinely-passing suite into a false TIMEOUT (see `_run_mutants_parallel`).
 
-    If `progress` is given, it is called with the baseline notice, then — for each mutant that
-    actually runs — a "running (<=Ns)" heartbeat *before* it runs and a verdict line *after*, in
-    generation order (invalid mutants never run, so they get only the verdict line). The CLI wires
-    it to stderr so a long or hanging run shows steady output instead of looking frozen; `None`
-    runs silently. Under ``jobs > 1`` verdict lines arrive as each mutant finishes (their true
-    generation index is shown); the per-mutant heartbeat is omitted (the lines would interleave).
+    If `progress` is given, it is called with the baseline notice, the pre-run plan
+    (`_progress_plan`), then a rate-limited heartbeat (`_Progress.beat`) as mutants finish — never
+    one line per mutant: that repeated the per-mutant timeout budget over and over for no reason,
+    once the plan line had already said it. The CLI wires `progress` to stderr so a long or hanging
+    run shows steady output instead of looking frozen; `None` runs silently. `jobs > 1` needs no
+    special case here — the heartbeat only ever reports aggregate counts, which climb the same way
+    whether one worker or several produced them.
     """
     per_mutant_timeout, baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
     clock = _Progress(emit=progress, style=progress_style, baseline_secs=baseline_secs)
@@ -517,13 +496,12 @@ def _mutate_file(
             adapter,
             mutants,
             per_mutant_timeout,
-            progress,
             jobs,
             clock,
         )
     else:
         outcomes = _run_mutants_serial(
-            project_dir, path, source, runner, adapter, mutants, per_mutant_timeout, progress, clock
+            project_dir, path, source, runner, adapter, mutants, per_mutant_timeout, clock
         )
     clock.beat(force=True)  # every file ends on a line that shows it reached n/n
     return MutationRun(tuple(outcomes))
@@ -537,13 +515,18 @@ def _run_mutants_serial(
     adapter: Adapter,
     mutants: Sequence[Mutant],
     per_mutant_timeout: float,
-    progress: Callable[[str], None] | None,
     clock: _Progress,
 ) -> list[MutantOutcome]:
-    """Evaluate every mutant one at a time against the real project file (the trusted default)."""
+    """Evaluate every mutant one at a time against the real project file (the trusted default).
+
+    No per-mutant line here on purpose — only `clock.record`'s own rate-limited heartbeat
+    (`_Progress.beat`, via `clock.emit`) reports progress. A line for every mutant repeated the
+    per-mutant timeout budget over and over (the old "running (<=Ns) ..."), which is noise once
+    the pre-run plan line has already said it once; the heartbeat already answers "is this still
+    going" without repeating a number nobody needs restated per mutant.
+    """
     outcomes: list[MutantOutcome] = []
-    total = len(mutants)
-    for index, mutant in enumerate(mutants, start=1):
+    for mutant in mutants:
         ran: float | None = None
         if mutant.ignore_reason is not None:
             # A `# gdmutant: ignore` annotation suppresses this mutant — generated for the report
@@ -552,8 +535,6 @@ def _run_mutants_serial(
         else:
             mutated, valid = adapter.apply_mutant(mutant, source)
             if valid:
-                if progress is not None:
-                    progress(_progress_start(index, total, mutant, per_mutant_timeout))
                 started = time.monotonic()
                 verdict = _run_one(project_dir, path, source, mutated, runner, per_mutant_timeout)
                 ran = time.monotonic() - started
@@ -561,8 +542,6 @@ def _run_mutants_serial(
                 verdict = Verdict.INVALID
         outcome = MutantOutcome(mutant, verdict)
         outcomes.append(outcome)
-        if progress is not None:
-            progress(_progress_line(index, total, outcome))
         if ran is not None:
             # Only a mutant that actually ran is a sample: ignored and invalid ones never reached
             # the suite, so counting them would make the measured rate a fiction.
@@ -611,7 +590,6 @@ def _run_mutants_parallel(
     adapter: Adapter,
     mutants: Sequence[Mutant],
     per_mutant_timeout: float,
-    progress: Callable[[str], None] | None,
     jobs: int,
     clock: _Progress,
 ) -> list[MutantOutcome]:
@@ -657,8 +635,6 @@ def _run_mutants_parallel(
                 continue
             outcome = MutantOutcome(mutant, Verdict.INVALID)
         outcomes[index] = outcome
-        if progress is not None:
-            progress(_progress_line(index + 1, total, outcome))
     if not runnable:  # every mutant was ignored/invalid — no Godot run needed
         return [outcomes[index] for index in range(total)]
 
@@ -688,10 +664,9 @@ def _run_mutants_parallel(
             outcome = MutantOutcome(mutant, verdict)
             with lock:
                 outcomes[index] = outcome
-                if progress is not None:
-                    progress(_progress_line(index + 1, total, outcome))
-                # Inside the same lock the progress lines take, so the counters and the last-beat
-                # marks are only ever touched by one worker at a time.
+                # clock.record emits the rate-limited heartbeat itself; no per-mutant line here
+                # (see _run_mutants_serial's docstring). Inside the same lock so the counters and
+                # the last-beat marks are only ever touched by one worker at a time.
                 clock.record(verdict, ran)
 
     with tempfile.TemporaryDirectory(prefix="gdmutant-jobs-") as tmp:

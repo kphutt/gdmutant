@@ -10,7 +10,7 @@
 #
 # Consumers pin the commit SHA (or a full version tag such as `@v0.1.0`). There is no floating `@v1`
 # or `@v0` tag: every published tag names a full version and is immutable, so this repo cannot
-# produce a moving major tag. See the README's "GitHub Action" section.
+# produce a moving major tag. See docs/gdmutant-guide.md's "GitHub Actions" section.
 #
 # The action sets up Godot, installs gdmutant, runs it, and writes the surviving mutants — WITH their
 # gap/risk/start explanations — to the GitHub Actions job summary ($GITHUB_STEP_SUMMARY), right where
@@ -66,10 +66,12 @@ inputs:
     default: ""
   ref:
     description: >-
-      The gdmutant git ref (tag/branch/SHA) to install from during the pre-PyPI interim. Defaults to
-      the v1 tag that consumers pin.
+      The gdmutant git ref (tag/branch/SHA) to install from during the pre-PyPI interim. Defaults
+      to whatever ref this Action itself was invoked at (e.g. the `@v0.1.0` a consumer already
+      pinned in their own `uses:` line), so installing gdmutant's code never depends on a second,
+      separately-maintained value that could drift from (or simply not exist as) a real ref.
     required: false
-    default: v1
+    default: ""
   since:
     description: >-
       Only mutate lines changed since this git ref (gdmutant's --since) — the fast, per-PR
@@ -132,12 +134,22 @@ runs:
     - name: Install gdmutant
       shell: bash
       env:
-        GDMUTANT_REF: ${{ inputs.ref }}
+        # inputs.ref, if a consumer set it explicitly, wins; otherwise fall back to the ref this
+        # Action was itself invoked at (github.action_ref) — always a real, resolvable ref for a
+        # remote `uses: owner/repo@ref` invocation, unlike a hardcoded default string that can go
+        # stale the moment this repo's tagging policy changes.
+        GDMUTANT_REF: ${{ inputs.ref || github.action_ref }}
         # GDMUTANT_VERSION is reserved for the PyPI switch below; unused during the git interim.
         GDMUTANT_VERSION: ${{ inputs.gdmutant-version }}
       run: |
         python -m pip install --upgrade pip
-        # INTERIM: gdmutant isn't on PyPI yet, so install it from git at the requested ref.
+        if [ -z "$GDMUTANT_REF" ]; then
+          echo "::error::could not resolve a gdmutant ref to install — github.action_ref is only" \
+               "set for a remote 'uses: owner/repo@ref' invocation. Pass 'ref' explicitly (e.g. a" \
+               "branch or SHA) when consuming this action via a local path or an unversioned ref." >&2
+          exit 1
+        fi
+        # INTERIM: gdmutant isn't on PyPI yet, so install it from git at the resolved ref.
         # TODO(launch): switch to `pip install gdmutant==<ver>` once published to PyPI (drive <ver>
         # from GDMUTANT_VERSION, keep `ref` only as an escape hatch for testing unreleased commits).
         python -m pip install "git+https://github.com/kphutt/gdmutant@${GDMUTANT_REF}"

@@ -11,9 +11,9 @@ mutates a project's source (flip `>`↔`>=`, `and`↔`or`, bump a number, …), 
 mutant, and reports survivors: lines a bug could live on that no test catches. This is the
 fast-orientation guide for anyone (human or AI) *contributing to* gdmutant's own source. The
 product rationale is in [`README.md`](README.md), and the authoritative design is in
-[`docs/design/DESIGN.md`](docs/design/DESIGN.md). Driving gdmutant as a tool (invoking the CLI
-from an AI agent, not editing its code) is a different job: see
-[`docs/using-with-an-ai-agent.md`](docs/using-with-an-ai-agent.md) instead.
+[`docs/design/DESIGN.md`](docs/design/DESIGN.md). Driving gdmutant as a tool (invoking the CLI,
+not editing its code) is a different job: see
+[`docs/gdmutant-guide.md`](docs/gdmutant-guide.md) instead.
 
 ## Setup
 

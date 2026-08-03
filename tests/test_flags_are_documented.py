@@ -16,7 +16,7 @@ from pathlib import Path
 from gdmutant.cli import build_parser
 
 _REPO = Path(__file__).resolve().parent.parent
-_DOCS = (_REPO / "README.md", _REPO / "docs" / "using-with-an-ai-agent.md")
+_DOCS = (_REPO / "README.md", _REPO / "docs" / "gdmutant-guide.md")
 
 
 def _run_subparser() -> argparse.ArgumentParser:

@@ -185,8 +185,8 @@ def test_console_summary_score_counts_and_survivors() -> None:
     assert "killed:   1" in out and "survived: 1" in out
     assert "invalid:  1" in out and "error:    1" in out
     assert "Survivors (1):" in out
-    # New per-survivor explanation block: header with category, then gap/risk/start/more.
-    assert "survived" in out and "boolean ─" in out
+    # Per-survivor explanation block: file:line/func leads, then gap/risk/start/more — no
+    # redundant "survived"/operator banner, since "Survivors (1):" already says these all did.
     assert "f.gd:2" in out
     assert "gap    Your tests pass whether this needs both sides" in out
 
@@ -213,7 +213,6 @@ def test_readme_shows_the_current_console_format_not_the_retired_one() -> None:
     repo = Path(__file__).resolve().parent.parent
     readme = (repo / "README.md").read_text(encoding="utf-8")
     assert "→ kill it" not in readme
-    assert "──── survived" in readme  # shows the new block
     # The README's example survivor (turn_order.gd:27, `and` -> `or`) must match the renderer's
     # real output — the WHOLE block, not just the caret line, so no slot can drift unnoticed.
     # It must also be a survivor the reader can act on: turn_order.gd:13's `<` -> `<=` used to be
@@ -304,7 +303,7 @@ def test_console_summary_renders_a_deletion_survivor_without_a_dangling_arrow() 
         )
     )
     out = console_summary(run)
-    assert "statement-deletion ─" in out
+    assert "f.gd:2" in out
     assert "gap    Your tests pass with this line removed entirely" in out
     assert "-> \n" not in out and "-> (deleted)" not in out
 

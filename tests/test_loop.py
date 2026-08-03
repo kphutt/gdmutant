@@ -14,7 +14,6 @@ from gdmutant.adapters.gdscript import ADAPTER
 from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.loop import (
     BaselineFailed,
-    MutantOutcome,
     ProgressStyle,
     SourceOutsideProject,
     SourceWriteFailed,
@@ -25,9 +24,7 @@ from gdmutant.engine.loop import (
     _format_duration,
     _plain_beat_every,
     _Progress,
-    _progress_line,
     _progress_plan,
-    _progress_start,
     _write_source,
 )
 from gdmutant.engine.loop import run as _run
@@ -432,35 +429,31 @@ def test_runner_error_on_a_later_mutant_preserves_earlier_verdicts(tmp_path: Pat
     assert Path(path).read_text(encoding="utf-8") == src
 
 
-def test_progress_fires_a_heartbeat_then_a_verdict_per_mutant_in_order(tmp_path: Path) -> None:
-    # Progress fires the baseline notice, then for each mutant that runs: a "running (<=Ns)"
-    # heartbeat BEFORE (so a hang shows on a specific mutant, not a frozen terminal) and a verdict
-    # line AFTER — pinned exactly so a mutated separator, index base, budget, or verdict label is
-    # caught. Source has 3 mutants: >, and, <. Explicit timeout keeps the budget deterministic.
+def test_progress_has_no_per_mutant_line_only_plan_heartbeat_and_close(tmp_path: Path) -> None:
+    # No "[i/N] path:line  a -> b  ... verdict" line per mutant anymore — on purpose, so the
+    # per-mutant timeout budget the plan line already states doesn't get repeated over and over.
+    # Progress is just: the baseline notice, the pre-run plan, a heartbeat (`_Progress.beat`), and
+    # the closing wall-clock. A fast synthetic run finishes well inside one heartbeat interval, so
+    # only the forced end-of-file beat fires — pinned exactly so a mutated separator, count, or
+    # verdict tally is caught. Source has 3 mutants: >, and, <. Explicit timeout keeps the budget
+    # deterministic.
     src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"
     path = _write(tmp_path, "f.gd", src)
     lines: list[str] = []
     runner = MarkerRunner(target=path, kill_marker=">=")
     run(str(tmp_path), path, src, runner, timeout=10.0, progress=lines.append)
     assert lines[0] == "running the unmutated (baseline) suite ..."
-    # The plan line follows the baseline; the baseline's own wall-clock is nondeterministic, so
-    # pin the part that isn't. The trailing forced heartbeat and the closing wall-clock are timed
-    # too, so the verdict block is sliced out between them.
-    assert lines[1].startswith("3 mutants to run.") and lines[1].endswith("capped at 10s.")
-    assert lines[-2].startswith("… 3/3 done in ") and lines[-1].startswith("Done in ")
-    assert lines[2:-2] == [
-        f"[1/3] {path}:2:11  > -> >=  running (<=10s) ...",
-        f"[1/3] {path}:2:11  > -> >=  ... killed",
-        f"[2/3] {path}:2:15  and -> or  running (<=10s) ...",
-        f"[2/3] {path}:2:15  and -> or  ... survived",
-        f"[3/3] {path}:2:21  < -> <=  running (<=10s) ...",
-        f"[3/3] {path}:2:21  < -> <=  ... survived",
-    ]
+    # The baseline's own wall-clock is nondeterministic, so pin only the parts that aren't.
+    assert lines[1].startswith("3 mutants to run.") and lines[1].endswith("capped at 10.0s.")
+    assert lines[2].startswith("… 3/3 done in ") and "2 survived, 0 timed out." in lines[2]
+    assert lines[3].startswith("Done in ") and "3 mutants, none timed out." in lines[3]
+    assert len(lines) == 4  # nothing per-mutant: just the plan, one heartbeat, and the close
 
 
-def test_progress_reports_invalid_and_error_verdicts(tmp_path: Path) -> None:
-    # Every mutant is reported regardless of verdict — an invalid (unparseable) mutant labelled
-    # "invalid", and a mutant whose runner raises labelled "error" (not only the ones that pass).
+def test_progress_counts_invalid_and_error_verdicts_without_naming_them(tmp_path: Path) -> None:
+    # Every verdict still reaches the tally (checked via the closing/heartbeat counts), but no
+    # per-mutant line names which specific one was invalid or errored anymore — that detail now
+    # lives only in the post-run report, not the live progress stream.
     src = "func f(a, b) -> bool:\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
     invalid: list[str] = []
@@ -468,33 +461,21 @@ def test_progress_reports_invalid_and_error_verdicts(tmp_path: Path) -> None:
     run(
         str(tmp_path), path, src, MarkerRunner(path, "ZZZ"), catalog=(bad,), progress=invalid.append
     )
-    # An invalid mutant never runs, so it gets NO heartbeat — only the verdict line. It is also
-    # not a timing *sample*: counting a mutant that never reached the suite would make the closing
-    # wall-clock's "N mutants" a fiction, so the run reports 0 of them.
+    # An invalid mutant never runs, so it is not a timing *sample* either: counting a mutant that
+    # never reached the suite would make the closing wall-clock's "N mutants" a fiction.
     assert invalid[0] == "running the unmutated (baseline) suite ..."
     assert invalid[1].startswith("1 mutant to run.")
-    assert invalid[2] == f"[1/1] {path}:2:11  > -> ))  ... invalid"
+    assert invalid[2].startswith("… 0/1 done in ") and "0 survived, 0 timed out." in invalid[2]
     assert invalid[-1].startswith("Done in ") and "0 mutants, none timed out." in invalid[-1]
 
-    # An erroring mutant DID run, so it gets the heartbeat then the error verdict.
+    # An erroring mutant DID run (and DOES count as a sample), so it reaches the heartbeat's done
+    # count even though nothing names it as the one that errored.
     errored: list[str] = []
     run(str(tmp_path), path, src, RaiseAfterBaselineRunner(), timeout=10.0, progress=errored.append)
     assert errored[0] == "running the unmutated (baseline) suite ..."
     assert errored[1].startswith("1 mutant to run.")
-    assert errored[2:4] == [
-        f"[1/1] {path}:2:11  > -> >=  running (<=10s) ...",
-        f"[1/1] {path}:2:11  > -> >=  ... error",
-    ]
-
-
-def test_progress_lines_render_a_deletion_as_deleted() -> None:
-    # The stderr progress heartbeat + verdict line are the most-seen render surface, so a deletion
-    # (empty replacement) must show `not -> (deleted)` there too, not a dangling arrow.
-    deletion = Mutant("f.gd", Span(2, 8, 2, 11), "logical-not", "not", "")
-    start = _progress_start(1, 1, deletion, 10.0)
-    line = _progress_line(1, 1, MutantOutcome(deletion, Verdict.SURVIVED))
-    assert start == "[1/1] f.gd:2:8  not -> (deleted)  running (<=10s) ..."
-    assert line == "[1/1] f.gd:2:8  not -> (deleted)  ... survived"
+    assert errored[2].startswith("… 1/1 done in ") and "0 survived, 0 timed out." in errored[2]
+    assert errored[-1].startswith("Done in ") and "1 mutant, none timed out." in errored[-1]
 
 
 def test_format_duration_scales_seconds_minutes_hours() -> None:
@@ -511,7 +492,7 @@ def test_progress_plan_states_the_work_and_the_cap_without_forecasting() -> None
     # tells someone at a still terminal how long silence is normal, which is the pacing job the old
     # `estimated ≈` figure was doing badly. No total duration appears anywhere in it.
     line = _progress_plan(runnable=18, total=18, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=1)
-    assert line == "18 mutants to run. Baseline suite 1.4s; each mutant is capped at 30s."
+    assert line == "18 mutants to run. Baseline suite 1.4s; each mutant is capped at 30.0s."
 
 
 def test_progress_plan_counts_ignored_separately() -> None:
@@ -531,7 +512,7 @@ def test_progress_plan_names_the_cap_the_parallel_path_really_enforces() -> None
     # Derived, never a literal: a hardcoded number is exactly how the message drifted from the code.
     expected = _contention_budget(30.0, min(4, 18))
     line = _progress_plan(runnable=18, total=18, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=4)
-    assert f"each mutant is capped at {expected:g}s." in line
+    assert f"each mutant is capped at {expected:.1f}s." in line
     assert expected == 120.0  # and the scaling is real: 4 workers, not the 30s serial figure
 
 
@@ -541,7 +522,7 @@ def test_progress_plan_still_names_a_real_cap_when_nothing_is_runnable() -> None
     # useless but visibly wrong, in the line a first-time user reads before the silence starts.
     line = _progress_plan(runnable=0, total=3, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=1)
     assert line.startswith("0 mutants to run (3 ignored). ")
-    assert "each mutant is capped at 30s." in line
+    assert "each mutant is capped at 30.0s." in line
 
 
 def test_progress_plan_never_names_a_scaled_cap_the_serial_path_will_not_apply() -> None:
@@ -549,7 +530,7 @@ def test_progress_plan_never_names_a_scaled_cap_the_serial_path_will_not_apply()
     # contend with itself — so `--jobs 4` on a single runnable mutant is a serial run wearing a
     # flag, and the announcement must not inflate its cap fourfold.
     line = _progress_plan(runnable=1, total=1, baseline_secs=1.4, per_mutant_timeout=30.0, jobs=4)
-    assert "each mutant is capped at 30s." in line
+    assert "each mutant is capped at 30.0s." in line
 
 
 def test_progress_plan_is_singular_for_one_mutant() -> None:
@@ -731,7 +712,7 @@ def test_a_multi_file_run_closes_once_for_the_whole_run(tmp_path: Path) -> None:
         line for line in lines if line.startswith("Done in ")
     ][:1]
     assert sum(line.startswith("Done in ") for line in lines) == 1
-    assert sum(line.endswith("capped at 10s.") for line in lines) == 2  # one plan line per file
+    assert sum(line.endswith("capped at 10.0s.") for line in lines) == 2  # one plan line per file
 
 
 def test_progress_defaults_to_silent(tmp_path: Path) -> None:
@@ -908,7 +889,7 @@ def test_parallel_matches_serial_verdicts_and_order(tmp_path: Path) -> None:
         Verdict.SURVIVED,
         Verdict.IGNORED,
     }  # a real mix ran parallel
-    assert any(line.endswith("killed") for line in lines)  # parallel emitted verdict progress lines
+    assert any(line.startswith("Done in ") for line in lines)  # parallel still reaches the close
     # The original project file is NEVER mutated in the parallel path — only the worker copies are.
     assert Path(parallel_path).read_text(encoding="utf-8") == src
 

@@ -1,6 +1,6 @@
-"""The AI-agent usage guide (docs/using-with-an-ai-agent.md) must not rot: its hard facts are
-pinned against the code they describe, so changing a status string, the schema version, or the
-ignore marker without updating the guide fails CI."""
+"""The gdmutant guide (docs/gdmutant-guide.md) must not rot: its hard facts are pinned against the
+code they describe, so changing a status string, the schema version, or the ignore marker without
+updating the guide fails CI."""
 
 import re
 import subprocess
@@ -12,7 +12,7 @@ from gdmutant.adapters.gdscript import _IGNORE_MARKER
 from gdmutant.engine.report import _STATUS, SCHEMA_VERSION
 
 _REPO = Path(__file__).resolve().parent.parent
-_GUIDE = _REPO / "docs" / "using-with-an-ai-agent.md"
+_GUIDE = _REPO / "docs" / "gdmutant-guide.md"
 
 
 def _text() -> str:
@@ -64,7 +64,7 @@ def test_guide_local_links_resolve() -> None:
         if not target:
             continue
         assert (_GUIDE.parent / target).resolve().exists(), (
-            f"broken link in using-with-an-ai-agent.md: {target}"
+            f"broken link in gdmutant-guide.md: {target}"
         )
 
 

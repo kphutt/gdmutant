@@ -65,8 +65,8 @@ file whenever it is still running to do so. How durable the on-disk write is aga
 is a property of the write path, tracked and changed independently of this decision, so read the
 guarantee from the write path itself rather than from this record.
 
-Only this record was wrong. The user-facing guarantee in
-[`docs/using-with-an-ai-agent.md`](../using-with-an-ai-agent.md#safety-guarantee) already states the
+Only this record was wrong. The user-facing description in
+[`docs/gdmutant-guide.md`](../gdmutant-guide.md#how-gdmutant-writes-to-your-files) already states the
 limit correctly: a swap can persist through a hard kill, so commit or stash first, or pass
 `--require-clean`. This correction brings the decision record in line with the guidance users
 actually read.
@@ -90,6 +90,6 @@ never opened for truncation, so there is no zero-length window on the write path
 The narrower claim directly above this one still holds: a hard kill between the mutate write and the
 restore write leaves the target holding the mutant, because the restore simply has not run yet. That
 is a gap between two writes, not a truncation inside either one, and it is exactly the limit
-`docs/using-with-an-ai-agent.md#safety-guarantee` already describes. Only the "truncates in place" /
+`docs/gdmutant-guide.md#how-gdmutant-writes-to-your-files` already describes. Only the "truncates in place" /
 "zero-length state" mechanism was wrong. Read `_write_source`'s own docstring for the current
 mechanism rather than from this record, per the guidance the first correction already gave.

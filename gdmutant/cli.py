@@ -734,26 +734,37 @@ def _warn_unknown_ignore_operators(source: str) -> None:
 _DEFAULT_REPORT = object()
 
 
-def _default_report_stem(now: datetime | None = None) -> str:
-    """A timestamped, filesystem-safe basename (no extension) for a default report name.
+def _report_target_token(sources: Sequence[str]) -> str:
+    """A short, filesystem-safe token naming *what* a default report name is about: the one
+    source's own name, or a count when there's more than one. Never the full path — a source like
+    `../my-project/src/module.gd` would otherwise put `..`/`/` into a filename."""
+    if len(sources) == 1:
+        return Path(sources[0]).stem or "target"
+    return f"{Path(sources[0]).stem}+{len(sources) - 1}more"
+
+
+def _default_report_stem(sources: Sequence[str], now: datetime | None = None) -> str:
+    """A timestamped, filesystem-safe basename (no extension) for a default report name, naming
+    both *what* was run and *when*.
 
     No colons: Windows forbids them in filenames, and this CLI treats Windows as a deployment
     target (see AGENTS.md), not just a dev machine. Second resolution is enough — a real run takes
     at least the baseline suite's wall-clock, so two runs cannot land the same stamp by accident.
     """
-    return f"gdmutant-report-{(now or datetime.now()).strftime('%Y%m%d-%H%M%S')}"
+    stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
+    return f"gdmutant-report-{_report_target_token(sources)}-{stamp}"
 
 
 def _resolve_default_report_paths(
-    json_path: str | None, html_path: str | None
+    json_path: str | None, html_path: str | None, sources: Sequence[str]
 ) -> tuple[str | None, str | None]:
     """`(json_path, html_path)` with any `_DEFAULT_REPORT` sentinel replaced by a real, timestamped
-    filename. Both flags share one stem when both are bare, so a `--json --html` run's two output
-    files visibly pair up (`gdmutant-report-<stamp>.json` / `.html`) instead of landing seconds
-    apart under two different stamps."""
+    filename naming `sources`. Both flags share one stem when both are bare, so a `--json --html`
+    run's two output files visibly pair up (`gdmutant-report-<target>-<stamp>.json` / `.html`)
+    instead of landing seconds apart under two different stamps."""
     if json_path is not _DEFAULT_REPORT and html_path is not _DEFAULT_REPORT:
         return json_path, html_path
-    stem = _default_report_stem()
+    stem = _default_report_stem(sources)
     if json_path is _DEFAULT_REPORT:
         json_path = f"{stem}.json"
     if html_path is _DEFAULT_REPORT:
@@ -1241,10 +1252,13 @@ _CONFIG_FILENAME = ".gdmutant.toml"
 #: `.gdmutant.toml` is read from the working directory, so on a project you cloned it is a file
 #: somebody else wrote. Every other key it can set is inert — a directory, a glob, a number, a
 #: `res://` path — but these two decide what runs on your machine, which turns "point the mutation
-#: tester at this checkout" into "run whatever this checkout says". So they are ignored unless the
-#: person at the keyboard vouches for the file with ``--trust-config``, or passes the value as a
-#: flag themselves. `runner` is deliberately NOT here: it only picks *which* runner, and the
-#: program it would need still has to come from a trusted source.
+#: tester at this checkout" into "run whatever this checkout says". So the run refuses outright
+#: unless the person at the keyboard vouches for the file with ``--trust-config`` — no exception
+#: for also passing the same key as a flag, which never actually helped a project set one of these
+#: once in its own config and never repeat it: that legitimate case still needs ``--trust-config``
+#: every time either way, so the exception was one more thing to explain for no real benefit.
+#: `runner` is deliberately NOT here: it only picks *which* runner, and the program it would need
+#: still has to come from a trusted source.
 _EXECUTABLE_CONFIG_KEYS = ("command", "godot")
 
 
@@ -1328,9 +1342,10 @@ def _untrusted_config_message(keys: list[str]) -> str:
         "that file was written by\n"
         "  somebody else, and these keys decide what gets executed on your machine — so gdmutant "
         "will not act on\n"
-        "  them by itself.\n"
+        "  them by itself, even if you also pass the same value yourself.\n"
         "  If this project is yours, or you have read the file and trust it, add --trust-config.\n"
-        f"  Otherwise pass the value yourself ({flags}), which always wins over the file."
+        f"  Otherwise remove {named} from {_CONFIG_FILENAME} and pass it as a flag instead "
+        f"({flags}) — with no matching key in the file, no trust is needed."
     )
 
 
@@ -1353,9 +1368,15 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     run_parser.add_argument(
         "--runner",
         choices=("gdunit4", "gut", "command"),
-        default="gdunit4",
-        help="test runner: gdunit4 or gut (both JUnit XML) or command (any harness, by exit code) "
-        "(default: gdunit4)",
+        # No `default=`, deliberately: which runner to use is not something gdmutant should guess
+        # at silently. `argparse`'s own `required=True` isn't the fix here — it enforces the flag
+        # was typed on THIS invocation regardless of anything `set_defaults` supplied, which would
+        # break `.gdmutant.toml`'s `runner` key (a project's own persisted, explicit choice) the
+        # same way it breaks an explicit CLI flag. `main` checks for `None` itself instead, so a
+        # config-supplied value still counts as having said which one, and only a run with
+        # genuinely nothing set anywhere is refused.
+        help="test runner: gdunit4 or gut (both JUnit XML) or command (any harness, by exit code). "
+        "Required, no default. Set it here or once in .gdmutant.toml",
     )
     run_parser.add_argument(
         "--command",
@@ -1565,25 +1586,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _write_example(args.dest)
     if args.command == "run":
         if program_keys:
-            # Parse a second time with the whole config, and compare. A program-naming key only
-            # matters where the two disagree: where they agree, the user named that program on the
-            # command line themselves, so the file decided nothing and there is nothing to refuse.
-            trusted = build_parser(config).parse_args(argv)
-            decided = [
-                key
-                for key in program_keys
-                if getattr(args, _CONFIG_KEY_TO_DEST[key])
-                != getattr(trusted, _CONFIG_KEY_TO_DEST[key])
-            ]
-            if decided and not args.trust_config:
-                print(_untrusted_config_message(decided), file=sys.stderr)
+            # The file names a program gdmutant would execute — that alone needs the user's
+            # say-so, whether or not they also happen to pass the same key as a flag themselves.
+            # (An earlier version only refused when the file and the command line disagreed, which
+            # meant the one case it was supposed to make easy — a project's own config setting
+            # `command`/`godot` once, so nobody retypes it — still needed --trust-config every
+            # time, same as now; the exception bought nothing and was one more thing to explain.)
+            if not args.trust_config:
+                print(_untrusted_config_message(program_keys), file=sys.stderr)
                 return 2
-            args = trusted
+            args = build_parser(config).parse_args(argv)
         # Resolve a bare --json/--html (no path given) into a real, timestamped filename now, once,
         # before anything else reads args.json_path/args.html_path (the --dry-run "ignored flags"
         # note included) — every reader downstream sees a plain path or None, never the sentinel.
         args.json_path, args.html_path = _resolve_default_report_paths(
-            args.json_path, args.html_path
+            args.json_path, args.html_path, args.source
         )
         if args.jobs < 1:
             print("error: --jobs must be a positive integer", file=sys.stderr)
@@ -1646,7 +1663,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 flag
                 for flag, value, default in (
                     ("--project", args.project, None),
-                    ("--runner", args.runner, "gdunit4"),
+                    # --runner has no `default=` (see the argparse definition above), so
+                    # comparing against `None` here means: worth naming as ignored only when
+                    # the caller actually set it to something (--dry-run never runs a test
+                    # suite, so it never needs to know which one).
+                    ("--runner", args.runner, None),
                     ("--command", args.test_command, None),
                     ("--godot", args.godot, "godot"),
                     ("--tests", args.tests, "res://test"),
@@ -1674,6 +1695,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if rc != 0:
                     return rc
             return 0
+        if args.runner is None:
+            print(
+                "error: --runner is required (gdunit4, gut, or command). Pass it on the command "
+                "line, or set 'runner' once in .gdmutant.toml",
+                file=sys.stderr,
+            )
+            return 2
         project_dir = args.project or _default_project_dir(args.source, files)
         # The runner's own timeout is the *baseline* budget (the loop derives per-mutant budgets
         # from the baseline's wall-clock); without an explicit --timeout it falls back to the

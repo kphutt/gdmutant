@@ -235,7 +235,18 @@ def test_main_report_step_summary_writes_the_job_summary_end_to_end(
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: MarkerRunner(str(path), ">="))
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    rc = main(["run", str(path), "--project", str(tmp_path), "--report", "step-summary"])
+    rc = main(
+        [
+            "run",
+            str(path),
+            "--project",
+            str(tmp_path),
+            "--runner",
+            "gdunit4",
+            "--report",
+            "step-summary",
+        ]
+    )
     assert rc == 0
     written = summary.read_text(encoding="utf-8")
     assert "## gdmutant — mutation report" in written

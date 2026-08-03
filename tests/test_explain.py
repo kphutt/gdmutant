@@ -22,12 +22,12 @@ def _mutant(op: str, original: str, replacement: str, line: int = 2, col: int = 
     return Mutant("Foo.gd", Span(line, col, line, col + len(original)), op, original, replacement)
 
 
-#: The whole rendered block, byte-for-byte — pins the assembly (header, path, caret line, labels,
-#: blank lines, the doc link) AND the comparison copy, so any drift in structure or wording is
-#: caught. Update deliberately when the locked format changes.
+#: The whole rendered block, byte-for-byte — pins the assembly (path, caret line, labels, blank
+#: lines, the doc link) AND the comparison copy, so any drift in structure or wording is caught.
+#: Update deliberately when the locked format changes. No "survived"/operator banner on purpose:
+#: every entry in a survivors list already survived, and the operator repeats nothing the
+#: "changed X to Y" line and the doc link below don't already show more usefully.
 _GOLDEN_COMPARISON = """\
-──── survived ──────────────────────────────────────────── comparison ────
-
   V.gd:2   func is_greater
 
       2 |     if _major > other._major:
@@ -60,7 +60,6 @@ def test_full_block_shows_code_caret_and_enclosing_func() -> None:
     src = ["func is_greater(other):", "\tif _major > other._major:", "\t\treturn true"]
     # column 6 is the `>` inside the tab-indented line 2 (1 tab + "if _major ")
     out = "\n".join(render_survivor(_mutant("comparison", ">", ">=", line=2, col=11), src))
-    assert "── survived " in out and " comparison ─" in out
     assert "Foo.gd:2   func is_greater" in out  # enclosing function from the AST scan
     assert "if _major > other._major:" in out  # the source line, as written
     assert "^  changed  >  to  >= — every test still passed" in out
@@ -84,7 +83,6 @@ def test_caret_lands_under_the_token_across_tabs() -> None:
 def test_no_source_degrades_gracefully_but_keeps_the_narrative() -> None:
     lines = render_survivor(_mutant("boolean", "and", "or"), None)
     out = "\n".join(lines)
-    assert "boolean ─" in out
     assert "gap    Your tests pass whether this needs both sides" in out
     assert "start" in out and "docs/survivors/README.md#boolean" in out
     # no code line, no caret, no enclosing-func when the source is unavailable
@@ -427,7 +425,6 @@ def test_rendered_survivors_link_to_the_section_that_explains_them() -> None:
     on_assert_mutant = _mutant("comparison", ">", ">=", line=2, col=15)
     block = render_survivor(on_assert_mutant, _ASSERT_LINES)
     assert block[-2] == f"  more   {doc_url(ASSERT_SECTION)}"
-    assert "comparison" in block[0]  # the header still names the operator: that IS what changed
 
     on_enum_mutant = _mutant("numeric", "0", "1", line=3, col=20)
     assert render_survivor(on_enum_mutant, _ENUM_LINES)[-2] == f"  more   {doc_url(ENUM_SECTION)}"

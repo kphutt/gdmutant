@@ -433,15 +433,17 @@ def render_survivor(mutant: Mutant, source_lines: list[str] | None) -> list[str]
     gap, risk, start = _narrative(mutant, source_lines)
     # An assert survivor's `more` link goes to the section that explains *that*, not to the
     # operator's — the operator's page would send a reader off to write the test this one cannot be
-    # killed by. The header still names the operator: it is still what changed.
+    # killed by.
     anchor = reference_section(mutant, source_lines)
 
-    prefix, suffix = "──── survived ", f" {op} ────"
-    # A negative repeat count is already "" in Python, so no clamp is needed for a long operator id.
-    out = [prefix + "─" * (_WIDTH - len(prefix) - len(suffix)) + suffix, ""]
+    # No "──── survived ──── {op} ────" banner here on purpose: every entry in this list already
+    # survived (the list itself, "Survivors (N):", says so) and the operator repeats nothing the
+    # rest of the block doesn't already show more usefully — the "changed X to Y" line below makes
+    # the kind of change obvious, and the doc link still resolves to the right operator page. What a
+    # reader scanning many entries across many files actually needs first is the file and the
+    # function, so that's the leading line instead.
     # The full path (as given, editors linkify ``path:line``) — unambiguous across a multi-file run.
-    out.append(f"  {mutant.path}:{line_no}" + (f"   func {func}" if func else ""))
-    out.append("")
+    out = [f"  {mutant.path}:{line_no}" + (f"   func {func}" if func else ""), ""]
     if src is not None:
         out.append(f"   {line_no:>4} | {src.expandtabs(4)}")
         caret_at = _display_col(src[: col - 1])

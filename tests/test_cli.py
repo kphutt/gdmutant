@@ -228,18 +228,16 @@ def test_run_mutation_shows_paths_relative_to_the_project_in_the_html_report(
     assert str(source) in json.loads(json_file.read_text(encoding="utf-8"))["files"]
 
 
-def test_run_mutation_emits_per_mutant_progress_to_stderr(
+def test_run_mutation_emits_progress_to_stderr(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Per-mutant progress goes to stderr so a real run doesn't look hung; the "[i/N]"
-    # counter proves one line per mutant. The default (non --json -) summary is on stdout, so the
-    # progress lines must NOT be there.
+    # Progress (the pre-run plan + the closing wall-clock) goes to stderr so a real run doesn't
+    # look hung. The default (non --json -) summary is on stdout, so progress must NOT be there.
     path = _gd(tmp_path)  # 3 mutants
     run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), ">="))
     captured = capsys.readouterr()
-    assert "[1/3]" in captured.err and "[3/3]" in captured.err
-    assert "... killed" in captured.err
-    assert "[1/3]" not in captured.out  # progress never pollutes stdout
+    assert "mutants to run" in captured.err and "Done in" in captured.err
+    assert "mutants to run" not in captured.out  # progress never pollutes stdout
 
 
 def test_run_mutation_json_dash_keeps_progress_off_stdout(
@@ -251,7 +249,7 @@ def test_run_mutation_json_dash_keeps_progress_off_stdout(
     assert rc == 0
     captured = capsys.readouterr()
     json.loads(captured.out)  # stdout is still valid JSON, nothing mixed in
-    assert "[1/3]" in captured.err  # progress landed on stderr
+    assert "mutants to run" in captured.err  # progress landed on stderr
 
 
 def test_run_mutation_json_dash_writes_pure_json_to_stdout(
@@ -439,6 +437,8 @@ def test_main_refuses_the_step_summary_collision_end_to_end(
             str(path),
             "--project",
             str(tmp_path),
+            "--runner",
+            "gdunit4",
             "--json",
             "-",
             "--report",
@@ -690,7 +690,7 @@ def test_junit_runner_does_not_print_the_cold_import_notice(
     # tool is about to do — it is scoped to the one mode that cannot.
     path = _gd(tmp_path)
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
-    assert main(["run", str(path), "--project", str(tmp_path)]) == 0
+    assert main(["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4"]) == 0
     assert "import cache" not in capsys.readouterr().err
 
 
@@ -702,6 +702,42 @@ def test_jobs_must_be_a_positive_integer(
     rc = main(["run", str(path), "--jobs", "0"])
     assert rc == 2
     assert "--jobs must be a positive integer" in capsys.readouterr().err
+
+
+def test_a_real_run_with_no_runner_set_anywhere_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # No --runner flag, and no .gdmutant.toml supplying one either: a real run must refuse rather
+    # than silently pick one for the caller (there is no `default=` on --runner — see build_parser).
+    path = _gd(tmp_path)
+    rc = main(["run", str(path), "--project", str(tmp_path)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--runner is required" in err
+    assert "gdunit4, gut, or command" in err
+
+
+def test_dry_run_needs_no_runner(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # --dry-run never runs a test suite, so it never needs to know which runner would have been
+    # used — unlike a real run, it must not refuse just because --runner was never set.
+    path = _gd(tmp_path)
+    rc = main(["run", str(path), "--dry-run"])
+    assert rc == 0
+    assert "--runner is required" not in capsys.readouterr().err
+
+
+def test_a_config_supplied_runner_satisfies_the_requirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A project's own .gdmutant.toml persisting `runner` once counts as having said which one —
+    # only a run with genuinely nothing set anywhere (no flag, no config) is refused.
+    path = _gd(tmp_path)
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text('runner = "gut"\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
+    runner = RecordingRunner()
+    monkeypatch.setattr(cli, "GutRunner", lambda **kwargs: runner)
+    assert main(["run", str(path), "--project", str(tmp_path)]) == 0
 
 
 def test_run_mutation_nonexistent_project_dir_reports_directory_not_executable(
@@ -1073,7 +1109,7 @@ def test_parser_defaults() -> None:
     assert args.report_path is None
     assert args.timeout is None  # default: derived per-mutant from the baseline run time
     assert args.require_clean is False
-    assert args.runner == "gdunit4"
+    assert args.runner is None  # no silent default — main() refuses a real run without one
     assert args.test_command is None
 
 
@@ -1113,7 +1149,8 @@ def test_parser_help_text(
     for expected in (
         "one or more .gd files or directories to mutate (a directory mutates every .gd under it, recursively, excluding addons/ and dot-dirs)",  # noqa: E501
         "the Godot project dir (default: the source's dir)",
-        "test runner: gdunit4 or gut (both JUnit XML) or command (any harness, by exit code) (default: gdunit4)",  # noqa: E501
+        "test runner: gdunit4 or gut (both JUnit XML) or command (any harness, by exit code). "
+        "Required, no default. Set it here or once in .gdmutant.toml",
         "test command for --runner command (exit 0 = pass), e.g. 'godot --headless --script res://tests/run_tests.gd'",  # noqa: E501
         "the Godot executable (default: godot)",
         "the test directory (gdunit4's -a / gut's -gdir) (default: res://test)",
@@ -1133,7 +1170,7 @@ def test_main_dispatches_run_with_injected_runner(
     path = _gd(tmp_path)
     # Replace the real GdUnit4Runner so no Godot is needed.
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: MarkerRunner(str(path), ">="))
-    rc = main(["run", str(path), "--project", str(tmp_path)])
+    rc = main(["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4"])
     assert rc == 0
     assert "Mutation score:" in capsys.readouterr().out
 
@@ -1155,7 +1192,7 @@ def test_main_default_project_uses_the_source_dir(
     path = _gd(tmp_path)
     runner = RecordingRunner()
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
-    assert main(["run", str(path)]) == 0  # no --project given
+    assert main(["run", str(path), "--runner", "gdunit4"]) == 0  # no --project given
     assert runner.seen[0] == str(path.resolve().parent)  # defaulted to the source's directory
 
 
@@ -1244,7 +1281,7 @@ def test_main_uses_config_defaults_when_cli_flags_omitted(
     monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     runner = RecordingRunner()
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
-    assert main(["run", str(path)]) == 0
+    assert main(["run", str(path), "--runner", "gdunit4"]) == 0
     assert runner.seen[0] == str(proj)  # from config, not the source's own directory
 
 
@@ -1258,7 +1295,7 @@ def test_main_cli_flag_overrides_config(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     runner = RecordingRunner()
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
-    assert main(["run", str(path), "--project", str(cli_proj)]) == 0
+    assert main(["run", str(path), "--project", str(cli_proj), "--runner", "gdunit4"]) == 0
     assert runner.seen[0] == str(cli_proj)  # an explicit CLI flag wins over the config default
 
 
@@ -1302,6 +1339,8 @@ def test_main_constructs_runner_with_test_path_and_godot(
             str(path),
             "--project",
             str(tmp_path),
+            "--runner",
+            "gdunit4",
             "--godot",
             "godot4",
             "--tests",
@@ -1336,6 +1375,8 @@ def test_main_threads_report_path_and_timeout_to_runner(
             str(path),
             "--project",
             str(tmp_path),
+            "--runner",
+            "gdunit4",
             "--report-path",
             "out/custom.xml",
             "--timeout",
@@ -1353,7 +1394,9 @@ def test_main_threads_json_path_to_run_mutation(
     path = _gd(tmp_path)
     report = tmp_path / "out.json"
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: MarkerRunner(str(path), ">="))
-    rc = main(["run", str(path), "--project", str(tmp_path), "--json", str(report)])
+    rc = main(
+        ["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4", "--json", str(report)]
+    )
     assert rc == 0
     assert report.exists()
 
@@ -1362,20 +1405,30 @@ def test_main_threads_json_path_to_run_mutation(
 
 
 def test_default_report_stem_is_deterministic_and_filesystem_safe() -> None:
-    stem = _default_report_stem(datetime(2026, 8, 2, 23, 55, 54))
-    assert stem == "gdmutant-report-20260802-235554"
+    stem = _default_report_stem(["corpus/turn_order.gd"], datetime(2026, 8, 2, 23, 55, 54))
+    assert stem == "gdmutant-report-turn_order-20260802-235554"
     assert ":" not in stem, "Windows forbids a colon in a filename"
 
 
+def test_default_report_stem_names_a_multi_file_run_by_count() -> None:
+    stem = _default_report_stem(
+        ["corpus/turn_order.gd", "corpus/other.gd"], datetime(2026, 8, 2, 23, 55, 54)
+    )
+    assert stem == "gdmutant-report-turn_order+1more-20260802-235554"
+
+
 def test_resolve_default_report_paths_leaves_none_and_explicit_values_alone() -> None:
-    assert _resolve_default_report_paths(None, None) == (None, None)
-    assert _resolve_default_report_paths("out.json", "out.html") == ("out.json", "out.html")
+    assert _resolve_default_report_paths(None, None, ["f.gd"]) == (None, None)
+    assert _resolve_default_report_paths("out.json", "out.html", ["f.gd"]) == (
+        "out.json",
+        "out.html",
+    )
     # "-" (stdout) is an explicit value a caller typed, never the bare-flag sentinel.
-    assert _resolve_default_report_paths("-", None) == ("-", None)
+    assert _resolve_default_report_paths("-", None, ["f.gd"]) == ("-", None)
 
 
 def test_resolve_default_report_paths_only_resolves_the_sentinel() -> None:
-    json_path, html_path = _resolve_default_report_paths(_DEFAULT_REPORT, "explicit.html")
+    json_path, html_path = _resolve_default_report_paths(_DEFAULT_REPORT, "explicit.html", ["f.gd"])
     assert (
         json_path is not None
         and json_path.startswith("gdmutant-report-")
@@ -1384,7 +1437,7 @@ def test_resolve_default_report_paths_only_resolves_the_sentinel() -> None:
     assert html_path == "explicit.html"
 
     # ...and the reverse: only --html was bare, so only html_path resolves.
-    json_path, html_path = _resolve_default_report_paths(None, _DEFAULT_REPORT)
+    json_path, html_path = _resolve_default_report_paths(None, _DEFAULT_REPORT, ["f.gd"])
     assert json_path is None
     assert html_path is not None and html_path.startswith("gdmutant-report-")
     assert html_path.endswith(".html")
@@ -1393,9 +1446,14 @@ def test_resolve_default_report_paths_only_resolves_the_sentinel() -> None:
 def test_resolve_default_report_paths_shares_one_stem_when_both_are_bare() -> None:
     # So a --json --html run's two files visibly pair up rather than landing under two different
     # timestamps seconds apart.
-    json_path, html_path = _resolve_default_report_paths(_DEFAULT_REPORT, _DEFAULT_REPORT)
+    json_path, html_path = _resolve_default_report_paths(_DEFAULT_REPORT, _DEFAULT_REPORT, ["f.gd"])
     assert json_path is not None and html_path is not None
     assert json_path[: -len(".json")] == html_path[: -len(".html")]
+
+
+def test_resolve_default_report_paths_names_what_was_run() -> None:
+    json_path, _ = _resolve_default_report_paths(_DEFAULT_REPORT, None, ["corpus/turn_order.gd"])
+    assert json_path is not None and "turn_order" in json_path
 
 
 def test_main_bare_json_and_html_resolve_to_paired_timestamped_paths(
@@ -1413,7 +1471,9 @@ def test_main_bare_json_and_html_resolve_to_paired_timestamped_paths(
         return 0
 
     monkeypatch.setattr(cli, "run_mutation", fake_run_mutation)
-    rc = main(["run", str(path), "--project", str(tmp_path), "--json", "--html"])
+    rc = main(
+        ["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4", "--json", "--html"]
+    )
     assert rc == 0
     json_path, html_path = captured["json_path"], captured["html_path"]
     assert isinstance(json_path, str) and isinstance(html_path, str)
@@ -1663,11 +1723,22 @@ def test_split_command_windows_unbalanced_quote_still_raises(
 def test_main_command_without_runner_command_is_flagged_not_dropped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # --command left on the default --runner gdunit4 is a footgun: warn instead of silently
+    # --command on a JUnit runner (not --runner command) is a footgun: warn instead of silently
     # discarding it (and still build the GdUnit4 runner).
     path = _gd(tmp_path)
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: MarkerRunner(str(path), ">="))
-    rc = main(["run", str(path), "--project", str(tmp_path), "--command", "godot --headless"])
+    rc = main(
+        [
+            "run",
+            str(path),
+            "--project",
+            str(tmp_path),
+            "--runner",
+            "gdunit4",
+            "--command",
+            "godot --headless",
+        ]
+    )
     assert rc == 0
     # Trailing newline so a wrapped "XX...XX" mutant (which keeps the text a substring) still fails.
     assert "note: --command is ignored unless --runner command is set\n" in capsys.readouterr().err
@@ -1882,10 +1953,10 @@ def test_main_threads_require_clean_to_run_mutation(
 
     monkeypatch.setattr(cli, "run_mutation", fake_run_mutation)
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
-    main(["run", str(path), "--project", str(tmp_path), "--require-clean"])
+    main(["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4", "--require-clean"])
     assert captured["require_clean"] is True
     captured.clear()
-    main(["run", str(path), "--project", str(tmp_path)])
+    main(["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4"])
     assert captured["require_clean"] is False
     captured.clear()
     # If the config defaults it to True, --no-require-clean must override it to False. Point
@@ -1894,7 +1965,7 @@ def test_main_threads_require_clean_to_run_mutation(
     cfg = tmp_path / ".gdmutant.toml"
     cfg.write_text("require-clean = true\n", encoding="utf-8")
     monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
-    main(["run", str(path), "--no-require-clean"])
+    main(["run", str(path), "--runner", "gdunit4", "--no-require-clean"])
     assert captured["require_clean"] is False
 
 
@@ -2168,7 +2239,7 @@ def test_main_routes_a_directory_to_the_multi_file_path(
 ) -> None:
     _multi_project(tmp_path)
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
-    rc = main(["run", str(tmp_path), "--project", str(tmp_path)])
+    rc = main(["run", str(tmp_path), "--project", str(tmp_path), "--runner", "gdunit4"])
     assert rc == 0
     assert "2 files:" in capsys.readouterr().out  # routed to run_mutation_paths
 
@@ -2250,7 +2321,7 @@ def test_main_real_run_skips_unparseable_and_mutates_the_rest(
     (tmp_path / "b.gd").write_text("func g(x) -> bool:\n\treturn x < 0\n", encoding="utf-8")
     (tmp_path / "bad.gd").write_text("func h(:\n", encoding="utf-8")
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
-    assert main(["run", str(tmp_path), "--project", str(tmp_path)]) == 0
+    assert main(["run", str(tmp_path), "--project", str(tmp_path), "--runner", "gdunit4"]) == 0
     out = capsys.readouterr()
     assert "skipped 1 directory file(s)" in out.err
     assert "2 files:" in out.out  # the two parseable files were mutated as a multi-file run
@@ -2890,7 +2961,21 @@ def test_main_threads_the_resolved_progress_style_to_the_run(
 
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: RecordingRunner())
     monkeypatch.setattr(cli, "run_mutation", fake_run_mutation)
-    assert main(["run", str(path), "--project", str(tmp_path), "--progress", "none"]) == 0
+    assert (
+        main(
+            [
+                "run",
+                str(path),
+                "--project",
+                str(tmp_path),
+                "--runner",
+                "gdunit4",
+                "--progress",
+                "none",
+            ]
+        )
+        == 0
+    )
     assert captured["progress_style"] is ProgressStyle.NONE
 
 
@@ -2955,7 +3040,6 @@ def test_the_default_style_still_prints_the_plan_and_closing_lines(
     )
     err = capsys.readouterr().err
     assert "mutants to run" in err
-    assert "[1/3]" in err
     assert "Done in" in err
     assert "running the unmutated (baseline) suite" in err  # the notice `none` deliberately drops
 
@@ -2987,8 +3071,10 @@ def test_progress_none_is_silent_on_the_multi_file_path_too(
 # file somebody else wrote. Two of its keys name a program gdmutant then executes: `command` goes
 # straight to the operating system, and `godot` is the binary every JUnit runner launches. Acting
 # on either without being asked turns "point the mutation tester at this checkout" into "run
-# whatever this checkout says". They are refused unless the user adds --trust-config or names the
-# program on the command line themselves.
+# whatever this checkout says". If the file sets either key at all, gdmutant refuses to run unless
+# the user adds --trust-config — no exception for also passing the same key as a flag, which
+# never actually helped the person it should have (a project's own config setting one of these
+# once, so nobody retypes it, still needs --trust-config every time either way).
 
 
 def _record_launches(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
@@ -3098,23 +3184,22 @@ def test_trust_config_lets_a_project_use_its_own_command(
     assert list(captured["r"].command) == ["my-test-harness", "--headless"]
 
 
-def test_naming_the_program_on_the_command_line_needs_no_trust_flag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_naming_the_program_on_the_command_line_still_needs_the_trust_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # An explicit flag already beats the config value, so the file decided nothing and there is
-    # nothing to refuse. Refusing anyway would contradict the advice the refusal itself gives.
+    # The file names a program at all is what's refused -- not "and the two disagree". An earlier
+    # version let an explicit --godot skip the flag when it happened to match nothing in
+    # particular; that carve-out never helped the one person it should have (a project's own
+    # config setting `godot` once so nobody retypes it still needed --trust-config every time
+    # anyway), so it was removed rather than kept as an unused exception.
     source = _payload_config(tmp_path, monkeypatch, 'godot = "./payload"\n')
-    captured: dict[str, object] = {}
+    launched = _record_launches(monkeypatch)
 
-    def record(source: str, project: str, runner: object, **kw: object) -> int:
-        captured["r"] = runner
-        return 0
+    rc = cli.main(["run", source, "--godot", "/my/own/godot"])
 
-    monkeypatch.setattr(cli, "run_mutation", record)
-
-    assert cli.main(["run", source, "--godot", "/my/own/godot"]) == 0
-
-    assert captured["r"].godot == "/my/own/godot"
+    assert launched == []
+    assert rc == 2
+    assert "names a program for gdmutant to run ('godot')" in capsys.readouterr().err
 
 
 def test_a_config_that_names_no_program_still_needs_no_trust_flag(
