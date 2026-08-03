@@ -147,8 +147,19 @@ jobs:
             exit 1
           fi
 
+      - name: Summarize — score can't have moved
+        if: always() && steps.scope.outputs.run_full == 'false'
+        run: |
+          {
+            echo "## Mutation testing (mutmut) — skipped"
+            echo
+            echo "No changes under \`gdmutant/\`, \`tests/\`, \`corpus/\`, \`pyproject.toml\`, or"
+            echo "\`uv.lock\` — the mutation score cannot have moved, so the full mutmut sweep was"
+            echo "skipped. \`uv run pytest\` ran instead to confirm the suite still passes."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Summarize the mutation score
-        if: always()
+        if: always() && steps.scope.outputs.run_full == 'true'
         run: |
           uv run mutmut export-cicd-stats || true
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
