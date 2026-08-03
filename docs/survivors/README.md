@@ -16,9 +16,8 @@ to kill it, and when it legitimately survives (an *equivalent mutant*). The `mor
 survivor points to that operator's section here. Two sections, [Assert](#assert) and
 [Enum member](#enum-member), are not operators: each explains a whole class of survivor that is
 unkillable by where it sits rather than by which operator produced it, and gdmutant links a survivor
-there instead when that is the real story. Nothing is ever skipped or discounted for sitting in
-one of those places. Every mutant still runs and still counts toward the score. Only the
-explanation changes.
+there instead when that is the real story. Every one of those mutants still runs and still counts
+toward the score; only its explanation differs.
 
 ### The score
 
@@ -63,15 +62,6 @@ months.
 The rule of thumb for every operator: your tests pass whether the code is the original or the
 mutant, so if the mutated behavior would be wrong, nothing guards against it. Only you know the
 intended result. gdmutant reports the gap, not the answer.
-
-The HTML report is also the machine-readable one. `--html` writes a page you read, and that same
-file carries the full `mutation-testing-elements` report inside it, in a
-`<script type="application/json" id="mutation-test-report">` block. So a report someone mailed you
-can be parsed directly, with no second file and no re-run. Pull that block's text out, parse it, and
-you get exactly the report `--json` writes. The bytes are not identical: the embedded copy is packed
-onto one line and writes `</` as `<\/` so it cannot end the `<script>` tag early, while `--json`
-pretty-prints. Parsed, the two are the same report, and a test pins that. The page offers it as a
-download too, from the arrow beside the light/dark toggle.
 
 Jump to an operator: [Arithmetic](#arithmetic) · [Boolean](#boolean) · [Comparison](#comparison) ·
 [Compound assign](#compound-assign) · [Constant](#constant) · [Logical not](#logical-not) ·

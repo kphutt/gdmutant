@@ -223,6 +223,11 @@ two comes back entirely CRLF.
   should close.
 - Mutant order is deterministic (fixed generation order), so `id`s and the survivor list are
   stable across runs and safe to diff between attempts.
+- `--html` is also machine-readable: the page embeds this same report in a
+  `<script type="application/json" id="mutation-test-report">` block, so a report someone sent you as
+  HTML can be parsed with no second file and no re-run. The embedded bytes differ from `--json`'s
+  (packed onto one line, `</` escaped as `<\/` so it cannot end the `<script>` tag early, vs.
+  `--json`'s pretty-printing), but parsed, the two are the same report.
 
 ## The survivor → killing-test loop
 
