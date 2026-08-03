@@ -121,7 +121,13 @@ each survivor as it's found, the same explanation shown at the top of this page:
 untested, why it matters, where to start a test. No report file is needed to see it. `--html`
 writes that same explanation to `report.html` too: one self-contained file to open, keep, or send
 someone, with every survivor on its own source line and the same `61.1%` shown at the top of this
-page.
+page. This is `report.html` from the run above, on `return 0`, where two different mutants (a
+numeric change and a whole-line deletion) land on the same token: the badge shows how many, and
+clicking it switches between them.
+
+<p align="center">
+  <img src=".github/assets/html-report.png" alt="The gdmutant HTML report open on turn_order.gd, showing the 61.1% score header and the return 0 line marked with a badge for two overlapping findings: a numeric change and a statement deletion, both caught" width="900">
+</p>
 
 ### Point it at your own project
 
