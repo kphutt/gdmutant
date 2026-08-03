@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -29,11 +29,23 @@ _spec.loader.exec_module(check)
 
 
 class FakeRunner:
-    """Answers each command by the first matching fragment in its argv, and records every call."""
+    """Answers each command by the first matching fragment in its argv, and records every call.
 
-    def __init__(self, answers: dict[str, check.Result], default: check.Result | None = None):
+    The real ``gdmutant example`` writes a file to `cwd` as a side effect that `example_problem`
+    then checks for on disk -- a plain Result can report success without a fake having actually
+    done that. `side_effects` lets a fragment run a callback against `cwd` alongside its Result, so
+    a fake command can be faithful about what it claims to have done.
+    """
+
+    def __init__(
+        self,
+        answers: dict[str, check.Result],
+        default: check.Result | None = None,
+        side_effects: dict[str, Callable[[Path], None]] | None = None,
+    ):
         self.answers = answers
         self.default = default or check.Result(0, "")
+        self.side_effects = side_effects or {}
         self.calls: list[list[str]] = []
         self.cwds: list[Path] = []
 
@@ -41,6 +53,9 @@ class FakeRunner:
         self.calls.append(list(argv))
         self.cwds.append(cwd)
         joined = " ".join(str(part) for part in argv)
+        for fragment, effect in self.side_effects.items():
+            if fragment in joined:
+                effect(cwd)
         for fragment, result in self.answers.items():
             if fragment in joined:
                 return result
@@ -54,7 +69,13 @@ def _healthy(venv_dir: Path, version: str = "0.1.0") -> dict[str, check.Result]:
         "--version": check.Result(0, f"gdmutant {version}\n"),
         "gdmutant.__file__": check.Result(0, str(site)),
         "--dry-run": check.Result(0, "3 mutants for smoke.gd:\n  smoke.gd:4:12  comparison\n"),
+        "example": check.Result(0, f"Wrote {check.EXAMPLE_NAME}\n"),
     }
+
+
+def _healthy_side_effects() -> dict[str, Callable[[Path], None]]:
+    """Paired with `_healthy`'s answers: the one fake command with a real filesystem side effect."""
+    return {"example": lambda cwd: (cwd / check.EXAMPLE_NAME).write_text("stub", encoding="utf-8")}
 
 
 def _main(tmp_path: Path, runner: FakeRunner, version: str = "v0.1.0", attempts: int = 3) -> int:
@@ -189,6 +210,37 @@ def test_a_crashing_dry_run_fails() -> None:
     assert problem is not None and "exited 1" in problem
 
 
+def test_example_writing_its_file_passes(tmp_path: Path) -> None:
+    written = tmp_path / check.EXAMPLE_NAME
+    written.write_text("stub", encoding="utf-8")
+    assert check.example_problem(check.Result(0, f"Wrote {written}\n"), written) is None
+
+
+def test_example_exiting_nonzero_fails(tmp_path: Path) -> None:
+    problem = check.example_problem(check.Result(1, "Traceback ..."), tmp_path / check.EXAMPLE_NAME)
+    assert problem is not None and "exited 1" in problem
+
+
+def test_example_exiting_zero_but_writing_nothing_fails(tmp_path: Path) -> None:
+    # The one shape a bare exit code can't catch: a command that claims success without doing the
+    # one thing it exists to do. Package data missing from the wheel looks exactly like this.
+    problem = check.example_problem(check.Result(0, "Wrote it\n"), tmp_path / check.EXAMPLE_NAME)
+    assert problem is not None and "did not write" in problem
+
+
+def test_example_name_matches_the_cli_constant() -> None:
+    # This script deliberately never imports gdmutant (see ISOLATION at the top of the module under
+    # test), so EXAMPLE_NAME is a hand-kept copy of gdmutant/cli.py's _EXAMPLE_NAME rather than a
+    # shared import. Nothing else would catch the two drifting: a future rename in cli.py that
+    # forgets this constant would leave the real `gdmutant example` command working fine while this
+    # post-release gate looks for a file that no longer exists and reports a healthy package BROKEN.
+    # This test itself is dev-time code, not something the released package runs, so it's free to
+    # import gdmutant directly for the comparison.
+    from gdmutant.cli import _EXAMPLE_NAME
+
+    assert check.EXAMPLE_NAME == _EXAMPLE_NAME
+
+
 # --- Installing, with the index catching up ------------------------------------------------------
 
 
@@ -228,6 +280,7 @@ def test_the_wait_is_bounded(tmp_path: Path) -> None:
 
 def test_an_install_that_succeeds_on_a_later_attempt_continues(tmp_path: Path) -> None:
     answers = _healthy(tmp_path / "venv")
+    effects = _healthy_side_effects()
     attempts = {"n": 0}
 
     def runner(argv: Sequence[str], cwd: Path) -> check.Result:
@@ -237,6 +290,9 @@ def test_an_install_that_succeeds_on_a_later_attempt_continues(tmp_path: Path) -
             if attempts["n"] == 1:
                 return check.Result(1, "ERROR: No matching distribution found")
             return check.Result(0, "Successfully installed gdmutant-0.1.0")
+        for fragment, effect in effects.items():
+            if fragment in joined:
+                effect(cwd)
         for fragment, result in answers.items():
             if fragment in joined:
                 return result
@@ -254,7 +310,7 @@ def test_a_real_install_error_fails_immediately(tmp_path: Path) -> None:
 
 
 def test_it_installs_from_the_named_index(tmp_path: Path) -> None:
-    runner = FakeRunner(_healthy(tmp_path / "venv"))
+    runner = FakeRunner(_healthy(tmp_path / "venv"), side_effects=_healthy_side_effects())
     assert _main(tmp_path, runner) == check.OK
     pip_call = next(call for call in runner.calls if "pip" in " ".join(call))
     assert "--index-url" in pip_call
@@ -271,7 +327,12 @@ def test_a_venv_that_cannot_be_created_is_reported(tmp_path: Path) -> None:
 
 
 def test_a_healthy_published_package_passes(tmp_path: Path) -> None:
-    assert _main(tmp_path, FakeRunner(_healthy(tmp_path / "venv"))) == check.OK
+    assert (
+        _main(
+            tmp_path, FakeRunner(_healthy(tmp_path / "venv"), side_effects=_healthy_side_effects())
+        )
+        == check.OK
+    )
 
 
 def test_a_wrong_version_on_the_index_fails(tmp_path: Path) -> None:
@@ -291,7 +352,7 @@ def test_a_missing_runtime_dependency_fails(tmp_path: Path) -> None:
 def test_every_command_runs_in_the_workdir_never_a_checkout(tmp_path: Path) -> None:
     """`.gdmutant.toml` is read from the working directory and `sys.path` starts there, so a
     subprocess launched from a checkout could be answering about the wrong copy of gdmutant."""
-    runner = FakeRunner(_healthy(tmp_path / "venv"))
+    runner = FakeRunner(_healthy(tmp_path / "venv"), side_effects=_healthy_side_effects())
     assert _main(tmp_path, runner) == check.OK
     assert set(runner.cwds) == {tmp_path}
 
@@ -301,7 +362,7 @@ def test_the_scratch_source_is_real_gdscript_the_adapter_can_mutate(tmp_path: Pa
     GDScript with something mutable in it, not a placeholder."""
     assert "\t" in check.SMOKE_SOURCE
     assert ">" in check.SMOKE_SOURCE
-    runner = FakeRunner(_healthy(tmp_path / "venv"))
+    runner = FakeRunner(_healthy(tmp_path / "venv"), side_effects=_healthy_side_effects())
     _main(tmp_path, runner)
     assert (tmp_path / "smoke.gd").read_text(encoding="utf-8") == check.SMOKE_SOURCE
 
@@ -316,7 +377,9 @@ def test_a_temporary_workdir_is_cleaned_up(tmp_path: Path, monkeypatch: pytest.M
         return str(directory)
 
     monkeypatch.setattr(check.tempfile, "mkdtemp", fake_mkdtemp)
-    runner = FakeRunner(_healthy(tmp_path / "temporary" / "venv"))
+    runner = FakeRunner(
+        _healthy(tmp_path / "temporary" / "venv"), side_effects=_healthy_side_effects()
+    )
     check.main(
         ["check_published_package.py", "--version", "v0.1.0", "--attempts", "1"],
         run=runner,
@@ -328,7 +391,7 @@ def test_a_temporary_workdir_is_cleaned_up(tmp_path: Path, monkeypatch: pytest.M
 def test_it_never_runs_a_command_that_could_publish_anything(tmp_path: Path) -> None:
     """It runs after a real upload against the real index, so it must be incapable of changing
     anything: no upload, no tag, no write to the index."""
-    runner = FakeRunner(_healthy(tmp_path / "venv"))
+    runner = FakeRunner(_healthy(tmp_path / "venv"), side_effects=_healthy_side_effects())
     _main(tmp_path, runner)
     for call in runner.calls:
         joined = " ".join(call)

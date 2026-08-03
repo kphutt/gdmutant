@@ -113,7 +113,7 @@ def test_the_same_operator_on_a_different_token_is_a_different_finding() -> None
 def test_finding_keys_are_unique_across_files() -> None:
     # `fid` is only unique WITHIN a file — two files can hold the identical token under the
     # identical operator, and do here. The path is what separates them, which is why the address
-    # the page links to and stores marks under is the joined key, never the bare id.
+    # the page links to is the joined key, never the bare id.
     report = _report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Survived")])
     report["files"]["b.gd"] = {
         "language": "gdscript",
@@ -129,7 +129,7 @@ def test_finding_keys_are_unique_across_files() -> None:
 def test_a_findings_id_is_the_tuple_it_was_grouped_by_so_it_cannot_collide() -> None:
     # Co-located findings of DIFFERENT operators are the collision that would matter: on `return 0`
     # the `numeric` span sits inside the `statement-deletion` span. The operator is in the id, so
-    # they stay two addresses — a done-mark on one can never tick the other.
+    # they stay two addresses and never collide.
     view = report_view(
         _report(
             "return 0\n",
@@ -146,22 +146,15 @@ def test_a_findings_id_is_the_tuple_it_was_grouped_by_so_it_cannot_collide() -> 
 
 
 def test_a_finding_keeps_its_id_when_the_run_is_repeated_and_the_source_has_not_moved() -> None:
-    # The whole point of the identity: regenerate, and every link and done-mark still lands. The
-    # outcome may change — a test now kills it — without the address changing.
+    # The whole point of the identity: regenerate, and every link still lands. The outcome may
+    # change — a test now kills it — without the address changing.
     before = report_view(_report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Survived")]))
     after = report_view(_report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Killed")]))
     assert before.files[0].findings[0].fid == after.files[0].findings[0].fid
-    # …but the file's stamp DOES change, which is how a mark made against the old run is spotted.
-    assert before.files[0].stamp != after.files[0].stamp
 
 
-def test_the_stamp_is_stable_for_an_unchanged_run_so_a_reload_is_not_mistaken_for_a_re_run() -> (
-    None
-):
-    # A timestamp here would make every regeneration — including one that changed nothing — accuse
-    # every done-mark of being stale, which is exactly the crying-wolf that gets marks ignored.
+def test_render_html_is_deterministic_for_an_unchanged_report() -> None:
     report = _report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Survived")])
-    assert report_view(report).files[0].stamp == report_view(report).files[0].stamp
     assert render_html(report) == render_html(report)
 
 
@@ -380,9 +373,9 @@ def test_without_a_project_root_the_path_is_shown_exactly_as_the_report_keys_it(
 
 
 def test_the_displayed_path_is_what_findings_are_addressed_by(tmp_path: Path) -> None:
-    # The path is not decoration: it is half of a finding's address, so it is what a deep link and
-    # a done-mark are keyed on. Shortening it in the index and addressing by something else would
-    # give the page two names for one file.
+    # The path is not decoration: it is half of a finding's address, so it is what a deep link is
+    # keyed on. Shortening it in the index and addressing by something else would give the page two
+    # names for one file.
     source = tmp_path / "src" / "diff.gd"
     source.parent.mkdir()
     report = _report("return 0\n", [_mutant(1, 8, 9, "numeric", "1", "Survived")], path=str(source))

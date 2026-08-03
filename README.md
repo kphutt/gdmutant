@@ -103,22 +103,18 @@ cd gdmutant-workspace
 uv add gdmutant
 ```
 
-Save this as `scratch.gd`:
+`gdmutant example` writes a small bundled GDScript file, `gdmutant-hello-world.gd`, so there's
+something to point the tool at before you have a project of your own:
 
-```gdscript
-static func clamp_initiative(value: int, max_value: int) -> int:
-	if value < 0:
-		return 0
-	if value > max_value:
-		return max_value
-	return value
+```sh
+uv run gdmutant example
 ```
 
 then preview its mutants. `--dry-run` lists what *would* be mutated and stops there (no test run,
 no Godot):
 
 ```sh
-uv run gdmutant run scratch.gd --dry-run
+uv run gdmutant run gdmutant-hello-world.gd --dry-run
 ```
 
 Point it at your own file instead once you have one. The preview is not the payoff. A real run
@@ -330,12 +326,11 @@ updates:
   but sub-linear (~3× at `--jobs 4`), since the workers contend for CPU and RAM. Watch the closing
   line for how much of the time was timeouts. A few hanging mutants can outweigh every other
   mutant combined, and `--timeout` caps each one.
-- How long will it take? gdmutant will not guess, and no other mutation tester does either. Up
-  front it tells you what the run *is*: how many mutants, and the cap on each, so you know how
-  long silence is normal. A rate estimate was built and measured before being dropped: on an even
-  workload it tracked the true finish to within 5%, but on a run whose hanging mutants arrived
-  late it read 3.2s at 25% done for a run that took 58s. A mutant that hangs costs its whole
-  timeout, and nothing before it hints that it will.
+- How long will it take? Up front it tells you what the run *is*: how many mutants, and the cap
+  on each, so you know how long silence is normal. A rate estimate was built and measured before
+  being dropped: on an even workload it tracked the true finish to within 5%, but on a run whose
+  hanging mutants arrived late it read 3.2s at 25% done for a run that took 58s. A mutant that
+  hangs costs its whole timeout, and nothing before it hints that it will.
 - The first run sits there for minutes and never starts. The project has not been imported. See
   [Prerequisites](#prerequisites). Run `godot --headless --path <project> --import` once. Under
   `--runner command` gdmutant says so up front when the project has no `.godot/` directory.

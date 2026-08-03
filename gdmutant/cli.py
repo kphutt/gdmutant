@@ -18,6 +18,7 @@ import sys
 import tomllib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 
 from gdmutant import __version__
@@ -816,6 +817,49 @@ def _setup_problem(
     return None
 
 
+#: The bundled starter file's name, both inside the package (`gdmutant/examples/`) and as the
+#: default filename `example` writes. One name for both so a reader who finds it on disk (an
+#: editor's "recent files", a shell history line) recognizes it as the same file the command wrote.
+_EXAMPLE_NAME = "gdmutant-hello-world.gd"
+
+
+def _example_target(dest: str | None) -> Path:
+    """Where `example` writes: `dest` itself, `_EXAMPLE_NAME` under `dest` if `dest` is an existing
+    directory, or `_EXAMPLE_NAME` in the current directory if `dest` is None. A pure path
+    computation — no filesystem write — so the no-`dest` default (which resolves relative to the
+    cwd) is testable without a test having to change the process's working directory to observe it,
+    which would break mutmut's baseline (see ``tests/test_mutation_baseline_inputs.py``)."""
+    target = Path(dest) if dest else Path(_EXAMPLE_NAME)
+    if target.is_dir():
+        target = target / _EXAMPLE_NAME
+    return target
+
+
+def _write_example(dest: str | None) -> int:
+    """Write the bundled starter GDScript file to `dest` (default: `_EXAMPLE_NAME` in the current
+    directory; a given directory gets the same default name inside it), so a first-time reader with
+    no project of their own has something to run ``--dry-run`` against without hand-copying the
+    README's snippet into a file themselves. Refuses to overwrite an existing file — the
+    destination is the caller's, and a silent overwrite could erase something real that happens to
+    share the name. Returns 0, or 2 if the destination already exists or can't be written.
+    """
+    target = _example_target(dest)
+    if target.exists():
+        print(f"error: {target} already exists — not overwriting it", file=sys.stderr)
+        return 2
+    source = (
+        resources.files("gdmutant").joinpath("examples", _EXAMPLE_NAME).read_text(encoding="utf-8")
+    )
+    try:
+        target.write_text(source, encoding="utf-8")
+    except OSError as error:
+        print(f"error: cannot write {target}: {error}", file=sys.stderr)
+        return 2
+    print(f"Wrote {target}")
+    print(f"Preview its mutants (no Godot needed): gdmutant run {target} --dry-run")
+    return 0
+
+
 def list_mutants(source_path: str, only_lines: set[int] | None = None) -> int:
     """Print every mutant gdmutant would generate for `source_path` **without running any tests** —
     a Godot-free way to see the tool work. With `only_lines` (diff-scoped) only mutants on
@@ -1390,6 +1434,18 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     # tool's exclude list), so it must NOT seed the append-action default here.
     if config:
         run_parser.set_defaults(**{k: v for k, v in config.items() if k != "exclude"})
+    example_parser = sub.add_parser(
+        "example",
+        help="write a small bundled .gd file to try --dry-run on, with no project of your own yet",
+    )
+    example_parser.add_argument(
+        "dest",
+        nargs="?",
+        default=None,
+        metavar="path",
+        help=f"where to write it — a file path, or a directory to write {_EXAMPLE_NAME} into "
+        f"(default: ./{_EXAMPLE_NAME})",
+    )
     return parser
 
 
@@ -1459,6 +1515,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     program_keys = _program_naming_keys(config)
     parser = build_parser(_without_program_names(config) if program_keys else config)
     args = parser.parse_args(argv)
+    if args.command == "example":
+        return _write_example(args.dest)
     if args.command == "run":
         if program_keys:
             # Parse a second time with the whole config, and compare. A program-naming key only
