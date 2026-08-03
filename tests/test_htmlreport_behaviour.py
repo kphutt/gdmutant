@@ -55,13 +55,6 @@ _MUTANTS = [
     _mutant(4, 11, 12, "arithmetic", "-", "Killed"),
 ]
 
-#: The same run again after a test was added that kills the first survivor. Same source, so every
-#: finding keeps its id — but the file's stamp moves, which is what lets the page tell a mark made
-#: against *this* run from one carried over from the run before it.
-_RERUN = [
-    {**m, "status": "Killed"} if m["location"]["start"]["column"] == 5 else m for m in _MUTANTS
-]
-
 _OPS = ["arithmetic", "boolean", "comparison", "numeric", "statement-deletion"]
 
 
@@ -134,14 +127,13 @@ KEYS = [
 def observed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     """What the page displayed while the harness drove it."""
     out = tmp_path_factory.mktemp("page")
-    page, rerun = out / "report.html", out / "rerun.html"
+    page = out / "report.html"
     multi, unscored = out / "multi.html", out / "unscored.html"
     page.write_text(render_html(_report(_MUTANTS)), encoding="utf-8")
-    rerun.write_text(render_html(_report(_RERUN)), encoding="utf-8")
     multi.write_text(render_html(_multi_report()), encoding="utf-8")
     unscored.write_text(render_html(_unscored_report()), encoding="utf-8")
     result = subprocess.run(
-        ["node", str(HARNESS), str(page), str(rerun), str(multi), str(unscored)],
+        ["node", str(HARNESS), str(page), str(multi), str(unscored)],
         capture_output=True,
         text=True,
         # Explicit, because the harness prints UTF-8 and Windows would otherwise decode its output
@@ -264,63 +256,6 @@ def test_pasting_a_link_into_an_already_open_report_navigates_it(
     assert observed["deep"]["afterPaste"] == "1 of 4 findings"
 
 
-# ---- done marks --------------------------------------------------------------------------------
-
-
-def test_done_marks_count_what_is_on_screen_and_toggle_both_ways(
-    observed: dict[str, Any],
-) -> None:
-    marks = observed["marks"]
-    assert marks["start"] == "0 of 4 done"
-    assert marks["afterOne"] == "1 of 4 done"
-    assert marks["afterTwo"] == "2 of 4 done"
-    assert marks["afterUnmark"] == "1 of 4 done"
-    assert marks["beforeReload"] == "2 of 4 done"
-
-
-def test_done_marks_survive_a_reload_and_land_back_on_the_same_findings(
-    observed: dict[str, Any],
-) -> None:
-    # Persisting a count would be easy and useless. What has to survive is *which* findings — so
-    # the assertion walks the list and reads each card's own control.
-    assert observed["marks"]["afterReload"] == "2 of 4 done"
-    assert observed["marks"]["states"] == ["done", "", "done", ""]
-
-
-def test_a_copy_that_travelled_opens_unmarked_rather_than_inheriting_progress(
-    observed: dict[str, Any],
-) -> None:
-    # Same browser storage, different report location. Losing marks is the safe failure here;
-    # showing a stranger's — or your own, from another project — is not.
-    assert observed["marks"]["elsewhere"] == "0 of 4 done"
-
-
-def test_storage_that_refuses_costs_the_marks_and_nothing_else(
-    observed: dict[str, Any],
-) -> None:
-    # Private windows, a full quota, storage switched off. A report someone opened to read must
-    # not break over a feature they are not using.
-    assert observed["marks"]["brokenPos"] == "1 of 4 findings"
-    assert observed["marks"]["brokenDone"] == "1 of 4 done"  # works, just does not persist
-
-
-def test_a_mark_carried_over_from_an_earlier_run_is_flagged_not_counted_as_done(
-    observed: dict[str, Any],
-) -> None:
-    # THE failure this feature could introduce: a stale tick hiding a live survivor — the exact
-    # miss gdmutant exists to prevent. After a re-run, a mark on a finding that is *still
-    # surviving* reads "re-check", is styled apart, and contributes nothing to the count. The
-    # marked finding that the re-run actually killed simply drops out of the survivor list.
-    assert observed["stale"]["done"] == "0 of 3 done · 1 to re-check"
-    assert observed["stale"]["states"] == ["", "recheck", ""]
-
-
-def test_acknowledging_a_re_check_is_one_keypress_and_sticks(observed: dict[str, Any]) -> None:
-    assert observed["stale"]["ackFound"] == "recheck"
-    assert observed["stale"]["afterAck"] == "1 of 3 done"
-    assert observed["stale"]["afterAckReload"] == "1 of 3 done"
-
-
 # ---- the click audit ---------------------------------------------------------------------------
 #
 # The bug these exist for: `#prev` / `#next` shipped drawn, labelled, with `paintStepper` faithfully
@@ -352,11 +287,7 @@ def test_clicking_a_mark_in_the_source_selects_its_finding(observed: dict[str, A
     assert observed["clicks"]["mark"] == "3 of 4 findings"
 
 
-def test_the_done_control_and_the_reference_disclosure_respond_to_a_click(
-    observed: dict[str, Any],
-) -> None:
-    assert observed["clicks"]["doneBefore"] == "0 of 4 done"
-    assert observed["clicks"]["doneAfter"] == "1 of 4 done"
+def test_the_reference_disclosure_responds_to_a_click(observed: dict[str, Any]) -> None:
     assert observed["clicks"]["refBefore"] is False
     assert observed["clicks"]["refAfter"] is True
 

@@ -1,18 +1,13 @@
 // A DOM stand-in just rich enough to run the report page's real inlined script in Node, so the
-// page's *behaviour* — stepping, filtering, keyboard access, deep links, done marks — is tested
-// rather than assumed.
+// page's *behaviour* — stepping, filtering, keyboard access, deep links — is tested rather than
+// assumed.
 //
 // The script is a plain inline <script>, not a module, so it exports nothing; it is observed the
 // way a reader observes it, through what it writes to the page. Every element is a recording stub
 // looked up by selector and cached, so a value written through `$('#pos')` is still there when the
 // assertion reads it back.
 //
-// `open_()` builds ONE tab. The `store` handed to it outlives the tab, which is the whole point:
-// "close it, open it again, the marks are still on the right findings" is a claim this harness can
-// actually check rather than reason about. Handing two tabs the same store models regenerating the
-// report over the same `--html` path; handing them different stores models a copy that travelled.
-//
-// Usage: node harness.js <page> <rerun> <multi-file> <unscored>  ->  one JSON line of observations.
+// Usage: node harness.js <page> <multi-file> <unscored>  ->  one JSON line of observations.
 
 const fs = require('fs');
 const vm = require('vm');
@@ -33,12 +28,10 @@ function dataOf(file) { return scriptsOf(file)[0]; }
 
 const OPS = JSON.parse(process.env.HARNESS_OPS || '[]');
 
-// Where the report file pretends to live. Done marks are scoped to this, so every tab that claims
-// this location shares a bucket and one that claims another does not.
+// Where the report file pretends to live.
 const HERE = 'file:///reports/report.html';
 
-function openTab(file, store, hash, opts) {
-  const options = opts || {};
+function openTab(file, hash) {
   const cache = new Map();
 
   // What the page handed the browser to download: one entry per click that really downloaded.
@@ -122,10 +115,9 @@ function openTab(file, store, hash, opts) {
     addEventListener: (kind, fn) => { if (kind === 'keydown') keydown = fn; },
   };
 
-  const at = options.at || HERE;
   const location = {
-    href: at + (hash || ''),
-    pathname: at.slice(at.indexOf('///') + 2),
+    href: HERE + (hash || ''),
+    pathname: HERE.slice(HERE.indexOf('///') + 2),
     search: '',
     hash: hash || '',
   };
@@ -138,7 +130,7 @@ function openTab(file, store, hash, opts) {
   // question the page answers rather than sidesteps. `stack` holds every entry and `cursor` is
   // where the reader stands in it, so a push that grows the stack and a replace that does not are
   // told apart by observing the history, never by watching which method got called.
-  const stack = [at + (hash || '')];
+  const stack = [HERE + (hash || '')];
   let cursor = 0;
   const apply = url => {
     const i = String(url).indexOf('#');
@@ -153,14 +145,6 @@ function openTab(file, store, hash, opts) {
       apply(url);
     },
   };
-  // `broken` is the private-window / quota-exceeded / storage-disabled case, which must cost the
-  // marks and nothing else.
-  const localStorage = options.broken
-    ? { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } }
-    : {
-        getItem: k => (Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null),
-        setItem: (k, v) => { store[k] = String(v); },
-      };
 
   // Enough of the Blob / object-URL pair to observe a download. Nothing here reaches a network,
   // and that is the point: the bytes handed to `Blob` are ones the page already holds.
@@ -186,7 +170,7 @@ function openTab(file, store, hash, opts) {
   const drain = () => { while (timers.length) timers.shift()(); };
 
   const context = vm.createContext({
-    document, window, location, history, localStorage, console, JSON, Blob, URL,
+    document, window, location, history, console, JSON, Blob, URL,
     setTimeout: setTimeout_,
   });
   vm.runInContext(scriptOf(file), context);
@@ -200,13 +184,9 @@ function openTab(file, store, hash, opts) {
 
   return {
     pos: () => byId('#pos').textContent,
-    done: () => byId('#done').textContent,
     hash: () => location.hash,
     card,
     theme: () => document.documentElement.dataset.theme,
-    // '' · 'done' · 'recheck', read off the control the reader actually sees.
-    state: () => (/class="donebtn done"/.test(card()) ? 'done'
-      : /class="donebtn recheck"/.test(card()) ? 'recheck' : ''),
     press: key => keydown({ key, target: { tagName: 'BODY' } }),
     // Click a control by the selector the page looks for it under.
     clickSel: sel => hit(target(sel)),
@@ -263,16 +243,15 @@ function openTab(file, store, hash, opts) {
 // ---- the observations the Python test asserts on -------------------------------------------
 
 const PAGE = process.argv[2];      // the report
-const RERUN = process.argv[3];     // the same file re-run: one survivor is now caught
-const MULTI = process.argv[4];     // a two-file report, for the index rows and the back button
-const UNSCORED = process.argv[5];  // a report holding an ignored, an invalid and an errored mutant
+const MULTI = process.argv[3];     // a two-file report, for the index rows and the back button
+const UNSCORED = process.argv[4];  // a report holding an ignored, an invalid and an errored mutant
 const KEYS = JSON.parse(process.env.HARNESS_KEYS || '[]');
 
 const out = { load: null, forward: [], backward: [], filters: {} };
 
 // ---- stepping, filtering, the keyboard ------------------------------------------------------
 
-const s = openTab(PAGE, {}, '');
+const s = openTab(PAGE, '');
 out.load = s.pos();
 
 // Walk the whole list forward: one extra press proves it clamps instead of wrapping.
@@ -299,7 +278,7 @@ out.kept = { under_survived: held, under_all: s.pos() };
 
 // ---- deep links -----------------------------------------------------------------------------
 
-const d = openTab(PAGE, {}, '');
+const d = openTab(PAGE, '');
 out.deep = { onLoad: d.hash() };
 d.press('ArrowRight');
 d.press('ArrowRight');
@@ -307,86 +286,37 @@ out.deep.link = d.hash();
 out.deep.posAtLink = d.pos();
 
 // Paste that link into a fresh tab — the reload, and the "look at this survivor" case.
-const restored = openTab(PAGE, {}, out.deep.link);
+const restored = openTab(PAGE, out.deep.link);
 out.deep.restoredPos = restored.pos();
 out.deep.restoredHash = restored.hash();
 
 // A link to a CAUGHT finding: it resolves, and the page widens the filter so it is actually on
 // screen rather than resolving correctly into an empty pane.
-const caught = openTab(PAGE, {}, '#' + KEYS[5]);
+const caught = openTab(PAGE, '#' + KEYS[5]);
 out.deep.caughtPos = caught.pos();
 out.deep.caughtHash = caught.hash();
 
 // The source moved: the finding id no longer matches. The FILE it named is still the best answer.
-const moved = openTab(PAGE, {}, '#a.gd:999:1:2:comparison');
+const moved = openTab(PAGE, '#a.gd:999:1:2:comparison');
 out.deep.movedPos = moved.pos();
 out.deep.movedHash = moved.hash();
 
 // A file this run did not cover: all the way back to the default view.
-const gone = openTab(PAGE, {}, '#nowhere/else.gd:1:1:2:comparison');
+const gone = openTab(PAGE, '#nowhere/else.gd:1:1:2:comparison');
 out.deep.gonePos = gone.pos();
 
 // Garbage, including a percent-escape that throws inside decodeURIComponent.
-const junk = openTab(PAGE, {}, '#%%%not-a-key');
+const junk = openTab(PAGE, '#%%%not-a-key');
 out.deep.junkPos = junk.pos();
 
 // Pasting a link into an ALREADY-OPEN report: same document, so nothing reloads on its own.
-const live = openTab(PAGE, {}, '');
+const live = openTab(PAGE, '');
 const firstLink = live.hash();
 live.press('ArrowRight');
 live.press('ArrowRight');
 out.deep.beforePaste = live.pos();
 live.paste(firstLink);
 out.deep.afterPaste = live.pos();
-
-// ---- done marks -----------------------------------------------------------------------------
-
-const store = {};
-const m = openTab(PAGE, store, '');
-out.marks = { start: m.done() };
-m.press('d');                                   // finding 1
-out.marks.afterOne = m.done();
-m.press('ArrowRight');
-m.press('d');                                   // finding 2
-out.marks.afterTwo = m.done();
-m.press('d');                                   // …and off again
-out.marks.afterUnmark = m.done();
-m.press('ArrowRight');
-m.press('d');                                   // finding 3
-out.marks.beforeReload = m.done();
-
-// Reload: same report, same location, so the marks come back — and on the same findings.
-const m2 = openTab(PAGE, store, '');
-out.marks.afterReload = m2.done();
-out.marks.states = [];
-for (let i = 0; i < 4; i++) { out.marks.states.push(m2.state()); m2.press('ArrowRight'); }
-
-// A copy that travelled (mailed, downloaded, archived) opens unmarked — SAME browser storage,
-// different report location, so it cannot inherit progress that was never about it.
-out.marks.elsewhere = openTab(PAGE, store, '', { at: 'file:///Downloads/report.html' }).done();
-
-// Storage that refuses must cost the marks and nothing else.
-const broken = openTab(PAGE, {}, '', { broken: true });
-out.marks.brokenPos = broken.pos();
-broken.press('d');
-out.marks.brokenDone = broken.done();
-
-// ---- the stale mark -------------------------------------------------------------------------
-//
-// Re-run over the same path: one of the marked survivors is now caught, so the file's stamp
-// changed. The mark that is STILL SURVIVING must be called out, never counted as progress.
-
-const re = openTab(RERUN, store, '');
-out.stale = { done: re.done(), states: [] };
-for (let i = 0; i < 3; i++) { out.stale.states.push(re.state()); re.press('ArrowRight'); }
-
-// Acknowledging a re-check is one keypress, and it sticks.
-const ack = openTab(RERUN, store, '');
-for (let i = 0; i < 3 && ack.state() !== 'recheck'; i++) ack.press('ArrowRight');
-out.stale.ackFound = ack.state();
-ack.press('d');
-out.stale.afterAck = ack.done();
-out.stale.afterAckReload = openTab(RERUN, store, '').done();
 
 // ---- the click audit --------------------------------------------------------------------------
 //
@@ -395,7 +325,7 @@ out.stale.afterAckReload = openTab(RERUN, store, '').done();
 // ever pressed keys. So each control here is exercised through a real click on the real element,
 // and the assertion is that something changed.
 
-const c = openTab(PAGE, {}, '');
+const c = openTab(PAGE, '');
 out.clicks = { start: c.pos() };
 
 c.clickSel('#next');
@@ -416,10 +346,7 @@ c.clickChip('[data-filter]', 'survived');
 c.clickMark(KEYS[3].split(':').slice(1).join(':'));      // the `numeric` finding
 out.clicks.mark = c.pos();
 
-// The done control on the card, and the reference disclosure beside it.
-out.clicks.doneBefore = c.done();
-c.clickSel('.donebtn');
-out.clicks.doneAfter = c.done();
+// The reference disclosure on the card.
 out.clicks.refBefore = /class="ref"/.test(c.card());
 c.clickRef(KEYS[3].split(':').slice(1).join(':'));
 out.clicks.refAfter = /class="ref"/.test(c.card());
@@ -434,7 +361,7 @@ out.clicks.themeAfter = c.theme();
 // last text after the index replaces the markup that owned it, so it cannot answer this.
 const isIndex = t => /Most survivors first/.test(t.body());
 
-const mf = openTab(MULTI, {}, '');
+const mf = openTab(MULTI, '');
 out.index = { openHash: mf.hash(), openIndex: isIndex(mf) };
 mf.clickRow(1);
 out.index.afterRow = { pos: mf.pos(), hash: mf.hash(), index: isIndex(mf) };
@@ -451,7 +378,7 @@ out.index.afterEscape = { hash: mf.hash(), reachedFile: viaRow };
 // It is built from the marks the pane just drew, so it is read back per filter, and from a report
 // that actually contains the rare states as well as one that does not.
 
-const lg = openTab(PAGE, {}, '');
+const lg = openTab(PAGE, '');
 out.legend = { survived: lg.legend() };
 lg.clickChip('[data-filter]', 'caught');
 out.legend.caught = lg.legend();
@@ -464,7 +391,7 @@ out.legend.multiMark = out.legend.multiMark ? out.legend.multiMark[1] : null;
 const badge = /class="mark [^"]*\bmulti"[^>]*\sdata-n="(\d+)"/.exec(lg.source());
 out.legend.multiBadge = badge ? badge[1] : null;
 
-const us = openTab(UNSCORED, {}, '');
+const us = openTab(UNSCORED, '');
 us.clickChip('[data-filter]', 'all');
 out.legend.unscored = us.legend();
 
@@ -473,7 +400,7 @@ out.legend.unscored = us.legend();
 // They live OUTSIDE `#body`, on `#head`, so a click on one has to travel a wiring the rest of the
 // page does not use. Clicked here through that real element, not by setting `filter` by hand.
 
-const rare = openTab(UNSCORED, {}, '');
+const rare = openTab(UNSCORED, '');
 out.rare = { start: rare.pos() };
 for (const status of ['Ignored', 'CompileError', 'RuntimeError']) {
   rare.clickHead('rare:' + status);
@@ -491,7 +418,7 @@ out.rare.runtimeCard = rare.card();
 // status filter is the only thing deciding what a header count reaches. Narrow the operator first,
 // to one that holds none of the counted mutants, then click the count. `RuntimeError` lives on
 // `numeric` in this report and `comparison` holds an `Ignored`, so the two genuinely disagree.
-const stale = openTab(UNSCORED, {}, '');
+const stale = openTab(UNSCORED, '');
 stale.clickChip('[data-op]', 'comparison');
 out.staleOp = { afterOpChip: stale.pos() };
 stale.clickHead('rare:RuntimeError');
@@ -499,7 +426,7 @@ out.staleOp.afterHeaderCount = stale.pos();
 out.staleOp.card = stale.card();
 
 // From the INDEX, where there is no source pane to filter at all: the click has to open a file.
-const rx = openTab(MULTI, {}, '');
+const rx = openTab(MULTI, '');
 out.rareIndex = { openedOnIndex: isIndex(rx) };
 rx.clickHead('rare:Timeout');
 out.rareIndex.afterClick = { index: isIndex(rx), pos: rx.pos() };
@@ -509,7 +436,7 @@ out.rareIndex.afterClick = { index: isIndex(rx), pos: rx.pos() };
 // Read off the rows the index actually drew, in order, so this observes the sort rather than the
 // state variable behind it.
 
-const sortTab = openTab(MULTI, {}, '');
+const sortTab = openTab(MULTI, '');
 out.sort = { initial: sortTab.rows() };
 sortTab.clickSort('survived');            // the same column again flips the direction
 out.sort.survivedAsc = sortTab.rows();
@@ -536,7 +463,7 @@ out.sort.openedFirstDrawn = sortTab.hash();
 
 // ---- the JSON download -------------------------------------------------------------------------
 
-const dl = openTab(PAGE, {}, '');
+const dl = openTab(PAGE, '');
 out.download = { before: dl.downloads().length };
 dl.clickDownload();
 const got = dl.downloads();
@@ -553,7 +480,7 @@ out.download.parsed = JSON.parse(got[0].text);
 // and the reader's position in it, so "it pushed" and "it replaced" are told apart by what the
 // browser is left holding.
 
-const h = openTab(MULTI, {}, '');
+const h = openTab(MULTI, '');
 out.history = { onOpen: { depth: h.depth(), cursor: h.cursor(), index: isIndex(h) } };
 h.clickRow(0);                                   // index -> file: structural
 out.history.afterOpen = { depth: h.depth(), cursor: h.cursor(), index: isIndex(h) };
@@ -570,7 +497,7 @@ out.history.afterInPageBack = { depth: h.depth(), cursor: h.cursor(), index: isI
 
 // A single-file report has no index and therefore no structural move, so its history must be
 // exactly what it was: one entry, however far the reader steps.
-const solo = openTab(PAGE, {}, '');
+const solo = openTab(PAGE, '');
 out.history.solo = { onOpen: solo.depth() };
 for (let i = 0; i < 6; i++) solo.press('ArrowRight');
 solo.clickSel('#prev');
@@ -578,7 +505,7 @@ solo.clickMark(KEYS[3].split(':').slice(1).join(':'));
 out.history.solo.afterSteps = { depth: solo.depth(), cursor: solo.cursor(), pos: solo.pos() };
 
 // A deep link still opens on its finding, and opening one costs no extra entry either.
-const deepHist = openTab(PAGE, {}, '#' + KEYS[3]);
+const deepHist = openTab(PAGE, '#' + KEYS[3]);
 out.history.deepLink = { depth: deepHist.depth(), pos: deepHist.pos() };
 
 console.log(JSON.stringify(out));

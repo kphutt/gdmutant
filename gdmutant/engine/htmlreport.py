@@ -21,16 +21,15 @@ What it shows, and why it is not the stock viewer:
   an offline reader can still learn what the operator means.
 * **Every finding has an address.** A finding's id is the tuple it was grouped by
   (``line:col:colEnd:operator``), which the page joins to the file path to get a key that is stable
-  across regeneration — so a finding can be linked to (`location.hash`) and remembered
-  (`localStorage`) instead of only looked at. An earlier positional id renumbered on every run,
-  which made both impossible.
+  across regeneration — so a finding can be linked to (`location.hash`) instead of only looked at.
+  An earlier positional id renumbered on every run, which made that impossible.
 * Paths are shown relative to the project root. The report is made to travel (mailed, attached to
   a review, handed to a colleague), and an absolute path from the machine that produced it is noise
   to every reader but its author, whose username and directory layout it also carries. Given the
   project root (`project_dir`), a file inside it is displayed as its project-relative path. A file
   genuinely outside the project keeps its absolute one, because there is no shorter honest name for
   it. The displayed path is what the page addresses findings by, so a run that moves between
-  machines keeps its links and its done-marks.
+  machines keeps its links.
 
 The rendered page keeps the full ``mutation-testing-elements`` report in a
 ``<script type="application/json">`` block, so the file stays machine-readable for other tooling.
@@ -46,7 +45,6 @@ printed it under all 18 mutants including the 11 a test had actually killed.
 from __future__ import annotations
 
 import base64
-import hashlib
 import html
 import json
 import re
@@ -156,7 +154,7 @@ class Finding:
     ``line:col:colEnd:operator``. It is therefore unique within a file by construction, and it is
     the same string every time the report is regenerated from source that has not moved. Joined to
     the file's path (`finding_key`) it addresses a finding across the whole report, which is what
-    lets a selection live in the URL and a done-mark live in `localStorage`.
+    lets a selection live in the URL.
 
     ``start`` is the console's ``start`` field verbatim: the missing *input* to add a test for.
     It is deliberately **not** called "fix" — `explain` only names the input, never the expected
@@ -190,13 +188,7 @@ class Finding:
 
 @dataclass
 class FileView:
-    """One source file: its lines, its findings, and its own tally for the index.
-
-    ``stamp`` digests this file's findings **and their outcomes**. A done-mark records the stamp it
-    was made under, so the page can tell "you marked this against the report you are looking at"
-    from "you marked this against an older run of this file". Per file, not per report: adding a
-    second file to a run must not cast doubt on marks made against the first.
-    """
+    """One source file: its lines, its findings, and its own tally for the index."""
 
     path: str
     lines: list[str]
@@ -206,7 +198,6 @@ class FileView:
     survived: int
     total: int
     score: float | None
-    stamp: str
 
 
 @dataclass
@@ -288,19 +279,6 @@ def finding_key(path: str, fid: str) -> str:
     ``:`` (``res://scripts/a.gd``, ``C:/src/a.gd``) while the four trailing fields never can.
     """
     return f"{path}:{fid}"
-
-
-def _stamp(path: str, findings: list[Finding]) -> str:
-    """A short digest of a file's findings *and their outcomes*.
-
-    Changes exactly when this file's result set changes — a finding appearing, vanishing, or
-    flipping between surviving and caught. That is the question a done-mark has to answer to be
-    trustworthy: "is this still the run I marked?" A timestamp would answer "no" on every
-    regeneration, including one that changed nothing, so the digest is over content only and
-    `render_html` stays deterministic.
-    """
-    body = "\n".join(f"{finding.fid}|{finding.cls}" for finding in findings)
-    return hashlib.sha256(f"{path}\n{body}".encode()).hexdigest()[:12]
 
 
 def _findings(
@@ -450,9 +428,6 @@ def report_view(report: dict[str, Any], project_dir: str | None = None) -> Repor
                 survived=survived,
                 total=len(mutants),
                 score=_score(detected, survived),
-                # Stamped from the *displayed* path, the one done-marks are keyed by, so a Windows
-                # run and a POSIX run of the same project agree.
-                stamp=_stamp(shown_path, findings),
             )
         )
     # Most actionable first: the file with the most survivors is where the reader should start.
@@ -543,6 +518,9 @@ code,pre,.code,.mono{font-family:var(--mono)}
 .stat.jump[aria-pressed="true"] b,.stat.jump[aria-pressed="true"] i{color:var(--accent)}
 .tbtn{background:var(--surface);border:1px solid var(--border);color:var(--text);
   border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:14px;flex:none}
+/* Wide enough to carry a label: the plain down-arrow gave no hint what the file would be. */
+.tbtn.dl{width:auto;padding:0 10px;gap:4px;display:inline-flex;align-items:center;
+  font:600 11px/1 var(--mono);letter-spacing:.02em}
 
 /* ---- file index ---- */
 .crumb{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
@@ -582,16 +560,13 @@ code,pre,.code,.mono{font-family:var(--mono)}
   border-radius:999px;padding:5px 12px;font:500 12px/1 var(--mono);cursor:pointer}
 .chip[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent-border);
   color:var(--accent)}
-.stepper{margin-left:8px;display:flex;align-items:center;gap:6px;
+.stepper{margin-left:auto;display:flex;align-items:center;gap:6px;
   background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:4px 6px}
 .stepper button{background:none;border:0;color:var(--text);cursor:pointer;font-size:17px;
   width:30px;height:26px;border-radius:999px}
 .stepper button:hover:not(:disabled){background:var(--surface-2)}
 .stepper button:disabled{opacity:.45;cursor:default}
 .stepper .pos{font:600 12px/1 var(--mono);color:var(--text-muted);min-width:118px;text-align:center}
-/* Progress through the list, kept clear of the stepper's position so the two counts are never
-   read as one number. It takes over the `margin-left:auto` that used to push the stepper right. */
-.done{margin-left:auto;font:500 11.5px/1 var(--mono);color:var(--text-muted)}
 
 /* ---- legend: the marks mean nothing without it ---- */
 .legend{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px;
@@ -649,14 +624,6 @@ code,pre,.code,.mono{font-family:var(--mono)}
   font:700 9px/1 var(--sans);color:var(--bg-elevated);background:var(--tone);
   border-radius:999px;padding:1.5px 3.5px;pointer-events:none}
 .mark.on{background:var(--accent-soft);box-shadow:0 0 0 2px var(--accent)}
-/* Handled: faded, so the eye skips it — but never hidden, and never recoloured to green, which
-   would claim a test now catches it. Opacity only; a strikethrough would touch the baseline and
-   fuse with `<` / `>`, the exact thing this page must never do to an operator. */
-.mark.done{opacity:.45}
-/* Marked done under an EARLIER run and still surviving. Loud on purpose: a stale tick hiding a
-   live survivor is the one failure these marks could introduce, so it is never quiet. Dotted, and
-   outside the glyph box like the other outlines here. */
-.mark.recheck{opacity:1;outline:2px dotted var(--danger);outline-offset:2px}
 
 /* The caret row: a triangle that pops out under the exact token, the HTML echo of the `^` the
    console prints. Explicit height: both cells hold only absolutely-positioned children, so without
@@ -698,15 +665,6 @@ code,pre,.code,.mono{font-family:var(--mono)}
 .f dd{margin:0;font-size:13.5px;line-height:1.62;color:var(--text)}
 .f.start dt{color:var(--accent)}
 .card a{color:var(--accent);font-size:12.5px;font-family:var(--mono)}
-.tag.re{color:var(--danger);background:var(--danger-soft);border-color:var(--danger-border)}
-/* The done toggle. Quiet until pressed; loud only in the carried-over state. */
-.donebtn{display:block;width:100%;text-align:left;margin:0 0 10px;cursor:pointer;
-  background:var(--bg-elevated);border:1px solid var(--border);color:var(--text-muted);
-  border-radius:8px;padding:7px 10px;font:500 12px/1.35 var(--mono)}
-.donebtn:hover{background:var(--surface-2)}
-.donebtn.done{background:var(--good-soft);border-color:var(--good);color:var(--good)}
-.donebtn.recheck{background:var(--danger-soft);border-color:var(--danger-border);
-  color:var(--danger)}
 /* Inline reference: expands in place rather than navigating away mid-triage. */
 .refbtn{background:none;border:0;padding:0;cursor:pointer;color:var(--accent);
   font:500 12.5px var(--mono);text-align:left}
@@ -760,7 +718,7 @@ const isSv = f => f.cls === 'sv';
 // `f.fid` is the tuple the generator grouped by — `line:col:colEnd:operator` — so it is unique
 // within a file and identical every time the report is regenerated from source that has not moved.
 // Joined to the path it addresses a finding across the whole report. That one primitive is what
-// both the URL fragment and the done-marks are built on; nothing else here needs a new id.
+// the URL fragment is built on; nothing else here needs a new id.
 const keyOf = f => file().path + ':' + f.fid;
 // Split from the RIGHT: a path may contain `:` (`res://a.gd`, `C:/src/a.gd`), the four trailing
 // fields never can. `.*` is greedy, so the last legal split wins.
@@ -856,55 +814,6 @@ function syncHash(){
   lastHash = String(location.hash || '');
 }
 
-// ---- done marks ------------------------------------------------------------------------------
-//
-// SCOPED PER REPORT FILE, not per run. The triage loop is "mark a batch done, write tests, re-run,
-// regenerate over the same --html path", so marks that evaporated on every regeneration would
-// vanish exactly when they start being worth something. Keying on the report's own location gets
-// that for free, and gets the other half too: a copy that travels — mailed, downloaded, archived —
-// opens on a different path and therefore opens UNMARKED, rather than showing a stranger's
-// progress. Losing marks is the safe failure here; inheriting someone else's is not.
-//
-// The danger this is designed against is a stale tick hiding a live survivor. So each mark records
-// the file's `stamp` (a digest of its findings and their outcomes). A mark made under an older
-// stamp on a finding that is STILL SURVIVING is shown as "re-check", styled apart, and is NOT
-// counted as done — the count never claims progress the run does not support. Marks never filter
-// or hide a finding, and the header's survivor total is always the run's own number.
-const STORE = 'gdmutant.done.v1:' + String(location.href || '').split('#')[0].split('?')[0];
-let marks = {};
-function loadMarks(){
-  // localStorage can be absent, disabled, full, or hold something another version wrote. None of
-  // that is worth an error on a report someone opened to read: fall back to unmarked.
-  try { marks = JSON.parse(localStorage.getItem(STORE) || '{}'); } catch (e) { marks = null; }
-  if (!marks || typeof marks !== 'object' || Array.isArray(marks)) marks = {};
-}
-function saveMarks(){
-  try { localStorage.setItem(STORE, JSON.stringify(marks)); } catch (e) { /* session only */ }
-}
-// '' · 'done' (marked under the stamp on screen) · 'recheck' (marked earlier, still surviving).
-function markState(f){
-  const at = marks[keyOf(f)];
-  if (at === undefined) return '';
-  return (at !== file().stamp && isSv(f)) ? 'recheck' : 'done';
-}
-function toggleDone(f){
-  if (!f) return;
-  // Toggling a carried-over mark re-affirms it against the run on screen; toggling again clears
-  // it. So acknowledging a re-check is one keypress, and never a silent no-op.
-  if (markState(f) === 'done') delete marks[keyOf(f)];
-  else marks[keyOf(f)] = file().stamp;
-  saveMarks();
-  paintSelection();
-}
-function markSets(){
-  const done = new Set(), recheck = new Set();
-  file().findings.forEach(f => {
-    const s = markState(f);
-    if (s === 'done') done.add(f.fid); else if (s === 'recheck') recheck.add(f.fid);
-  });
-  return [done, recheck];
-}
-
 // ---- detail card ---------------------------------------------------------------------------
 
 function cardHTML(f){
@@ -914,13 +823,11 @@ function cardHTML(f){
   const angles = f.angles.map(a => `<b>${esc(a.change)}</b> — ${esc(a.outcome)}.`).join('\n');
   const many = f.angles.length > 1
     ? `<span class="tag op">${plural(f.angles.length, 'change')} here</span>` : '';
-  const state = markState(f);
   return `<div class="card">
     <div class="who">
       <span class="tag ${f.cls}">${esc(f.tag)}</span>
       <span class="tag op">${esc(f.op)}</span>
       ${many}
-      ${state === 'recheck' ? '<span class="tag re">re-check</span>' : ''}
       <span class="loc">${esc(file().path)}:${f.line}${
         f.func ? '  ·  func ' + esc(f.func) : ''}</span>
     </div>
@@ -932,19 +839,8 @@ ${angles}</div>
       // it should assert is the reader's to decide — a guess would codify a bug. Labelling it "fix"
       // promised a remedy the tool does not have.
       f.start ? `<dl class="f start"><dt>start</dt><dd>${esc(f.start)}</dd></dl>` : ''}
-    ${doneHTML(f, state)}
     ${refHTML(f)}
   </div>`;
-}
-
-// The done control. A mark is progress through a list, not a verdict on the code, so it never
-// changes the finding's tag and never removes it from anything.
-function doneHTML(f, state){
-  const label = state === 'done' ? '&#10003; done'
-    : state === 'recheck' ? '&#10003; done earlier — still surviving, re-check'
-    : 'mark done';
-  return `<button class="donebtn ${state}" data-done="1" aria-pressed="${state === 'done'}"`
-    + ` title="Toggle done (d)">${label}</button>`;
 }
 
 // The per-operator reference, inlined — it expands in place instead of navigating away, and
@@ -1035,8 +931,6 @@ function onClick(e){
     paintSelection();
     return;
   }
-  if (at('.donebtn')) { toggleDone(sel); return; }
-
   const mark = at('.mark');
   if (mark) {
     const ids = mark.dataset.ids.split(',');
@@ -1243,17 +1137,11 @@ function paintSelection(){
   if (caretEl) { caretEl.remove(); caretEl = null; }
   if (hostEl) { hostEl.remove(); hostEl = null; }
 
-  // ONE pass over the marks carries both the selection and the done state — the pane is walked
-  // once per selection change either way, and splitting them doubled that walk for nothing.
-  const [done, recheck] = markSets();
   src.querySelectorAll('.mark').forEach(el => {
     const ids = el.dataset.ids.split(',');
     const on = !!sel && ids.indexOf(sel.fid) >= 0;
     el.classList.toggle('on', on);
     el.setAttribute('aria-pressed', on ? 'true' : 'false');
-    // A token may host several findings; it reads as handled only when every one of them is.
-    el.classList.toggle('done', ids.every(i => done.has(i)));
-    el.classList.toggle('recheck', ids.some(i => recheck.has(i)));
   });
 
   const aside = $('#aside');
@@ -1306,18 +1194,6 @@ function paintStepper(){
     : 'no findings';
   $('#prev').disabled = !list.length || idx === 0;
   $('#next').disabled = !list.length || idx === list.length - 1;
-
-  // Counted over what is on screen, exactly like the stepper — a mark for a finding this filter
-  // (or this run) does not show contributes nothing, so the number can never claim progress the
-  // page cannot back up. Carried-over marks are called out separately rather than folded in.
-  let done = 0, recheck = 0;
-  list.forEach(f => {
-    const s = markState(f);
-    if (s === 'done') done++; else if (s === 'recheck') recheck++;
-  });
-  $('#done').textContent = list.length
-    ? `${done} of ${list.length} done` + (recheck ? ` · ${recheck} to re-check` : '')
-    : '';
 }
 
 // ---- the file view -------------------------------------------------------------------------
@@ -1338,7 +1214,6 @@ function renderFile(){
       <span style="width:10px"></span>
       <button class="chip" data-op="all">every mutator</button>
       ${chips}
-      <span class="done" id="done" aria-live="polite"></span>
       <div class="stepper">
         <button id="prev" title="Previous finding (left arrow)"
           aria-label="Previous finding">&larr;</button>
@@ -1349,8 +1224,7 @@ function renderFile(){
     </div>
     <p class="note">A <b>finding</b> is one spot in the code under one mutator. gdmutant may try
       several changes at that spot — each change is a <b>mutant</b>, and the numbers above count
-      mutants. Fixing a finding usually takes one test. Arrow keys step; <b>d</b> marks one done —
-      done marks stay in this browser, for this report file, and never hide a survivor.</p>
+      mutants. Fixing a finding usually takes one test. Arrow keys step between findings.</p>
     <div class="legend" id="legend"></div>
     <div class="panes">
       <div class="src"><div class="rows" id="src"></div></div>
@@ -1413,7 +1287,6 @@ document.addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft') step(-1);
   else if (e.key === 'ArrowRight') step(1);
   else if (e.key === 'Escape' && MULTI && view === 'file') toIndex();
-  else if ((e.key === 'd' || e.key === 'D') && view === 'file') toggleDone(sel);
 });
 NARROW.addEventListener('change', () => { if (view === 'file') paintSelection(); });
 $('#theme').onclick = () => {
@@ -1481,7 +1354,6 @@ $('#body').onclick = onClick;
 // Same handler, so a header count reaches the same filter path a chip does rather than a private
 // one of its own.
 $('#head').onclick = onClick;
-loadMarks();
 open_();
 """
 
@@ -1540,7 +1412,10 @@ def render_html(report: dict[str, Any], project_dir: str | None = None) -> str:
         else f"mutation score &middot; {view.detected} of {view.detected + view.survived} caught"
     )
     script = _JS.replace("DATA_JSON", _escape_for_script(json.dumps(asdict(view))))
-    data = _escape_for_script(json.dumps(report))
+    # indent=2 (not the view model above): this is the block the download button hands back
+    # verbatim as a .json file (see "getting the JSON back out" below), and a reader opening that
+    # file wants it formatted like the --json CLI output, not the single line a page doesn't need.
+    data = _escape_for_script(json.dumps(report, indent=2))
     return f"""<!doctype html>
 <html lang="en" data-theme="light">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1553,8 +1428,8 @@ def render_html(report: dict[str, Any], project_dir: str | None = None) -> str:
     {FRANK_SVG}
     <div><h1>gdmutant</h1><p>{html.escape(TAGLINE)}</p></div>
     <div class="acts">
-      <button class="tbtn" id="dl" title="Download the full report as JSON"
-        aria-label="Download the full report as JSON">&#11015;</button>
+      <button class="tbtn dl" id="dl" title="Download the full report as JSON"
+        aria-label="Download the full report as JSON">&#11015; JSON</button>
       <button class="tbtn" id="theme" title="Toggle light / dark"
         aria-label="Toggle light / dark">&#9680;</button>
     </div>
