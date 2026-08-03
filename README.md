@@ -46,8 +46,8 @@ Mutation score: 61.1%
 ──────────────────────────────────────────────────────────────────────────
 ```
 
-Coverage tells you a line *ran*. Mutation tells you whether a bug there would be *caught*: a
-killed mutant means yes, a survivor means no. Those are not the same question, and the more code
+Coverage tells you a line *ran*. Mutations tell you if a bug there would be *caught*: a killed
+mutant means yes, a survivor means no. Those are not the same question, and the more code
 a project ships (whoever or whatever wrote it), the more of it rides on the answer. A standalone
 CLI, no AI required.
 
