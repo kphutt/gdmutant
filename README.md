@@ -92,16 +92,13 @@ the point where the CLI surface and exit codes stop moving.
 
 ### See it find a real bug, right now
 
-No project of your own needed yet. gdmutant tests itself, and its own `corpus/` fixture is a real
-Godot project with real GUT and gdUnit4 tests. Cloning the repo and running against that fixture
-is the fastest way to see a genuine survivor report, the kind at the top of this page:
-
 ```sh
 git clone https://github.com/kphutt/gdmutant
 cd gdmutant
-uv sync --frozen
+uv sync --frozen                           # installs gdmutant's own pinned dependencies
 uv run python scripts/install_gdunit4.py   # the addon isn't vendored in git; this fetches it
 uv run gdmutant run corpus/turn_order.gd --project corpus --html report.html
+# mutates one file, reruns corpus/'s real GdUnit4 tests against each mutant, writes report.html
 ```
 
 ~30 seconds on a cold checkout, most of it Godot's one-time project import. The console prints
