@@ -46,48 +46,36 @@ Mutation score: 61.1%
 ──────────────────────────────────────────────────────────────────────────
 ```
 
-Coverage tells you a line *ran*. Mutation tells you a bug there would be *caught*. Those are
-not the same question, and the more code a project ships (whoever or whatever wrote it), the
-more of it rides on the answer. A standalone CLI, no AI required.
+Coverage tells you a line *ran*. Mutation tells you whether a bug there would be *caught*: a
+killed mutant means yes, a survivor means no. Those are not the same question, and the more code
+a project ships (whoever or whatever wrote it), the more of it rides on the answer. A standalone
+CLI, no AI required.
+
+Same idea, other languages: [mutmut](https://github.com/boxed/mutmut) for Python,
+[Stryker](https://stryker-mutator.io/) for JS/TS, [PIT](https://pitest.org/) for Java.
 
 ## Is this for you?
 
 - You write GDScript and test with GUT, gdUnit4, or any `godot --headless` command.
-- You already have a Godot project whose tests pass, however you run them (with GUT or gdUnit4 that
-  means its addon is installed and enabled). gdmutant grades those tests, it doesn't replace them.
+- You already have a Godot project whose tests pass, however you run them. gdmutant grades those
+  tests, it doesn't replace them.
   No project yet? See it find a real bug first, using gdmutant's own test fixture. No project
   required.
-- Not GDScript? gdmutant reads GDScript and nothing else. Same idea, other languages:
-  [mutmut](https://github.com/boxed/mutmut) for Python, [Stryker](https://stryker-mutator.io/) for
-  JS/TS, [PIT](https://pitest.org/) for Java.
 
 ## Prerequisites
 
-Godot 4.3+, a test suite that already passes, and the GUT or gdUnit4 addon if you use either.
+- [Godot](https://godotengine.org/) 4.3+ (see [Compatibility](#compatibility) for exact versions).
+- The GUT or gdUnit4 addon, already installed and enabled in your project, if you use either.
+- Python 3.12+. If you don't have it, don't go install it yourself: get
+  [uv](https://docs.astral.sh/uv/) instead, which fetches its own.
 
-A project Godot has already imported. On a checkout Godot has never opened, it imports every
-asset before it will run anything: minutes of total silence on a real game, which is easy to read
-as a hung tool. `--runner gdunit4` and `--runner gut` do that warm-up for you and say so.
-`--runner command` cannot: it only knows the command you hand it. Do it once yourself, and every
-later run starts in seconds:
+  ```sh
+  # Windows (PowerShell)
+  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
-```sh
-godot --headless --path path/to/your-game --import
-```
-
-Python 3.12+, and if you don't have Python, don't go install it. Install
-[uv](https://docs.astral.sh/uv/) instead: it fetches its own Python and runs gdmutant on it.
-
-```sh
-# Windows (PowerShell)
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Already have Python 3.12+? `pip install gdmutant` works just as well: drop the `uv run` prefix
-from every command below.
+  # macOS / Linux
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
 
 ## Compatibility
 
@@ -131,18 +119,22 @@ clicking it switches between them.
 
 ### Point it at your own project
 
-Make gdmutant a small uv project in a folder beside your game, never inside it: `uv init` drops
-`.git`, `.gitignore`, `.python-version`, `pyproject.toml`, a `README.md` of its own and a starter
-Python file wherever you run it, and none of that belongs in a game repo. Which starter file
-depends on your uv version, `main.py` at the root through 0.11 and `src/<name>/__init__.py` from
-0.12, so treat the list as the shape of the mess rather than an exact manifest. Pin the
-interpreter: `uv init` alone floors on whatever it finds, and gdmutant needs 3.12+.
+Make gdmutant a small uv project in a folder beside your Godot project, never inside it: `uv init`
+drops `.git`, `.gitignore`, `.python-version`, `pyproject.toml`, a `README.md` of its own and a
+starter Python file wherever you run it, and none of that belongs in your project's own
+repository. Which starter file depends on your uv version, `main.py` at the root through 0.11 and
+`src/<name>/__init__.py` from 0.12, so treat the list as the shape of the mess rather than an
+exact manifest. Pin the interpreter: `uv init` alone floors on whatever it finds, and gdmutant
+needs 3.12+.
 
 ```sh
 uv init --python 3.12 gdmutant-workspace
 cd gdmutant-workspace
 uv add gdmutant
 ```
+
+Already have Python 3.12+ yourself? `pip install gdmutant` works just as well: drop the `uv run`
+prefix from every command below.
 
 A real run reruns your tests once per mutant and reports the survivors: lines where a bug could
 live that no test catches. Finding those is what the tool is for.
@@ -156,11 +148,11 @@ not search subdirectories:
 
 ```sh
 # GUT
-uv run gdmutant run ../my-game/src/module.gd --project ../my-game \
+uv run gdmutant run ../my-project/src/module.gd --project ../my-project \
   --runner gut --tests res://test/unit --json report.json
 
 # gdUnit4 (the default)
-uv run gdmutant run ../my-game/src/module.gd --project ../my-game --json report.json
+uv run gdmutant run ../my-project/src/module.gd --project ../my-project --json report.json
 ```
 
 `--json` writes the
@@ -173,7 +165,7 @@ gdmutant runs your `--command` string exactly as given and never edits it, so if
 your PATH, write its full path directly into the command yourself:
 
 ```sh
-uv run gdmutant run ../my-game/src/module.gd --project ../my-game \
+uv run gdmutant run ../my-project/src/module.gd --project ../my-project \
   --runner command --command "godot --headless --script res://tests/run_tests.gd" --json report.json
 ```
 
@@ -268,9 +260,9 @@ needs no trust. Every other key is just a setting, never a program to run.
 - The first run goes quiet for minutes right after it starts. gdmutant does warn you first (the
   GUT/gdUnit4 runners print a "preparing the project" notice, and `--runner command` warns too
   when the project has no `.godot/` directory), but the wait itself is silent: that's Godot
-  importing every asset in the project, once, which gdmutant can't see into or report on. See
-  [Prerequisites](#prerequisites), or run `godot --headless --path <project> --import` yourself
-  first so every later run starts in seconds.
+  importing every asset in the project, once, which gdmutant can't see into or report on. Run
+  `godot --headless --path <project> --import` yourself first so every later run starts in
+  seconds.
 - Want to see what gdmutant would touch before committing to a full run? `--dry-run` lists the
   mutants without running your tests: a scoping check on a large file, or before wiring up
   `--exclude`, not a substitute for a real run (it can't tell you anything your tests would catch).
