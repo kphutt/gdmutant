@@ -53,11 +53,16 @@ class BaselineFailed(Exception):
 
 
 class SourceOutsideProject(Exception):
-    """A file to mutate does not lie inside the project directory, so `jobs > 1` cannot isolate it.
+    """A path that must stay inside the project directory does not, so gdmutant refuses.
 
-    Parallel evaluation works by giving each worker its own copy of the project and mutating the
-    file *inside that copy*. A file outside the project is in no copy, so there is nothing to
-    isolate and nothing sound to run — see `_project_relative`.
+    Two callers reuse this for the same shape of problem:
+    - A file to mutate outside the project: `jobs > 1` cannot isolate it. Parallel evaluation
+      works by giving each worker its own copy of the project and mutating the file *inside that
+      copy*. A file outside the project is in no copy, so there is nothing to isolate and nothing
+      sound to run — see `_project_relative`.
+    - A `--report-path` that resolves outside the project: every run deletes whatever sits at that
+      path first, so a path that escapes the project is a delete-anything primitive, not just a
+      misconfiguration — see `_GodotJUnitRunner.run` in `adapters/gdscript/runner.py`.
     """
 
 

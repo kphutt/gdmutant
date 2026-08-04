@@ -199,6 +199,17 @@ CLI.
 - `--json -` combined with `--report step-summary` and no `$GITHUB_STEP_SUMMARY` set is now
   refused up front with exit 2, naming both flags and how to fix it, instead of printing the
   report to stdout and poisoning the JSON.
+- `--report-path` (or a cloned project's own `.gdmutant.toml`) could resolve outside `--project`
+  via an absolute override or `../` traversal. Every run deletes whatever sits at that path first,
+  so this was a delete-anything-on-disk primitive reachable with no flags at all. Now refused
+  unless the resolved path stays inside the project.
+- `.gdmutant.toml`'s `project` key now requires `--trust-config`, alongside the existing
+  `command`/`godot` gate: it roots every subprocess's cwd and, under `--jobs`, what gets copied
+  once per worker, the same "this file decides what happens on your machine" shape those two keys
+  already guarded against.
+- The HTML report's script-embedding escape only rewrote `</`, missing `<!--<script` (needs no
+  slash) which could push a browser's HTML parser into a state that swallows the report's own
+  closing tag, blanking the page past that point. Every `<` is escaped now.
 
 ### Safety
 

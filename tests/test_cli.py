@@ -3166,6 +3166,21 @@ def test_a_config_supplied_godot_binary_is_refused_even_behind_an_explicit_runne
     assert "sets 'godot'" in capsys.readouterr().err
 
 
+def test_a_config_supplied_project_is_refused_alone_with_no_trust_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `project` alone, with neither `command` nor `godot` in the file: the gate must fire on
+    # `project` by itself, not only when it happens to accompany one of the other two keys.
+    proj = tmp_path / "elsewhere"
+    proj.mkdir()
+    source = _payload_config(tmp_path, monkeypatch, f"project = '{proj}'\n")
+
+    rc = cli.main(["run", source])
+
+    assert rc == 2
+    assert "sets 'project'" in capsys.readouterr().err
+
+
 def test_the_refusal_names_every_program_key_the_file_set(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
