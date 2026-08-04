@@ -39,13 +39,22 @@ _spec.loader.exec_module(harden_github)
 # files. Written out in full so a workflow rename that changes a context has to be reflected here
 # deliberately, not absorbed silently.
 #
-# One entry, because one job qualifies. ADR-0012 moved the merge-time checks to the local
-# pre-commit gate and reduced `ci.yml` to `workflow_dispatch`, so nothing in it can report on a
-# pull request; `zizmor.yml` kept its unfiltered `pull_request` trigger to stay the one cloud
-# check that gates a merge. This is also the one context branch protection requires on `main`
-# today, so the derivation and the live setting agree — but the assertion stays offline (the
-# derivation is the thing under test, and a test that phoned GitHub would fail on a fork).
-EXPECTED_CONTEXTS = ["Workflow security (zizmor)"]
+# Six entries: `zizmor.yml` kept its unfiltered `pull_request` trigger throughout, so it stayed
+# the one cloud check gating a merge while ADR-0012 had `ci.yml` on `workflow_dispatch` only. The
+# other five came back 2026-08-04 when `ci.yml`'s `pull_request`/`push` triggers were restored
+# ahead of gdmutant going public (ADR-0012's Correction section) — `verify`'s two-platform matrix
+# and the `secret-scan`/`selftest-godot`/`selftest-gut` gate jobs can report on every pull request
+# again. This is also what branch protection requires on `main` today, so the derivation and the
+# live setting agree — but the assertion stays offline (the derivation is the thing under test,
+# and a test that phoned GitHub would fail on a fork).
+EXPECTED_CONTEXTS = [
+    "Workflow security (zizmor)",
+    "Verify (ubuntu-24.04)",
+    "Verify (windows-2025)",
+    "Secret scan (gitleaks)",
+    "Self-test (real Godot)",
+    "Self-test (real Godot + GUT)",
+]
 
 
 def test_required_contexts_are_derived_from_this_repos_workflows() -> None:

@@ -74,9 +74,11 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   CLI people run on Windows, so test on Windows for real, not just Linux. Two concrete traps to
   watch for: console output can crash under the legacy `cp1252` code page, and `python3` can resolve
   to a *different* interpreter than `python` (see `.pre-commit-config.yaml`'s header for the guard).
-- `ci.yml` does not run automatically (why: [ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md)).
-  The unbypassable gate is `publish.yml`'s release-time run of `verify` on both Linux and Windows,
-  before every real release. Run the same checks locally any time:
+- `ci.yml` runs automatically on every pull request and push to `main` (restored 2026-08-04, ahead
+  of going public — why it was ever manual-only, and why it's back:
+  [ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md)). The unbypassable gate is
+  still `publish.yml`'s release-time run of `verify` on both Linux and Windows, before every real
+  release. Run the same checks locally any time:
 
   ```
   uv run python scripts/verify_local.py
@@ -85,8 +87,7 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   ```
 
   This script reads its commands out of `ci.yml` rather than restating them, so local, CI, and the
-  release gate can't drift apart. To restore `ci.yml` running automatically, see ADR-0012's
-  Decision section for the exact steps.
+  release gate can't drift apart.
 
   If every tool fails with `uv trampoline failed to canonicalize script path`, the venv's
   launcher shims are stale, usually after a `uv` version bump. Fix: `uv sync --frozen --reinstall`.

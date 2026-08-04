@@ -76,13 +76,12 @@ def _workflows_dir(workflows: pathlib.Path | None) -> pathlib.Path:
 # deliberately. Leaving ids here that nothing can report is the same failure as hardcoding a
 # stale context string, just one step further back.
 #
-# Today exactly one job qualifies. ADR-0012 moved the merge-time checks to the local pre-commit
-# gate and reduced `ci.yml` to `workflow_dispatch`, so `verify`, `secret-scan`, `selftest-godot`
-# and `selftest-gut` can no longer run on a pull request at all - listing them here would be the
-# same never-reports failure this file exists to prevent. `zizmor.yml` stayed on `pull_request`
-# with no path filter precisely so it could be the one cloud check that gates a merge, and it is
-# the one context branch protection requires on `main` today.
-REQUIRED_JOBS = ("zizmor",)
+# `ci.yml`'s `pull_request`/`push` triggers were restored 2026-08-04, ahead of gdmutant going
+# public (see the file's own header, and ADR-0012's Correction section) - `verify`, `secret-scan`,
+# `selftest-godot` and `selftest-gut` can report on every pull request again, so they're back here
+# too. `zizmor.yml` was the one cloud check left gating a merge while `ci.yml` was
+# `workflow_dispatch`-only; it stays required alongside the restored four, not in place of them.
+REQUIRED_JOBS = ("zizmor", "verify", "secret-scan", "selftest-godot", "selftest-gut")
 
 
 def _ok(msg: str) -> None:
