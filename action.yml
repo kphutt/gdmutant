@@ -22,9 +22,7 @@
 # built here; gdmutant's CLI prints an actionable hint if the addon is missing, so assume-present
 # degrades gracefully.
 name: gdmutant — mutation testing for Godot
-description: >-
-  Run gdmutant mutation testing on a Godot/GDScript project and report the surviving mutants (with
-  explanations) to the job summary.
+description: "Mutation testing for GDScript and Godot: find the bugs your green tests would miss."
 branding:
   icon: crosshair
   color: purple
