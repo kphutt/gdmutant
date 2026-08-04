@@ -26,8 +26,16 @@ mutant means yes, a survivor means no. A standalone CLI, no AI required.
 
 Same idea, other languages: [mutmut](https://github.com/boxed/mutmut) for Python, [Stryker](https://stryker-mutator.io/) for JS/TS, [PIT](https://pitest.org/) for Java.
 
+The `--html` report, open on `turn_order.gd`. A survivor in the source, `and` marked on line 27:
+
 <p align="center">
-  <img src=".github/assets/html-report.png" alt="The gdmutant HTML report open on turn_order.gd, showing the 61.1% score header and the return 0 line marked with a badge for two overlapping findings: a numeric change and a statement deletion, both caught" width="900">
+  <img src=".github/assets/html-report-survivor-code.png" alt="turn_order.gd:27, return alive and not stunned, with and marked as a survivor" width="580">
+</p>
+
+and its detail card: what it means, why it's risky, and how to close it.
+
+<p align="center">
+  <img src=".github/assets/html-report-survivor-card.png" alt="The detail card: survived, boolean, turn_order.gd:27, func can_act. Gap: tests pass whether this needs both sides or just one. Risk: a change that loosens or tightens the guard would pass every test. Start: add a test where exactly one side is true and the other false, and assert the outcome" width="760">
 </p>
 
 ## Prerequisites
