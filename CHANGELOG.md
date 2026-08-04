@@ -10,7 +10,7 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] — unreleased
+## [0.1.0] - unreleased
 
 gdmutant mutates real GDScript and reports survivors end-to-end via the standalone `gdmutant run`
 CLI.
@@ -179,7 +179,7 @@ CLI.
   wrong in both directions at once: 1.7–3.4× *under* on a real project (it counted neither
   gdmutant's own per-mutant work nor timeouts, which were four minutes of one 6m24s run) and, since
   it never took `--jobs` into account, roughly N× *over* under `--jobs N`. In its place, three
-  lines that `--progress {auto,plain,none}` controls together (`none` silences all three; `auto`
+  lines that `--progress {auto,plain,none}` controls together (`none` silences all three, `auto`
   and `plain` print all three):
   - before, the facts: `18 mutants to run. Baseline suite 1.4s; each mutant is capped at 30s.`
     The cap is the part that paces the wait, and it says how long silence is normal.

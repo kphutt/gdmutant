@@ -258,7 +258,7 @@ engine restores the file whenever it is still running to do so, but a process ki
 restore anything, so a hard kill can leave a mutant on disk. If that kill lands between the staged
 write and the rename (NF-7), it also leaves the stray temp file behind instead of the rename ever
 completing: `tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")` names it
-`.<name>.<random>.tmp`, beside the source it was headed for — safe to delete on sight. A failed
+`.<name>.<random>.tmp`, beside the source it was headed for. Safe to delete on sight. A failed
 restore does the same thing with no crash at all: when a full disk or a lock that outlasts the
 retries stops that second write, it raises and the mutant stays where it is. This is why gdmutant
 warns when git holds no copy of a file it is about to mutate, and why `--require-clean` refuses to
