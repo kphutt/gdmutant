@@ -172,7 +172,7 @@ class _GodotJUnitRunner:
         """
         detail = (completed.stderr or completed.stdout or "").strip()
         return RuntimeError(
-            f"{self._framework} wrote no report at {report} — Godot may have failed to run"
+            f"{self._framework} wrote no report at {report}. Godot may have failed to run"
             + (f":\n{detail[-1000:]}" if detail else "")
         )
 
@@ -345,7 +345,7 @@ class GdUnit4Runner(_GodotJUnitRunner):
             return super()._missing_report_error(report, completed)
         return RuntimeError(
             f"GdUnit4 discovered no test suites under {self.test_path}, so it ran nothing and "
-            "produced no report. This is test discovery rather than a crash — GdUnit4 said so "
+            "produced no report. This is test discovery, not a crash: GdUnit4 said so "
             f"itself ({_GDUNIT_NO_TESTS_MARKER!r}). Point gdmutant at the directory holding your "
             "suites with --tests res://<your test dir>, and check they are GdUnit4 suites "
             "(extending GdUnitTestSuite)"
@@ -489,10 +489,10 @@ class GutRunner(_GodotJUnitRunner):
                 # Discovery, not a crash — see the docstring. Mid-run drops keep the message below.
                 message = (
                     f"GUT found no tests under {self.test_dir} on the unmutated (baseline) run, so "
-                    "this is test discovery, not a broken suite — no mutant existed yet. GUT's "
+                    "this is test discovery, not a broken suite: no mutant existed yet. GUT's "
                     "-gdir does not search subdirectories, and GUT's own layout puts suites in "
                     "test/unit/: point gdmutant at them with --tests res://test/unit (or wherever "
-                    "yours live). One directory only — for a tree of suites, run GUT yourself with "
+                    "yours live). One directory only. For a tree of suites, run GUT yourself with "
                     "-ginclude_subdirs via --runner command"
                 )
             else:
@@ -502,7 +502,7 @@ class GutRunner(_GodotJUnitRunner):
                     else f"GUT ran {tests} tests, fewer than the baseline {baseline}"
                 )
                 message = (
-                    f"{reason} — a test suite failed to compile/load and GUT skipped it (it runs "
+                    f"{reason}: a test suite failed to compile/load and GUT skipped it (it runs "
                     "the rest green and exits 0, so this would otherwise be a false survivor)"
                 )
             raise RuntimeError(message + (f":\n{detail[-1000:]}" if detail else ""))
@@ -518,7 +518,7 @@ class GutRunner(_GodotJUnitRunner):
         if not self._nondeterminism_canary:
             return None
         return (
-            "warning: test collection was non-deterministic — a run collected more tests than the "
+            "warning: test collection was non-deterministic. A run collected more tests than the "
             "healthy baseline, which a legitimate mutant cannot cause (a mutation cannot add test "
             "files). The crash-safety guard's protection against a silently-masked skipped test "
             "suite is degraded in this environment; investigate flaky suite loading. This is the "

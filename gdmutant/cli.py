@@ -62,13 +62,13 @@ from gdmutant.engine.runner import CommandRunner, Runner, RunWarning
 #: needs, whichever flag they end up putting it in.
 _MACOS_GODOT_BINARY = "/Applications/Godot.app/Contents/MacOS/Godot"
 _MISSING_GODOT_MACOS_HINT = (
-    "  On macOS, Godot ships as an app bundle and is never on PATH — pass the binary directly:\n"
+    "  On macOS, Godot ships as an app bundle and is never on PATH. Pass the binary directly:\n"
     f"    --godot {_MACOS_GODOT_BINARY}"
 )
 #: The same fact for ``--runner command``, where the binary goes inside ``--command`` and naming
 #: ``--godot`` here would repeat the very mistake the hint above it is correcting.
 _MISSING_GODOT_MACOS_COMMAND_HINT = (
-    "  On macOS, Godot ships as an app bundle and is never on PATH — its binary is at\n"
+    "  On macOS, Godot ships as an app bundle and is never on PATH. Its binary is at:\n"
     f"    {_MACOS_GODOT_BINARY}"
 )
 
@@ -231,7 +231,7 @@ def _git_failure_reason(judged_path: str, stderr: str) -> str:
     detail = [line.strip() for line in stderr.strip().splitlines() if line.strip()]
     if not detail:
         return f"git could not check {judged_path}, and said nothing about why"
-    return f"git could not check {judged_path} — " + " ".join(detail)
+    return f"git could not check {judged_path}: " + " ".join(detail)
 
 
 def _git_backup(source_path: str) -> _GitBackup:
@@ -263,7 +263,7 @@ def _git_backup(source_path: str) -> _GitBackup:
             env=_clean_git_env(),
         )
     except OSError:
-        return _GitBackup(None, "git could not be run here — it may not be installed")
+        return _GitBackup(None, "git could not be run here, and may not be installed")
     judged = _judged_path(source_path)
     if completed.returncode != 0:
         return _GitBackup(None, _git_failure_reason(judged, completed.stderr))
@@ -316,7 +316,7 @@ def _unbacked_source_problem(source_path: str, *, require_clean: bool) -> str | 
     if backup.backed_up is None:
         return None  # cannot tell, and nobody asked for a guarantee — stay quiet
     return (
-        f"warning: {backup.reason} — gdmutant mutates it in place (restoring it when done), so a "
+        f"warning: {backup.reason}: gdmutant mutates it in place (restoring it when done), so a "
         f"hard kill could leave it modified. {advice}"
     )
 
@@ -358,7 +358,7 @@ def _missing_executable_hint(filename: str, command: Sequence[str] | None = None
     Either way, a Godot-looking binary on macOS also gets the app-bundle path (the single most
     common first-run failure — most Godot users are on macOS, where Godot is never on PATH), phrased
     for the flag that mode actually uses."""
-    lines = [f"error: could not run the test suite — executable {filename!r} not found."]
+    lines = [f"error: could not run the test suite: executable {filename!r} not found."]
     if command is None:
         lines.append("  Install it and put it on your PATH, or pass its full path with --godot.")
         if sys.platform == "darwin" and "godot" in filename.lower():
@@ -409,7 +409,7 @@ def _addon_hint(
     if (Path(project_dir) / addon_rel).is_dir():
         return None  # addon is present — some other framework/Godot failure, not a setup problem
     return (
-        f"error: the {framework} addon was not found in the project — {addon_rel}/ is missing "
+        f"error: the {framework} addon was not found in the project: {addon_rel}/ is missing "
         f"under {project_dir}.\n"
         f"  {install_hint}, or run without the addon via "
         '--runner command --command "<your headless test command>".'
@@ -467,7 +467,7 @@ def _cold_import_notice(project_dir: str) -> str | None:
         "the first\n"
         "  run of --command imports every asset in the project before a single test executes. On a "
         "real\n"
-        "  game that is minutes of silence. --runner command cannot warm the cache for you — it "
+        "  game that is minutes of silence. --runner command cannot warm the cache for you: it "
         "only\n"
         "  knows the command you gave it. Run this once, then run gdmutant again:\n"
         f"    godot --headless --path {project_dir} --import"
@@ -615,12 +615,12 @@ def _expand_sources(paths: list[str], exclude: list[str] | None = None) -> list[
     if tests_skipped:
         print(
             f"note: skipped {tests_skipped} test file(s) (test/ dirs, *_test.gd, or "
-            "extends GdUnitTestSuite/GutTest) — name one explicitly to mutate it",
+            "extends GdUnitTestSuite/GutTest); name one explicitly to mutate it",
             file=sys.stderr,
         )
     if n_excluded:
         print(
-            f"note: excluded {n_excluded} file(s) matching --exclude — name one explicitly "
+            f"note: excluded {n_excluded} file(s) matching --exclude; name one explicitly "
             "to mutate it",
             file=sys.stderr,
         )
@@ -726,7 +726,7 @@ def _warn_unknown_ignore_operators(source: str) -> None:
         else:
             detail = f"'# gdmutant: ignore[]' on line {line} has empty brackets"
         print(
-            f"warning: {detail} — it suppresses nothing "
+            f"warning: {detail}: it suppresses nothing "
             "(name a real operator, or drop the brackets to ignore the whole line).",
             file=sys.stderr,
         )
@@ -788,7 +788,7 @@ def _report_path_problem(path: str | None, flag: str, *, stdout_ok: bool) -> str
     if path is None:
         return None
     if path == "-":
-        return None if stdout_ok else f"{flag} needs a file path — stdout ('-') isn't supported"
+        return None if stdout_ok else f"{flag} needs a file path: stdout ('-') isn't supported"
     parent = Path(path).parent
     if not parent.exists():
         return f"{flag} directory does not exist: {parent}"
@@ -898,7 +898,7 @@ def _write_example(dest: str | None) -> int:
     """
     target = _example_target(dest)
     if target.exists():
-        print(f"error: {target} already exists — not overwriting it", file=sys.stderr)
+        print(f"error: {target} already exists, not overwriting it", file=sys.stderr)
         return 2
     source = (
         resources.files("gdmutant").joinpath("examples", _EXAMPLE_NAME).read_text(encoding="utf-8")
@@ -1085,7 +1085,7 @@ def _write_reports(
         # piping the run into `json.loads` got a parse error naming a column in the trailing prose
         # with nothing to say that `--html` had caused it.
         print(
-            f"\nWrote HTML report to {html_path} — open it in a browser.",
+            f"\nWrote HTML report to {html_path}. Open it in a browser.",
             file=sys.stderr if json_path == "-" else sys.stdout,
         )
     return 0
@@ -1288,7 +1288,7 @@ def _load_config(path: Path | None = None) -> dict[str, object] | None:
     for key, value in raw.items():
         dest = _CONFIG_KEY_TO_DEST.get(key)
         if dest is None:
-            print(f"warning: {path}: unknown key '{key}' — ignoring", file=sys.stderr)
+            print(f"warning: {path}: unknown key '{key}', ignoring", file=sys.stderr)
             continue
         settings[dest] = value
     # Validate settings types up front — set_defaults bypasses argparse's own type/choices
@@ -1346,12 +1346,12 @@ def _untrusted_config_message(keys: list[str]) -> str:
         "stopped instead of running it.\n"
         f"  {_CONFIG_FILENAME} is read from the directory you are in. In a project you cloned, "
         "that file was written by\n"
-        "  somebody else, and these keys decide what gets executed on your machine — so gdmutant "
+        "  somebody else, and these keys decide what gets executed on your machine, so gdmutant "
         "will not act on\n"
         "  them by itself, even if you also pass the same value yourself.\n"
         "  If this project is yours, or you have read the file and trust it, add --trust-config.\n"
         f"  Otherwise remove {named} from {_CONFIG_FILENAME} and pass it as a flag instead "
-        f"({flags}) — with no matching key in the file, no trust is needed."
+        f"({flags}): with no matching key in the file, no trust is needed."
     )
 
 
@@ -1400,7 +1400,7 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         dest="progress_style",
         help="how much the run says about itself while it works: auto (a heartbeat every 3s on a "
         "terminal, rarer in a log or CI), plain (the rarer cadence always), or none (nothing at "
-        "all — no heartbeat, no per-mutant line, no plan or closing line, and not the 'preparing "
+        "all: no heartbeat, no per-mutant line, no plan or closing line, and not the 'preparing "
         "the project' / 'running the baseline suite' notices either, so a slow first run is "
         "silent). The summary and the report are unaffected either way. (default: auto)",
     )
@@ -1412,14 +1412,14 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     run_parser.add_argument(
         "--report-path",
         default=None,
-        help="JUnit-XML report path, relative to the project dir (default: per runner — "
+        help="JUnit-XML report path, relative to the project dir (default: per runner: "
         f"gdunit4 {DEFAULT_REPORT_PATH}, gut {DEFAULT_GUT_REPORT_PATH})",
     )
     run_parser.add_argument(
         "--timeout",
         type=float,
         default=None,
-        help="per-mutant test-run timeout, in seconds (default: derived from the baseline run — "
+        help="per-mutant test-run timeout, in seconds (default: derived from the baseline run: "
         "10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",
     )
     run_parser.add_argument(
@@ -1437,7 +1437,7 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         nargs="?",
         const=_DEFAULT_REPORT,
         default=None,
-        help="write a ready-to-open HTML report here — one self-contained file (no network "
+        help="write a ready-to-open HTML report here: one self-contained file (no network "
         "needed) showing each survivor on its own source line, with the gap explained (bare "
         "--html defaults to a timestamped filename)",
     )
@@ -1471,7 +1471,7 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     run_parser.add_argument(
         "--since",
         metavar="ref",
-        help="only mutate lines changed since this git ref (e.g. main, HEAD~1) — the per-PR "
+        help="only mutate lines changed since this git ref (e.g. main, HEAD~1): the per-PR "
         "diff-scoped mode; a much faster, gate-able signal than a whole-file run",
     )
     run_parser.add_argument(
@@ -1481,7 +1481,7 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         metavar="N",
         default=1,
         help="evaluate N mutants in parallel, each on its own copy of the project (default: 1 = "
-        "serial), for a faster run with the same verdicts — process isolation, and the per-mutant "
+        "serial), for a faster run with the same verdicts: process isolation, and the per-mutant "
         "timeout is scaled by N so contention can't cause a false timeout. Bounded by your "
         "cores/RAM; a plain per-worker copy is made per job.",
     )
@@ -1516,7 +1516,7 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         nargs="?",
         default=None,
         metavar="path",
-        help=f"where to write it — a file path, or a directory to write {_EXAMPLE_NAME} into "
+        help=f"where to write it: a file path, or a directory to write {_EXAMPLE_NAME} into "
         f"(default: ./{_EXAMPLE_NAME})",
     )
     return parser
@@ -1632,7 +1632,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             dropped = set(unparseable)
             files = [f for f in files if f not in dropped]
             print(
-                f"note: skipped {len(unparseable)} directory file(s) gdtoolkit couldn't parse — "
+                f"note: skipped {len(unparseable)} directory file(s) gdtoolkit couldn't parse; "
                 f"mutating the other {len(files)}:",
                 file=sys.stderr,
             )
@@ -1652,7 +1652,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 2
             if not any(changed.values()):
                 print(
-                    f"no lines changed since {args.since} in the given path(s) — nothing to mutate",
+                    f"no lines changed since {args.since} in the given path(s): nothing to mutate",
                     file=sys.stderr,
                 )
                 if args.dry_run:

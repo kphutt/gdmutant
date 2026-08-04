@@ -240,7 +240,7 @@ def test_zero_tests_after_a_healthy_baseline_keeps_the_compile_crash_message(
     monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
     runner = GutRunner()
     assert runner.run(str(tmp_path)).passed  # baseline: 4 tests — discovery works
-    with pytest.raises(RuntimeError, match="GUT ran 0 tests — a test suite failed to compile/load"):
+    with pytest.raises(RuntimeError, match="GUT ran 0 tests: a test suite failed to compile/load"):
         runner.run(str(tmp_path))
 
 

@@ -478,16 +478,16 @@ class MissingGodotRunner:
 # first) so mutmut's string mutation is caught: a wrapped "XX…--godot.XX\n" fails an endswith of the
 # verbatim block, where a loose "--godot" in err would not.
 _GENERIC_GODOT_MISSING = (
-    "error: could not run the test suite — executable 'godot' not found.\n"
+    "error: could not run the test suite: executable 'godot' not found.\n"
     "  Install it and put it on your PATH, or pass its full path with --godot.\n"
 )
 _MACOS_GODOT_MISSING = (
     _GENERIC_GODOT_MISSING
-    + "  On macOS, Godot ships as an app bundle and is never on PATH — pass the binary directly:\n"
+    + "  On macOS, Godot ships as an app bundle and is never on PATH. Pass the binary directly:\n"
     + "    --godot /Applications/Godot.app/Contents/MacOS/Godot\n"
 )
 _FALLBACK_MISSING = (
-    "error: could not run the test suite — executable 'the test runner' not found.\n"
+    "error: could not run the test suite: executable 'the test runner' not found.\n"
     "  Install it and put it on your PATH, or pass its full path with --godot.\n"
 )
 
@@ -575,7 +575,7 @@ def test_command_runner_missing_executable_names_command_not_godot(
     assert rc == 2  # still a setup error, not a red baseline
     err = capsys.readouterr().err
     assert err.endswith(
-        f"error: could not run the test suite — executable '{_ABSENT}' not found.\n"
+        f"error: could not run the test suite: executable '{_ABSENT}' not found.\n"
         + _COMMAND_MODE_HINT
         + f'    --command "<full path to {_ABSENT}> --headless --script res://tests/run.gd"\n'
     )
@@ -607,7 +607,7 @@ def test_command_runner_missing_godot_on_darwin_gives_the_bundle_path_not_the_fl
     assert rc == 2
     err = capsys.readouterr().err
     assert err.endswith(
-        "  On macOS, Godot ships as an app bundle and is never on PATH — its binary is at\n"
+        "  On macOS, Godot ships as an app bundle and is never on PATH. Its binary is at:\n"
         "    /Applications/Godot.app/Contents/MacOS/Godot\n"
     )
     assert "--godot /Applications" not in err
@@ -896,9 +896,7 @@ class NoReportRunner:
     uninstalled/broken GdUnit4 addon produces (as opposed to a missing godot binary)."""
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
-        raise RuntimeError(
-            "GdUnit4 wrote no report at res://reports — Godot may have failed to run"
-        )
+        raise RuntimeError("GdUnit4 wrote no report at res://reports. Godot may have failed to run")
 
 
 def test_run_mutation_missing_addon_returns_two_with_actionable_hint(
@@ -932,7 +930,7 @@ class GutNoReportRunner:
     uninstalled/broken GUT addon produces (Godot can't load gut_cmdln.gd, so nothing is written)."""
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
-        raise RuntimeError("GUT wrote no report at res://reports — Godot may have failed to run")
+        raise RuntimeError("GUT wrote no report at res://reports. Godot may have failed to run")
 
 
 def test_run_mutation_missing_gut_addon_returns_two_with_actionable_hint(
@@ -1154,8 +1152,8 @@ def test_parser_help_text(
         "test command for --runner command (exit 0 = pass), e.g. 'godot --headless --script res://tests/run_tests.gd'",  # noqa: E501
         "the Godot executable (default: godot)",
         "the test directory (gdunit4's -a / gut's -gdir) (default: res://test)",
-        "JUnit-XML report path, relative to the project dir (default: per runner — gdunit4 reports/report_1/results.xml, gut reports/gut_results.xml)",  # noqa: E501
-        "per-mutant test-run timeout, in seconds (default: derived from the baseline run — 10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",  # noqa: E501
+        "JUnit-XML report path, relative to the project dir (default: per runner: gdunit4 reports/report_1/results.xml, gut reports/gut_results.xml)",  # noqa: E501
+        "per-mutant test-run timeout, in seconds (default: derived from the baseline run: 10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",  # noqa: E501
         "refuse to run if the source file has uncommitted git changes (default: warn only)",
         "write the Stryker JSON report here (use - for stdout; bare --json defaults to a "
         "timestamped filename)",
@@ -1755,7 +1753,7 @@ def test_main_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None
 # Exact messages, pinned so mutmut's string mutation is caught.
 def _dirty_warning(source: str) -> str:
     return (
-        f"warning: {source} has uncommitted changes — gdmutant mutates it in place "
+        f"warning: {source} has uncommitted changes: gdmutant mutates it in place "
         "(restoring it when done), so a hard kill could leave it modified. Commit or stash "
         "first to be safe."
     )
@@ -2658,7 +2656,7 @@ def test_main_since_no_changes_emits_the_job_summary_when_asked(
     assert main(["run", path, "--since", "HEAD", "--json", "-", "--report", "step-summary"]) == 0
     assert json.loads(capsys.readouterr().out)["files"][path]["mutants"] == []
     written = summary.read_text(encoding="utf-8")
-    assert "gdmutant — mutation report" in written
+    assert "gdmutant: mutation report" in written
     assert "No surviving mutants" in written
 
 

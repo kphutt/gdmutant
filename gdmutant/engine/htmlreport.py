@@ -91,7 +91,7 @@ _RARE: tuple[tuple[str, str], ...] = (
 #: answer "which findings hold a runtime error?" without shipping a status on every angle.
 _RARE_STATUSES = frozenset(status for _, status in _RARE)
 
-TAGLINE = "Mutation testing for GDScript and Godot — find the bugs your green tests would miss."
+TAGLINE = "Mutation testing for GDScript and Godot: find the bugs your green tests would miss."
 
 #: Frank, inlined. The repo's copy at ``.github/assets/frank.svg`` is a README asset and ships in no
 #: distribution (see the sdist allowlist in ``pyproject.toml``), and a URL would put the page
@@ -594,7 +594,7 @@ code,pre,.code,.mono{font-family:var(--mono)}
 .ln.hit{color:var(--text);font-weight:700}
 .code{position:relative;padding-left:12px;white-space:pre}
 /* The MARKED CHARACTER is the target: an overlaid dot covers the very token it points at, so the
-   mutated span itself gets the tint and the click handler. Zero horizontal padding — any would
+   mutated span itself gets the tint and the click handler. Zero horizontal padding: any would
    shift the monospace grid the caret row aligns against.
    BACKGROUND ONLY, never an underline: an underline tight beneath `<` or `>` fuses with the glyph
    and reads as `<=` / `>=`, disguising the exact operator the mutation is about. Rings and
@@ -610,7 +610,7 @@ code,pre,.code,.mono{font-family:var(--mono)}
 /* Hover strengthens the mark's OWN tone. Fading every mark to neutral grey on hover briefly
    claimed the tone reserved for ignored/invalid. */
 .mark:hover{box-shadow:0 0 0 2px var(--tone)}
-/* SEVERAL findings on one token. The previous treatment — a 1px dashed outline at 1px offset —
+/* SEVERAL findings on one token. The previous treatment (a 1px dashed outline at 1px offset)
    was invisible in practice, and measured so in Chrome on the corpus fixture's one multi mark
    (`return 0`, `numeric` nested inside `statement-deletion`): the outline computed to
    `1px dashed rgb(20,83,45)` sitting immediately outside a solid ring of the *identical* colour,
@@ -680,8 +680,8 @@ code,pre,.code,.mono{font-family:var(--mono)}
 .empty{color:var(--text-muted);font-size:13px;padding:18px}
 .note{font-size:11.5px;color:var(--text-muted);margin:0 0 14px;line-height:1.5}
 
-/* Below this the side panel has no room. Rather than stacking it far below the fold — where a
-   click gives no visible feedback at all — the detail opens INLINE under the active line, and the
+/* Below this the side panel has no room. Rather than stacking it far below the fold (where a
+   click gives no visible feedback at all), the detail opens INLINE under the active line, and the
    side pane is dropped. Same renderer, one layout switch. */
 @media (max-width:900px){
   .panes{grid-template-columns:1fr}
@@ -705,7 +705,7 @@ let view = MULTI ? 'index' : 'file';
 // the default deliberately: it is the only order that answers "where do I start". Score would be
 // worse, because 1 survivor in 5 mutants and 100 in 500 both read 80%.
 let sortBy = 'survived', sortDesc = true;
-// What the source pane currently has painted. The pane is rebuilt only when this changes —
+// What the source pane currently has painted. The pane is rebuilt only when this changes:
 // selection moves repaint nothing but the few nodes that actually differ.
 let painted = null;
 let caretEl = null, hostEl = null;
@@ -715,7 +715,7 @@ const isSv = f => f.cls === 'sv';
 
 // ---- stable finding identity -----------------------------------------------------------------
 //
-// `f.fid` is the tuple the generator grouped by — `line:col:colEnd:operator` — so it is unique
+// `f.fid` is the tuple the generator grouped by (`line:col:colEnd:operator`), so it is unique
 // within a file and identical every time the report is regenerated from source that has not moved.
 // Joined to the path it addresses a finding across the whole report. That one primitive is what
 // the URL fragment is built on; nothing else here needs a new id.
@@ -738,7 +738,7 @@ function matches(f){
 // there first, which is what a header count clicked from the index has to ask.
 const shownIn = f => f.findings.filter(matches);
 // The stepper walks exactly what is on screen. Making it walk survivors while the source showed
-// everything meant selecting a caught mark reported "- of 6" — a live selection the stepper said
+// everything meant selecting a caught mark reported "- of 6": a live selection the stepper said
 // did not exist.
 const shown = () => shownIn(file());
 
@@ -757,13 +757,13 @@ function docUrl(f){ return D.docBase + '#' + f.ref; }
 //
 // The selected (file, finding) is mirrored into `location.hash`, so a reload keeps your place and
 // "look at this survivor" is a link you can paste into a review. Only the three characters that
-// would actually break a fragment are escaped — the hash stays readable, which is the point of
+// would actually break a fragment are escaped, so the hash stays readable, which is the point of
 // having one.
 function encFrag(s){ return s.replace(/%/g, '%25').replace(/#/g, '%23').replace(/ /g, '%20'); }
 function decFrag(s){ try { return decodeURIComponent(s); } catch (e) { return s; } }
 
-// Resolve the current hash against THIS report. Everything here can fail — the link may name a
-// file this run did not cover, or a finding whose line has moved since — and every failure returns
+// Resolve the current hash against THIS report. Everything here can fail: the link may name a
+// file this run did not cover, or a finding whose line has moved since, and every failure returns
 // null, which the caller turns into the ordinary default view. A stale link never errors and never
 // lands on the wrong finding: an id that does not match exactly does not match at all.
 function fromHash(){
@@ -817,10 +817,10 @@ function syncHash(){
 // ---- detail card ---------------------------------------------------------------------------
 
 function cardHTML(f){
-  // Prints only what the generator computed. No outcome is derived here — that is exactly how
+  // Prints only what the generator computed. No outcome is derived here: that is exactly how
   // "every test still passed" once ended up under a tag reading CAUGHT. One narrative, then one
   // line per angle; no aggregate sentence is invented over the angle set.
-  const angles = f.angles.map(a => `<b>${esc(a.change)}</b> — ${esc(a.outcome)}.`).join('\n');
+  const angles = f.angles.map(a => `<b>${esc(a.change)}</b>: ${esc(a.outcome)}.`).join('\n');
   const many = f.angles.length > 1
     ? `<span class="tag op">${plural(f.angles.length, 'change')} here</span>` : '';
   return `<div class="card">
@@ -836,14 +836,14 @@ ${angles}</div>
     ${f.gap ? `<dl class="f"><dt>gap</dt><dd>${esc(f.gap)}</dd></dl>` : ''}
     ${f.risk ? `<dl class="f"><dt>risk</dt><dd>${esc(f.risk)}</dd></dl>` : ''}
     ${// `start`, never "fix": `explain` names the missing INPUT and stops there, because the value
-      // it should assert is the reader's to decide — a guess would codify a bug. Labelling it "fix"
+      // it should assert is the reader's to decide: a guess would codify a bug. Labelling it "fix"
       // promised a remedy the tool does not have.
       f.start ? `<dl class="f start"><dt>start</dt><dd>${esc(f.start)}</dd></dl>` : ''}
     ${refHTML(f)}
   </div>`;
 }
 
-// The per-operator reference, inlined — it expands in place instead of navigating away, and
+// The per-operator reference, inlined: it expands in place instead of navigating away, and
 // offline a GitHub link resolves to nothing at all. Shown only on a finding with a surviving
 // angle: "what a numeric survivor means" beside a CAUGHT tag contradicts the tag.
 function refHTML(f){
@@ -861,14 +861,14 @@ function refHTML(f){
 // ---- clicks ----------------------------------------------------------------------------------
 //
 // ONE delegated handler for every control in either view, wired ONCE to `#body`. `#body` is part
-// of the page shell — the views replace its innerHTML, never the element — so nothing here is
+// of the page shell (the views replace its innerHTML, never the element), so nothing here is
 // re-wired on a view switch, a filter change, or a repaint.
 //
 // This is not only about the 309-finding file (though per-element listeners on thousands of marks
 // were already the wrong shape). It is about the failure that one-listener-per-control invites:
 // the `#prev` / `#next` arrows shipped DRAWN, labelled, with their disabled state faithfully
 // maintained by `paintStepper`, and never connected to `step()`. They were decorative. The
-// keyboard path worked, so the harness — which pressed keys — saw nothing wrong. A control that
+// keyboard path worked, so the harness (which pressed keys) saw nothing wrong. A control that
 // exists in the markup now reaches its behaviour through this one function or not at all.
 function onClick(e){
   const at = s => e.target.closest(s);
@@ -997,7 +997,7 @@ function renderIndex(){
   const box = D.files.length >= SEARCH_FROM
     ? `<input id="q" class="qbox" type="search" placeholder="filter files…"
          aria-label="Filter files by path">` : '';
-  $('#body').innerHTML = `<p class="note">Most survivors first — that is where to start.
+  $('#body').innerHTML = `<p class="note">Most survivors first: that is where to start.
       Choose a file to work through its findings, or click a column heading to re-sort.</p>
     ${box}<div class="files" id="filelist"></div>`;
   const input = $('#q');
@@ -1042,7 +1042,7 @@ function paintSource(){
     const n = i + 1;
     const here = f.findings.filter(x => x.line === n && vis.has(x.fid));
     // A mark is a character range and may host more than one FINDING, when different operators
-    // touch overlapping spans — on `return 0`, `numeric` sits inside `statement-deletion`.
+    // touch overlapping spans: on `return 0`, `numeric` sits inside `statement-deletion`.
     // Clicking cycles findings, never raw mutants, which would re-split a grouped finding.
     const groups = [];
     here.forEach(x => {
@@ -1061,13 +1061,13 @@ function paintSource(){
       const tip = g.fs.map(x => x.op + ': '
         + x.angles.map(a => a.change + ' (' + a.tag + ')').join(', ')).join(' | ');
       // Say the real number and the real action. "click to cycle" was vague, and on the common
-      // case — exactly two — "cycle" is simply the wrong word for what the click does.
+      // case (exactly two), "cycle" is simply the wrong word for what the click does.
       const many = g.fs.length > 1
-        ? ` — ${g.fs.length} findings here, click to switch between them` : '';
+        ? `: ${g.fs.length} findings here, click to switch between them` : '';
       seen[cls] = true;
       if (g.fs.length > 1) seen.multi = true;
       // Only a mark actually DRAWN grey teaches the grey swatch, and it teaches the states it
-      // really holds — collected here, from the angles, rather than assumed from the palette.
+      // really holds: collected here, from the angles, rather than assumed from the palette.
       if (cls === 'ot') {
         g.fs.forEach(x => x.angles.forEach(a => { if (a.cls === 'ot') seen.unscored[a.tag] = 1; }));
       }
@@ -1092,36 +1092,36 @@ function paintSource(){
 
 // The three states that are neither survived nor caught. They are NOT one thing, and the legend
 // used to call all three "never run", which is wrong for the third:
-//   * ignored — a `# gdmutant: ignore` annotation suppresses it. Generated for the report, never
+//   * ignored: a `# gdmutant: ignore` annotation suppresses it. Generated for the report, never
 //     run at all (no validity check, no suite run), excluded from the score.
-//   * invalid — the mutation did not survive the re-parse guard, so it was discarded before any
+//   * invalid: the mutation did not survive the re-parse guard, so it was discarded before any
 //     test ran. Also never run.
-//   * error  — the runner FAILED WHILE EXECUTING IT (a Godot crash, say). This one was run, or at
+//   * error: the runner FAILED WHILE EXECUTING IT (a Godot crash, say). This one was run, or at
 //     least attempted; calling it "never run" states the opposite of what happened.
 // (Definitions taken from `Verdict` in `gdmutant/engine/loop.py`, which is where they are decided.)
-// They share one grey, because the page draws them one grey — so they share one entry, and the
+// They share one grey, because the page draws them one grey, so they share one entry, and the
 // entry names exactly the ones this pane contains.
 const UNSCORED = {
-  ignored: 'ignored — a <code># gdmutant: ignore</code> annotation, so it never ran',
-  invalid: 'invalid — the mutation did not parse, so it never ran',
-  error: 'errored — the runner failed while running it',
+  ignored: 'ignored: a <code># gdmutant: ignore</code> annotation, so it never ran',
+  invalid: 'invalid: the mutation did not parse, so it never ran',
+  error: 'errored: the runner failed while running it',
 };
 const UNSCORED_ORDER = ['ignored', 'invalid', 'error'];
 
 // Built from the marks just drawn, never from the full palette. An entry for a colour this report
-// does not contain teaches a reader a shade they will never see and cannot recognise — and on the
+// does not contain teaches a reader a shade they will never see and cannot recognise, and on the
 // corpus fixture, where ignored/invalid/errored are all zero, that was three quarters of the grey
 // entry's copy describing nothing. It narrows with the filter for the same reason: the legend is a
 // key to the marks on screen, not a glossary of the tool.
 function paintLegend(){
   const bits = [];
   const row = (cls, text) => `<span><span class="sw ${cls}">&nbsp;&nbsp;</span>${text}</span>`;
-  if (seen.sv) bits.push(row('sv', 'survived — no test caught it'));
+  if (seen.sv) bits.push(row('sv', 'survived: no test caught it'));
   if (seen.kd) bits.push(row('kd', 'caught by a test'));
   const un = UNSCORED_ORDER.filter(k => seen.unscored[k]);
   if (un.length) bits.push(row('ot', un.map(k => UNSCORED[k]).join(' &middot; ')));
   if (seen.multi) {
-    bits.push(row('multi', 'more than one finding on this token — the badge is how many;'
+    bits.push(row('multi', 'more than one finding on this token: the badge is how many;'
       + ' click to switch between them'));
   }
   $('#legend').innerHTML = bits.join('');
@@ -1187,7 +1187,7 @@ function paintSelection(){
 function paintStepper(){
   const list = shown();
   const idx = sel ? list.findIndex(x => x.fid === sel.fid) : -1;
-  // Say "findings", because the header counts MUTANTS — two different units on one screen, and an
+  // Say "findings", because the header counts MUTANTS: two different units on one screen, and an
   // unlabelled "1 of 6" beside "18 mutants" invites the reader to reconcile them wrongly.
   $('#pos').textContent = list.length
     ? `${idx < 0 ? '–' : idx + 1} of ${plural(list.length, 'finding')}`
@@ -1223,7 +1223,7 @@ function renderFile(){
       </div>
     </div>
     <p class="note">A <b>finding</b> is one spot in the code under one mutator. gdmutant may try
-      several changes at that spot — each change is a <b>mutant</b>, and the numbers above count
+      several changes at that spot: each change is a <b>mutant</b>, and the numbers above count
       mutants. Fixing a finding usually takes one test. Arrow keys step between findings.</p>
     <div class="legend" id="legend"></div>
     <div class="panes">
@@ -1269,7 +1269,7 @@ function toIndex(){
   renderIndex();
 }
 
-// Clamp, never wrap — and never scrollIntoView: the page must not move under you.
+// Clamp, never wrap, and never scrollIntoView: the page must not move under you.
 function step(d){
   if (view !== 'file') return;
   const list = shown();
@@ -1335,7 +1335,7 @@ function open_(){
 }
 
 // Someone pasting a link into the address bar of an already-open report is the same-document case,
-// so nothing reloads — without this the URL would change and the page would not.
+// so nothing reloads: without this the URL would change and the page would not.
 //
 // This is ALSO the browser's back and forward buttons, and it is the only listener they need. Both
 // events fire on a history move between two entries that differ by fragment, and every entry this

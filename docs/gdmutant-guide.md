@@ -373,7 +373,7 @@ mutant is killable, it usually is. Write the test.
 - "GUT ran 0 tests" partway through a run. That one is real: a mutant broke a test file badly
   enough that GUT skipped its suite and ran the rest green. Reported as an error, not a survivor.
 - The addon isn't found. The actual message names the missing directory and the fix directly:
-  `error: the GdUnit4 addon was not found in the project — addons/gdUnit4/ is missing under
+  `error: the GdUnit4 addon was not found in the project: addons/gdUnit4/ is missing under
   <project>. Install GdUnit4 (Godot Asset Library), or run without the addon via --runner command
   --command "<your headless test command>".` GUT's version reads the same way with `addons/gut/`.
   GUT or gdUnit4 must already be installed and enabled in the project `--project` names; gdmutant

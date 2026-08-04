@@ -158,7 +158,7 @@ def all_survived_warning(run: MutationRun) -> str | None:
     where = files[0] if len(files) == 1 else ", ".join(files)
     return (
         f"warning: all {run.survived} evaluated mutants survived. This usually means the test "
-        f"suite ran but never exercised {where} — check that --tests (or --command) targets it. "
+        f"suite ran but never exercised {where}. Check that --tests (or --command) targets it. "
         "The mutation score and exit code are unchanged."
     )
 
@@ -247,7 +247,7 @@ def _survivor_markdown(mutant: Mutant, source_lines: list[str] | None) -> list[s
             src.expandtabs(4),
             "```",
             "",
-            f"{_change_note(mutant)} — every test still passed.",
+            f"{_change_note(mutant)}: every test still passed.",
             "",
         ]
     anchor = reference_section(mutant, source_lines)
@@ -275,7 +275,7 @@ def job_summary_markdown(run: MutationRun) -> str:
     score = run.mutation_score
     score_str = "n/a" if score is None else f"{score * 100:.1f}%"
     out = [
-        "## gdmutant — mutation report",
+        "## gdmutant: mutation report",
         "",
         f"**Mutation score: {score_str}**",
         "",
@@ -284,12 +284,12 @@ def job_summary_markdown(run: MutationRun) -> str:
         "",
     ]
     if not run.survivors:
-        out.append("No surviving mutants — every mutant your tests could catch, they caught.")
+        out.append("No surviving mutants. Every mutant your tests could catch, they caught.")
         return "\n".join(out) + "\n"
     out += [
         f"### Surviving mutants ({len(run.survivors)})",
         "",
-        "Each is a line a bug could live on that no test catches. gdmutant explains the gap — "
+        "Each is a line a bug could live on that no test catches. gdmutant explains the gap, "
         "not just the location:",
         "",
     ]
