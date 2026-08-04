@@ -127,9 +127,9 @@ gdmutant run ../my-project/src/module.gd --project ../my-project --runner gdunit
 See the [survivor reference](docs/survivors/README.md) for what
 `ignored`, `invalid` and `error` mean.
 
-## Killing Survivors
+## Catching Survivors
 
-Kill each survivor with a real test, or mark a genuine equivalent with `# gdmutant: ignore` and a
+Catch each survivor with a real test, or mark a genuine equivalent with `# gdmutant: ignore` and a
 reason ([details](docs/survivors/README.md)). Re-run until nothing survives. A mutation score
 isn't a target to hit, it's a direction to watch. There's no universal "good" number.
 
