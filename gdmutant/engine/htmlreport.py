@@ -645,52 +645,18 @@ code,pre,.code,.mono{font-family:var(--mono)}
    console prints. Explicit height: both cells hold only absolutely-positioned children, so without
    it the grid row collapses to 0 and the triangle lands on the next line of code. */
 .caret-row{display:grid;grid-template-columns:52px 1fr;font-family:var(--mono);font-size:13px;
-  line-height:20px;position:relative}
+  line-height:20px;background:var(--accent-soft)}
 .caret-row .ln{border-right:1px solid var(--border)}
 .caret-row .car{position:relative;padding-left:12px;white-space:pre;color:var(--accent)}
-/* One band per finding sharing this token, full row width (reaching left past .car's own padding
-   and the .ln gutter, 64px = 52px column + 12px padding, so it lines up with .row.active's own
-   edge-to-edge wash rather than stopping at .car's own box). Hue is the finding's own caught/
-   survived status, exactly like every mark elsewhere in the report; only the ALPHA changes with
-   selection, so status is never the thing selection state overloads. */
-.caret-row .fg-band{position:absolute;left:-64px;right:0;pointer-events:none}
-.caret-row .fg-band.sv{background:rgba(251,113,133,.06)}
-.caret-row .fg-band.kd{background:rgba(52,211,153,.06)}
-.caret-row .fg-band.ot{background:var(--surface-2)}
-.caret-row .fg-band.fg-sel.sv{background:rgba(251,113,133,.22)}
-.caret-row .fg-band.fg-sel.kd{background:rgba(52,211,153,.22)}
 /* No margin offset: the triangle glyph is centred inside its own 1ch advance, so putting its left
-   edge on the character cell's left edge already centres it under the token. z-index: above the
-   bands, which are position:absolute siblings painted first in DOM order but must never occlude
-   it. */
-.caret-row .tri{position:absolute;top:-1px;font-size:13px;line-height:20px;z-index:1}
+   edge on the character cell's left edge already centres it under the token. */
+.caret-row .tri{position:absolute;top:-1px;font-size:13px;line-height:20px}
 /* MUST stay at the code's 13px: `left` is in `ch`, and `ch` resolves against the element's OWN
    font-size. At 11.5px its `ch` is narrower than the code grid's, so the text crept left by an
    amount that grew with the column. The smaller text lives in a nested span instead. */
-.caret-row .say{position:absolute;top:0;font-size:13px;color:var(--text-muted);white-space:nowrap;
-  z-index:1}
+.caret-row .say{position:absolute;top:0;font-size:13px;color:var(--text-muted);white-space:nowrap}
 .caret-row .say i{font-style:normal;font-size:11.5px;line-height:20px;display:inline-block}
-.caret-row .say em{font-style:normal;letter-spacing:.06em;font-size:11px}
-/* The label+description grid: one row per mutant, grid-auto-rows pinned to the same 20px every
-   line height elsewhere in this pane already uses, so a label's rowspan (via grid-row:span N) lines
-   up with its own fg-band without either side recomputing the other's offsets by hand. The label
-   column is max-content: it fits the widest mutator name actually present (never a fixed guess that
-   could truncate "statement-deletion" or waste space on "numeric"), and every row's label column
-   shares that same width regardless of when its group's label repeats, which is what keeps every
-   group's description text starting at one shared x, the thing a plain <br>-joined list never had.
-   BOTH columns max-content, never `auto`: this grid's container (.say) is itself shrink-to-fit and
-   `white-space:nowrap`, and an `auto` track asks "how much space is available", a question with no
-   answer inside a box whose own size is "however much my content needs" -- that circular sizing
-   query pathologically hung Chromium's layout on this exact nesting (grid-inside-nowrap-inside-
-   absolute, all shrink-to-fit) even though nothing here is an infinite JS loop. max-content asks
-   "how much does the content need" instead, which is answerable without looking at the
-   container. */
-.caret-row .fg-list{display:grid;grid-template-columns:max-content max-content;column-gap:10px;
-  grid-auto-rows:20px;align-items:center}
-.caret-row .fg-list .fg-label{grid-column:1;align-self:start;padding-top:1px;cursor:pointer}
-.caret-row .fg-list .fg-body{grid-column:2;white-space:nowrap;cursor:pointer}
-.caret-row .fg-list .fg-sel{color:var(--text);font-weight:700}
-.caret-row .fg-list .fg-unsel{color:var(--text-faint);font-weight:400}
+.caret-row .say em{font-style:normal;color:var(--text-muted);letter-spacing:.06em;font-size:11px}
 .row.active{background:var(--accent-soft)}
 
 /* ---- detail card ---- */
@@ -981,15 +947,6 @@ function onClick(e){
     paintSelection();
     return;
   }
-  // A finding's own row in the stacked caret annotation: every finding sharing a token is drawn
-  // there now, not just the selected one, so clicking a muted one is how you switch to it directly
-  // -- no need to cycle back through .mark first.
-  const fg = at('.fg-label') || at('.fg-body');
-  if (fg) {
-    const f = file().findings.find(x => x.fid === fg.dataset.fid);
-    if (f) pick(f);
-    return;
-  }
   const mark = at('.mark');
   if (mark) {
     const ids = mark.dataset.ids.split(',');
@@ -1196,13 +1153,11 @@ function paintSelection(){
   if (caretEl) { caretEl.remove(); caretEl = null; }
   if (hostEl) { hostEl.remove(); hostEl = null; }
 
-  let selMark = null;
   src.querySelectorAll('.mark').forEach(el => {
     const ids = el.dataset.ids.split(',');
     const on = !!sel && ids.indexOf(sel.fid) >= 0;
     el.classList.toggle('on', on);
     el.setAttribute('aria-pressed', on ? 'true' : 'false');
-    if (on) selMark = el;
   });
 
   const aside = $('#aside');
@@ -1216,52 +1171,21 @@ function paintSelection(){
   const row = src.querySelector('.row[data-line="' + sel.line + '"]');
   if (row) {
     row.classList.add('active');
-    // Caret row: the triangle pops out under the exact column, mirroring the console's `^`. Every
-    // finding sharing this token is stacked here, not just the selected one -- read back off the
-    // mark's own data-ids, since paintSource()'s groups are local to that function and kept nowhere
-    // between paints. The selected finding sorts first, so its label sits nearest the triangle.
-    const shareIds = selMark ? selMark.dataset.ids.split(',') : [sel.fid];
-    const groupFindings = shareIds.map(id => file().findings.find(x => x.fid === id))
-      .filter(Boolean);
-    groupFindings.sort((a, b) => (a.fid === sel.fid ? -1 : b.fid === sel.fid ? 1 : 0));
-
-    // One line PER ANGLE, stacked, with the label on a finding's first line only (grid-row:span
-    // covers the rest). A bare count ("2 angles") hid the very thing the reader wants; showing the
-    // first change plus "+1 more" put two numbers side by side meaning different things. Each line
-    // carries its own outcome, so a finding whose angles disagree shows that here rather than
-    // flattening it -- and now, a token shared by several findings shows all of them, not just
-    // whichever one is currently selected, since a static reader (or a screenshot) only ever sees
-    // one frame and "click to see the rest" is invisible in a frame.
-    let atRow = 0;
-    const bands = [];
-    const rows = [];
-    groupFindings.forEach(f => {
-      const isSel = f.fid === sel.fid;
-      const n = f.angles.length;
-      bands.push(`<div class="fg-band ${f.cls}${isSel ? ' fg-sel' : ''}"`
-        + ` style="top:${atRow * 20}px;height:${n * 20}px"></div>`);
-      f.angles.forEach((a, i) => {
-        const label = i === 0
-          ? `<span class="fg-label tag ${f.cls}${isSel ? ' fg-sel' : ''}" data-fid="${esc(f.fid)}"`
-            + ` style="grid-row:span ${n}">${esc(f.op)}</span>`
-          : '';
-        rows.push(label
-          + `<span class="fg-body${isSel ? ' fg-sel' : ' fg-unsel'}" data-fid="${esc(f.fid)}">`
-          + `${esc(a.change)} &middot; <em>${esc(a.tag)}</em></span>`);
-      });
-      atRow += n;
-    });
-
+    // Caret row: the triangle pops out under the exact column, mirroring the console's `^`. One
+    // line PER ANGLE, stacked, with the triangle on the first only. A bare count ("2 angles") hid
+    // the very thing the reader wants; showing the first change plus "+1 more" put two numbers
+    // side by side meaning different things. Each line carries its own outcome, so a finding
+    // whose angles disagree shows that here rather than flattening it.
+    const lines = sel.angles.map(a =>
+      `${esc(a.change)} &middot; <em>${esc(a.tag)}</em>`).join('<br>');
     caretEl = document.createElement('div');
     caretEl.className = 'caret-row';
-    caretEl.style.height = (atRow * 20) + 'px';
+    caretEl.style.height = (sel.angles.length * 20) + 'px';
     caretEl.innerHTML = `<div class="ln"></div><div class="car">`
-      + bands.join('')
       + `<span class="tri" style="left:calc(12px + ${sel.col - 1}ch)">&#9650;</span>`
       // Anchored to the token's START, the same origin as the triangle, so the gap between them
       // is a constant 2ch. Anchoring to `colEnd` made the gap grow with token length.
-      + `<span class="say" style="left:calc(12px + ${sel.col + 1}ch)">`
-      + `<i><div class="fg-list">${rows.join('')}</div></i></span>`
+      + `<span class="say" style="left:calc(12px + ${sel.col + 1}ch)"><i>${lines}</i></span>`
       + `</div>`;
     row.after(caretEl);
     if (NARROW.matches) {
