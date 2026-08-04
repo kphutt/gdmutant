@@ -70,7 +70,7 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. |
 | `--timeout <seconds>` | 10x the baseline run | Per-mutant test timeout. |
 | `--require-clean` / `--no-require-clean` | warn only | Refuse to run on an uncommitted source file. |
-| `--trust-config` | off | Act on `.gdmutant.toml`'s `command`/`godot` keys. |
+| `--trust-config` | off | Act on `.gdmutant.toml`'s `command`/`godot`/`project` keys. |
 | `--progress {auto,plain,none}` | `auto` | How much the run narrates itself while it works. |
 | `--dry-run` | off | List the mutants without running any tests. |
 
@@ -155,6 +155,7 @@ gdmutant reads `.gdmutant.toml` from the directory it runs in. Its keys seed the
 flags of the same name (an explicit flag on the command line still wins):
 
 ```toml
+# project needs --trust-config too, see below
 project = "."
 runner = "command"
 # command and godot need --trust-config, see below
@@ -163,10 +164,12 @@ command = "godot --headless --script res://tests/run_tests.gd"
 # exclude = ["*_generated.gd", "*/vendor/*"]
 ```
 
-Two of those keys name a program gdmutant would execute: `command` and `godot`. In a checkout you
-did not write, that file is somebody else's instruction about what runs on your machine, so
-gdmutant refuses to act on those two and exits 2 instead, even if you also pass `--command`/
-`--godot` yourself, since the file naming a program is what needs your say-so, not just a
+Three of those keys are trust-required: `command` and `godot` name a program gdmutant would
+execute, and `project` names the directory every other operation is rooted in, the `cwd` of every
+subprocess and, under `--jobs N`, a tree copied once per worker. In a checkout you did not write,
+that file is somebody else's instruction about what runs and what gets read on your machine, so
+gdmutant refuses to act on those three and exits 2 instead, even if you also pass the matching
+flag yourself, since the file setting one of them at all is what needs your say-so, not just a
 disagreement between the file and the flag. The refusal fires on any run, `--dry-run` included, and
 it is the exit-2 cause most likely to surprise an agent working in a directory it did not create.
 
@@ -174,10 +177,10 @@ it is the exit-2 cause most likely to surprise an agent working in a directory i
 gdmutant run scripts --trust-config
 ```
 
-`--trust-config` acts on the file's `command` and `godot`. Use it only where the checkout is
-trusted. Otherwise, remove those two keys from `.gdmutant.toml` and pass them as flags instead.
-Every other key is read normally: none of them can decide what gets executed, so none of them ever
-need trust.
+`--trust-config` acts on the file's `command`, `godot`, and `project`. Use it only where the
+checkout is trusted. Otherwise, remove those keys from `.gdmutant.toml` and pass them as flags
+instead. Every other key is read normally: none of them can decide what gets executed or read, so
+none of them ever need trust.
 
 ### Exit codes (the contract)
 
@@ -192,8 +195,8 @@ need trust.
   - `--project` does not name an existing directory
   - `--require-clean` was set and gdmutant could not confirm git holds a copy of the source: a
     dirty tree, a file git ignores, a file outside any repository, or a machine with no git
-  - `.gdmutant.toml` sets `command` or `godot` and `--trust-config` was not passed, or that file
-    cannot be read or holds a value of the wrong type
+  - `.gdmutant.toml` sets `command`, `godot`, or `project` and `--trust-config` was not passed, or
+    that file cannot be read or holds a value of the wrong type
   - the test-runner executable was not found: `godot`, or the program named by `--command`
   - `--runner command` with no `--command`, or a `--command` string that cannot be split into words
   - `--since` names a ref git cannot diff against
@@ -441,7 +444,8 @@ either. The action installs none of that.
 `fetch-depth: 0`. Its default fetches one commit, the base commit is not among them, and the
 gdmutant step then fails on a git error rather than mutating anything.
 
-If your project's `.gdmutant.toml` sets `command` or `godot`, add `args: --trust-config`. Without
+If your project's `.gdmutant.toml` sets `command`, `godot`, or `project`, add `args:
+--trust-config`. Without
 it gdmutant refuses to run at all and the step fails, for the reason given under [Project
 config](#project-config-gdmutanttoml) above.
 

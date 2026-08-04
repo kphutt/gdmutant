@@ -361,6 +361,53 @@ def test_run_creates_the_report_directory_when_missing(
     assert (result.tests, result.failed) == (2, False)
 
 
+def test_run_refuses_a_report_path_that_escapes_the_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Proof of the fix, not just its shape: a decoy file OUTSIDE the project survives run() instead
+    # of being deleted. Before the containment check, `report.unlink(missing_ok=True)` ran on
+    # whatever `Path(project_dir) / report_path` resolved to, with nothing stopping report_path
+    # from walking out via `../..` (or, worse, an absolute path — pathlib silently discards the
+    # left side of `/` when the right side is absolute, so an absolute report_path replaced
+    # project_dir entirely). A `.gdmutant.toml` in a cloned project sets report-path today with no
+    # --trust-config needed, so this was a delete-anything-on-the-victim's-machine primitive on a
+    # plain `gdmutant run` with no flags at all.
+    project = tmp_path / "project"
+    project.mkdir()
+    decoy = tmp_path / "decoy.txt"
+    decoy.write_text("precious", encoding="utf-8")
+
+    def fail_if_called(*args: object, **kwargs: object) -> object:
+        raise AssertionError("subprocess must never run once the path check refuses")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fail_if_called)
+    runner = GutRunner(report_path="../decoy.txt")
+    with pytest.raises(runner_mod.SourceOutsideProject, match="outside the project"):
+        runner.run(str(project))
+    assert decoy.read_text(encoding="utf-8") == "precious"  # never touched
+
+
+def test_run_refuses_an_absolute_report_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The other escape route: pathlib's `/` discards the left operand entirely when the right side
+    # is absolute, so `Path(project_dir) / "/etc/passwd"`-shaped input bypassed containment even
+    # though it contains no `..`.
+    project = tmp_path / "project"
+    project.mkdir()
+    decoy = tmp_path / "decoy.txt"
+    decoy.write_text("precious", encoding="utf-8")
+
+    def fail_if_called(*args: object, **kwargs: object) -> object:
+        raise AssertionError("subprocess must never run once the path check refuses")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fail_if_called)
+    runner = GutRunner(report_path=str(decoy))
+    with pytest.raises(runner_mod.SourceOutsideProject, match="outside the project"):
+        runner.run(str(project))
+    assert decoy.read_text(encoding="utf-8") == "precious"
+
+
 def test_run_warns_but_does_not_error_when_test_count_rises_above_baseline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

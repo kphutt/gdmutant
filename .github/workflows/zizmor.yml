@@ -46,11 +46,14 @@ jobs:
 
       # --persona=pedantic asserts SHA-pinning going forward (flags a tag-pinned or unpinned action,
       # not just a completely unpinned one) and requires each granted permission to carry a comment —
-      # the drift-prevention this floor control exists for. Scoped to .github/workflows/ (the only
-      # thing to lint). GH_TOKEN enables the online audits (known-vulnerable-actions, stale-action-refs,
-      # impostor-commit, ref-confusion, ref-version-mismatch); the default read-only token is enough.
-      # zizmor exits non-zero on any finding, which fails the step — this is a floor gate, not advisory.
+      # the drift-prevention this floor control exists for. Scoped to `.` (repo root), not just
+      # .github/workflows/: gdmutant also ships action.yml, a composite action other repos `uses:`
+      # and trust, and zizmor lints that file's own shell steps and action pins too — a second
+      # action definition later is covered for free. GH_TOKEN enables the online audits
+      # (known-vulnerable-actions, stale-action-refs, impostor-commit, ref-confusion,
+      # ref-version-mismatch); the default read-only token is enough. zizmor exits non-zero on any
+      # finding, which fails the step — this is a floor gate, not advisory.
       - name: Lint workflows (zizmor)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: uvx zizmor@1.14.2 --persona=pedantic .github/workflows/
+        run: uvx zizmor@1.14.2 --persona=pedantic .

@@ -608,6 +608,19 @@ def test_source_containing_a_script_close_cannot_break_out_of_either_data_block(
     assert json.loads(block)["files"]["a.gd"]["source"] == 'var s := "</script><img src=x>"'
 
 
+def test_source_containing_a_double_escape_sequence_cannot_blank_the_report() -> None:
+    # `<!--<script` needs no `/` at all: it is the exact sequence that pushes an HTML tokenizer
+    # into "script data double escaped" state, where the page's own real `</script>` closing tag
+    # is then read as literal text instead of a tag, and everything after it in the document goes
+    # unrendered. Escaping only `</` (the earlier fix) let this one through.
+    report = _report('var s := "<!--<script>x</script>-->"', [])
+    page = render_html(report)
+    assert "<!--<script" not in page
+    assert "<" not in page.split('id="mutation-test-report">', 1)[1].split("</script>", 1)[0]
+    block = page.split('id="mutation-test-report">', 1)[1].split("</script>", 1)[0]
+    assert json.loads(block)["files"]["a.gd"]["source"] == 'var s := "<!--<script>x</script>-->"'
+
+
 def test_the_inlined_reference_carries_only_the_operators_this_report_used() -> None:
     view = report_view(
         _report("return a > b\n", [_mutant(1, 10, 11, "comparison", ">=", "Survived")])

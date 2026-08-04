@@ -1279,7 +1279,9 @@ def test_main_uses_config_defaults_when_cli_flags_omitted(
     monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     runner = RecordingRunner()
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
-    assert main(["run", str(path), "--runner", "gdunit4"]) == 0
+    # A config-set `project` is trust-required: it becomes the cwd of every subprocess and, under
+    # --jobs, a tree shutil.copytree'd once per worker.
+    assert main(["run", str(path), "--runner", "gdunit4", "--trust-config"]) == 0
     assert runner.seen[0] == str(proj)  # from config, not the source's own directory
 
 
@@ -1293,7 +1295,22 @@ def test_main_cli_flag_overrides_config(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     runner = RecordingRunner()
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
-    assert main(["run", str(path), "--project", str(cli_proj), "--runner", "gdunit4"]) == 0
+    # `project` is trust-required even though the CLI flag wins in the end: the config file still
+    # set it, and that alone needs --trust-config (see _untrusted_config_keys).
+    assert (
+        main(
+            [
+                "run",
+                str(path),
+                "--project",
+                str(cli_proj),
+                "--runner",
+                "gdunit4",
+                "--trust-config",
+            ]
+        )
+        == 0
+    )
     assert runner.seen[0] == str(cli_proj)  # an explicit CLI flag wins over the config default
 
 
@@ -3128,7 +3145,7 @@ def test_a_config_supplied_command_is_refused_and_never_reaches_a_subprocess(
     assert launched == [], "the config's command must never be executed"
     assert rc == 2
     err = capsys.readouterr().err
-    assert "names a program for gdmutant to run ('command')" in err
+    assert "sets 'command'" in err
     assert "--trust-config" in err
 
 
@@ -3146,7 +3163,22 @@ def test_a_config_supplied_godot_binary_is_refused_even_behind_an_explicit_runne
 
     assert launched == [], "the config's godot binary must never be launched"
     assert rc == 2
-    assert "names a program for gdmutant to run ('godot')" in capsys.readouterr().err
+    assert "sets 'godot'" in capsys.readouterr().err
+
+
+def test_a_config_supplied_project_is_refused_alone_with_no_trust_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `project` alone, with neither `command` nor `godot` in the file: the gate must fire on
+    # `project` by itself, not only when it happens to accompany one of the other two keys.
+    proj = tmp_path / "elsewhere"
+    proj.mkdir()
+    source = _payload_config(tmp_path, monkeypatch, f"project = '{proj}'\n")
+
+    rc = cli.main(["run", source])
+
+    assert rc == 2
+    assert "sets 'project'" in capsys.readouterr().err
 
 
 def test_the_refusal_names_every_program_key_the_file_set(
@@ -3158,7 +3190,7 @@ def test_the_refusal_names_every_program_key_the_file_set(
 
     assert cli.main(["run", source]) == 2
 
-    assert "('command' and 'godot')" in capsys.readouterr().err
+    assert "sets 'command' and 'godot'" in capsys.readouterr().err
 
 
 def test_trust_config_lets_a_project_use_its_own_command(
@@ -3198,7 +3230,7 @@ def test_naming_the_program_on_the_command_line_still_needs_the_trust_flag(
 
     assert launched == []
     assert rc == 2
-    assert "names a program for gdmutant to run ('godot')" in capsys.readouterr().err
+    assert "sets 'godot'" in capsys.readouterr().err
 
 
 def test_a_config_that_names_no_program_still_needs_no_trust_flag(

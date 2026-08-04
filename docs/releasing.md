@@ -235,6 +235,12 @@ manual version becomes the way to reproduce a failure by hand.
   because the stake is worth a second look: a required check that nothing reports blocks every pull
   request forever.
 
+- Secret scanning and push protection are on. Both are GitHub Advanced Security features that are
+  free on a public repository but unavailable while it stays private, so they cannot be turned on
+  ahead of time, only right after the flip. *Pass:* `uv run python scripts/harden_github.py --check`
+  reports `secret_scanning` and `secret_scanning_push_protection` both `enabled`.
+  *Automatable:* `scripts/harden_github.py` (no `--check`) already converges both.
+
 ### What is still fixable afterwards
 - The GitHub Release's title and notes: editable at any time.
 - The repository's docs, including the survivor-reference URL the CLI prints. It tracks `main`, so a
