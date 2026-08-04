@@ -61,7 +61,7 @@ gdmutant run corpus/turn_order.gd --project corpus --runner gdunit4 --html
 Output:
 
 ```
-Survivors (7):
+...
 
   corpus\turn_order.gd:27   func can_act
 
@@ -80,11 +80,18 @@ Survivors (7):
 
   more   https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#boolean
 ──────────────────────────────────────────────────────────────────────────
-  ...
 
 Results
 
 Mutation score: 61.1%
+  killed:   11
+  timeout:  0  (counted as killed)
+  survived: 7
+  ignored:  0  (suppressed, excluded from score)
+  invalid:  0
+  error:    0
+
+Wrote HTML report to gdmutant-report-turn_order-<timestamp>.html. Open it in a browser.
 ```
 
 ## Point it at your own project
