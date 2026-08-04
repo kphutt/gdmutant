@@ -18,13 +18,13 @@
 
 ## What it is
 
-gdmutant mutates your GDScript (flips `>`↔`>=`, `and`↔`or`, bumps a number, deletes a statement),
-reruns your tests once per change, and reports the survivors.
-
 Coverage tells you a line *ran*. Mutations tell you if a bug there would be *caught*: a killed
 mutant means yes, a survivor means no. A standalone CLI, no AI required.
 
 Same idea, other languages: [mutmut](https://github.com/boxed/mutmut) for Python, [Stryker](https://stryker-mutator.io/) for JS/TS, [PIT](https://pitest.org/) for Java.
+
+gdmutant mutates your GDScript (flips `>`↔`>=`, `and`↔`or`, bumps a number, deletes a statement),
+reruns your tests once per change, and reports the survivors.
 
 The `--html` report, open on `turn_order.gd`. A survivor in the source, `and` marked on line 27:
 
@@ -135,9 +135,9 @@ gdmutant run ../my-project/src/module.gd --project ../my-project --runner gdunit
 See the [survivor reference](docs/survivors/README.md) for what
 `ignored`, `invalid` and `error` mean.
 
-## Catching Survivors
+## Killing Survivors
 
-Catch each survivor with a real test, or mark a genuine equivalent with `# gdmutant: ignore` and a
+Kill each survivor with a real test, or mark a genuine equivalent with `# gdmutant: ignore` and a
 reason ([details](docs/survivors/README.md)). Re-run until nothing survives. A mutation score
 isn't a target to hit, it's a direction to watch. There's no universal "good" number.
 
