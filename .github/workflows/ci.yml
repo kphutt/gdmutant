@@ -114,36 +114,19 @@ jobs:
     # both Linux and Windows to catch that bug class (encoding + path). Both runners are pinned
     # (never `-latest`) so a runner-image migration can't silently break us. macOS is intentionally
     # out — there is no macOS-specific code path to guard, and it would only add cost.
-    # Linux only. Windows was removed from this matrix to control Actions cost — Windows
-    # runners bill at 2x the Linux rate and this matrix was the largest line in a month that
-    # hit 100% of the budget (at which point Actions stops running and the gates go quiet).
     #
-    # The Windows coverage is NOT abandoned. The encoding/path bug class it guards — a cp1252
-    # console bug shipped once because CI was Linux-only — is covered two ways now: on the
-    # maintainer's own Windows machine as a discipline (`uv run python scripts/verify_local.py`,
-    # see AGENTS.md's Conventions section), and, as of ADR-0012, as an actual MECHANICAL gate:
-    # publish.yml runs this exact `verify` job's steps live, on both Linux and Windows runners,
-    # before anything reaches PyPI. That closes the old gap — "nothing enforces that mechanically,
-    # so it is a discipline, not a gate" no longer describes the Windows leg once a release ships.
-    #
-    # `Verify (windows-2025)` was removed from branch protection's required checks in the same
-    # change — a required check that can never report blocks every PR forever. This job's whole
-    # `on:` trigger is now also disabled for the same reason (ADR-0012) — see the top of this file.
-    #
-    # To restore Windows to THIS workflow (not the same thing as publish.yml's copy, which already
-    # covers both OSes): put `windows-2025` back in the matrix below AND re-add
-    # `Verify (windows-2025)` to the required checks. Both, or the gate is theatre.
-    #
-    # The single-entry matrix is deliberate: it keeps this job's check name
-    # `Verify (ubuntu-24.04)`, which WAS a required status check on main until ADR-0012 removed
-    # required checks alongside this workflow's triggers (see the top of this file). Dropping the
-    # matrix would rename the check to `Verify` — if triggers and required checks are ever
-    # restored together, the renamed check would never match, blocking every PR forever. It also
-    # makes restoring Windows a one-word edit.
+    # Windows was dropped from this matrix while private (Windows runners bill at 2x the Linux
+    # rate, and this matrix was the largest line in a month that hit 100% of the Actions budget) —
+    # restored 2026-08-04 alongside this workflow's triggers (ADR-0012's correction). The two
+    # halves of that restoration have to land together: an `on:` trigger with no Windows coverage
+    # and a Windows leg with no trigger to run it are each individually "the gate is theatre" —
+    # this file's own prior revision said so explicitly. Both are back now: this matrix, and
+    # `Verify (windows-2025)` is required again in branch protection (`scripts/harden_github.py`
+    # derives that list from this file, so it just needs a re-run once this lands).
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04]
+        os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
