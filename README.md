@@ -108,13 +108,11 @@ Wrote HTML report to gdmutant-report-turn_order-<timestamp>.html. Open it in a b
 pip install 'gdmutant==0.1.*'   # gdmutant is 0.x: pin the minor so a new one is a move you make on purpose
 ```
 
-Want a global command instead of a project dependency? [`pipx install
-gdmutant`](https://pipx.pypa.io/) or [`uv tool install
-gdmutant`](https://docs.astral.sh/uv/guides/tools/) work the same way, each in its own isolated
-environment.
-
 Pick your test runner with `--runner` (required). [GUT](https://github.com/bitwes/Gut) or
-[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4). Both need their godot addon already installed and Godot itself on PATH, or `--godot <path>`.
+[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) — Godot has no built-in test runner, so both
+ship as addons: a plugin folder (`addons/gut/` or `addons/gdUnit4/`) that lives inside a Godot
+project. Whichever you pick needs to already be installed there, in the project you're pointing
+gdmutant at. Godot itself needs to be on PATH, or point at it with `--godot <path>`.
 gdUnit4's usual test layout matches gdmutant's default `--tests res://test`, so a gdUnit4 command
 needs no `--tests` flag. GUT needs it spelled out: its stock layout puts suites in `test/unit/`
 instead, and GUT's own `-gdir` doesn't search subdirectories.
