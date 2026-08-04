@@ -576,7 +576,8 @@ code,pre,.code,.mono{font-family:var(--mono)}
 .legend .sw.sv{background:var(--danger-soft);box-shadow:0 0 0 1px var(--danger-border)}
 .legend .sw.kd{background:var(--good-soft);box-shadow:0 0 0 1px var(--good)}
 .legend .sw.ot{background:var(--surface-2);box-shadow:0 0 0 1px var(--border-strong)}
-.legend .sw.multi{background:var(--danger-soft);outline:2px dashed var(--danger);outline-offset:0}
+.legend .sw.multi{background:var(--danger-soft);outline:2px dashed var(--danger);
+  outline-offset:-1px}
 .legend code{font-size:11px;background:var(--surface-2);border-radius:3px;padding:0 3px}
 
 /* ---- source ---- */
