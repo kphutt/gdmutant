@@ -576,7 +576,8 @@ code,pre,.code,.mono{font-family:var(--mono)}
 .legend .sw.sv{background:var(--danger-soft);box-shadow:0 0 0 1px var(--danger-border)}
 .legend .sw.kd{background:var(--good-soft);box-shadow:0 0 0 1px var(--good)}
 .legend .sw.ot{background:var(--surface-2);box-shadow:0 0 0 1px var(--border-strong)}
-.legend .sw.multi{background:var(--danger-soft);outline:2px dashed var(--danger);outline-offset:0}
+.legend .sw.multi{background:var(--danger-soft);outline:2px dashed var(--danger);
+  outline-offset:-1px}
 .legend code{font-size:11px;background:var(--surface-2);border-radius:3px;padding:0 3px}
 
 /* ---- source ---- */
@@ -598,9 +599,17 @@ code,pre,.code,.mono{font-family:var(--mono)}
    shift the monospace grid the caret row aligns against.
    BACKGROUND ONLY, never an underline: an underline tight beneath `<` or `>` fuses with the glyph
    and reads as `<=` / `>=`, disguising the exact operator the mutation is about. Rings and
-   outlines sit outside the glyph box, so they are safe; anything touching the baseline is not. */
+   outlines sit outside the glyph box, so they are safe; anything touching the baseline is not.
+   Its OWN line-height, shorter than `.row`'s 22px: a mark's box is always exactly the row's line
+   height regardless of how many characters it wraps, so a wide mark like `return 0` reads as a
+   normal rounded rectangle while a single narrow character (`<`, `0`, `>`) reads as a tall pill,
+   the same height stretched over a fraction of the width. Tall enough on a short, tightly stacked
+   line to bleed the mark's own border into the row above or below it. A shorter line-height here
+   is safe: `.mark` is an inline-block with visible overflow, so its baseline (and so its glyph's
+   position against surrounding plain text) comes from its own text content, not from matching the
+   row's box height, and stays put whether this value is 16px or 22px. */
 .mark{--tone:var(--danger);--tone-soft:var(--danger-soft);--tone-border:var(--danger-border);
-  font:inherit;color:inherit;line-height:inherit;white-space:pre;border:0;margin:0;padding:0;
+  font:inherit;color:inherit;line-height:16px;white-space:pre;border:0;margin:0;padding:0;
   cursor:pointer;border-radius:3px;background:var(--tone-soft);position:relative;
   box-shadow:0 0 0 1px var(--tone-border)}
 .mark.kd{--tone:var(--good);--tone-soft:var(--good-soft);--tone-border:var(--good)}
@@ -619,8 +628,15 @@ code,pre,.code,.mono{font-family:var(--mono)}
    weight, REPLACING the solid one rather than sitting beside it, and a small count badge rides the
    corner. The ring is an outline and the badge is absolutely positioned, so neither takes layout
    space, shifts the monospace grid, or touches the baseline the caret row aligns to. */
-.mark.multi{box-shadow:none;outline:2px dashed var(--tone);outline-offset:0}
-.mark.multi::after{content:attr(data-n);position:absolute;top:-5px;right:-6px;
+/* Neither the outline nor the badge takes layout space (see above), which means neither one
+   reserves room in the row's own 22px line box either: a short line stacked tightly above or
+   below another mark (e.g. `return 0` directly above `if value > max_value:`) left the outline's
+   bottom edge and the badge's top edge bleeding into the neighboring row's own mark, reading as
+   two marks fused together. Pulling the outline in with a negative offset (rather than widening
+   the gap between rows, which is `.row`'s call, not this rule's) keeps the ring inside the mark's
+   own box instead of projecting past it, and the badge sits closer to the corner it decorates. */
+.mark.multi{box-shadow:none;outline:2px dashed var(--tone);outline-offset:-1px}
+.mark.multi::after{content:attr(data-n);position:absolute;top:-3px;right:-4px;
   font:700 9px/1 var(--sans);color:var(--bg-elevated);background:var(--tone);
   border-radius:999px;padding:1.5px 3.5px;pointer-events:none}
 .mark.on{background:var(--accent-soft);box-shadow:0 0 0 2px var(--accent)}
