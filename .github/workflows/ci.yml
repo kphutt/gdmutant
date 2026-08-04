@@ -2,28 +2,28 @@ name: CI
 
 # Security checks + the Python verify gate.
 #
-# NOT AUTO-TRIGGERED WHILE PRIVATE (ADR-0012). This ran on every `pull_request` + push to `main`
-# — every one of gdmutant's five jobs billed at least its own 1-minute minimum, and at ~12 runs/day
-# that alone approached this account's whole 3,000-min/month included allowance, on a repo that
-# doesn't ship anything on merge (only a tag push + a human "Publish" click ships, and that path is
-# gated separately — see publish.yml). Merge-time checks now run locally instead
-# (.pre-commit-config.yaml, pre-push stage — same commands, not a reimplementation, so local and
-# whatever runs here later cannot drift). publish.yml's release-time gate runs these same jobs live,
-# in the cloud, unconditionally, on the exact commit being published — a check gating a shipped
-# artifact must be one no local machine state can skip, so THAT path stays cloud regardless.
-#
-# TRIVIAL TO RE-ENABLE, BY DESIGN. Nothing about the jobs below changed to make this possible —
-# only this trigger block did. Once gdmutant is public, Actions is free and unlimited, and you'd
-# want this running automatically again for contributor-facing PR visibility. Restore it with:
-#
-#   on:
-#     pull_request:
-#     push:
-#       branches: [main]
-#
-# and remove `workflow_dispatch` below (or keep both — a manual trigger doesn't hurt).
+# AUTO-TRIGGERED AGAIN as of 2026-08-04, ahead of gdmutant going public. It ran on every
+# `pull_request` + push to `main` until 2026-07-29, when it was switched to `workflow_dispatch`
+# only (ADR-0012): every one of gdmutant's five jobs billed at least its own 1-minute minimum, and
+# at ~12 runs/day that alone approached this account's whole 3,000-min/month included allowance on
+# a *private* repo, on a project that doesn't ship anything on merge (only a tag push + a human
+# "Publish" click ships, and that path is gated separately — see publish.yml). Merge-time checks
+# ran locally instead in between (.pre-commit-config.yaml, pre-push stage — same commands, not a
+# reimplementation, so local and this workflow can't drift from each other). That trade only made
+# sense while private and solo: once gdmutant can take pull requests from anyone, nothing forces a
+# drive-by contributor to install the local hooks, so this cloud run is what actually checks their
+# PR — restoring it is what makes "the real gate is local" (CONTRIBUTING.md's old framing, rewritten
+# alongside this) stop being true for someone who skipped that step. Actions minutes are also free
+# and unlimited on a public repo, so the original cost problem doesn't apply going forward either.
+# `publish.yml`'s release-time gate still re-runs these same jobs live, in the cloud, unconditionally,
+# on the exact commit being published, regardless of this workflow's own history — a check gating a
+# shipped artifact must be one no local machine state (or CI history) can skip, so that path always
+# stayed cloud and is unaffected by this change. Full history: ADR-0012.
 on:
-  workflow_dispatch: # manual only — Actions -> CI -> "Run workflow", for an ad-hoc cloud check
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: # manual too — Actions -> CI -> "Run workflow", for an ad-hoc cloud check
 
 # Least privilege at the workflow level; jobs opt into more only where needed.
 permissions:

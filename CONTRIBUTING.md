@@ -19,13 +19,13 @@ gdmutant is a [uv](https://docs.astral.sh/uv/) project. Follow [`AGENTS.md`](AGE
 "Setup" to install uv and sync the pinned toolchain (`uv sync --frozen`), then run commands with
 `uv run` (e.g. `uv run pytest`).
 
-### Install the local checks, the real gate
+### Install the local checks — fast, optional feedback
 
-`ci.yml` doesn't run automatically on pull
-requests (see
-[ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md)). The lint, type, test, audit
-and license checks run on your own machine instead, via the git hooks in `.pre-commit-config.yaml`.
-They run the same commands CI would, not a reimplementation. Install them:
+`ci.yml` runs automatically on every pull request and push to `main` — lint, types, tests, audit,
+license, and a secret scan, all in the cloud, whether or not you set anything up locally. That's
+the real gate. The git hooks in `.pre-commit-config.yaml` exist to catch the same problems earlier,
+on your own machine, before you even push — not because the cloud check is otherwise missing.
+Installing them is optional but saves a round trip to the cloud run. Install them:
 
 ```sh
 uv run pre-commit install --hook-type pre-commit --hook-type pre-push
@@ -45,16 +45,10 @@ nothing. Get it from [the gitleaks install
 instructions](https://github.com/gitleaks/gitleaks#installing), then confirm with `uv run pre-commit
 run gitleaks`.
 
-Skipping the install does not leave your pull request unchecked, but it leaves most of it unchecked.
-Some workflows do trigger on `pull_request`, just not `ci.yml`: a workflow-security lint
-(`zizmor.yml`) on every pull request, plus the mutation check and the action smoke test on the paths
-they cover. Branch protection on `main` requires the workflow-security context, so a red result
-there blocks the merge whether or not you installed anything. To see what is really required rather
-than trusting this paragraph, run `gh api repos/<owner>/<repo>/branches/main/protection --jq
-'.required_status_checks.contexts'`. What none of those cover is the rest: lint, types, tests,
-audit, the license gate and the secret scan have no cloud run on a pull request, so they reach
-`main` unexamined if you skip the hooks. The one check nothing local can skip is the release-time
-gate (`publish.yml`), which re-runs everything live before a real release, not on every merge.
+The one check nothing, local or cloud, skips is the release-time gate (`publish.yml`), which
+re-runs everything live before a real release, not on every merge. See
+[ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md) for why merge-time and
+release-time are held to different rigor.
 
 ## Before you open a PR
 
@@ -82,12 +76,9 @@ GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-
 ## Pull request guidelines
 
 - One focused change per PR, with a clear description of what and why.
-- Lint, types, tests, audit, and secret scan all pass. The pre-commit and pre-push hooks
-  enforce most of this automatically if you installed both above (the secret scan runs at commit
-  time, the rest before a push, except the test suite, which you run yourself). Otherwise run the
-  commands by hand before opening the PR. The checks that do
-  run in the cloud on a pull request cover none of this (see "Install the local checks" above), so
-  it is on you.
+- Lint, types, tests, audit, and secret scan all pass. `ci.yml` checks all of this in the cloud on
+  every PR regardless, so it's covered either way — the pre-commit and pre-push hooks just surface
+  the same failures locally, sooner (see "Install the local checks" above).
 - New behavior comes with tests. This is a testing tool, and we hold ourselves to it.
 - Larger design changes are recorded as an ADR in `docs/decisions/` (append-only, see the
   existing records for the format) and, where relevant, reflected in `docs/design/`.
