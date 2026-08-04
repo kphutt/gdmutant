@@ -58,15 +58,15 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 |---|---|---|
 | `--project <dir>` | the source's own directory | The Godot project directory. |
 | `--runner {gdunit4,gut,command}` | *(required, no default)* | Which test harness runs the suite. See [Runner selection](#runner-selection) below. |
-| `--command <cmd>` | — | The test command, for `--runner command`. |
+| `--command <cmd>` | *(none)* | The test command, for `--runner command`. |
 | `--godot <path>` | `godot` | The Godot executable. |
 | `--tests <res://...>` | `res://test` | The test directory (gdUnit4's `-a` / GUT's `-gdir`). |
-| `--json [-\|path]` | off | Write the Stryker JSON report. `-` streams to stdout; a bare `--json` defaults to a timestamped filename. |
+| `--json [-\|path]` | off | Write the Stryker JSON report. `-` streams to stdout, and a bare `--json` defaults to a timestamped filename. |
 | `--html [path]` | off | Write a self-contained HTML report. A bare `--html` defaults to a timestamped filename. |
 | `--report-path <rel>` | per-runner default | Where the JUnit XML report lands, relative to the project. |
 | `--report step-summary` | off | Also write survivors to the GitHub Actions job summary (or stdout, if that variable is unset). |
-| `--since <ref>` | mutate everything | Only mutate lines changed since a git ref — the per-PR mode. |
-| `--exclude <glob>` | — | Skip matching files when expanding a directory (repeatable). |
+| `--since <ref>` | mutate everything | Only mutate lines changed since a git ref: the per-PR mode. |
+| `--exclude <glob>` | *(none)* | Skip matching files when expanding a directory (repeatable). |
 | `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. |
 | `--timeout <seconds>` | 10x the baseline run | Per-mutant test timeout. |
 | `--require-clean` / `--no-require-clean` | warn only | Refuse to run on an uncommitted source file. |
@@ -79,31 +79,31 @@ section is the nuance behind the flags that have edge cases, grouped by topic.
 
 #### Runner selection
 
-`--runner` is required; there is no default. `gdunit4` and `gut` are first-class peer JUnit
+`--runner` is required. There is no default. `gdunit4` and `gut` are first-class peer JUnit
 adapters (per-test detail). No JUnit XML? `--runner command --command "<test cmd>"` takes any
 command that exits non-zero on failure (e.g. a hand-rolled
 `godot --headless --script res://tests/run_tests.gd`). Under `--runner command` the executable
-comes from `--command` itself — `--godot` is not read in that mode, so put the full path inside
+comes from `--command` itself. `--godot` is not read in that mode, so put the full path inside
 `--command`. See [`docs/decisions/0011`](decisions/0011-runner-agnostic-adapter-seam.md) (the
 runner seam) and [`docs/decisions/0005`](decisions/0005-exit-code-test-runner-convention.md) (the
 exit-code fallback).
 
 #### Scoping a run
 
-- `--since <ref>` mutates only the lines changed since a git ref (e.g. `--since origin/main`) — the
+- `--since <ref>` mutates only the lines changed since a git ref (e.g. `--since origin/main`), the
   fast per-PR mode for CI. When nothing in the given paths changed since that ref, gdmutant runs no
   tests, exits 0, and still writes the report and job summary you asked for (an empty `mutants` list,
   no score), so `--json -` never needs a special case for it. A PR that touches no `.gd` file hits
   this every time.
 - `--dry-run` lists the mutants gdmutant *would* generate, without Godot and without running any
-  tests — a fast, dependency-free preview, useful before wiring up `--exclude` or scoping a large
+  tests: a fast, dependency-free preview, useful before wiring up `--exclude` or scoping a large
   file. Not a substitute for a real run: it can't tell you anything your tests would actually catch.
   `gdmutant example && gdmutant run gdmutant-hello-world.gd --dry-run` shows the shape on the bundled
   demo file.
 
 #### Parallelism
 
-`--jobs N` runs N mutants at once, each inside its own copy of the project — your own file is never
+`--jobs N` runs N mutants at once, each inside its own copy of the project. Your own file is never
 touched (see [How gdmutant writes to your files](#how-gdmutant-writes-to-your-files)). One
 restriction: every file to mutate must sit inside `--project`, or the run exits 2.
 
@@ -111,30 +111,30 @@ restriction: every file to mutate must sit inside `--project`, or the run exits 
 
 `--require-clean` refuses to run unless git holds a copy of the source it could restore (exit 2 on
 uncommitted changes, a gitignored file, a file outside any repository, or a machine with no git).
-Without it, gdmutant only *warns* and proceeds — it never blocks on a prompt, so it's safe for a
+Without it, gdmutant only *warns* and proceeds: it never blocks on a prompt, so it's safe for a
 headless agent. `--no-require-clean` overrides a `.gdmutant.toml` that sets `require-clean = true`,
 for the one run that has to go ahead on a dirty tree anyway.
 
 #### Job summary
 
 `--report step-summary` writes survivors, with their explanations, as Markdown to the GitHub Actions job summary
-(`$GITHUB_STEP_SUMMARY`), or to stdout when that variable is unset — see [Keeping stdout
+(`$GITHUB_STEP_SUMMARY`), or to stdout when that variable is unset: see [Keeping stdout
 parseable](#keeping-stdout-parseable) for how that interacts with `--json -`. `step-summary` is the
-only value it takes; repeating the flag changes nothing. It's advisory: a failed write only warns,
+only value it takes, and repeating the flag changes nothing. It's advisory: a failed write only warns,
 and never changes the score or exit code. [GitHub Actions](#github-actions) covers the common case,
 where the Action sets `$GITHUB_STEP_SUMMARY` itself.
 
 #### Progress output
 
 Nothing predicts a finish time: before the run gdmutant states the mutant count, during it a
-heartbeat reports what's finished, and the closing `Done in ...` line gives the real wall-clock —
+heartbeat reports what's finished, and the closing `Done in ...` line gives the real wall-clock:
 parse that, not the opening line. `--progress plain` forces the heartbeat cadence otherwise chosen
 automatically off a TTY or in CI. `--progress none` silences the whole stream, including that
 closing line, so use it only when you don't need the duration.
 
 ### Keeping stdout parseable
 
-With `--json -` the report is the only thing on stdout — the human summary and per-mutant progress
+With `--json -` the report is the only thing on stdout. The human summary and per-mutant progress
 go to stderr. No flag can quietly append to it:
 
 - `--html <path>` is safe to combine. The report goes to stdout, the page goes to the file, and the
@@ -165,7 +165,7 @@ command = "godot --headless --script res://tests/run_tests.gd"
 
 Two of those keys name a program gdmutant would execute: `command` and `godot`. In a checkout you
 did not write, that file is somebody else's instruction about what runs on your machine, so
-gdmutant refuses to act on those two and exits 2 instead — even if you also pass `--command`/
+gdmutant refuses to act on those two and exits 2 instead, even if you also pass `--command`/
 `--godot` yourself, since the file naming a program is what needs your say-so, not just a
 disagreement between the file and the flag. The refusal fires on any run, `--dry-run` included, and
 it is the exit-2 cause most likely to surprise an agent working in a directory it did not create.
@@ -174,7 +174,7 @@ it is the exit-2 cause most likely to surprise an agent working in a directory i
 gdmutant run scripts --trust-config
 ```
 
-`--trust-config` acts on the file's `command` and `godot`; use it only where the checkout is
+`--trust-config` acts on the file's `command` and `godot`. Use it only where the checkout is
 trusted. Otherwise, remove those two keys from `.gdmutant.toml` and pass them as flags instead.
 Every other key is read normally: none of them can decide what gets executed, so none of them ever
 need trust.
@@ -364,7 +364,7 @@ mutant is killable, it usually is. Write the test.
   is earlier on PATH, that's the one your shell runs, silently. `gdmutant --version` won't catch
   this: every install prints `gdmutant 0.1.0` until this project ships a second version. Check the
   path instead: `Get-Command gdmutant` (PowerShell) or `which gdmutant` (bash/zsh) shows which
-  `gdmutant.exe` actually answers — compare it against the path pip's warning named. Fix by adding
+  `gdmutant.exe` actually answers, and compare it against the path pip's warning named. Fix by adding
   that directory to PATH, or by uninstalling the older `gdmutant` first.
 - "GUT found no tests …" on the baseline run. Nothing is broken: `--tests` defaults to
   `res://test`, GUT's layout puts suites in `test/unit/`, and `-gdir` doesn't search
@@ -376,7 +376,7 @@ mutant is killable, it usually is. Write the test.
   `error: the GdUnit4 addon was not found in the project: addons/gdUnit4/ is missing under
   <project>. Install GdUnit4 (Godot Asset Library), or run without the addon via --runner command
   --command "<your headless test command>".` GUT's version reads the same way with `addons/gut/`.
-  GUT or gdUnit4 must already be installed and enabled in the project `--project` names; gdmutant
+  GUT or gdUnit4 must already be installed and enabled in the project `--project` names. gdmutant
   installs neither.
 - Everything survives. Usually the tests never ran: run your suite by hand first. Godot exits `0`
   even on a harness that fails to *compile*, so gate a `--command` harness on `can_instantiate()`.
@@ -424,18 +424,18 @@ either. The action installs none of that.
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `godot-version` | Yes | — | The Godot version to set up, e.g. `4.7.0`. |
+| `godot-version` | Yes | *(none)* | The Godot version to set up, e.g. `4.7.0`. |
 | `project-path` | No | `./` | The Godot project directory (`--project`). |
 | `paths` | No | the whole project | Source file(s)/directories to mutate, space-separated (gdmutant's positional targets). Excludes `addons/` and test files. |
 | `runner` | No | `gdunit4` | Test runner: `gdunit4`, `gut`, or `command` (`--runner`). |
 | `tests` | No | gdmutant's default, `res://test` | The test directory (`--tests`). |
-| `since` | No | mutate the full target | Only mutate lines changed since this git ref (`--since`) — the fast, per-PR diff-scoped mode. |
+| `since` | No | mutate the full target | Only mutate lines changed since this git ref (`--since`): the fast, per-PR diff-scoped mode. |
 | `args` | No | *(none)* | Extra raw arguments appended to the invocation, verbatim. |
 | `job-summary` | No | `true` | Write survivors (with explanations) to the job summary as Markdown (`--report step-summary`). Set `false` to skip. |
 | `godot-use-dotnet` | No | `false` | Set up the .NET (Mono) build of Godot instead of the standard build. |
-| `addon-version` | No | `installed` | How the test-runner addon is provided. Only `installed` (already vendored in your project) ships today; cloning the addon at a ref is a planned fast-follow. |
+| `addon-version` | No | `installed` | How the test-runner addon is provided. Only `installed` (already vendored in your project) ships today. Cloning the addon at a ref is a planned fast-follow. |
 | `ref` | No | the ref this Action was invoked at | The gdmutant git ref (tag/branch/SHA) to install from, during the pre-PyPI interim. |
-| `gdmutant-version` | No | *(unused)* | Reserved for the PyPI switch; ignored today, since the interim install uses `ref`. |
+| `gdmutant-version` | No | *(unused)* | Reserved for the PyPI switch. Ignored today, since the interim install uses `ref`. |
 
 `since` reads the base commit out of your clone, so the workflow's `actions/checkout` step needs
 `fetch-depth: 0`. Its default fetches one commit, the base commit is not among them, and the
