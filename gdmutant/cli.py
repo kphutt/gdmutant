@@ -1252,20 +1252,26 @@ _CONFIG_KEY_TO_DEST = {
 }
 _CONFIG_FILENAME = ".gdmutant.toml"
 
-#: The config keys whose value names a **program gdmutant will execute**: `command` is handed
-#: straight to the operating system, and `godot` is the binary every JUnit runner launches.
+#: The config keys gdmutant will not act on without `--trust-config`: `command` and `godot` name a
+#: **program gdmutant will execute**, and `project` names the directory every other operation is
+#: rooted in (the `cwd` of every subprocess, and — under `--jobs N` — a tree `shutil.copytree`d
+#: once per worker). A `project` outside the checkout a user actually meant to point gdmutant at
+#: (a config value of e.g. their home directory) turns a plain `gdmutant run` into copying or
+#: reading a tree they never chose, the same "this checkout decides what happens on your machine"
+#: problem `command`/`godot` already guard against, not merely a directory picked wrong.
 #:
 #: `.gdmutant.toml` is read from the working directory, so on a project you cloned it is a file
-#: somebody else wrote. Every other key it can set is inert — a directory, a glob, a number, a
-#: `res://` path — but these two decide what runs on your machine, which turns "point the mutation
-#: tester at this checkout" into "run whatever this checkout says". So the run refuses outright
-#: unless the person at the keyboard vouches for the file with ``--trust-config`` — no exception
-#: for also passing the same key as a flag, which never actually helped a project set one of these
-#: once in its own config and never repeat it: that legitimate case still needs ``--trust-config``
-#: every time either way, so the exception was one more thing to explain for no real benefit.
-#: `runner` is deliberately NOT here: it only picks *which* runner, and the program it would need
-#: still has to come from a trusted source.
-_EXECUTABLE_CONFIG_KEYS = ("command", "godot")
+#: somebody else wrote. Every OTHER key it can set is genuinely inert against this file's own
+#: reach — a glob, a number, a `res://` path relative to whatever `project` resolves to (itself
+#: gated, so a gated `project` bounds every path key that follows it, including `report-path`,
+#: which additionally refuses to resolve outside the project at all — see `_GodotJUnitRunner.run`).
+#: So the run refuses outright unless the person at the keyboard vouches for the file with
+#: ``--trust-config`` — no exception for also passing the same key as a flag, which never actually
+#: helped a project set one of these once in its own config and never repeat it: that legitimate
+#: case still needs ``--trust-config`` every time either way, so the exception was one more thing
+#: to explain for no real benefit. `runner` is deliberately NOT here: it only picks *which*
+#: runner, and the program it would need still has to come from a trusted source.
+_TRUST_REQUIRED_CONFIG_KEYS = ("command", "godot", "project")
 
 
 def _load_config(path: Path | None = None) -> dict[str, object] | None:
@@ -1324,31 +1330,35 @@ def _load_config(path: Path | None = None) -> dict[str, object] | None:
     return settings
 
 
-def _program_naming_keys(settings: dict[str, object]) -> list[str]:
-    """The `_EXECUTABLE_CONFIG_KEYS` this config actually sets, as the user wrote them."""
+def _untrusted_config_keys(settings: dict[str, object]) -> list[str]:
+    """The `_TRUST_REQUIRED_CONFIG_KEYS` this config actually sets, as the user wrote them."""
     return [
-        key for key in _EXECUTABLE_CONFIG_KEYS if settings.get(_CONFIG_KEY_TO_DEST[key]) is not None
+        key
+        for key in _TRUST_REQUIRED_CONFIG_KEYS
+        if settings.get(_CONFIG_KEY_TO_DEST[key]) is not None
     ]
 
 
-def _without_program_names(settings: dict[str, object]) -> dict[str, object]:
-    """`settings` with every program-naming key dropped — the version that is safe to trust."""
-    dropped = {_CONFIG_KEY_TO_DEST[key] for key in _EXECUTABLE_CONFIG_KEYS}
+def _without_untrusted_keys(settings: dict[str, object]) -> dict[str, object]:
+    """`settings` with every trust-required key dropped — the version that is safe to use."""
+    dropped = {_CONFIG_KEY_TO_DEST[key] for key in _TRUST_REQUIRED_CONFIG_KEYS}
     return {dest: value for dest, value in settings.items() if dest not in dropped}
 
 
 def _untrusted_config_message(keys: list[str]) -> str:
-    """The refusal shown when `.gdmutant.toml` names a program and nobody has vouched for it."""
+    """The refusal shown when `.gdmutant.toml` sets a trust-required key and nobody has vouched
+    for the file."""
     named = " and ".join(f"'{key}'" for key in keys)
     flags = " / ".join(f"--{key}" for key in keys)
     return (
-        f"error: {_CONFIG_FILENAME} names a program for gdmutant to run ({named}), so gdmutant "
-        "stopped instead of running it.\n"
+        f"error: {_CONFIG_FILENAME} sets {named}, which gdmutant will not act on without your "
+        "say-so, so gdmutant stopped instead of running.\n"
         f"  {_CONFIG_FILENAME} is read from the directory you are in. In a project you cloned, "
         "that file was written by\n"
-        "  somebody else, and these keys decide what gets executed on your machine, so gdmutant "
-        "will not act on\n"
-        "  them by itself, even if you also pass the same value yourself.\n"
+        "  somebody else, and these keys decide what runs (command/godot) or what gdmutant reads "
+        "and copies (project),\n"
+        "  so gdmutant will not act on them by itself, even if you also pass the same value "
+        "yourself.\n"
         "  If this project is yours, or you have read the file and trust it, add --trust-config.\n"
         f"  Otherwise remove {named} from {_CONFIG_FILENAME} and pass it as a flag instead "
         f"({flags}): with no matching key in the file, no trust is needed."
@@ -1455,8 +1465,8 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     run_parser.add_argument(
         "--trust-config",
         action="store_true",
-        help=f"act on the keys in {_CONFIG_FILENAME} that name a program to run "
-        f"({', '.join(_EXECUTABLE_CONFIG_KEYS)}). Without this they are refused, because that "
+        help=f"act on the keys in {_CONFIG_FILENAME} that gdmutant will not otherwise trust "
+        f"({', '.join(_TRUST_REQUIRED_CONFIG_KEYS)}). Without this they are refused, because that "
         "file comes from the project directory and a project you did not write could point them "
         "at anything.",
     )
@@ -1582,24 +1592,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = _load_config()
     if config is None:
         return 2  # a malformed/invalid .gdmutant.toml is a setup error
-    # Parse first with the program-naming keys withheld, so nothing the config file says can pick
-    # what runs before the user has had a chance to vouch for it. Only once --trust-config is seen
-    # on the command line are they parsed back in.
-    program_keys = _program_naming_keys(config)
-    parser = build_parser(_without_program_names(config) if program_keys else config)
+    # Parse first with the trust-required keys withheld, so nothing the config file says can pick
+    # what runs or what gdmutant reads/copies before the user has had a chance to vouch for it.
+    # Only once --trust-config is seen on the command line are they parsed back in.
+    untrusted_keys = _untrusted_config_keys(config)
+    parser = build_parser(_without_untrusted_keys(config) if untrusted_keys else config)
     args = parser.parse_args(argv)
     if args.command == "example":
         return _write_example(args.dest)
     if args.command == "run":
-        if program_keys:
-            # The file names a program gdmutant would execute — that alone needs the user's
-            # say-so, whether or not they also happen to pass the same key as a flag themselves.
-            # (An earlier version only refused when the file and the command line disagreed, which
-            # meant the one case it was supposed to make easy — a project's own config setting
-            # `command`/`godot` once, so nobody retypes it — still needed --trust-config every
-            # time, same as now; the exception bought nothing and was one more thing to explain.)
+        if untrusted_keys:
+            # The file sets a trust-required key — that alone needs the user's say-so, whether or
+            # not they also happen to pass the same key as a flag themselves. (An earlier version
+            # only refused when the file and the command line disagreed, which meant the one case
+            # it was supposed to make easy — a project's own config setting `command`/`godot` once,
+            # so nobody retypes it — still needed --trust-config every time, same as now; the
+            # exception bought nothing and was one more thing to explain.)
             if not args.trust_config:
-                print(_untrusted_config_message(program_keys), file=sys.stderr)
+                print(_untrusted_config_message(untrusted_keys), file=sys.stderr)
                 return 2
             args = build_parser(config).parse_args(argv)
         # Resolve a bare --json/--html (no path given) into a real, timestamped filename now, once,

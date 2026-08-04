@@ -1359,11 +1359,13 @@ open_();
 
 
 def _escape_for_script(payload: str) -> str:
-    """``</`` -> ``<\\/`` so nothing inside embedded source can close the ``<script>`` early.
+    """Every ``<`` -> ``\\u003c``, so nothing inside embedded source can affect the ``<script>``
+    parse, including sequences like ``<!--<script`` that need no ``/`` to push the HTML tokenizer
+    into "script data double escaped" state and swallow the page's own closing tag as literal text.
 
-    Valid JSON (``\\/`` escapes ``/``), so it round-trips on parse.
+    Valid JSON (``\\uXXXX`` is a standard string escape), so it round-trips on parse.
     """
-    return payload.replace("</", "<\\/")
+    return payload.replace("<", "\\u003c")
 
 
 def _head_stats(view: ReportView) -> str:

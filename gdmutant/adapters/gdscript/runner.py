@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
+from gdmutant.engine.loop import SourceOutsideProject
 from gdmutant.engine.runner import SuiteResult, SuiteTimeout, parse_junit_xml, with_filename
 
 _GDUNIT_CMD_TOOL = "res://addons/gdUnit4/bin/GdUnitCmdTool.gd"
@@ -177,12 +178,30 @@ class _GodotJUnitRunner:
         )
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        # Checked before any work happens, including the import warm-up below: no reason to spend a
+        # Godot boot on a run that's about to be refused anyway.
+        project = Path(project_dir).resolve()
+        report = (project / self.report_path).resolve()
+        if not report.is_relative_to(project):
+            # `Path.__truediv__` silently discards `project` if `report_path` is absolute, and
+            # `../` walks upward the ordinary way either path gets here: --report-path on the
+            # command line, or an untrusted project's own .gdmutant.toml. Every run below this
+            # point deletes whatever sits at `report` first (the freshness guard, right below), so
+            # a report path that escapes the project is a delete-anything primitive, not just a
+            # misconfiguration. Refuse instead of ever resolving outside the project. Reuses
+            # SourceOutsideProject (loop.py's "path outside the project" case for a source file)
+            # rather than a second, parallel exception for the same shape of problem.
+            raise SourceOutsideProject(
+                f"--report-path {self.report_path!r} resolves to {report}, outside the project "
+                f"{project}. gdmutant deletes this file before every run to guarantee it reads "
+                "this run's own result, never a stale one, so it refuses to point outside the "
+                "project it was given."
+            )
         # Warm Godot's import cache once (before the very first suite run) so the framework's
         # class_name types resolve on a cold checkout; a no-op if the engine already prepared — and
         # on every subsequent mutant.
         self.prepare(project_dir)
         budget = self.timeout if timeout is None else timeout
-        report = Path(project_dir) / self.report_path
         # Ensure the report's parent directory exists. GUT (unlike GdUnit4, which creates its own
         # reports/report_N/) will NOT create the directory for -gjunit_xml_file: on a fresh project
         # with no reports/ dir it runs the whole suite green but then fails to export with "Could
