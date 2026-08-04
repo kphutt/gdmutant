@@ -46,6 +46,11 @@ gdmutant is a Python CLI (Python 3.12+):
 pip install gdmutant
 ```
 
+Want a global command instead of a project dependency? [`pipx install
+gdmutant`](https://pipx.pypa.io/) or [`uv tool install
+gdmutant`](https://docs.astral.sh/uv/guides/tools/) work the same way, each in its own isolated
+environment.
+
 The README's [Quickstart](../README.md#quickstart) has the full setup.
 
 ### Invoke
