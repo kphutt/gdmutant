@@ -7,7 +7,7 @@ name = "gdmutant"
 version = "0.1.0"                       # the packaged version (see CHANGELOG.md). A release tag
                                         # must declare the same number — scripts/check_release_tag.py
                                         # fails the release path otherwise.
-description = "An AST-based, language-agnostic mutation-testing tool for GDScript/Godot."
+description = "Mutation testing for GDScript and Godot: find the bugs your green tests would miss."
 # `readme` is dynamic, not a static path: the long description is README.md with its relative
 # image paths rewritten to absolute ones at build time. See the fancy-pypi-readme hook below.
 dynamic = ["readme"]
