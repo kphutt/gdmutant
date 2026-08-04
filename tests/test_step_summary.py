@@ -46,7 +46,7 @@ def test_job_summary_markdown_renders_score_tally_and_the_survivor_explanation()
         )
     )
     md = job_summary_markdown(run)
-    assert md.startswith("## gdmutant — mutation report")
+    assert md.startswith("## gdmutant: mutation report")
     assert "**Mutation score: 50.0%**" in md
     assert "1 killed · 0 timeout · **1 survived** · 0 ignored · 0 invalid · 0 error" in md
     assert "### Surviving mutants (1)" in md
@@ -69,7 +69,7 @@ def test_job_summary_markdown_includes_the_source_line_and_change_note_when_read
     md = job_summary_markdown(MutationRun((MutantOutcome(m, Verdict.SURVIVED),)))
     assert "```gdscript" in md
     assert "    return a and b" in md  # the tab was expanded to four spaces
-    assert "Changed `and` to `or` — every test still passed." in md
+    assert "Changed `and` to `or`: every test still passed." in md
 
 
 def test_job_summary_markdown_shows_a_line_one_survivor_source(tmp_path: Path) -> None:
@@ -98,7 +98,7 @@ def test_job_summary_markdown_renders_a_deletion_change_note(tmp_path: Path) -> 
     path.write_text("func f():\n\tprint(x)\n", encoding="utf-8")
     m = Mutant(str(path), Span(2, 2, 2, 10), "statement-deletion", "print(x)", "")
     md = job_summary_markdown(MutationRun((MutantOutcome(m, Verdict.SURVIVED),)))
-    assert "This whole line was removed — every test still passed." in md
+    assert "This whole line was removed: every test still passed." in md
 
 
 def test_job_summary_markdown_renders_a_removal_change_note_for_an_empty_replacement(
@@ -110,7 +110,7 @@ def test_job_summary_markdown_renders_a_removal_change_note_for_an_empty_replace
     path.write_text("func f(a):\n\treturn not a\n", encoding="utf-8")
     m = Mutant(str(path), Span(2, 9, 2, 12), "logical-not", "not", "")
     md = job_summary_markdown(MutationRun((MutantOutcome(m, Verdict.SURVIVED),)))
-    assert "Removed `not` — every test still passed." in md
+    assert "Removed `not`: every test still passed." in md
 
 
 def test_job_summary_markdown_says_all_caught_when_there_are_no_survivors() -> None:
@@ -141,7 +141,7 @@ def test_emit_step_summary_writes_markdown_to_the_github_step_summary_path(
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     _emit_step_summary(MutationRun((_boolean_survivor(),)))
     written = summary.read_text(encoding="utf-8")
-    assert "## gdmutant — mutation report" in written
+    assert "## gdmutant: mutation report" in written
     assert "**The gap.**" in written  # the explanation, not just a list
 
 
@@ -156,7 +156,7 @@ def test_emit_step_summary_appends_rather_than_truncating(
     _emit_step_summary(MutationRun((_boolean_survivor(),)))
     written = summary.read_text(encoding="utf-8")
     assert written.startswith("PRIOR STEP\n")  # the earlier step's content is preserved
-    assert "## gdmutant — mutation report" in written
+    assert "## gdmutant: mutation report" in written
 
 
 def test_emit_step_summary_prints_to_stdout_when_the_env_var_is_unset(
@@ -165,7 +165,7 @@ def test_emit_step_summary_prints_to_stdout_when_the_env_var_is_unset(
     # No $GITHUB_STEP_SUMMARY (running locally) -> the Markdown goes to stdout instead.
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     _emit_step_summary(MutationRun((_boolean_survivor(),)))
-    assert "## gdmutant — mutation report" in capsys.readouterr().out
+    assert "## gdmutant: mutation report" in capsys.readouterr().out
 
 
 def test_emit_step_summary_warns_and_continues_on_a_write_error(
@@ -191,7 +191,7 @@ def test_run_mutation_step_summary_writes_survivors_to_the_summary_file(
     rc = run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), ">="), step_summary=True)
     assert rc == 0
     written = summary.read_text(encoding="utf-8")
-    assert "## gdmutant — mutation report" in written
+    assert "## gdmutant: mutation report" in written
     assert "Surviving mutants" in written
 
 
@@ -249,7 +249,7 @@ def test_main_report_step_summary_writes_the_job_summary_end_to_end(
     )
     assert rc == 0
     written = summary.read_text(encoding="utf-8")
-    assert "## gdmutant — mutation report" in written
+    assert "## gdmutant: mutation report" in written
     assert "Surviving mutants" in written
 
 

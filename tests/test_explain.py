@@ -31,7 +31,7 @@ _GOLDEN_COMPARISON = """\
   V.gd:2   func is_greater
 
       2 |     if _major > other._major:
-        |               ^  changed  >  to  >= — every test still passed
+        |               ^  changed  >  to  >=: every test still passed
 
   gap    Your tests pass whether this says `>` or `>=`. They run this
          line, but never with an input the two decide differently, so what
@@ -62,7 +62,7 @@ def test_full_block_shows_code_caret_and_enclosing_func() -> None:
     out = "\n".join(render_survivor(_mutant("comparison", ">", ">=", line=2, col=11), src))
     assert "Foo.gd:2   func is_greater" in out  # enclosing function from the AST scan
     assert "if _major > other._major:" in out  # the source line, as written
-    assert "^  changed  >  to  >= — every test still passed" in out
+    assert "^  changed  >  to  >=: every test still passed" in out
     assert "gap    Your tests pass whether this says `>` or `>=`" in out
     assert "risk   Passing here is false confidence" in out
     assert "start  Add a test that reaches this line with two equal operands" in out
@@ -99,7 +99,7 @@ def test_out_of_range_line_is_treated_as_no_source() -> None:
 def test_logical_not_removal_reads_as_removed_not_a_deleted_line() -> None:
     src = ["\tif not ready:"]
     out = "\n".join(render_survivor(_mutant("logical-not", "not", "", line=1, col=5), src))
-    assert "removed  not — every test still passed" in out
+    assert "removed  not: every test still passed" in out
     assert "this whole line was removed" not in out
     assert "-> " not in out  # no dangling arrow
 
@@ -108,7 +108,7 @@ def test_statement_deletion_reads_as_whole_line_removed() -> None:
     src = ["\tprint(x)"]
     m = _mutant("statement-deletion", "print(x)", "", line=1, col=2)
     out = "\n".join(render_survivor(m, src))
-    assert "this whole line was removed — every test still passed" in out
+    assert "this whole line was removed: every test still passed" in out
     assert "gap    Your tests pass with this line removed entirely" in out
 
 
@@ -168,7 +168,7 @@ def test_survivor_report_fields_use_the_fallback_for_an_unknown_operator() -> No
     # An operator with no bespoke copy falls back to the safe generic narrative (same _FALLBACK the
     # console block uses), so an unrecognized operator still gets non-empty report fields.
     description, status_reason = survivor_report_fields(_mutant("custom-op", "x", "y"))
-    assert description == "Your tests pass with this change applied — nothing distinguishes it."
+    assert description == "Your tests pass with this change applied: nothing distinguishes it."
     assert status_reason == (
         "A change here would pass every test.\n\nAdd a test that fails under this exact change."
     )

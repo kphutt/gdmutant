@@ -66,7 +66,7 @@ Survivors (7):
   corpus\turn_order.gd:27   func can_act
 
      27 |     return alive and not stunned
-        |                  ^  changed  and  to  or — every test still passed
+        |                  ^  changed  and  to  or: every test still passed
 
   gap    Your tests pass whether this needs both sides (`and`) or just one
          (`or`). No test covers the case that tells them apart: the

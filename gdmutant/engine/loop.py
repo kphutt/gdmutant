@@ -298,7 +298,7 @@ class _Progress:
         been found so far. No finish time: see `_HEARTBEAT_SECS`' note for the run that settled
         that."""
         return (
-            f"… {self.done}/{self.total} done in {_format_duration(elapsed)} — "
+            f"… {self.done}/{self.total} done in {_format_duration(elapsed)}: "
             f"{self.survived} survived, {self.file_timeouts} timed out."
         )
 
@@ -321,7 +321,7 @@ class _Progress:
             if self.timeouts
             else ""
         )
-        self.emit(f"Done in {_format_duration(elapsed)} — {self.ran} {unit}{cost}.")
+        self.emit(f"Done in {_format_duration(elapsed)}. {self.ran} {unit}{cost}.")
 
 
 def _plain_beat_every(total: int) -> int:
@@ -447,8 +447,8 @@ def _run_baseline(
         raise BaselineFailed(
             f"the unmutated (baseline) test suite for {project_dir!r} reported 0 tests. Nothing "
             "ran, so nothing can be detected: every mutant would come back SURVIVED and the whole "
-            "report would be false. This is a discovery or configuration problem rather than a red "
-            "suite — check that the runner is pointed at your tests (--tests, or --command for a "
+            "report would be false. This is a discovery or configuration problem, not a red suite: "
+            "check that the runner is pointed at your tests (--tests, or --command for a "
             "custom harness) and that the suite runs on its own."
         )
     per_mutant_timeout = timeout if timeout is not None else _derive_timeout(baseline_secs)

@@ -63,28 +63,28 @@ _EXPLAIN: dict[str, tuple[str, str, str]] = {
     "constant": (
         "Your tests pass whether this is `{a}` or `{b}`. Nothing they assert depends on the value, "
         "so it is invisible to your tests.",
-        "This could be flipped — by accident or a bad merge — and nothing would fail. Whatever it "
+        "This could be flipped (by accident or a bad merge) and nothing would fail. Whatever it "
         "controls is effectively untested.",
         "Add a test that exercises the behavior this value controls and assert it matches.",
     ),
     "numeric": (
         "Your tests pass whether this number is `{a}` or `{b}`. No test pins the exact "
         "value or the boundary it sets.",
-        "An off-by-one here — a bad edit or a wrong assumption — would pass every test.",
+        "An off-by-one here (a bad edit or a wrong assumption) would pass every test.",
         "Add a test at the boundary this number sets (one input on each side) and assert "
         "which side each lands on.",
     ),
     "logical-not": (
         "Your tests pass whether this condition is negated or not. No test runs this branch with "
         "the condition both ways.",
-        "The guard could be inverted and nothing would fail — the wrong branch runs unchecked.",
+        "The guard could be inverted and nothing would fail: the wrong branch runs unchecked.",
         "Add a test that makes the condition true and another that makes it false, then "
         "assert which branch runs each time.",
     ),
     "compound-assign": (
         "Your tests pass whether this update is `{a}` or `{b}`. Nothing pins the "
         "accumulated value, so the two look the same.",
-        "The wrong update here — a typo or a bad merge — would pass every test.",
+        "The wrong update here (a typo or a bad merge) would pass every test.",
         "Add a test that drives several updates and asserts the exact accumulated value.",
     ),
     "modulo": (
@@ -102,11 +102,11 @@ _EXPLAIN: dict[str, tuple[str, str, str]] = {
         "running, so its whole effect is unchecked.",
         "This line could be dropped in a refactor and no test would notice. Anything "
         "relying on its effect is unguarded.",
-        "Add a test that asserts this line's effect — something that fails if the line is gone.",
+        "Add a test that asserts this line's effect: something that fails if the line is gone.",
     ),
 }
 _FALLBACK = (
-    "Your tests pass with this change applied — nothing distinguishes it.",
+    "Your tests pass with this change applied: nothing distinguishes it.",
     "A change here would pass every test.",
     "Add a test that fails under this exact change.",
 )
@@ -130,26 +130,26 @@ _ENUM_START_RE = re.compile(r"^\s*enum\b")
 
 _ASSERT_EXPLAIN = (
     "This mutant sits inside an `assert`, and your tests pass either way. A weakened assertion "
-    "only behaves differently on an input the original would have rejected — and a failed assert "
+    "only behaves differently on an input the original would have rejected. A failed assert "
     "aborts the whole Godot process, which a test running inside that process cannot observe as "
     "anything but its own death. So no in-process test can kill this one.",
     "Low, and it is not a gap in your tests. The assert guards a condition your callers are "
     "supposed to already satisfy; the real risk is reading a score built from mutants like this "
     "one as if every survivor were actionable.",
     "Treat it as a legitimate survivor. If you want it out of the report, mark the line with "
-    "`# gdmutant: ignore` — it stays visible as `ignored` and drops out of the score. Only reach "
+    "`# gdmutant: ignore`: it stays visible as `ignored` and drops out of the score. Only reach "
     "for a test if the condition is one real callers can actually violate, in which case the "
     "check belongs in a branch that returns or emits an error, not in an assert.",
 )
 _ENUM_EXPLAIN = (
     "This mutant changes an `enum` member's value, and your tests pass either way. Code that "
-    "refers to the member by name moves with it — both sides of `cell == Cell.FLOOR` change "
-    "together — so nothing your tests observe reads the number itself.",
+    "refers to the member by name moves with it (both sides of `cell == Cell.FLOOR` change "
+    "together), so nothing your tests observe reads the number itself.",
     "Usually none: most enums are purely symbolic. It matters when the number is read AS a "
-    "number — a bitflag enum combined with `|` or `&`, or a value written to a save file, sent "
+    "number: a bitflag enum combined with `|` or `&`, or a value written to a save file, sent "
     "over a network, or handed to a shader or another program. There this really is an uncaught "
     "bug.",
-    "First decide whether the number matters at all. If it does, pin it — assert the concrete "
+    "First decide whether the number matters at all. If it does, pin it: assert the concrete "
     "value, or round-trip it through whatever reads it as a number. If every use is by name this "
     "is an equivalent mutant: mark the line `# gdmutant: ignore` with your reason, or leave it. "
     "gdmutant reads one file at a time, so it cannot make that call for you.",
@@ -453,7 +453,7 @@ def render_survivor(mutant: Mutant, source_lines: list[str] | None) -> list[str]
             change = f"removed  {a}"  # e.g. a `not` token dropped (logical-not)
         else:
             change = f"changed  {a}  to  {b}"
-        out.append(f"        | {' ' * caret_at}^  {change} — every test still passed")
+        out.append(f"        | {' ' * caret_at}^  {change}: every test still passed")
         out.append("")
     out += _block("gap", gap)
     out.append("")

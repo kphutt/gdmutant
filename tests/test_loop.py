@@ -538,7 +538,7 @@ def test_heartbeat_reports_measured_progress_and_no_finish_time() -> None:
     for verdict in [Verdict.KILLED, Verdict.SURVIVED, Verdict.TIMEOUT]:
         clock.record(verdict, 1.0)
     clock.beat(force=True)
-    assert lines[-1] == "… 3/18 done in 0s — 1 survived, 1 timed out."
+    assert lines[-1] == "… 3/18 done in 0s: 1 survived, 1 timed out."
     assert "left" not in lines[-1] and "~" not in lines[-1]
 
 
@@ -555,7 +555,7 @@ def test_heartbeat_waits_for_its_interval(monkeypatch: pytest.MonkeyPatch) -> No
     assert lines == []  # far too soon
     now[0] += loop_mod._HEARTBEAT_SECS
     clock.record(Verdict.KILLED, 1.0)
-    assert lines == [f"… 2/100 done in {int(loop_mod._HEARTBEAT_SECS)}s — 0 survived, 0 timed out."]
+    assert lines == [f"… 2/100 done in {int(loop_mod._HEARTBEAT_SECS)}s: 0 survived, 0 timed out."]
 
 
 def test_plain_style_needs_both_the_slower_clock_and_a_tenth_of_the_file(
@@ -574,7 +574,7 @@ def test_plain_style_needs_both_the_slower_clock_and_a_tenth_of_the_file(
     assert lines == []  # … but only 1 of the 10 mutants that rule also wants
     for _ in range(9):
         clock.record(Verdict.KILLED, 1.0)
-    assert lines == ["… 10/100 done in 10m 0s — 0 survived, 0 timed out."]
+    assert lines == ["… 10/100 done in 10m 0s: 0 survived, 0 timed out."]
 
 
 def test_plain_beat_every_is_a_tenth_of_the_file_but_never_zero() -> None:
@@ -597,7 +597,7 @@ def test_a_forced_heartbeat_always_closes_a_file(monkeypatch: pytest.MonkeyPatch
         clock.record(Verdict.KILLED, 1.0)
     assert lines == []  # no interval elapsed
     clock.beat(force=True)
-    assert lines == ["… 4/4 done in 0s — 0 survived, 0 timed out."]
+    assert lines == ["… 4/4 done in 0s: 0 survived, 0 timed out."]
 
 
 def test_progress_style_none_silences_the_heartbeat_but_not_the_closing_line() -> None:
@@ -635,7 +635,7 @@ def test_closing_line_breaks_out_the_timeout_cost(monkeypatch: pytest.MonkeyPatc
         clock.record(Verdict.TIMEOUT, 30.0)
     now[0] += 392.0
     clock.finish()
-    assert lines == ["Done in 6m 32s — 18 mutants, 8 timed out (4m 0s of that)."]
+    assert lines == ["Done in 6m 32s. 18 mutants, 8 timed out (4m 0s of that)."]
 
 
 def test_closing_line_adds_nothing_extra_when_nothing_timed_out(
@@ -653,7 +653,7 @@ def test_closing_line_adds_nothing_extra_when_nothing_timed_out(
     clock.record(Verdict.KILLED, 2.0)
     now[0] += 25.0
     clock.finish()
-    assert lines == ["Done in 25s — 1 mutant."]
+    assert lines == ["Done in 25s. 1 mutant."]
 
 
 def test_timeout_cost_is_measured_not_multiplied_out() -> None:

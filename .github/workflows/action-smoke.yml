@@ -116,7 +116,7 @@ jobs:
               check=True,
           )
           print(result.stdout)
-          for needle in ("## gdmutant — mutation report", "Surviving mutants", "**The gap.**"):
+          for needle in ("## gdmutant: mutation report", "Surviving mutants", "**The gap.**"):
               if needle not in result.stdout:
                   sys.exit(f"the step-summary reporter did not emit {needle!r}")
           print("OK: --report step-summary emitted the survivor explanations")
