@@ -109,7 +109,9 @@ pip install 'gdmutant==0.1.*'   # gdmutant is 0.x: pin the minor so a new one is
 ```
 
 Pick your test runner with `--runner` (required). [GUT](https://github.com/bitwes/Gut) or
-[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4). Both need their godot addon already installed and Godot itself on PATH, or `--godot <path>`.
+[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) — both are Godot addons, so whichever you
+pick needs to already be installed in *your* project. Godot itself needs to be on PATH, or point at
+it with `--godot <path>`.
 gdUnit4's usual test layout matches gdmutant's default `--tests res://test`, so a gdUnit4 command
 needs no `--tests` flag. GUT needs it spelled out: its stock layout puts suites in `test/unit/`
 instead, and GUT's own `-gdir` doesn't search subdirectories.
