@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -3587,16 +3588,30 @@ def test_a_dirty_symlink_target_is_named_in_the_message(tmp_path: Path) -> None:
     assert os.path.realpath(str(other / "f.gd")) in backup.reason
 
 
-def test_an_ordinary_file_is_named_once_and_only_once(tmp_path: Path) -> None:
+def test_an_ordinary_file_is_named_once_and_only_once() -> None:
     # The note is for a source whose bytes live somewhere else. A file that is its own target must
     # not collect it: a message that says "(resolved to ...)" about a path the user typed reads as
     # gdmutant having found something, when it found nothing. Asking `Path.absolute()` instead of
     # `os.path.abspath` is what puts it there -- `absolute()` only prefixes the working directory
     # and never follows a link, so every file under a symlinked DIRECTORY looks moved to it.
-    path = _gd(tmp_path)
+    #
+    # `os.path.relpath` (used below to build a relative-path test input, not under test itself)
+    # defaults its `start` to the CWD, and raises `ValueError` if that CWD is on a different drive
+    # than the file -- exactly gdmutant's own `--jobs` isolation-copy check works around in
+    # `engine/loop.py`. A hosted Windows runner's checkout and pytest's `tmp_path` routinely land on
+    # different drives (checkout on `D:`, `%TEMP%` on `C:`); a local dev machine usually has both on
+    # `C:`, which is why this only ever broke in CI. `tmp_path` is deliberately not used here:
+    # `tempfile.TemporaryDirectory(dir=".")` creates the scratch directory *inside the repo checkout
+    # itself*, same drive as the cwd by construction, without ever changing the process's actual
+    # working directory -- chdir is banned repo-wide (see
+    # test_mutation_baseline_inputs.py::test_no_test_moves_the_process_to_another_directory) because
+    # mutmut resolves `source_paths=['gdmutant']` against the cwd and a stray chdir aborts its
+    # baseline collection.
+    with tempfile.TemporaryDirectory(dir=".") as scratch:
+        path = _gd(Path(scratch))
 
-    assert cli._judged_path(str(path)) == str(path)
-    assert cli._judged_path(os.path.relpath(str(path))) == os.path.relpath(str(path))
+        assert cli._judged_path(str(path)) == str(path)
+        assert cli._judged_path(os.path.relpath(str(path))) == os.path.relpath(str(path))
 
 
 def test_a_path_typed_in_a_different_case_is_not_read_as_a_different_file(tmp_path: Path) -> None:
