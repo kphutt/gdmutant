@@ -363,6 +363,45 @@ def test_a_multi_finding_mark_says_how_many_and_what_a_click_does(
     assert "the badge is how many" in observed["legend"]["all"]
 
 
+def test_every_finding_sharing_a_token_shows_stacked_not_just_the_selected_one(
+    observed: dict[str, Any],
+) -> None:
+    # A static reader (or a screenshot) only ever sees one frame, and "click to see the rest" is
+    # invisible in a frame — so both findings sharing this token must render every time, whichever
+    # one is selected, not just the one `sel` currently points at.
+    stacked = observed["stacked"]
+    first = stacked["firstPick"]
+    assert "3:16:17:numeric" in first
+    assert "3:9:17:statement-deletion" in first
+    assert first.count('class="fg-band') == 2  # one band per finding, always, not per angle
+    assert first.count("Changed 0 to") == 2  # numeric's own two angles, both shown
+    assert "This whole line was removed" in first
+
+
+def test_the_selected_group_is_the_one_the_right_panel_agrees_with(
+    observed: dict[str, Any],
+) -> None:
+    # Two independent channels have to name the same finding: the caret row's own `fg-sel` marker,
+    # and the right panel's card. They must never point at different findings — that would be the
+    # exact "two paths that should agree" shape this repo's own AGENTS.md calls out by name.
+    stacked = observed["stacked"]
+    assert 'class="fg-label tag sv fg-sel" data-fid="3:16:17:numeric"' in stacked["firstPick"]
+    assert "numeric" in stacked["firstCard"]
+    assert "statement-deletion" not in stacked["firstCard"]
+
+
+def test_clicking_a_stacked_findings_own_row_switches_to_it(observed: dict[str, Any]) -> None:
+    # Before this, seeing a finding you did not click required clicking the source mark again to
+    # cycle past it. Now every finding's own row is a direct, one-click path to itself.
+    after = observed["stacked"]["afterSwitch"]
+    assert 'class="fg-label tag sv fg-sel" data-fid="3:9:17:statement-deletion"' in after["caret"]
+    assert "statement-deletion" in after["card"]
+    assert after["hash"] == "#a.gd:3:9:17:statement-deletion"
+    # The finding that was selected before the switch is still shown, just no longer highlighted.
+    assert "3:16:17:numeric" in after["caret"]
+    assert "fg-unsel" in after["caret"]
+
+
 # ---- the header's rare-status counts ------------------------------------------------------------
 
 

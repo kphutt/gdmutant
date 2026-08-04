@@ -88,11 +88,35 @@ function openTab(file, hash) {
     return cache.get(sel);
   }
 
-  // The source pane hands back a fresh row for whatever line the selection asks about, and no
-  // marks (mark painting is cosmetic; nothing under test reads it back).
+  // The source pane hands back a fresh row for whatever line the selection asks about. Marks used
+  // to be cosmetic here (nothing under test read them back), so `.mark` queries were stubbed to
+  // `[]` -- but `paintSelection()` now reads a mark's own `data-ids` to find every finding sharing
+  // its token, so a `[]` stub makes that lookup always fail silently, never exercising the stacked
+  // case at all. `paintSource()` still runs for REAL in this harness and writes REAL markup into
+  // `src.innerHTML`, so parsing that string (same trick `multiMark`/`multiBadge` already use on
+  // `source()`) reflects what the real code actually drew, not a hand-guessed stand-in that could
+  // drift from it.
+  // The row's own `.after(caretEl)` used to be a no-op stub -- fine while nothing read the caret
+  // row back, but it means the stacked-findings markup would otherwise vanish into a detached node
+  // the harness can never see again. Capturing it here is the only way to observe it: the page
+  // keeps `caretEl` in a plain top-level `let`, which a `vm` context does not expose as a property
+  // the way `var`/function declarations are.
+  let lastCaret = null;
   const src = byId('#src');
-  src.querySelector = sel => (sel.startsWith('.row[data-line=') ? stub() : null);
-  src.querySelectorAll = () => [];
+  src.querySelector = sel => {
+    if (!sel.startsWith('.row[data-line=')) return null;
+    const row = stub();
+    row.after = el => { lastCaret = el; };
+    return row;
+  };
+  src.querySelectorAll = sel => {
+    if (sel !== '.mark') return [];
+    const re = /<button type="button" class="mark[^"]*"\s+data-ids="([^"]*)"/g;
+    const out = [];
+    let m;
+    while ((m = re.exec(src._html))) out.push(stub({ ids: m[1] }));
+    return out;
+  };
 
   // The page's own `application/json` block, so what the download button reads back is what the
   // file really carries.
@@ -208,6 +232,9 @@ function openTab(file, hash) {
     // because that number is the only thing telling a click which file it opened.
     rowIds: () => [...byId('#filelist').innerHTML.matchAll(/data-file="(\d+)"/g)].map(m => m[1]),
     clickMark: ids => hit(target('.mark', { ids })),
+    // A finding's own row inside the stacked caret annotation -- `.fg-body` and `.fg-label` both
+    // carry the same `data-fid`, so either is a valid click target for switching to that finding.
+    clickFg: fid => hit(target('.fg-body', { fid })),
     clickRef: fid => hit(target('.refbtn', { ref: fid })),
     clickTheme: () => byId('#theme').onclick(),
     next: () => byId('#next'),
@@ -217,6 +244,9 @@ function openTab(file, hash) {
     legend: () => byId('#legend').innerHTML,
     body: () => byId('#body').innerHTML,
     source: () => byId('#src').innerHTML,
+    // The caret row's own markup, or null before any finding has ever been selected (nothing has
+    // called `.after()` yet).
+    caret: () => (lastCaret ? lastCaret.innerHTML : null),
     // Someone pasting a link into the address bar of an already-open report.
     paste: h => { location.hash = h; if (onhash) onhash(); },
     clickDownload: () => byId('#dl').onclick(),
@@ -372,6 +402,24 @@ mf.clickRow(0);
 const viaRow = mf.hash();
 mf.press('Escape');
 out.index.afterEscape = { hash: mf.hash(), reachedFile: viaRow };
+
+// ---- stacked findings on one token -------------------------------------------------------------
+//
+// Line 3 of `_SOURCE` carries the fixture's one multi mark: two `numeric` mutants (one finding, two
+// angles) and a `statement-deletion` mutant whose span overlaps them (a second, different finding).
+// Selecting either must show BOTH findings stacked in the caret row, not just the selected one --
+// that is the whole point of the feature -- and clicking the other one's own row must switch to it.
+
+const sk = openTab(PAGE, '');
+sk.clickChip('[data-filter]', 'all');
+const stackedIds = /class="mark [^"]*\bmulti"[^>]*\sdata-ids="([^"]*)"/.exec(sk.source())[1];
+sk.clickMark(stackedIds);
+out.stacked = { ids: stackedIds, firstPick: sk.caret(), firstCard: sk.card() };
+// clickMark on a fresh selection always lands on ids[0] (`pick`'s -1-index fallback), so ids[1] is
+// unambiguously "the other one" here, not a guess.
+const otherFid = stackedIds.split(',')[1];
+sk.clickFg(otherFid);
+out.stacked.afterSwitch = { caret: sk.caret(), card: sk.card(), hash: sk.hash() };
 
 // ---- the legend ------------------------------------------------------------------------------
 //
