@@ -1287,7 +1287,11 @@ def test_git_ignores_a_private_word_list_dropped_into_this_tree() -> None:
 #: so it is legitimately out of scope, but the list is written down rather than inferred: a file
 #: that silently stops being readable then shows up as a failure here instead of as one fewer
 #: file scanned, which is how a whole file used to fall out of this guard without saying so.
-UNREADABLE_BY_DESIGN = (".github/assets/frank.png", ".github/assets/html-report.png")
+UNREADABLE_BY_DESIGN = (
+    ".github/assets/frank.png",
+    ".github/assets/html-report-survivor-card.png",
+    ".github/assets/html-report-survivor-code.png",
+)
 
 
 def test_every_tracked_file_but_the_declared_binaries_is_actually_read() -> None:

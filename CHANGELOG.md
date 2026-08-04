@@ -114,6 +114,9 @@ CLI.
   report is written (every given file listed, an empty `mutants` list, no score key), the job
   summary is emitted if `--report step-summary` was asked for, `--project` and the report targets
   are validated the same as on a real run, and a malformed `# gdmutant: ignore[...]` pragma warns.
+- The HTML report now opens in dark mode by default. The toggle to switch to light is unchanged.
+- The count badge on a mark with multiple findings sits further outside the mark's border, so it
+  no longer covers part of the character underneath.
 
 ### Fixed
 

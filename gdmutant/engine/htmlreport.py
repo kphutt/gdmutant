@@ -636,9 +636,9 @@ code,pre,.code,.mono{font-family:var(--mono)}
    the gap between rows, which is `.row`'s call, not this rule's) keeps the ring inside the mark's
    own box instead of projecting past it, and the badge sits closer to the corner it decorates. */
 .mark.multi{box-shadow:none;outline:2px dashed var(--tone);outline-offset:-1px}
-.mark.multi::after{content:attr(data-n);position:absolute;top:-3px;right:-4px;
+.mark.multi::after{content:attr(data-n);position:absolute;top:-6px;right:-6px;
   font:700 9px/1 var(--sans);color:var(--bg-elevated);background:var(--tone);
-  border-radius:999px;padding:1.5px 3.5px;pointer-events:none}
+  border-radius:999px;padding:1px 3px;pointer-events:none}
 .mark.on{background:var(--accent-soft);box-shadow:0 0 0 2px var(--accent)}
 
 /* The caret row: a triangle that pops out under the exact token, the HTML echo of the `^` the
@@ -1435,7 +1435,7 @@ def render_html(report: dict[str, Any], project_dir: str | None = None) -> str:
     # file wants it formatted like the --json CLI output, not the single line a page doesn't need.
     data = _escape_for_script(json.dumps(report, indent=2))
     return f"""<!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="dark">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>gdmutant mutation report</title>
 <link rel="icon" href="{FAVICON_HREF}">
