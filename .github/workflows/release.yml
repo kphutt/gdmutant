@@ -11,7 +11,9 @@ name: Release
 #
 # It also never creates or moves a tag. `gh release create --verify-tag` fails if the tag does not
 # already exist, so the workflow can only ever react to a tag the maintainer pushed — which is what
-# keeps it compatible with the tag-protection ruleset that blocks deletion and re-pointing.
+# keeps it compatible with the tag-protection ruleset that blocks deletion and re-pointing for
+# anyone acting normally (a repo admin can still disable the ruleset itself as a rare, deliberate
+# override — see docs/releasing.md for the real capability and when it's actually appropriate).
 #
 # NO CI-STATUS GATE HERE (ADR-0012, replacing an earlier version of this file that had one).
 #
@@ -72,7 +74,8 @@ jobs:
       # The two answer different questions: the step above asks "is this the right version number?",
       # this one asks "is this the right commit?".
       #
-      # Tag protection stops a tag being deleted or re-pointed, but nothing stops a version tag from
+      # Tag protection stops a tag being deleted or re-pointed for anyone acting normally (see
+      # docs/releasing.md for the admin-override exception), but nothing stops a version tag from
       # being *created* at an arbitrary commit — including one on a branch that never passed Verify
       # or the self-tests. Branch protection on main cannot see a tag push at all. So without this
       # step, the only thing between an unreviewed commit and PyPI is its pyproject.toml version

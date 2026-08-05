@@ -8,8 +8,10 @@ produce:
 * `scripts/check_release_tag.py` fails any tag that does not equal the version in `pyproject.toml`,
   so a `v1` tag would demand a packaged version of literally `1` — asserted below rather than
   described, so the reason stays true if the guard changes.
-* The tag ruleset on the repo blocks deletion and non-fast-forward updates on every ref, so an
-  existing tag cannot be moved to a later commit either.
+* The tag ruleset on the repo blocks deletion and non-fast-forward updates on every ref for anyone
+  acting normally, so an existing tag cannot be moved to a later commit through ordinary use either
+  (a repo admin can still disable the ruleset itself as a rare, deliberate override -- see
+  docs/releasing.md -- but that's not something a consumer's pinned tag needs to worry about).
 
 Consumers therefore pin a commit SHA (or a full `vX.Y.Z` tag) and take bumps from Dependabot. This
 test keeps the shipped copy honest about that.
