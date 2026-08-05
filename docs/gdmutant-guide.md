@@ -463,8 +463,9 @@ config](#project-config-gdmutanttoml) above.
 ### Pinning
 
 Pin the commit SHA shown above, or a full `vX.Y.Z` tag (e.g. `@v0.1.0`). Never `@v1` or `@v0`: a
-tag ruleset blocks deleting or re-pointing any tag, and the release guard rejects a tag that
-doesn't equal the packaged version, so a floating major tag is not something this repo can produce.
+tag ruleset blocks deleting or re-pointing any tag for anyone acting normally, and the release
+guard rejects a tag that doesn't equal the packaged version, so a floating major tag is not
+something this repo can produce through ordinary use.
 Pinning `@v0.1.0` works and is just as stable, for the same reason.
 
 The bumps a floating tag would have handed you come from Dependabot instead, as PRs you review
