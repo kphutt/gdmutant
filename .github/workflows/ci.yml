@@ -57,10 +57,10 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      # Needed by BOTH steps now: gitleaks-action reads the PR's commit range, and dorny/paths-filter
-      # reads the PR's changed-files list via the REST API on pull_request runs. (Keep this comment on
-      # the same line — zizmor's pedantic `undocumented-permissions` only sees a trailing comment.)
-      pull-requests: read # gitleaks reads the PR's commit range; paths-filter reads its changed-files list
+      # Needed by dorny/paths-filter, which reads the PR's changed-files list via the REST API on
+      # pull_request runs. (Keep this comment on the same line — zizmor's pedantic
+      # `undocumented-permissions` only sees a trailing comment.)
+      pull-requests: read # paths-filter reads its changed-files list via the REST API
     outputs:
       godot: ${{ steps.filter.outputs.godot }}
     steps:
@@ -82,9 +82,33 @@ jobs:
           #     `ensureRefAvailable` resolves both locally and skips its fetch fallback.
           persist-credentials: false
 
-      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Runs the gitleaks CLI directly, not gitleaks/gitleaks-action -- matches publish.yml's
+      # secret-scan job byte-for-byte (same binary version, same command). The two jobs used to run
+      # different gitleaks versions: this one went through the gitleaks-action wrapper (whatever
+      # version it bundled by default) while publish.yml's had to bypass that wrapper entirely,
+      # because it hard-refuses `release` events -- see publish.yml's own step comments for that
+      # story. Unifying on the direct-CLI approach here closes the gap: one command, one pinned
+      # version, run in both places, instead of two paths that were quietly diverging.
+      - name: Install gitleaks
+        run: |
+          curl -sSLO https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks_8.30.1_linux_x64.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz gitleaks
+          chmod +x gitleaks
+
+      - name: Run gitleaks (full history)
+        run: ./gitleaks detect --redact -v --exit-code=2 --report-format=sarif --report-path=results.sarif --log-level=debug
+
+      # gitleaks-action uploaded this by default regardless of outcome, so a real hit has a
+      # structured, downloadable report to work from, not just the console log. Matches that here,
+      # and matches publish.yml's identical step.
+      - name: Upload gitleaks report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitleaks-results.sarif
+          path: results.sarif
+          if-no-files-found: ignore
 
       # --- Path filter: does this PR touch anything the real-Godot self-tests could care about? ----
       # Consumed by both self-test worker jobs below via `needs.secret-scan.outputs.godot`.
