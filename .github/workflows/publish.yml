@@ -239,9 +239,19 @@ jobs:
           fetch-depth: 0 # full history — the question here is "ever leaked", not "leaked in this diff"
           persist-credentials: false
 
+      # gitleaks-action hardcodes its own supported-event list (src/index.js, checked directly
+      # against the pinned SHA below): push, pull_request, workflow_dispatch, schedule -- `release`
+      # is not in it and the action hard-exits with "The [release] event is not yet supported" if
+      # asked to run under one. This first surfaced on the real v0.1.0 release. workflow_dispatch
+      # and schedule both route to an untargeted full scan (no baseRef/headRef), which is exactly
+      # what this job wants -- so GITHUB_EVENT_NAME is overridden for this one step to take that
+      # path. Confirmed safe: the only other eventJSON field the action reads afterward
+      # (summary.js's eventJSON.repository.html_url) is always present on a real release payload,
+      # so nothing downstream breaks from the override.
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_EVENT_NAME: workflow_dispatch
 
   # --- Guards 4-5: the whole `verify` job, live, on both OSes -----------------
   # Reuses ci.yml's `verify` job steps via scripts/verify_local.py (reads them out of ci.yml rather
