@@ -175,23 +175,14 @@ jobs:
           TAG_NAME: ${{ github.event.release.tag_name }}
         run: python3 scripts/check_release_tag.py "$TAG_NAME"
 
-      # Guard 2 - the right COMMIT. Tag protection stops a tag being deleted or re-pointed for
-      # anyone acting normally (see docs/releasing.md for the admin-override exception), but
+      # Guard 2 - the right COMMIT. Tag protection stops a tag being deleted or re-pointed, but
       # nothing stops a version tag from being CREATED at an arbitrary commit, and branch protection
       # on main cannot see a tag push at all. This is what ties a release to reviewed history.
-      #
-      # persist-credentials: false (above) strips this checkout's git credentials, so a bare
-      # `git fetch origin` fails authenticating against a private repo -- the same bug release.yml's
-      # twin guard hit on a real tag push (see that file's comment for the full story). Fixed the
-      # same way: an auth header scoped to exactly the github.com URL, which a local-path remote (as
-      # used by this guard's own tests) ignores entirely.
       - name: Verify the released commit is on main
         env:
           TAG_NAME: ${{ github.event.release.tag_name }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
-            fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
           commit="$(git rev-parse HEAD)"
           if ! git merge-base --is-ancestor "$commit" origin/main; then
             # ASCII only: gdmutant already shipped a Windows bug where console output crashed under
