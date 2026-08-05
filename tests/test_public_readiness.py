@@ -1288,6 +1288,7 @@ def test_git_ignores_a_private_word_list_dropped_into_this_tree() -> None:
 #: that silently stops being readable then shows up as a failure here instead of as one fewer
 #: file scanned, which is how a whole file used to fall out of this guard without saying so.
 UNREADABLE_BY_DESIGN = (
+    ".github/assets/banner.png",
     ".github/assets/frank.png",
     ".github/assets/html-report-survivor-card.png",
     ".github/assets/html-report-survivor-code.png",

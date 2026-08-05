@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src=".github/assets/banner.svg" alt="gdmutant: banner with Frank the Mutant, the project mascot" width="1200" height="320">
+  <img src=".github/assets/banner.png" alt="gdmutant: banner with Frank the Mutant, the project mascot" width="1200" height="320">
 </h1>
 
 <p align="center"><strong>Mutation testing for GDScript and Godot: find the bugs your green tests would miss.</strong></p>
