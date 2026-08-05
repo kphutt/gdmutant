@@ -110,12 +110,13 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   what every member of the pair does now, including the ones already right.
 - Sensitive paths (CI, scripts, toolchain, the mutation-operator catalog, and the GDScript
   adapter) are listed in `CODEOWNERS` for documentation only. It enforces no review (a sole
-  maintainer can't approve their own PR). `main` requires a pull request and one status check,
-  `Workflow security (zizmor)`, which reads the workflow files and nothing else, so no check on
-  the code blocks a merge. Those are local discipline (ADR-0012). `.github/CODEOWNERS` carries the
-  full list of what branch protection enforces. Read changes to these paths carefully before
-  merging. The GDScript adapter is the real technical risk, since a wrong mutant means a silently
-  wrong survivor report.
+  maintainer can't approve their own PR). `main` requires a pull request and, alongside
+  `Workflow security (zizmor)` (which reads the workflow files and nothing else), the checks
+  `ci.yml`'s now-restored triggers make possible: `Verify` on both platforms, `Secret scan
+  (gitleaks)`, and both `Self-test` gates — see `scripts/harden_github.py`'s `REQUIRED_JOBS` for
+  the exact, current list. `.github/CODEOWNERS` carries the full list of what branch protection
+  enforces. Read changes to these paths carefully before merging. The GDScript adapter is the real
+  technical risk, since a wrong mutant means a silently wrong survivor report.
 
 ## Design goals (keep these in mind)
 
