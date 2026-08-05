@@ -1291,6 +1291,7 @@ UNREADABLE_BY_DESIGN = (
     ".github/assets/frank.png",
     ".github/assets/html-report-survivor-card.png",
     ".github/assets/html-report-survivor-code.png",
+    ".github/assets/social-preview.png",
 )
 
 
