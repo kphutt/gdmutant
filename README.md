@@ -146,7 +146,10 @@ gdmutant also ships as a GitHub Action, so a pull request can report its own sur
 
 ```yaml
 name: Mutation testing
-on: pull_request
+on:
+  pull_request:
+  push:
+    branches: [main]
 
 jobs:
   gdmutant:
@@ -160,7 +163,9 @@ jobs:
           godot-version: "4.7.0"   # the only required input
           paths: src                # what to mutate (default: the whole project)
           runner: gdunit4            # or gut, or command
-          since: ${{ github.event.pull_request.base.sha }}   # only the lines this PR changed
+          # A PR diffs against its base commit; a merge to main diffs against the commit
+          # it replaced -- either way, only the code that actually changed gets mutated.
+          since: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
 ```
 
 It sets up Godot, installs gdmutant, runs it, and writes every survivor with its `gap` / `risk` /
@@ -168,10 +173,11 @@ It sets up Godot, installs gdmutant, runs it, and writes every survivor with its
 failure: the step fails only on a real error, such as a suite that was already red. Your project
 brings its own GUT or gdUnit4 addon, the same one your existing test job uses.
 
-The main use case is catching new survivors as you develop: run it on every PR and get told about
-the gap while the change is still fresh in your head. Godot boots once per mutant, so a full-project
-run gets slow fast, which is what `since` is for: it scopes each run to just the lines the PR
-touched. Drop it (and `fetch-depth`) for an occasional full-project scan instead.
+The main use case is catching new survivors as you develop: run it on every PR and every merge to
+`main`, and get told about the gap while the change is still fresh in your head. Godot boots once
+per mutant, so a full-project run gets slow fast, which is what `since` is for: on either trigger it
+scopes the run to just the code that changed, never the whole project. Drop `since` (and
+`fetch-depth`) for an occasional full-project scan instead.
 
 Every input and output, and how to pin a version, is in
 [the guide](docs/gdmutant-guide.md#github-actions).
