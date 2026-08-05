@@ -223,11 +223,25 @@ manual version becomes the way to reproduce a failure by hand.
   its name. *Automatable:* description and topics are repository settings `scripts/harden_github.py`
   can converge. The social-preview image is uploaded by hand and stays a one-time click. The
   source SVG and the exact PNG uploaded are `.github/assets/social-preview.svg`/`.png` -- committed
-  so the design survives if the machine that made it doesn't. To regenerate the PNG after an SVG
-  edit: open the SVG in a browser at its native 1280x640 and save a screenshot, or use any
-  SVG-to-PNG renderer that respects the embedded `font-family` stack (the text is live system
-  fonts, not outlined paths, so rendering fidelity depends on what fonts are installed on the
-  machine doing the rendering).
+  so the design survives if the machine that made it doesn't.
+
+  Both this and the README banner (`.github/assets/banner.svg`/`.png`) are baked to PNG rather than
+  embedded live, and that choice is load-bearing, not cosmetic: the underline rule under "gdmutant"
+  was hand-tuned against live SVG `<text>` three separate times (issues traced through PRs #228,
+  #229, #234) and kept getting re-broken, because the actual rendered width depends on which font a
+  viewer's browser resolves from the `font-family` fallback stack -- confirmed directly by rendering
+  the same text with only the font varied and watching the measured width swing by ~90px. A PNG has
+  no fallback stack: it is fixed pixels, rendered once, identical for every viewer forever. The SVGs
+  stay as the editable source; the PNGs are what's actually embedded in `README.md` and uploaded to
+  GitHub's Social Preview setting.
+
+  To regenerate a PNG after an SVG edit: render it with a tool that resolves real system fonts (a
+  real browser, or a native renderer such as `resvg`) rather than eyeballing a live-SVG measurement
+  by hand -- that hand-measurement is exactly what broke three times. Whatever renderer is used,
+  re-verify the underline rule against the actual rendered text in that same output (a pixel scan
+  restricted to the heading's own row, not just "looks about right"), since the same fallback-stack
+  instability that broke the live SVG is just as capable of baking in a wrong measurement permanently
+  if the render used to produce the PNG resolves a different font than most real viewers would.
 
 - `ci.yml` runs automatically again. The README's CI badge reports on `ci.yml`, and a workflow
   with no automatic trigger has no result to report, so the badge reads "no status" to every

@@ -80,7 +80,7 @@ build-backend = "hatchling.build"
 # THE PROBLEM. README.md is both the repo's front page and the PyPI long description, and the two
 # surfaces resolve image paths differently:
 #
-#   - A RELATIVE path (`.github/assets/banner.svg`) renders on GitHub whether the repo is private
+#   - A RELATIVE path (`.github/assets/banner.png`) renders on GitHub whether the repo is private
 #     or public, because GitHub resolves it against the repo using the *viewer's* session.
 #     `readme_renderer` does not resolve relative paths at all: it hands the literal string to
 #     PyPI's camo proxy, which hex-encodes it and 404s.
