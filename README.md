@@ -168,9 +168,10 @@ It sets up Godot, installs gdmutant, runs it, and writes every survivor with its
 failure: the step fails only on a real error, such as a suite that was already red. Your project
 brings its own GUT or gdUnit4 addon, the same one your existing test job uses.
 
-Godot boots once per mutant, so a full-project run gets slow fast on anything past a toy example --
-`since` scopes each run to the lines the PR actually touched. Drop it (and `fetch-depth`) to mutate
-the whole project instead, on a schedule rather than per PR.
+The main use case is catching new survivors as you develop: run it on every PR and get told about
+the gap while the change is still fresh in your head. Godot boots once per mutant, so a full-project
+run gets slow fast, which is what `since` is for: it scopes each run to just the lines the PR
+touched. Drop it (and `fetch-depth`) for an occasional full-project scan instead.
 
 Every input and output, and how to pin a version, is in
 [the guide](docs/gdmutant-guide.md#github-actions).
