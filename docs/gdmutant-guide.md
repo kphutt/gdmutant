@@ -370,7 +370,7 @@ mutant is killable, it usually is. Write the test.
   gdmutant` warns when its `gdmutant.exe` lands somewhere not on PATH ("The script gdmutant.exe is
   installed in ... which is not on PATH"). If an older `gdmutant` from a different Python install
   is earlier on PATH, that's the one your shell runs, silently. `gdmutant --version` won't catch
-  this: every install prints `gdmutant 0.1.0` until this project ships a second version. Check the
+  this: every install prints `gdmutant 0.1.1` until this project ships a second version. Check the
   path instead: `Get-Command gdmutant` (PowerShell) or `which gdmutant` (bash/zsh) shows which
   `gdmutant.exe` actually answers, and compare it against the path pip's warning named. Fix by adding
   that directory to PATH, or by uninstalling the older `gdmutant` first.
