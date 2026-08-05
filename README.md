@@ -173,11 +173,12 @@ It sets up Godot, installs gdmutant, runs it, and writes every survivor with its
 failure: the step fails only on a real error, such as a suite that was already red. Your project
 brings its own GUT or gdUnit4 addon, the same one your existing test job uses.
 
-The main use case is catching new survivors as you develop: run it on every PR and every merge to
-`main`, and get told about the gap while the change is still fresh in your head. Godot boots once
-per mutant, so a full-project run gets slow fast, which is what `since` is for: on either trigger it
-scopes the run to just the code that changed, never the whole project. Drop `since` (and
-`fetch-depth`) for an occasional full-project scan instead.
+Most iteration happens locally with `gdmutant run` above -- a GitHub Action is too slow a feedback
+loop for that, since you already run your tests before committing. Its value here is as a CI check:
+scoped to just what changed, it catches anything a local run missed, without paying to mutate the
+whole project on every PR and push. Godot boots once per mutant, so that full-project cost is real,
+which is what `since` avoids. Drop it (and `fetch-depth`) for an occasional full-project scan
+instead.
 
 Every input and output, and how to pin a version, is in
 [the guide](docs/gdmutant-guide.md#github-actions).
