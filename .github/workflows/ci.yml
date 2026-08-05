@@ -124,15 +124,18 @@ jobs:
             push) BASE="$PUSH_BEFORE_SHA"; HEAD="$PUSH_HEAD_SHA" ;;
             *) BASE=""; HEAD="" ;;
           esac
-          # Two full, separately-quoted invocations rather than building the flag into a variable and
-          # expanding it unquoted below: an unquoted $LOG_OPTS word-splits on its own spaces, handing
-          # gitleaks "--first-parent" as its own top-level flag instead of part of --log-opts's value
-          # -- exactly the bug this comment replaced, caught by this PR's own CI run.
+          # A bash array, not a plain string: an unquoted plain-string variable word-splits on its own
+          # spaces at expansion, handing gitleaks "--first-parent" as its own top-level flag instead of
+          # part of --log-opts's value -- exactly the bug this comment replaced, caught by this PR's own
+          # CI run. An array element survives expansion as one argv entry regardless of embedded spaces,
+          # and unlike two full separately-quoted invocations (this fix's first pass), there's only one
+          # `gitleaks detect ...` call to keep in sync if its other flags ever change.
           if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] && [ -n "$HEAD" ]; then
-            ./gitleaks detect --redact -v --exit-code=2 --report-format=sarif --report-path=results.sarif --log-level=debug --log-opts="--no-merges --first-parent ${BASE}^..${HEAD}"
+            LOG_OPTS=(--log-opts="--no-merges --first-parent ${BASE}^..${HEAD}")
           else
-            ./gitleaks detect --redact -v --exit-code=2 --report-format=sarif --report-path=results.sarif --log-level=debug
+            LOG_OPTS=()
           fi
+          ./gitleaks detect --redact -v --exit-code=2 --report-format=sarif --report-path=results.sarif --log-level=debug "${LOG_OPTS[@]}"
 
       # gitleaks-action uploaded this by default regardless of outcome, so a real hit has a
       # structured, downloadable report to work from, not just the console log. Matches that here,
