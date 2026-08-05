@@ -13,19 +13,19 @@
       <stop offset="100%" stop-color="#9fe092" stop-opacity="0"/>
     </radialGradient>
   </defs>
-  <ellipse cx="640" cy="320" rx="350" ry="350" fill="url(#frankGlow)"/>
-  <g transform="translate(320,-10) scale(10.0)">
-    <rect x="4" y="33" width="8" height="9" rx="2" fill="#8d9199"/>
-    <rect x="52" y="33" width="8" height="9" rx="2" fill="#8d9199"/>
-    <rect x="11" y="12" width="42" height="42" rx="4" fill="#6fbf5e"/>
-    <path d="M11 16 a4 4 0 0 1 4-4 h34 a4 4 0 0 1 4 4 v8 H11 Z" fill="#20242b"/>
-    <path d="M11 29 H53" stroke="#2f7a29" stroke-width="2.2" fill="none"/>
-    <path d="M17 25.5 v7 M26 25.5 v7 M35 25.5 v7 M44 25.5 v7"
-          stroke="#2f7a29" stroke-width="2.2" stroke-linecap="round"/>
-    <circle cx="24" cy="40" r="6.5" fill="#ffffff"/>
-    <circle cx="24" cy="40" r="3.2" fill="#20242b"/>
-    <circle cx="41" cy="41" r="4" fill="#ffffff"/>
-    <circle cx="41" cy="41" r="2" fill="#20242b"/>
-    <path d="M23 49 q9 5 18 -1" stroke="#20242b" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <ellipse cx="640" cy="320" rx="320" ry="320" fill="url(#frankGlow)"/>
+  <g>
+    <rect x="385.2" y="320" width="72.8" height="81.9" rx="18.2" fill="#8d9199"/>
+    <rect x="822" y="320" width="72.8" height="81.9" rx="18.2" fill="#8d9199"/>
+    <rect x="448.9" y="128.9" width="382.2" height="382.2" rx="36.4" fill="#6fbf5e"/>
+    <path d="M448.9 165.3 a36.4 36.4 0 0 1 36.4-36.4 h309.4 a36.4 36.4 0 0 1 36.4 36.4 v72.8 H448.9 Z" fill="#20242b"/>
+    <path d="M448.9 283.6 H831.1" stroke="#2f7a29" stroke-width="20.02" fill="none"/>
+    <path d="M503.5 251.75 v63.7 M585.4 251.75 v63.7 M667.3 251.75 v63.7 M749.2 251.75 v63.7"
+          stroke="#2f7a29" stroke-width="20.02" stroke-linecap="round"/>
+    <circle cx="567.2" cy="383.7" r="59.15" fill="#ffffff"/>
+    <circle cx="567.2" cy="383.7" r="29.12" fill="#20242b"/>
+    <circle cx="721.9" cy="392.8" r="36.4" fill="#ffffff"/>
+    <circle cx="721.9" cy="392.8" r="18.2" fill="#20242b"/>
+    <path d="M558.1 465.6 q81.9 45.5 163.8 -9.1" stroke="#20242b" stroke-width="22.75" stroke-linecap="round" fill="none"/>
   </g>
 </svg>
