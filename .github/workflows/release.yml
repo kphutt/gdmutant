@@ -82,8 +82,22 @@ jobs:
         # vs-lightweight tag ambiguity in github.sha. main is resolved from the remote by explicit
         # refspec: the check must not depend on a local main branch happening to exist here, and the
         # refspec guarantees refs/remotes/origin/main is written however the clone is configured.
+        #
+        # persist-credentials: false (above) means the checkout's origin remote carries no token, so
+        # a bare `git fetch origin` fails asking for a username -- this first surfaced on the real
+        # v0.1.0 tag push, while the repo was still private (an authenticated fetch is required
+        # there; it would only have worked by accident once public). tests/test_check_release_tag.py
+        # never caught this: it runs this exact script against a LOCAL bare-repo stand-in for
+        # `origin`, which never needs auth regardless of transport -- only a real github.com HTTPS
+        # remote does. So the fix has to keep fetching `origin` itself (not a hardcoded URL, which
+        # would break that test's substitution), and add auth only when the remote actually is
+        # github.com. `-c http.<url>.extraheader` is scoped to that exact URL prefix: git ignores it
+        # entirely for a local-path remote, and the `-c` flag never touches .git/config or persists
+        # anything -- GitHub masks the raw $GH_TOKEN value in logs, but nothing in this step ever
+        # prints the derived header value either, so there's nothing to mask in the first place.
         run: |
-          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
           commit="$(git rev-parse HEAD)"
           if ! git merge-base --is-ancestor "$commit" origin/main; then
             # ASCII only, for the same reason as the version guard's message: gdmutant already
@@ -95,6 +109,7 @@ jobs:
           echo "tag $GITHUB_REF_NAME is on main ($commit)"
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # `gh` ships on the runner, so this needs no third-party action and adds no supply-chain
       # surface. --verify-tag: fail if the tag is missing rather than creating one. --draft: stage
