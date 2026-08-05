@@ -1,9 +1,9 @@
 """The distributed action must never advertise a `@v1`-style floating tag.
 
-`action.yml` makes gdmutant consumable as a GitHub Action, and its header comment plus the CLI
-reference's "GitHub Actions" section are where a consumer copies the `uses:` line from. Both used
-to be able to drift toward the convenient-looking `kphutt/gdmutant@v1`, which this repo cannot
-produce:
+`action.yml` makes gdmutant consumable as a GitHub Action, and its header comment, the guide's
+"GitHub Actions" section, and the README's own copy are where a consumer copies the `uses:` line
+from. Any of them could drift toward the convenient-looking `kphutt/gdmutant@v1`, which this repo
+cannot produce:
 
 * `scripts/check_release_tag.py` fails any tag that does not equal the version in `pyproject.toml`,
   so a `v1` tag would demand a packaged version of literally `1` — asserted below rather than
@@ -43,6 +43,7 @@ _FLOATING = re.compile(r"^v\d+(\.\d+)?$")
 DOCS_SHOWING_A_USES_LINE = [
     REPO / "action.yml",
     REPO / "docs" / "gdmutant-guide.md",
+    REPO / "README.md",
 ]
 
 
