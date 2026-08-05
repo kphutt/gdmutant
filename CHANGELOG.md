@@ -10,7 +10,7 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-08-04
 
 gdmutant mutates real GDScript and reports survivors end-to-end via the standalone `gdmutant run`
 CLI.
