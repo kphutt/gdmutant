@@ -57,10 +57,10 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      # Needed by BOTH steps now: gitleaks-action reads the PR's commit range, and dorny/paths-filter
-      # reads the PR's changed-files list via the REST API on pull_request runs. (Keep this comment on
-      # the same line — zizmor's pedantic `undocumented-permissions` only sees a trailing comment.)
-      pull-requests: read # gitleaks reads the PR's commit range; paths-filter reads its changed-files list
+      # Needed by dorny/paths-filter, which reads the PR's changed-files list via the REST API on
+      # pull_request runs. (Keep this comment on the same line — zizmor's pedantic
+      # `undocumented-permissions` only sees a trailing comment.)
+      pull-requests: read # paths-filter reads its changed-files list via the REST API
     outputs:
       godot: ${{ steps.filter.outputs.godot }}
     steps:
@@ -82,9 +82,71 @@ jobs:
           #     `ensureRefAvailable` resolves both locally and skips its fetch fallback.
           persist-credentials: false
 
-      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+      # Runs the gitleaks CLI directly, not gitleaks/gitleaks-action -- the install step below is
+      # byte-for-byte identical to publish.yml's (same pinned binary version, same checksum), so the
+      # two jobs can no longer quietly drift on WHICH gitleaks they run. This one went through the
+      # gitleaks-action wrapper before (whatever version it bundled by default) while publish.yml's
+      # had to bypass that wrapper entirely, because it hard-refuses `release` events -- see
+      # publish.yml's own step comments for that story. The scan *scope* below deliberately still
+      # differs between the two jobs -- see the next comment.
+      - name: Install gitleaks
+        run: |
+          curl -sSLO https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks_8.30.1_linux_x64.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz gitleaks
+          chmod +x gitleaks
+
+      # Diff-scoped on pull_request/push, same as gitleaks-action's own default (verified against its
+      # pinned source, src/gitleaks.js: --no-merges --first-parent <base>^..<head>, using the API-free
+      # refs GitHub already gives this job -- no pull-requests:read needed for this, unlike the
+      # wrapper's own baseRef/headRef API call). Unifying gitleaks *version* with publish.yml (the
+      # point of this job's change) is a different question from unifying scan *scope* -- publish.yml
+      # deliberately wants full history at release time ("the question here is 'ever leaked', not
+      # 'leaked in this diff'"; see its own step comment), but this job answers a different question
+      # on every PR and push: "did THIS change introduce one". A full-history scan here instead would
+      # make every future PR's CI red the day a rule update or an old, already-accepted pattern trips
+      # on a commit years before the PR touching it -- a gate failing for reasons disconnected from
+      # what the PR actually changed. Falls back to a full scan (never less scanning, only more) if
+      # the computed range would be invalid, e.g. `before` is the all-zero SHA a force-push can produce.
+      - name: Run gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Routed through env, not interpolated directly into the shell below: these are
+          # event-controlled values, and string-splicing `${{ }}` straight into a `run:` block is a
+          # template-injection vector even when (as here) the values are always well-formed SHAs.
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+        run: |
+          case "$EVENT_NAME" in
+            pull_request) BASE="$PR_BASE_SHA"; HEAD="$PR_HEAD_SHA" ;;
+            push) BASE="$PUSH_BEFORE_SHA"; HEAD="$PUSH_HEAD_SHA" ;;
+            *) BASE=""; HEAD="" ;;
+          esac
+          # A bash array, not a plain string: an unquoted plain-string variable word-splits on its own
+          # spaces at expansion, handing gitleaks "--first-parent" as its own top-level flag instead of
+          # part of --log-opts's value -- exactly the bug this comment replaced, caught by this PR's own
+          # CI run. An array element survives expansion as one argv entry regardless of embedded spaces,
+          # and unlike two full separately-quoted invocations (this fix's first pass), there's only one
+          # `gitleaks detect ...` call to keep in sync if its other flags ever change.
+          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] && [ -n "$HEAD" ]; then
+            LOG_OPTS=(--log-opts="--no-merges --first-parent ${BASE}^..${HEAD}")
+          else
+            LOG_OPTS=()
+          fi
+          ./gitleaks detect --redact -v --exit-code=2 --report-format=sarif --report-path=results.sarif --log-level=debug "${LOG_OPTS[@]}"
+
+      # gitleaks-action uploaded this by default regardless of outcome, so a real hit has a
+      # structured, downloadable report to work from, not just the console log. Matches that here,
+      # and matches publish.yml's identical step.
+      - name: Upload gitleaks report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitleaks-results.sarif
+          path: results.sarif
+          if-no-files-found: ignore
 
       # --- Path filter: does this PR touch anything the real-Godot self-tests could care about? ----
       # Consumed by both self-test worker jobs below via `needs.secret-scan.outputs.godot`.
