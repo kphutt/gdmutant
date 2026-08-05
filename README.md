@@ -139,6 +139,35 @@ Kill each survivor with a real test, or mark a genuine equivalent with `# gdmuta
 reason ([details](docs/survivors/README.md)). Re-run until nothing survives. A mutation score
 isn't a target to hit, it's a direction to watch. There's no universal "good" number.
 
+## GitHub Actions
+
+gdmutant also ships as a GitHub Action, so a pull request can report its own survivors. Save this as
+`.github/workflows/mutation.yml`:
+
+```yaml
+name: Mutation testing
+on: pull_request
+
+jobs:
+  gdmutant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: kphutt/gdmutant@05728864a1c9330d632e2aab2348ff4442f3d61d # v0.1.0
+        with:
+          godot-version: "4.7.0"   # the only required input
+          paths: src               # what to mutate (default: the whole project)
+          runner: gdunit4           # or gut, or command
+```
+
+It sets up Godot, installs gdmutant, runs it, and writes every survivor with its `gap` / `risk` /
+`start` explanation into the job summary, where reviewers already look. Survivors are output, not
+failure: the step fails only on a real error, such as a suite that was already red. Your project
+brings its own GUT or gdUnit4 addon, the same one your existing test job uses.
+
+Every input and output, and how to pin a version, is in
+[the guide](docs/gdmutant-guide.md#github-actions).
+
 ## Compatibility
 
 | | Verified at every release | Expected to work |
