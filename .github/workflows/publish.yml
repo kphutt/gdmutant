@@ -43,14 +43,19 @@ name: Publish
 # (scripts/run_gitleaks.py) is commit-stage only, scans only the staged diff, is skippable with
 # `--no-verify`, and SILENTLY exits 0 if the `gitleaks` binary isn't on PATH — found while fixing
 # this: there was no point on the actual release path, cloud or local, where a leaked secret was
-# guaranteed to be caught. `secret-scan` below scans full history (`fetch-depth: 0`, same
-# `gitleaks/gitleaks-action` pin `ci.yml` already uses) reachable from the released commit —
-# the question that matters right before code goes public and a package ships from it.
+# guaranteed to be caught. `secret-scan` below scans full history (`fetch-depth: 0`) reachable from
+# the released commit — the question that matters right before code goes public and a package
+# ships from it. It runs the gitleaks CLI directly rather than through `gitleaks/gitleaks-action`
+# (the pin `ci.yml`'s own `secret-scan` job uses) — the wrapper action hard-refuses `release`
+# events entirely, so this job can't use it; see its own step comments for the full story. That
+# also means the two jobs currently run different gitleaks versions (this one pinned to v8.30.1
+# explicitly; `ci.yml`'s wrapper defaults to whatever `gitleaks-action` bundles) — a real gap worth
+# closing in a fast-follow, not blocking this fix.
 #
 # Eight guards, all fail-closed, all before `publish-pypi` gets `id-token: write`:
 #   1. the tag matches the version in pyproject.toml      (scripts/check_release_tag.py)
 #   2. the released commit is an ancestor of main          (git merge-base --is-ancestor)
-#   3. no secret in history reachable from this commit     (gitleaks/gitleaks-action, full history)
+#   3. no secret in history reachable from this commit     (gitleaks CLI direct, full history)
 #   4. verify passes on Linux                              (scripts/verify_local.py --job verify)
 #   5. verify passes on Windows                             (same script, windows-2025 runner)
 #   6. license compliance                     (scripts/verify_local.py --job license-check)
@@ -222,8 +227,9 @@ jobs:
   # secret-scan job is dormant with everything else on that trigger, and the local pre-commit
   # hook (scripts/run_gitleaks.py) is commit-stage only, staged-diff only, skippable with
   # `--no-verify`, and silently exits 0 if `gitleaks` isn't on PATH. Full history
-  # (`fetch-depth: 0`), same `gitleaks/gitleaks-action` pin ci.yml's own `secret-scan` job uses —
-  # scanning the exact commit being released, not just its own diff.
+  # (`fetch-depth: 0`), scanning the exact commit being released, not just its own diff. Runs the
+  # gitleaks CLI directly (see the step below) rather than ci.yml's `gitleaks/gitleaks-action` pin
+  # -- that wrapper doesn't support `release` events at all.
   secret-scan:
     name: Secret scan (gitleaks, full history)
     needs: provenance
@@ -239,10 +245,12 @@ jobs:
           fetch-depth: 0 # full history — the question here is "ever leaked", not "leaked in this diff"
           persist-credentials: false
 
-      # gitleaks-action hardcodes its own supported-event list (src/index.js, checked directly
-      # against the pinned SHA below): push, pull_request, workflow_dispatch, schedule -- `release`
-      # is not in it and the action hard-exits with "The [release] event is not yet supported" if
-      # asked to run under one. This first surfaced on the real v0.1.0 release.
+      # gitleaks/gitleaks-action (the wrapper ci.yml's own secret-scan job uses, pinned there to
+      # e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e / v3.0.0) hardcodes its own supported-event list
+      # (its src/index.js, checked directly against that SHA): push, pull_request,
+      # workflow_dispatch, schedule -- `release` is not in it, and the action hard-exits with "The
+      # [release] event is not yet supported" if asked to run under one. This first surfaced on the
+      # real v0.1.0 release.
       #
       # First attempt at a fix overrode GITHUB_EVENT_NAME to workflow_dispatch for this step,
       # reasoning that workflow_dispatch/schedule both route to an untargeted full scan (no
@@ -254,9 +262,11 @@ jobs:
       #
       # Real fix: bypass the wrapper action entirely and run gitleaks directly, with the identical
       # command the wrapper uses for a full scan (read from gitleaks-action's own gitleaks.js
-      # Scan() function at the pinned SHA above -- the workflow_dispatch/schedule branch has no
+      # Scan() function at the SHA named above -- the workflow_dispatch/schedule branch has no
       # --log-opts, so this is it verbatim). Binary pinned + checksummed against gitleaks' own
-      # published release, same discipline as this repo's SHA-pinned actions.
+      # published release, same discipline as this repo's SHA-pinned actions. Version is v8.30.1,
+      # not whatever gitleaks-action bundles by default (its own default, unset here or in ci.yml)
+      # -- the two secret-scan jobs run different gitleaks versions until that's unified.
       - name: Install gitleaks
         run: |
           curl -sSLO https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
@@ -266,6 +276,16 @@ jobs:
 
       - name: Run gitleaks (full history)
         run: ./gitleaks detect --redact -v --exit-code=2 --report-format=sarif --report-path=results.sarif --log-level=debug
+
+      # gitleaks-action uploads this by default regardless of outcome, so a real hit has a
+      # structured, downloadable report to work from, not just the console log. Matches that here.
+      - name: Upload gitleaks report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitleaks-results.sarif
+          path: results.sarif
+          if-no-files-found: ignore
 
   # --- Guards 4-5: the whole `verify` job, live, on both OSes -----------------
   # Reuses ci.yml's `verify` job steps via scripts/verify_local.py (reads them out of ci.yml rather
