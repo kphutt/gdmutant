@@ -221,7 +221,13 @@ manual version becomes the way to reproduce a failure by hand.
   the project's own image rather than a generic avatar. Topics are how a search for mutation testing
   or Godot reaches the project at all. Without them it is findable only by people who already know
   its name. *Automatable:* description and topics are repository settings `scripts/harden_github.py`
-  can converge. The social-preview image is uploaded by hand and stays a one-time click.
+  can converge. The social-preview image is uploaded by hand and stays a one-time click. The
+  source SVG and the exact PNG uploaded are `.github/assets/social-preview.svg`/`.png` -- committed
+  so the design survives if the machine that made it doesn't. To regenerate the PNG after an SVG
+  edit: open the SVG in a browser at its native 1280x640 and save a screenshot, or use any
+  SVG-to-PNG renderer that respects the embedded `font-family` stack (the text is live system
+  fonts, not outlined paths, so rendering fidelity depends on what fonts are installed on the
+  machine doing the rendering).
 
 - `ci.yml` runs automatically again. The README's CI badge reports on `ci.yml`, and a workflow
   with no automatic trigger has no result to report, so the badge reads "no status" to every
