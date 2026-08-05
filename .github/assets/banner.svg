@@ -13,8 +13,8 @@
       <stop offset="100%" stop-color="#9fe092" stop-opacity="0"/>
     </radialGradient>
   </defs>
-  <ellipse cx="170" cy="163" rx="155" ry="148" fill="url(#frankGlow)"/>
-  <g transform="translate(70,60) scale(3.125)">
+  <ellipse cx="329" cy="163" rx="155" ry="148" fill="url(#frankGlow)"/>
+  <g transform="translate(229,60) scale(3.125)">
     <rect x="4" y="33" width="8" height="9" rx="2" fill="#8d9199"/>
     <rect x="52" y="33" width="8" height="9" rx="2" fill="#8d9199"/>
     <rect x="11" y="12" width="42" height="42" rx="4" fill="#6fbf5e"/>
@@ -29,9 +29,9 @@
     <path d="M23 49 q9 5 18 -1" stroke="#20242b" stroke-width="2.5" stroke-linecap="round" fill="none"/>
   </g>
   <g font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-    <text x="330" y="146" font-size="90" font-weight="700" fill="#f5f6f7">gdmutant</text>
-    <rect x="385" y="168" width="363" height="5" rx="2.5" fill="#6fbf5e"/>
-    <text x="330" y="218" font-size="32" font-weight="500" fill="#b3bcc8">Frank sneaks a bug into your code.</text>
-    <text x="330" y="264" font-size="37" font-weight="700" fill="#9fe092">Did your tests catch him?</text>
+    <text x="489" y="146" font-size="90" font-weight="700" fill="#f5f6f7">gdmutant</text>
+    <rect x="585" y="168" width="230" height="5" rx="2.5" fill="#6fbf5e"/>
+    <text x="489" y="218" font-size="32" font-weight="500" fill="#b3bcc8">Frank sneaks a bug into your code.</text>
+    <text x="489" y="264" font-size="37" font-weight="700" fill="#9fe092">Did your tests catch him?</text>
   </g>
 </svg>
