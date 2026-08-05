@@ -153,17 +153,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0        # `since` below needs the base commit in the clone
       - uses: kphutt/gdmutant@05728864a1c9330d632e2aab2348ff4442f3d61d # v0.1.0
         with:
           godot-version: "4.7.0"   # the only required input
-          paths: src               # what to mutate (default: the whole project)
-          runner: gdunit4           # or gut, or command
+          paths: src                # what to mutate (default: the whole project)
+          runner: gdunit4            # or gut, or command
+          since: ${{ github.event.pull_request.base.sha }}   # only the lines this PR changed
 ```
 
 It sets up Godot, installs gdmutant, runs it, and writes every survivor with its `gap` / `risk` /
 `start` explanation into the job summary, where reviewers already look. Survivors are output, not
 failure: the step fails only on a real error, such as a suite that was already red. Your project
 brings its own GUT or gdUnit4 addon, the same one your existing test job uses.
+
+Godot boots once per mutant, so a full-project run gets slow fast on anything past a toy example --
+`since` scopes each run to the lines the PR actually touched. Drop it (and `fetch-depth`) to mutate
+the whole project instead, on a schedule rather than per PR.
 
 Every input and output, and how to pin a version, is in
 [the guide](docs/gdmutant-guide.md#github-actions).
