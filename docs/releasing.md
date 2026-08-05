@@ -72,9 +72,14 @@ Verify the result at https://test.pypi.org/p/gdmutant.
 3. Merge both to `main` through the usual PR. A tag whose commit is not an ancestor of `main` is
    refused.
 4. Push the tag: `git tag vX.Y.Z <commit>` then `git push origin vX.Y.Z`. Get it right the first
-   time. The repo's tag ruleset blocks deleting and re-pointing tags, so a tag naming the wrong
-   version or the wrong commit cannot be fixed in place, and the recovery is to burn the version
-   number and cut a new one.
+   time. The repo's tag ruleset blocks deleting and re-pointing tags for anyone acting normally —
+   `current_user_can_bypass: never`, confirmed via the API — so a tag naming the wrong version or
+   commit cannot be fixed in place through the ordinary push/delete path; the default recovery is
+   to burn the version number and cut a new one. A repo admin *can* still disable the ruleset
+   itself (a separate, deliberate config change, not a bypass of the active rule), delete the tag,
+   and re-enable it — but treat that as a rare, considered override, only for a tag nothing
+   external has ever referenced (nothing published, no clone or consumer could have pinned to it),
+   never as a routine fix.
 5. *Automatic.* `release.yml` runs its two guards (the tag matches the packaged version, and the
    tagged commit is on `main`) and then stages a draft Release with generated notes. A guard
    that fails leaves no Release at all, so nothing has shipped.
