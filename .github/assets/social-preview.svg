@@ -13,8 +13,8 @@
       <stop offset="100%" stop-color="#9fe092" stop-opacity="0"/>
     </radialGradient>
   </defs>
-  <ellipse cx="640" cy="320" rx="300" ry="300" fill="url(#frankGlow)"/>
-  <g transform="translate(368,40) scale(8.5)">
+  <ellipse cx="640" cy="320" rx="350" ry="350" fill="url(#frankGlow)"/>
+  <g transform="translate(320,-10) scale(10.0)">
     <rect x="4" y="33" width="8" height="9" rx="2" fill="#8d9199"/>
     <rect x="52" y="33" width="8" height="9" rx="2" fill="#8d9199"/>
     <rect x="11" y="12" width="42" height="42" rx="4" fill="#6fbf5e"/>
