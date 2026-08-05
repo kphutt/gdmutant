@@ -2,28 +2,28 @@ name: CI
 
 # Security checks + the Python verify gate.
 #
-# NOT AUTO-TRIGGERED WHILE PRIVATE (ADR-0012). This ran on every `pull_request` + push to `main`
-# — every one of gdmutant's five jobs billed at least its own 1-minute minimum, and at ~12 runs/day
-# that alone approached this account's whole 3,000-min/month included allowance, on a repo that
-# doesn't ship anything on merge (only a tag push + a human "Publish" click ships, and that path is
-# gated separately — see publish.yml). Merge-time checks now run locally instead
-# (.pre-commit-config.yaml, pre-push stage — same commands, not a reimplementation, so local and
-# whatever runs here later cannot drift). publish.yml's release-time gate runs these same jobs live,
-# in the cloud, unconditionally, on the exact commit being published — a check gating a shipped
-# artifact must be one no local machine state can skip, so THAT path stays cloud regardless.
-#
-# TRIVIAL TO RE-ENABLE, BY DESIGN. Nothing about the jobs below changed to make this possible —
-# only this trigger block did. Once gdmutant is public, Actions is free and unlimited, and you'd
-# want this running automatically again for contributor-facing PR visibility. Restore it with:
-#
-#   on:
-#     pull_request:
-#     push:
-#       branches: [main]
-#
-# and remove `workflow_dispatch` below (or keep both — a manual trigger doesn't hurt).
+# AUTO-TRIGGERED AGAIN as of 2026-08-04, ahead of gdmutant going public. It ran on every
+# `pull_request` + push to `main` until 2026-07-29, when it was switched to `workflow_dispatch`
+# only (ADR-0012): every one of gdmutant's five jobs billed at least its own 1-minute minimum, and
+# at ~12 runs/day that alone approached this account's whole 3,000-min/month included allowance on
+# a *private* repo, on a project that doesn't ship anything on merge (only a tag push + a human
+# "Publish" click ships, and that path is gated separately — see publish.yml). Merge-time checks
+# ran locally instead in between (.pre-commit-config.yaml, pre-push stage — same commands, not a
+# reimplementation, so local and this workflow can't drift from each other). That trade only made
+# sense while private and solo: once gdmutant can take pull requests from anyone, nothing forces a
+# drive-by contributor to install the local hooks, so this cloud run is what actually checks their
+# PR — restoring it is what makes "the real gate is local" (CONTRIBUTING.md's old framing, rewritten
+# alongside this) stop being true for someone who skipped that step. Actions minutes are also free
+# and unlimited on a public repo, so the original cost problem doesn't apply going forward either.
+# `publish.yml`'s release-time gate still re-runs these same jobs live, in the cloud, unconditionally,
+# on the exact commit being published, regardless of this workflow's own history — a check gating a
+# shipped artifact must be one no local machine state (or CI history) can skip, so that path always
+# stayed cloud and is unaffected by this change. Full history: ADR-0012.
 on:
-  workflow_dispatch: # manual only — Actions -> CI -> "Run workflow", for an ad-hoc cloud check
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: # manual too — Actions -> CI -> "Run workflow", for an ad-hoc cloud check
 
 # Least privilege at the workflow level; jobs opt into more only where needed.
 permissions:
@@ -114,36 +114,19 @@ jobs:
     # both Linux and Windows to catch that bug class (encoding + path). Both runners are pinned
     # (never `-latest`) so a runner-image migration can't silently break us. macOS is intentionally
     # out — there is no macOS-specific code path to guard, and it would only add cost.
-    # Linux only. Windows was removed from this matrix to control Actions cost — Windows
-    # runners bill at 2x the Linux rate and this matrix was the largest line in a month that
-    # hit 100% of the budget (at which point Actions stops running and the gates go quiet).
     #
-    # The Windows coverage is NOT abandoned. The encoding/path bug class it guards — a cp1252
-    # console bug shipped once because CI was Linux-only — is covered two ways now: on the
-    # maintainer's own Windows machine as a discipline (`uv run python scripts/verify_local.py`,
-    # see AGENTS.md's Conventions section), and, as of ADR-0012, as an actual MECHANICAL gate:
-    # publish.yml runs this exact `verify` job's steps live, on both Linux and Windows runners,
-    # before anything reaches PyPI. That closes the old gap — "nothing enforces that mechanically,
-    # so it is a discipline, not a gate" no longer describes the Windows leg once a release ships.
-    #
-    # `Verify (windows-2025)` was removed from branch protection's required checks in the same
-    # change — a required check that can never report blocks every PR forever. This job's whole
-    # `on:` trigger is now also disabled for the same reason (ADR-0012) — see the top of this file.
-    #
-    # To restore Windows to THIS workflow (not the same thing as publish.yml's copy, which already
-    # covers both OSes): put `windows-2025` back in the matrix below AND re-add
-    # `Verify (windows-2025)` to the required checks. Both, or the gate is theatre.
-    #
-    # The single-entry matrix is deliberate: it keeps this job's check name
-    # `Verify (ubuntu-24.04)`, which WAS a required status check on main until ADR-0012 removed
-    # required checks alongside this workflow's triggers (see the top of this file). Dropping the
-    # matrix would rename the check to `Verify` — if triggers and required checks are ever
-    # restored together, the renamed check would never match, blocking every PR forever. It also
-    # makes restoring Windows a one-word edit.
+    # Windows was dropped from this matrix while private (Windows runners bill at 2x the Linux
+    # rate, and this matrix was the largest line in a month that hit 100% of the Actions budget) —
+    # restored 2026-08-04 alongside this workflow's triggers (ADR-0012's correction). The two
+    # halves of that restoration have to land together: an `on:` trigger with no Windows coverage
+    # and a Windows leg with no trigger to run it are each individually "the gate is theatre" —
+    # this file's own prior revision said so explicitly. Both are back now: this matrix, and
+    # `Verify (windows-2025)` is required again in branch protection (`scripts/harden_github.py`
+    # derives that list from this file, so it just needs a re-run once this lands).
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04]
+        os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -154,6 +137,16 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+
+      # `tests/test_htmlreport_behaviour.py` drives the HTML report's real inlined JS via a real
+      # `node` subprocess. Pinned rather than trusting whatever ships pre-installed on the runner
+      # image, the same reasoning `os` above is pinned for (never `-latest`, a runner-image
+      # migration can't silently change what these tests actually exercise). Same logic already
+      # applies here: an unpinned Node was invisible while this job only ran on Linux, and started
+      # mattering the moment Windows came back.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.14.0"
 
       # uv installs the exact locked deps (hashes) — reproducible across machines.
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0

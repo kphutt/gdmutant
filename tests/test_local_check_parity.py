@@ -46,6 +46,7 @@ PARSED_JOBS = ("verify", "license-check")
 ALLOWED_USES_PREFIXES = (
     "actions/checkout@",
     "actions/setup-python@",
+    "actions/setup-node@",
     "astral-sh/setup-uv@",
 )
 

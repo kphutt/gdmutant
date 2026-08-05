@@ -74,9 +74,11 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   CLI people run on Windows, so test on Windows for real, not just Linux. Two concrete traps to
   watch for: console output can crash under the legacy `cp1252` code page, and `python3` can resolve
   to a *different* interpreter than `python` (see `.pre-commit-config.yaml`'s header for the guard).
-- `ci.yml` does not run automatically (why: [ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md)).
-  The unbypassable gate is `publish.yml`'s release-time run of `verify` on both Linux and Windows,
-  before every real release. Run the same checks locally any time:
+- `ci.yml` runs automatically on every pull request and push to `main` (restored 2026-08-04, ahead
+  of going public — why it was ever manual-only, and why it's back:
+  [ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md)). The unbypassable gate is
+  still `publish.yml`'s release-time run of `verify` on both Linux and Windows, before every real
+  release. Run the same checks locally any time:
 
   ```
   uv run python scripts/verify_local.py
@@ -85,8 +87,7 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   ```
 
   This script reads its commands out of `ci.yml` rather than restating them, so local, CI, and the
-  release gate can't drift apart. To restore `ci.yml` running automatically, see ADR-0012's
-  Decision section for the exact steps.
+  release gate can't drift apart.
 
   If every tool fails with `uv trampoline failed to canonicalize script path`, the venv's
   launcher shims are stale, usually after a `uv` version bump. Fix: `uv sync --frozen --reinstall`.
@@ -109,12 +110,13 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   what every member of the pair does now, including the ones already right.
 - Sensitive paths (CI, scripts, toolchain, the mutation-operator catalog, and the GDScript
   adapter) are listed in `CODEOWNERS` for documentation only. It enforces no review (a sole
-  maintainer can't approve their own PR). `main` requires a pull request and one status check,
-  `Workflow security (zizmor)`, which reads the workflow files and nothing else, so no check on
-  the code blocks a merge. Those are local discipline (ADR-0012). `.github/CODEOWNERS` carries the
-  full list of what branch protection enforces. Read changes to these paths carefully before
-  merging. The GDScript adapter is the real technical risk, since a wrong mutant means a silently
-  wrong survivor report.
+  maintainer can't approve their own PR). `main` requires a pull request and, alongside
+  `Workflow security (zizmor)` (which reads the workflow files and nothing else), the checks
+  `ci.yml`'s now-restored triggers make possible: `Verify` on both platforms, `Secret scan
+  (gitleaks)`, and both `Self-test` gates — see `scripts/harden_github.py`'s `REQUIRED_JOBS` for
+  the exact, current list. `.github/CODEOWNERS` carries the full list of what branch protection
+  enforces. Read changes to these paths carefully before merging. The GDScript adapter is the real
+  technical risk, since a wrong mutant means a silently wrong survivor report.
 
 ## Design goals (keep these in mind)
 

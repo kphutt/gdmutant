@@ -105,3 +105,29 @@ kind of gap: a contributor who skips the manual suite run reaches `main` unverif
 the same way skipping any pre-commit hook always could. The premise this decision rests on, that a
 merge does not ship anything and the release gate is what catches it, is unaffected. Only the
 pre-push stage's exact command list, quoted above, needed updating.
+
+## Correction (2026-08-04)
+
+`ci.yml`'s `pull_request`/`push` triggers are restored, ahead of gdmutant going public
+(`workflow_dispatch` kept alongside them, per this record's own "Trivial to reverse" section). The
+cost argument in Context and Decision no longer applies going forward: Actions minutes are free and
+unlimited on a public repo, so there is no billed-minute problem left to solve by keeping this
+workflow manual-only.
+
+A second reason surfaced that this record didn't originally weigh, because it didn't apply while
+gdmutant was private and solo-authored: **merge-time correctness being "local, not mechanically
+enforced" only works when every contributor reliably has the local hooks installed.** That was true
+by construction while the operator was the only author (their own machines install them fleet-wide).
+It stops being true the moment gdmutant can take a pull request from anyone else — nothing forces a
+drive-by contributor to run `pre-commit install`, and `CONTRIBUTING.md` already documented, honestly,
+that skipping it left most of a PR's checks unrun. Restoring this workflow's automatic triggers is
+what makes that section of `CONTRIBUTING.md` false as written, so it was rewritten in the same
+change: cloud CI goes back to being the check every PR gets regardless of contributor setup; local
+hooks are now correctly described as the fast, optional, catches-it-earlier layer, not "the real
+gate."
+
+Everything else stands. `publish.yml`'s release-time gate is still the sole *unbypassable* check —
+this restoration adds contributor-facing visibility back, it does not change what's required to
+ship. The Decision section's reasoning for the original split (why merge-time and ship-time can
+tolerate different rigor) is historical record, not reversed by this correction — only the trigger
+configuration it produced changed, and for reasons this record didn't originally anticipate.

@@ -9,6 +9,7 @@ Skipped when `node` is not on PATH — the rest of the suite (and the whole CLI)
 """
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -143,7 +144,12 @@ def observed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
         env={
             "HARNESS_OPS": json.dumps(_OPS),
             "HARNESS_KEYS": json.dumps(KEYS),
-            "PATH": __import__("os").environ["PATH"],
+            "PATH": os.environ["PATH"],
+            # A replaced env on Windows still needs SystemRoot -- without it, Windows' own
+            # process loader (and Node's own init) can fail before the script even runs,
+            # decades-old and unrelated to anything GDScript/Node-specific. Absent on other
+            # platforms, so this is a no-op there.
+            **({"SYSTEMROOT": os.environ["SYSTEMROOT"]} if "SYSTEMROOT" in os.environ else {}),
         },
     )
     parsed: dict[str, Any] = json.loads(result.stdout)

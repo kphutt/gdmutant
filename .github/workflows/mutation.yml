@@ -100,6 +100,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      # `uv run pytest` below exercises tests/test_htmlreport_behaviour.py, which drives the HTML
+      # report's real inlined JS via a real `node` subprocess. Pinned for the same reason ci.yml's
+      # own matching step is — see its comment.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.14.0"
+
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.11.28"
