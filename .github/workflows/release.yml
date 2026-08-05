@@ -93,7 +93,8 @@ jobs:
         # would break that test's substitution), and add auth only when the remote actually is
         # github.com. `-c http.<url>.extraheader` is scoped to that exact URL prefix: git ignores it
         # entirely for a local-path remote, and the `-c` flag never touches .git/config or persists
-        # anything -- GitHub also masks secret values in logs regardless of how they're used.
+        # anything -- GitHub masks the raw $GH_TOKEN value in logs, but nothing in this step ever
+        # prints the derived header value either, so there's nothing to mask in the first place.
         run: |
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
             fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
