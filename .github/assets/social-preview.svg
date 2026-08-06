@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img"
-     aria-label="gdmutant &#8212; Frank sneaks a bug into your code. Did your tests catch him?">
-  <title>gdmutant &#8212; Frank sneaks a bug into your code. Did your tests catch him?</title>
+     aria-label="gdmutant: Frank the Mutant, the project mascot">
+  <title>gdmutant: Frank the Mutant, the project mascot</title>
   <rect x="0" y="0" width="1280" height="640" fill="#20242b"/>
   <defs>
     <radialGradient id="frankGlow" cx="0.5" cy="0.5" r="0.5">
@@ -13,25 +13,19 @@
       <stop offset="100%" stop-color="#9fe092" stop-opacity="0"/>
     </radialGradient>
   </defs>
-  <ellipse cx="640" cy="252" rx="200" ry="200" fill="url(#frankGlow)"/>
-  <g transform="translate(512,120) scale(4.0)">
-    <rect x="4" y="33" width="8" height="9" rx="2" fill="#8d9199"/>
-    <rect x="52" y="33" width="8" height="9" rx="2" fill="#8d9199"/>
-    <rect x="11" y="12" width="42" height="42" rx="4" fill="#6fbf5e"/>
-    <path d="M11 16 a4 4 0 0 1 4-4 h34 a4 4 0 0 1 4 4 v8 H11 Z" fill="#20242b"/>
-    <path d="M11 29 H53" stroke="#2f7a29" stroke-width="2.2" fill="none"/>
-    <path d="M17 25.5 v7 M26 25.5 v7 M35 25.5 v7 M44 25.5 v7"
-          stroke="#2f7a29" stroke-width="2.2" stroke-linecap="round"/>
-    <circle cx="24" cy="40" r="6.5" fill="#ffffff"/>
-    <circle cx="24" cy="40" r="3.2" fill="#20242b"/>
-    <circle cx="41" cy="41" r="4" fill="#ffffff"/>
-    <circle cx="41" cy="41" r="2" fill="#20242b"/>
-    <path d="M23 49 q9 5 18 -1" stroke="#20242b" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-  </g>
-  <g font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">
-    <text x="640" y="418" font-size="90" font-weight="700" fill="#f5f6f7">gdmutant</text>
-    <rect x="487" y="442" width="361" height="5" rx="2.5" fill="#6fbf5e"/>
-    <text x="640" y="502" font-size="32" font-weight="500" fill="#b3bcc8">Frank sneaks a bug into your code.</text>
-    <text x="640" y="550" font-size="37" font-weight="700" fill="#9fe092">Did your tests catch him?</text>
+  <ellipse cx="640" cy="320" rx="320" ry="320" fill="url(#frankGlow)"/>
+  <g>
+    <rect x="385.2" y="320" width="72.8" height="81.9" rx="18.2" fill="#8d9199"/>
+    <rect x="822" y="320" width="72.8" height="81.9" rx="18.2" fill="#8d9199"/>
+    <rect x="448.9" y="128.9" width="382.2" height="382.2" rx="36.4" fill="#6fbf5e"/>
+    <path d="M448.9 165.3 a36.4 36.4 0 0 1 36.4-36.4 h309.4 a36.4 36.4 0 0 1 36.4 36.4 v72.8 H448.9 Z" fill="#20242b"/>
+    <path d="M448.9 283.6 H831.1" stroke="#2f7a29" stroke-width="20.02" fill="none"/>
+    <path d="M503.5 251.75 v63.7 M585.4 251.75 v63.7 M667.3 251.75 v63.7 M749.2 251.75 v63.7"
+          stroke="#2f7a29" stroke-width="20.02" stroke-linecap="round"/>
+    <circle cx="567.2" cy="383.7" r="59.15" fill="#ffffff"/>
+    <circle cx="567.2" cy="383.7" r="29.12" fill="#20242b"/>
+    <circle cx="721.9" cy="392.8" r="36.4" fill="#ffffff"/>
+    <circle cx="721.9" cy="392.8" r="18.2" fill="#20242b"/>
+    <path d="M558.1 465.6 q81.9 45.5 163.8 -9.1" stroke="#20242b" stroke-width="22.75" stroke-linecap="round" fill="none"/>
   </g>
 </svg>
