@@ -172,6 +172,46 @@ def test_command_runner_success_has_no_detail(tmp_path: Path) -> None:
     assert CommandRunner(_exits(0)).run(str(tmp_path)).detail == ""
 
 
+def _prints_then_exits(text: str, code: int, *, stderr: bool = False) -> list[str]:
+    stream = "sys.stderr" if stderr else "sys.stdout"
+    script = f"import sys; print({text!r}, file={stream}); sys.exit({code})"
+    return [sys.executable, "-c", script]
+
+
+def test_command_runner_script_error_in_output_is_an_error_even_on_exit_zero(
+    tmp_path: Path,
+) -> None:
+    # The exact case a bare exit-code check can't catch (docs/decisions/0015): GDScript has no
+    # exceptions, so a runtime error can leave a half-executed test still exiting 0.
+    cmd = _prints_then_exits("SCRIPT ERROR: Nonexistent function 'foo'", 0)
+    result = CommandRunner(cmd).run(str(tmp_path))
+    assert result.failed is True
+    assert (result.tests, result.failures, result.errors) == (1, 0, 1)
+    assert "SCRIPT ERROR" in result.detail
+    assert "GDScript has no exceptions" in result.detail
+
+
+def test_command_runner_script_error_on_stderr_is_also_caught(tmp_path: Path) -> None:
+    cmd = _prints_then_exits("SCRIPT ERROR: boom", 0, stderr=True)
+    result = CommandRunner(cmd).run(str(tmp_path))
+    assert (result.failures, result.errors) == (0, 1)
+
+
+def test_command_runner_script_error_takes_precedence_over_a_nonzero_exit(tmp_path: Path) -> None:
+    # A command that both errors AND exits non-zero is still reported via `errors`, not `failures`:
+    # the SCRIPT ERROR is the more specific, more actionable diagnosis of the two.
+    cmd = _prints_then_exits("SCRIPT ERROR: boom", 1)
+    result = CommandRunner(cmd).run(str(tmp_path))
+    assert (result.failures, result.errors) == (0, 1)
+
+
+def test_command_runner_without_script_error_is_unaffected(tmp_path: Path) -> None:
+    # A non-Godot command (or a Godot one that never hits this) is untouched: ordinary exit-code
+    # pass/fail, no `errors`.
+    result = CommandRunner(_exits(0)).run(str(tmp_path))
+    assert (result.failures, result.errors) == (0, 0)
+
+
 def test_command_runner_missing_executable_raises(tmp_path: Path) -> None:
     # A command that can't be executed at all raises (the engine tallies it as ERROR / the CLI
     # surfaces the not-found hint) — it is never silently treated as a passing or failing suite.

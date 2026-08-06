@@ -84,3 +84,13 @@ Guidance for a hand-rolled harness, in order of reliability:
 3. An in-process watchdog does NOT help. A one-shot timer or `_process` deadline cannot interrupt
    a *synchronous* mutant (a compiling `while true`), because it starves the single main thread. The
    real hang defense is the external per-mutant subprocess timeout, which gdmutant already has.
+
+## Update — 2026-08-06: CommandRunner is no longer purely exit-code-only
+
+Point 2 above says *"gdmutant's `CommandRunner` is exit-code-only today, and a sentinel-aware runner
+is possible future work behind the same `Runner` seam."* That is now only half true: `CommandRunner`
+still reads no per-test sentinel, but it does check its captured output for a Godot runtime `SCRIPT
+ERROR` (regardless of exit code) as of docs/decisions/0015 — a different, narrower trap than this
+section's load-failure caveat (a *runtime* error mid-test, not a *compile* failure at load), found the
+same way: dogfooding this runner against a real Godot project's hand-rolled harness. See 0015 for the
+mechanism and why the check lives directly in `CommandRunner` rather than behind a new runner/flag.

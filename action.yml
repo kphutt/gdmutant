@@ -43,7 +43,7 @@ inputs:
     required: false
     default: ""
   runner:
-    description: "Test runner: gdunit4, gut, command, or godot-command (gdmutant's --runner)."
+    description: "Test runner: gdunit4, gut, or command (gdmutant's --runner)."
     required: false
     default: gdunit4
   tests:

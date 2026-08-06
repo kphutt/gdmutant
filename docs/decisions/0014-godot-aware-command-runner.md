@@ -1,13 +1,19 @@
 ---
 type: decision
-status: active
+status: superseded
 created: 2026-08-05
 ---
 
 # GodotCommandRunner: a Godot-aware exit-code runner, in the adapter, not the engine
 
 ## Status
-Accepted
+Accepted, then superseded 2026-08-06 by [`0015`](0015-command-runner-catches-a-runtime-script-error.md):
+the `GodotCommandRunner` adapter class and its `--runner godot-command` CLI flag were reverted (the PR
+that shipped them is `git revert`ed on `main`) in favor of the same `SCRIPT ERROR` check living
+directly in `CommandRunner`, so that a project already using `--runner command` gets the fix with no
+new flag to discover and no CLI/doc change to make. This record is kept as history — restored after an
+earlier version of the revert deleted it outright, which contradicts this repo's own append-only ADR
+convention; see 0015's own "No new ADR-0014 reuse" note. The analysis below is otherwise unedited.
 
 ## Context
 [ADR-0005](0005-exit-code-test-runner-convention.md) added `CommandRunner` for any harness that

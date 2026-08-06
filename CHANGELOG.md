@@ -10,6 +10,15 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `--runner command` now catches a Godot runtime `SCRIPT ERROR` in the test command's output and
+  reports it as a failure regardless of exit code. GDScript has no exceptions, so a runtime error
+  mid-test previously could leave a hand-rolled harness's own exit code at 0 even though the test
+  never finished, reading as a false survivor. See `docs/decisions/0015`.
+
 ## [0.1.0] - 2026-08-04
 
 gdmutant mutates real GDScript and reports survivors end-to-end via the standalone `gdmutant run`
