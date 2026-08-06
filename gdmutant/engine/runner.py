@@ -92,7 +92,9 @@ class Runner(Protocol):
     responsible mutant SURVIVED, gdmutant's single worst failure mode (a wrong survivor report).
     Each concrete adapter upholds this in the way its framework fails:
       * ``CommandRunner`` — a non-zero exit is a failure (killed); a command that can't be executed
-        at all raises (the engine tallies ``error``).
+        at all raises (the engine tallies ``error``); a `_SCRIPT_ERROR_MARKER` in the captured
+        output is an ``error`` regardless of exit code — the clearest instance of this contract for
+        this runner, since a run that hit it did not actually finish (docs/decisions/0015).
       * ``GdUnit4Runner`` — GdUnit4 loads every suite during discovery, so one that fails to parse
         aborts the whole run and writes *no* report, caught by the "the report must reappear"
         freshness guard (it raises → ``error``). Measured at n>1 against a two-suite corpus, not

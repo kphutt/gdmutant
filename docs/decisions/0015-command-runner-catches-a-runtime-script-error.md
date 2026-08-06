@@ -50,6 +50,16 @@ as an intentional trade-off rather than an unexplained inconsistency the next re
   fire for a non-Godot command — the marker string simply never appears — so it costs those callers
   nothing beyond the one comparison. But it is a real, permanent asterisk on the class's own claim to
   be generic, and a hypothetical second, non-Godot adapter would carry a dead check it can never use.
+- The check is unconditional and, unlike the reverted `--runner godot-command`, offers no opt-out. A
+  hand-rolled Godot suite that *intentionally* exercises and logs a handled runtime error (e.g. a
+  defensive-programming/null-safety test) while still passing on its own terms and exiting 0 will now
+  be reported as `errors=1` instead of a clean pass, purely because its own output happens to contain
+  the literal substring `SCRIPT ERROR`. This is not a *silently wrong* result — the run aborts loudly
+  rather than mis-scoring a survivor, and the engine already treats an `error` the same as a kill, so
+  the worst case is a false alarm on an otherwise-green suite, never a false pass. Narrow in practice
+  (it requires a suite that specifically logs that exact phrase), but real, and worth knowing before
+  adopting: a harness in this shape should avoid printing the literal string, e.g. by logging a
+  paraphrase of the error instead of Godot's own wording.
 - The cold `.godot/` import-cache trap (the first run silently imports every asset before any test
   runs, discussed alongside this fix) is explicitly **not** addressed here. It was never a
   correctness bug — the existing `_cold_import_notice` in `cli.py` already tells the user exactly what
@@ -59,7 +69,9 @@ as an intentional trade-off rather than an unexplained inconsistency the next re
   (Playwright's browser install, Docker's image pull, Gradle's dependency resolution) commonly choose
   "tell the user, let them run it once" over silently absorbing the cost inside an unrelated command,
   and that is what gdmutant already does here.
-- No new ADR-0014 reuse: the prior godot-command/godot-script PR's ADR-0014 was deleted along with the
-  rest of that revert. This is `0015`, not a reused `0014`, since that PR's own (now-historical) review
-  comments already reference `docs/decisions/0014-godot-aware-command-runner.md` by that exact path —
-  reusing the number would point old references at unrelated content.
+- No new ADR-0014 reuse: this is `0015`, not a reused `0014`, since the reverted PR's own
+  (now-historical) review comments already reference `docs/decisions/0014-godot-aware-command-runner.md`
+  by that exact path — reusing the number would point old references at unrelated content. `0014`
+  itself is kept, not deleted, with its `status` changed to `superseded` and a pointer to this record —
+  an earlier version of this revert deleted it outright, which a review correctly flagged as breaking
+  this repo's own append-only ADR convention (`docs/decisions/NNNN-*.md` — `AGENTS.md`).
