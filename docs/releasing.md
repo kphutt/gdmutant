@@ -64,11 +64,12 @@ Verify the result at https://test.pypi.org/p/gdmutant.
 
 1. Set the version in `pyproject.toml`. The tag must match it exactly.
    `scripts/check_release_tag.py` fails the release if it doesn't.
-2. Date the changelog. Change this version's heading in `CHANGELOG.md` from
-   `## [X.Y.Z] — unreleased` to `## [X.Y.Z] — YYYY-MM-DD`, using the date you expect to publish.
-   Nothing automates this and no check enforces it, and it has to happen before the tag: the tag
-   ships the commit it points at, so tagging first publishes a changelog that calls the shipped
-   version unreleased.
+2. Date the changelog. Change `CHANGELOG.md`'s bare `## [Unreleased]` heading (Keep a Changelog's
+   own convention — no version number yet, since nothing under it has shipped) to
+   `## [X.Y.Z] - YYYY-MM-DD`, using the date you expect to publish: one rename adds both the
+   version number and the date together. Nothing automates this and no check enforces it, and it
+   has to happen before the tag: the tag ships the commit it points at, so tagging first publishes
+   a changelog that calls the shipped version unreleased.
 3. Merge both to `main` through the usual PR. A tag whose commit is not an ancestor of `main` is
    refused.
 4. Push the tag: `git tag vX.Y.Z <commit>` then `git push origin vX.Y.Z`. Get it right the first

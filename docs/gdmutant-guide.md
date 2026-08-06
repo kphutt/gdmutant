@@ -369,9 +369,11 @@ mutant is killable, it usually is. Write the test.
   missing `gut`, or any other flag behaving like an old version). `pip install .`/`pip install
   gdmutant` warns when its `gdmutant.exe` lands somewhere not on PATH ("The script gdmutant.exe is
   installed in ... which is not on PATH"). If an older `gdmutant` from a different Python install
-  is earlier on PATH, that's the one your shell runs, silently. `gdmutant --version` won't catch
-  this: every install prints `gdmutant 0.1.0` until this project ships a second version. Check the
-  path instead: `Get-Command gdmutant` (PowerShell) or `which gdmutant` (bash/zsh) shows which
+  is earlier on PATH, that's the one your shell runs, silently. Check `gdmutant --version` first —
+  if it names an older release than the one you meant to install, or a tool run from a checkout
+  silently prefers a stale git-pinned dependency over the one you just installed (`tool.uv.sources`
+  in `pyproject.toml`, if the project has one), that is the mismatch. Otherwise check the path
+  instead: `Get-Command gdmutant` (PowerShell) or `which gdmutant` (bash/zsh) shows which
   `gdmutant.exe` actually answers, and compare it against the path pip's warning named. Fix by adding
   that directory to PATH, or by uninstalling the older `gdmutant` first.
 - "GUT found no tests …" on the baseline run. Nothing is broken: `--tests` defaults to
