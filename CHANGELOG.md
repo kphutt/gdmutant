@@ -14,8 +14,8 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ### Added
 
-- A "GitHub Actions" section on the README, with a real, runnable workflow file: the Action
-  shipped in 0.1.0, but nothing on the README told a visitor it existed.
+- A "GitHub Actions" section on the README: the Action shipped in 0.1.0, but nothing on the
+  README told a visitor it existed.
 
 ### Fixed
 
