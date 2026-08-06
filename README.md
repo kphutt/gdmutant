@@ -163,8 +163,8 @@ jobs:
           godot-version: "4.7.0"   # the only required input
           paths: src                # what to mutate (default: the whole project)
           runner: gdunit4            # or gut, or command
-          # A PR diffs against its base commit; a merge to main diffs against the commit
-          # it replaced -- either way, only the code that actually changed gets mutated.
+          # A PR diffs against its base commit. A merge to main diffs against the commit
+          # it replaced. Either way, only the code that actually changed gets mutated.
           since: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
 ```
 
