@@ -1675,6 +1675,28 @@ def test_missing_command_executable_on_godot_command_runner_notes_godot_is_separ
     assert "is not read in this mode, so setting it changes nothing" not in err
 
 
+def test_missing_godot_and_command_sharing_a_name_still_attributes_to_godot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Regression: the common real shape is --command "godot ..." with --godot left at its own
+    # default of "godot" -- both name the SAME (missing) binary. GodotCommandRunner.run() always
+    # calls prepare() (which can only fail on a missing `godot`) before it ever runs `command`, so
+    # the import warm-up is what actually failed here; the advice must still point at --godot, not
+    # fall through to the --command wording just because command[0] happens to match too (the two
+    # can't both be independently missing in one run: a `godot` that resolved during warm-up would
+    # have resolved identically moments later in `command`).
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    path = _gd(tmp_path)
+    runner = GodotCommandRunner(
+        command=[_ABSENT, "--headless", "--script", "res://tests/run.gd"], godot=_ABSENT
+    )
+    rc = run_mutation(str(path), str(tmp_path), runner)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "pass its full path with --godot" in err
+    assert "The test command's executable comes from the --command string itself" not in err
+
+
 def test_main_gut_runner_builds_from_tests_godot_and_default_report_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

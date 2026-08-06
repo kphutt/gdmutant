@@ -345,7 +345,18 @@ def _command_argv(runner: Runner, missing: str) -> Sequence[str] | None:
     which runner it is. Comparing against `missing` (rather than only checking the runner's type)
     is what keeps that case correct: a `GodotCommandRunner` whose ``--godot`` binary is missing
     gets the same "pass its full path with --godot" advice a JUnit runner would, not the "‑‑godot
-    has no effect here" wording that is only true for a project whose whole command is opaque."""
+    has no effect here" wording that is only true for a project whose whole command is opaque.
+
+    The `godot` check must come first. `GodotCommandRunner.run` always calls `prepare` (which can
+    only fail on a missing `godot`) before it ever runs `command`, so when `godot` and `command[0]`
+    happen to be the same name — the common case, since both default to/name ``"godot"`` — a
+    `command`-first check would misattribute a genuinely-missing `--godot` to `--command` instead:
+    the two can never *both* be independently missing in the same run (a `godot` that resolved
+    during warm-up would have resolved identically moments later in `command`), so matching `godot`
+    first is always the correct attribution, never a false positive against a real `command` fault.
+    """
+    if isinstance(runner, GodotCommandRunner) and missing == runner.godot:
+        return None
     if isinstance(runner, CommandRunner | GodotCommandRunner) and missing == runner.command[0]:
         return runner.command
     return None
