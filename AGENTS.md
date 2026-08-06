@@ -92,7 +92,10 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   If every tool fails with `uv trampoline failed to canonicalize script path`, the venv's
   launcher shims are stale, usually after a `uv` version bump. Fix: `uv sync --frozen --reinstall`.
 - Keep the engine language-neutral: no GDScript-specific assumptions in `gdmutant/engine/`.
-  Language specifics live only in `gdmutant/adapters/<lang>/`.
+  Language specifics live only in `gdmutant/adapters/<lang>/`. One narrow, deliberate exception:
+  `CommandRunner` (docs/decisions/0005) also checks its output for a GDScript-specific marker
+  string (docs/decisions/0015) — costs nothing for a non-GDScript command (the string never
+  appears), so it was kept there rather than behind a new adapter-level runner and CLI flag.
 - The mutation-operator core is deterministic, the reproducible mode a CI check can trust. Any
   future LLM-semantic mode stays out of it.
 - **Recurring bug one: a gate that passes without checking anything.** Seen five times. A test that

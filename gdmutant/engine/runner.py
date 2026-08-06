@@ -14,6 +14,17 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 from xml.etree import ElementTree
 
+#: What a GDScript runtime error prints to stdout/stderr (verified live, Godot 4.7). GDScript has no
+#: exceptions: a runtime error (a null access, an out-of-range index, …) aborts only the *current
+#: function call* at that exact statement, and execution otherwise continues — the process does not
+#: crash. A hand-rolled test harness that decides pass/fail purely from its own recorded assertion
+#: failures (never "did every test method actually run to its end") cannot see this: a test that
+#: errors out halfway through, before reaching its own assertions, looks identical to one that ran
+#: clean and exits 0. `CommandRunner` checks for this literal string as a narrow, deliberate
+#: exception to staying language-neutral — see docs/decisions/0015 for why it lives here rather than
+#: behind a new adapter-level runner (the alternative considered and rejected).
+_SCRIPT_ERROR_MARKER = "SCRIPT ERROR"
+
 
 def with_filename(error: FileNotFoundError, attempted: str) -> FileNotFoundError:
     """`error`, guaranteed to carry a `.filename` the CLI's missing-executable hint can show the
@@ -159,6 +170,14 @@ class CommandRunner:
     guards (see `Runner`) can never fire for this runner — a harness that finds no tests and exits 0
     looks exactly like one that passed. **A command used here must exit non-zero when it discovers
     no tests**; nothing downstream can recover that distinction once the exit code is 0.
+
+    **One narrow, deliberate exception to staying language-neutral:** a `_SCRIPT_ERROR_MARKER` in
+    the command's captured output is treated as a failure regardless of exit code (see its own
+    docstring, and docs/decisions/0015). Found dogfooding this runner against a real Godot project's
+    hand-rolled harness: GDScript has no exceptions, so a runtime error mid-test can leave the
+    harness's own exit code at 0 even though the test never finished. This one check can never fire
+    for a non-Godot command (the string simply never appears), so it costs those callers nothing —
+    it just isn't fully general the way the rest of this class is.
     """
 
     command: Sequence[str]
@@ -185,6 +204,23 @@ class CommandRunner:
             # naming the actual bad command — the same Windows quirk the GdUnit4/GUT call sites
             # patch around.
             raise with_filename(error, self.command[0]) from error
+        output = (completed.stdout or "") + (completed.stderr or "")
+        if _SCRIPT_ERROR_MARKER in output:
+            # Regardless of exit code: see _SCRIPT_ERROR_MARKER and the class docstring. `errors`,
+            # not `failures`: the run itself cannot be trusted, a different fault from a clean red
+            # test (and, unlike an ordinary failure, the string can appear on either exit code).
+            return SuiteResult(
+                tests=1,
+                failures=0,
+                errors=1,
+                detail=(
+                    f"the command's output contains a Godot {_SCRIPT_ERROR_MARKER!r} "
+                    f"(exit code {completed.returncode}). GDScript has no exceptions, so a "
+                    "runtime error aborts only the current function call at that statement: a "
+                    "test harness that only checks its own recorded assertion failures can read "
+                    f"a half-executed test as a pass. Output:\n{output.strip()[-2000:]}"
+                ),
+            )
         if completed.returncode == 0:
             return SuiteResult(tests=1, failures=0, errors=0)
         # One suite as a single pass/fail unit — per-test counts aren't available without a report.
