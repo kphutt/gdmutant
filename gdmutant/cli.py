@@ -34,6 +34,7 @@ from gdmutant.adapters.gdscript.runner import (
     DEFAULT_REPORT_PATH,
     DEFAULT_TIMEOUT,
     GdUnit4Runner,
+    GodotCommandRunner,
     GutRunner,
 )
 from gdmutant.engine.adapter import Adapter
@@ -334,26 +335,51 @@ def _missing_executable(error: BaselineFailed) -> str | None:
     return None
 
 
-def _command_argv(runner: Runner) -> Sequence[str] | None:
-    """The ``--command`` argv when `runner` is the exit-code `CommandRunner`, else ``None``.
+def _command_argv(runner: Runner, missing: str) -> Sequence[str] | None:
+    """The ``--command`` argv, when `missing` (the executable that could not be run) came from it —
+    else ``None``, meaning ``--godot`` is the flag to fix.
 
-    The one thing an error message needs to know to give advice that works: the JUnit runners take
-    their executable from ``--godot``, and the exit-code runner takes it from the ``--command``
-    string. Reading it off the runner object keeps the two callers from threading a mode string
-    through every layer."""
-    return runner.command if isinstance(runner, CommandRunner) else None
+    For `CommandRunner` this is always its `command` (it never touches ``--godot`` at all).
+    `GodotCommandRunner` reads *both*: `command` for the actual test run, `godot` for its own
+    import warm-up — so which advice is right depends on which one actually went missing, not just
+    which runner it is. Comparing against `missing` (rather than only checking the runner's type)
+    is what keeps that case correct: a `GodotCommandRunner` whose ``--godot`` binary is missing
+    gets the same "pass its full path with --godot" advice a JUnit runner would, not the "‑‑godot
+    has no effect here" wording that is only true for a project whose whole command is opaque.
+
+    The `godot` check must come first. `GodotCommandRunner.run` always calls `prepare` (which can
+    only fail on a missing `godot`) before it ever runs `command`, so when `godot` and `command[0]`
+    happen to be the same name — the common case, since both default to/name ``"godot"`` — a
+    `command`-first check would misattribute a genuinely-missing `--godot` to `--command` instead:
+    the two can never *both* be independently missing in the same run (a `godot` that resolved
+    during warm-up would have resolved identically moments later in `command`), so matching `godot`
+    first is always the correct attribution, never a false positive against a real `command` fault.
+    """
+    if isinstance(runner, GodotCommandRunner) and missing == runner.godot:
+        return None
+    if isinstance(runner, CommandRunner | GodotCommandRunner) and missing == runner.command[0]:
+        return runner.command
+    return None
 
 
-def _missing_executable_hint(filename: str, command: Sequence[str] | None = None) -> str:
+def _missing_executable_hint(
+    filename: str, command: Sequence[str] | None = None, *, godot_flag_also_used: bool = False
+) -> str:
     """A friendly, actionable message for a not-found test-runner executable named `filename`.
 
-    `command` is the ``--command`` argv when the run used ``--runner command``, and ``None`` for
-    the JUnit runners — it picks the advice, because **the two modes take their executable from
-    different places**. Telling a ``--runner command`` user to "pass its full path with --godot"
-    sends them to a flag that mode never reads: they set it, get the byte-identical error, and have
-    to find the caveat in the README to get unstuck. So under ``--runner command`` the message says
-    where the executable actually comes from, that ``--godot`` has no effect there, and shows their
-    own command back with the path slot marked.
+    `command` is the ``--command`` argv when the missing executable came from it, and ``None`` when
+    it came from ``--godot`` instead — it picks the advice, because **the two sources take their
+    executable from different places**. Telling a ``--runner command`` user to "pass its full path
+    with --godot" sends them to a flag that mode never reads: they set it, get the byte-identical
+    error, and have to find the caveat in the README to get unstuck. So when `command` is set, the
+    message says where the executable actually comes from and shows their own command back with the
+    path slot marked.
+
+    `godot_flag_also_used` only matters when `command` is set: plain ``--runner command`` never
+    reads ``--godot`` at all, so the message can flatly say it "has no effect".
+    ``--runner godot-command`` *does* read it (for its own import warm-up) — just not for locating
+    *this* executable — so that same flat claim would be a false statement about this mode, not
+    merely unhelpful advice.
 
     Either way, a Godot-looking binary on macOS also gets the app-bundle path (the single most
     common first-run failure — most Godot users are on macOS, where Godot is never on PATH), phrased
@@ -368,10 +394,14 @@ def _missing_executable_hint(filename: str, command: Sequence[str] | None = None
     # it is the authoritative name of what could not be executed, even if the OS error lost it.
     executable = command[0]
     rest = " ".join(command[1:])
+    godot_note = (
+        "--godot is used separately, only to warm the import cache, so it can't fix this"
+        if godot_flag_also_used
+        else "--godot is not read in this mode, so setting it changes nothing"
+    )
     lines += [
-        "  With --runner command the executable comes from the --command string itself. --godot",
-        "  is not read in this mode, so setting it changes nothing. Put the full path inside",
-        "  --command instead, quoted if it contains spaces:",
+        f"  The test command's executable comes from the --command string itself. {godot_note}.",
+        "  Put the full path inside --command instead, quoted if it contains spaces:",
         f'    --command "<full path to {executable}>{" " + rest if rest else ""}"',
     ]
     if sys.platform == "darwin" and "godot" in executable.lower():
@@ -482,7 +512,14 @@ def _report_baseline_failure(error: BaselineFailed, project_dir: str, runner: Ru
     the flag that mode actually uses."""
     missing = _missing_executable(error)
     if missing is not None:
-        print(_missing_executable_hint(missing, _command_argv(runner)), file=sys.stderr)
+        print(
+            _missing_executable_hint(
+                missing,
+                _command_argv(runner, missing),
+                godot_flag_also_used=isinstance(runner, GodotCommandRunner),
+            ),
+            file=sys.stderr,
+        )
         return 2
     # Try each JUnit adapter's addon hint. Each is gated on its own framework's error signature, so
     # at most one fires — no need to thread the runner kind through: a GUT "wrote no report" never
@@ -1318,8 +1355,11 @@ def _load_config(path: Path | None = None) -> dict[str, object] | None:
     if not isinstance(settings.get("require_clean", False), bool):
         print(f"error: {path}: 'require-clean' must be true or false", file=sys.stderr)
         return None
-    if settings.get("runner") not in (None, "gdunit4", "gut", "command"):
-        print(f"error: {path}: 'runner' must be 'gdunit4', 'gut', or 'command'", file=sys.stderr)
+    if settings.get("runner") not in (None, "gdunit4", "gut", "command", "godot-command"):
+        print(
+            f"error: {path}: 'runner' must be 'gdunit4', 'gut', 'command', or 'godot-command'",
+            file=sys.stderr,
+        )
         return None
     exclude = settings.get("exclude")
     if exclude is not None and (
@@ -1383,7 +1423,7 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     run_parser.add_argument("--project", help="the Godot project dir (default: the source's dir)")
     run_parser.add_argument(
         "--runner",
-        choices=("gdunit4", "gut", "command"),
+        choices=("gdunit4", "gut", "command", "godot-command"),
         # No `default=`, deliberately: which runner to use is not something gdmutant should guess
         # at silently. `argparse`'s own `required=True` isn't the fix here — it enforces the flag
         # was typed on THIS invocation regardless of anything `set_defaults` supplied, which would
@@ -1391,13 +1431,13 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         # same way it breaks an explicit CLI flag. `main` checks for `None` itself instead, so a
         # config-supplied value still counts as having said which one, and only a run with
         # genuinely nothing set anywhere is refused.
-        help="test runner: gdunit4 or gut (both JUnit XML) or command (any harness, by exit code). "
-        "Required, no default. Set it here or once in .gdmutant.toml",
+        help="test runner: gdunit4, gut (JUnit XML), command (exit code), or godot-command "
+        "(Godot-aware; see the README). Required, no default. Set here or in .gdmutant.toml",
     )
     run_parser.add_argument(
         "--command",
         dest="test_command",  # not "command": that dest holds the subcommand name ("run")
-        help="test command for --runner command (exit 0 = pass), e.g. "
+        help="test command for --runner command/godot-command (exit 0 = pass), e.g. "
         "'godot --headless --script res://tests/run_tests.gd'",
     )
     run_parser.add_argument(
@@ -1724,7 +1764,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # historical default so a legitimately slow baseline still completes.
         baseline_timeout = DEFAULT_TIMEOUT if args.timeout is None else args.timeout
         runner: Runner
-        if args.runner == "command":
+        if args.runner in ("command", "godot-command"):
             # Split OS-aware (see `_split_command`), then require a non-empty result: this rejects a
             # missing --command AND a whitespace-only one (which would otherwise become `[]` -> a
             # confusing subprocess IndexError deep in the run). Unbalanced quotes make shlex raise
@@ -1736,19 +1776,33 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"error: could not parse --command: {error}", file=sys.stderr)
                 return 2
             if not test_command:
-                print("error: --runner command requires a non-empty --command", file=sys.stderr)
+                print(
+                    f"error: --runner {args.runner} requires a non-empty --command", file=sys.stderr
+                )
                 return 2
-            runner = CommandRunner(command=test_command, timeout=baseline_timeout)
-            # The JUnit runners warm Godot's import cache themselves (Preparable.prepare, which the
-            # engine announces). This mode can't, so an un-imported project gets told up front
-            # rather than looking hung for minutes on its very first run.
-            notice = _cold_import_notice(project_dir)
-            if notice is not None:
-                print(notice, file=sys.stderr)
+            if args.runner == "godot-command":
+                # Godot-aware: warms its own import cache and catches a runtime SCRIPT ERROR the
+                # command's exit code alone can miss (GodotCommandRunner's own docstring) — so,
+                # unlike plain `command`, no cold-checkout notice is needed here.
+                runner = GodotCommandRunner(
+                    command=test_command, godot=args.godot, timeout=baseline_timeout
+                )
+            else:
+                runner = CommandRunner(command=test_command, timeout=baseline_timeout)
+                # The JUnit runners warm Godot's import cache themselves (Preparable.prepare, which
+                # the engine announces). This mode can't, so an un-imported project gets told up
+                # front rather than looking hung for minutes on its very first run.
+                notice = _cold_import_notice(project_dir)
+                if notice is not None:
+                    print(notice, file=sys.stderr)
         else:
             if args.test_command:
-                # --command only applies to --runner command; flag it rather than silently drop it.
-                print("note: --command is ignored unless --runner command is set", file=sys.stderr)
+                # --command only applies to --runner command/godot-command; flag it rather than
+                # silently drop it.
+                print(
+                    "note: --command is ignored unless --runner command or godot-command is set",
+                    file=sys.stderr,
+                )
             # gdunit4 and gut are peer JUnit adapters over one contract (docs/decisions/0011); each
             # owns its own default report layout, resolved here when --report-path is omitted.
             if args.runner == "gut":

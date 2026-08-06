@@ -16,6 +16,11 @@ documented fallback — so the seam is *two* first-class JUnit adapters plus one
 path, and any future JUnit-emitting framework becomes first-class by adding one small adapter here,
 with no engine change (docs/decisions/0011).
 
+`GodotCommandRunner` is a *third*, adapter-scoped exit-code runner: same contract as the engine's
+`CommandRunner`, but for a project known to be Godot. Unlike `CommandRunner` — which lives in the
+engine precisely because it stays language-neutral (it only shells out and reads an exit code) —
+this class is deliberately Godot-aware, so it belongs here, not there. See its own docstring.
+
 The exact CLI flags and report locations are validated **live in CI** against real Godot + each
 addon (they can't be validated with the addon mocked). Unit tests here cover command construction
 and report parsing with the subprocess mocked.
@@ -25,6 +30,7 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -54,6 +60,42 @@ DEFAULT_TIMEOUT = 600.0
 # The one-time import warm-up gets its own generous budget, independent of the per-suite timeout: on
 # a cold checkout Godot imports every asset, which can take much longer than a single test run.
 _IMPORT_TIMEOUT = 300.0
+
+#: What a GDScript runtime error prints to stdout/stderr (verified live, Godot 4.7). GDScript has no
+#: exceptions: a null-access or similar error at runtime aborts only the *current function call* at
+#: that exact statement — every line after it in that function, including any assertion meant to run
+#: there, silently never executes. A hand-rolled test harness that only checks its own recorded
+#: assertion failures (never "did every test method actually finish") reads that as a clean pass —
+#: found via `GodotCommandRunner`'s reason for existing (see its class docstring).
+_SCRIPT_ERROR_MARKER = "SCRIPT ERROR"
+
+
+def _warm_import_cache(godot: str, project_dir: str) -> None:
+    """Warm Godot's import cache once, so ``class_name`` types resolve on a cold checkout.
+
+    Shared by every runner that needs it (`_GodotJUnitRunner.prepare`, `GodotCommandRunner.prepare`)
+    so the subprocess invocation and its timeout handling live in exactly one place. See
+    `_GodotJUnitRunner.prepare` for the full rationale — this is that method's body, extracted so a
+    second adapter runner doesn't have to duplicate it.
+
+    The exit code is ignored — ``--import`` returns non-zero on benign addon/import chatter across
+    Godot versions — and any failure is left to surface as the usual "wrote no report"/command
+    failure from the real run, rather than masking it behind a warm-up error.
+    """
+    # A pathologically slow import shouldn't itself abort the run; suppress its timeout and let the
+    # real suite run (with its own timeout) surface a genuine problem.
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        try:
+            subprocess.run(
+                [godot, "--headless", "--path", str(Path(project_dir).resolve()), "--import"],
+                cwd=project_dir,
+                timeout=_IMPORT_TIMEOUT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as error:
+            raise with_filename(error, godot) from error
 
 
 @dataclass
@@ -112,26 +154,7 @@ class _GodotJUnitRunner:
         """
         if self._imported:
             return
-        # A pathologically slow import shouldn't itself abort the run; suppress its timeout and let
-        # the real suite run (with its own timeout) surface a genuine problem as "wrote no report".
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            try:
-                subprocess.run(
-                    [
-                        self.godot,
-                        "--headless",
-                        "--path",
-                        str(Path(project_dir).resolve()),
-                        "--import",
-                    ],
-                    cwd=project_dir,
-                    timeout=_IMPORT_TIMEOUT,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-            except FileNotFoundError as error:
-                raise with_filename(error, self.godot) from error
+        _warm_import_cache(self.godot, project_dir)
         # Mark done only once the scan has completed — or a slow import was deliberately given up
         # on (a suppressed timeout falls through to here). A *non-timeout* failure (a transient
         # OSError, a permission error, Godot crashing) propagates out before this, leaving the
@@ -544,3 +567,88 @@ class GutRunner(_GodotJUnitRunner):
             "trigger to build per-suite baseline tracking. The mutation score and exit code are "
             "unchanged."
         )
+
+
+@dataclass
+class GodotCommandRunner:
+    """Runs an arbitrary exit-code test command, like the engine's `CommandRunner`, but for a
+    project known to be Godot — so it can do two things `CommandRunner` honestly can't
+    (`engine.runner`'s own docstring names both as reasons `CommandRunner` stays generic rather
+    than growing them itself).
+
+    **1. It warms the import cache.** `CommandRunner` is handed an opaque argv; it has no Godot
+    binary to warm the cache with, and guessing one would mean running a program the user never
+    named. This runner already takes `godot` (same as `GdUnit4Runner`/`GutRunner`), so it warms the
+    cache itself via `Preparable.prepare`, exactly like the JUnit adapters — no cold-checkout notice
+    needed, because there is nothing left for the notice to tell the user to go do by hand.
+
+    **2. It catches a GDScript runtime error a hand-rolled harness's own exit code can miss.**
+    GDScript has no exceptions: a runtime error (a null access, an out-of-range index, …) aborts
+    only the *current function call* at that exact statement, prints `_SCRIPT_ERROR_MARKER` to the
+    console, and execution otherwise continues — the process does not crash. A test harness that
+    decides pass/fail purely from its own recorded assertion failures (never "did every test method
+    actually run to its end") cannot see this: a test that errors out halfway through, before
+    reaching its own assertions, looks identical to one that ran clean and exits 0. Found dogfooding
+    `--runner command` against a real Godot project's hand-rolled headless test runner: a deleted
+    null-guard produced exactly this, and the mutant survived. `CommandRunner` can't fix this either
+    — it only reads the exit code, and the exit code is exactly what a half-executed test still
+    reports as 0. This runner reads the captured output for the marker and treats it as a failure
+    regardless of the exit code — surfaced as an `errors` count (not `failures`), so a baseline that
+    hits this reads as a broken/untrustworthy run rather than an ordinary red test.
+
+    `command` and `timeout` mean the same as `CommandRunner`'s. `godot` is otherwise only used for
+    the import warm-up — it plays no part in `command` itself, which the caller still spells out in
+    full (e.g. ``godot --headless --script res://tests/run_tests.gd``).
+    """
+
+    command: Sequence[str]
+    godot: str = "godot"
+    timeout: float = 600.0
+    _imported: bool = field(default=False, init=False, repr=False)
+
+    def prepare(self, project_dir: str) -> None:
+        """Warm Godot's import cache once — see `_warm_import_cache`. Idempotent via `_imported`,
+        same shape as `_GodotJUnitRunner.prepare`."""
+        if self._imported:
+            return
+        _warm_import_cache(self.godot, project_dir)
+        self._imported = True
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        # Defensive, like _GodotJUnitRunner.run: the engine calls prepare() once before timing the
+        # baseline, but a direct call to run() should still work cold.
+        self.prepare(project_dir)
+        budget = self.timeout if timeout is None else timeout
+        try:
+            completed = subprocess.run(
+                list(self.command),
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=budget,
+            )
+        except subprocess.TimeoutExpired as expired:
+            raise SuiteTimeout(f"test command exceeded {budget:g}s") from expired
+        except FileNotFoundError as error:
+            raise with_filename(error, self.command[0]) from error
+        output = (completed.stdout or "") + (completed.stderr or "")
+        if _SCRIPT_ERROR_MARKER in output:
+            # Regardless of exit code: this is the exact case CommandRunner cannot catch (see the
+            # class docstring) — a half-executed test that still exited 0. `errors`, not `failures`:
+            # the run itself cannot be trusted, which is a different fault from a clean red test.
+            return SuiteResult(
+                tests=1,
+                failures=0,
+                errors=1,
+                detail=(
+                    f"the command's output contains a Godot {_SCRIPT_ERROR_MARKER!r} "
+                    f"(exit code {completed.returncode}). GDScript has no exceptions, so a "
+                    "runtime error aborts only the current function call at that statement: a "
+                    "test harness that only checks its own recorded assertion failures can read "
+                    f"a half-executed test as a pass. Output:\n{output.strip()[-2000:]}"
+                ),
+            )
+        if completed.returncode == 0:
+            return SuiteResult(tests=1, failures=0, errors=0)
+        detail = (completed.stderr or completed.stdout or "").strip()
+        return SuiteResult(tests=1, failures=1, errors=0, detail=detail[-2000:])

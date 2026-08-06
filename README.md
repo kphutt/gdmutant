@@ -45,7 +45,9 @@ and its detail card: what it means, why it's risky, and how to close it.
   command instead.
 - [GUT](https://github.com/bitwes/Gut) or [gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4),
   already installed and enabled in your project, if you use either. A different test runner works
-  too, via `--runner command`: any headless command that exits non-zero on failure.
+  too, via `--runner command` (any headless command that exits non-zero on failure) or
+  `--runner godot-command` (the same, but Godot-aware — see the [CLI
+  guide](docs/gdmutant-guide.md#runner-selection)).
 - [Python](https://www.python.org/downloads/) 3.12+ (check with `python --version`).
 
 ## Quickstart
