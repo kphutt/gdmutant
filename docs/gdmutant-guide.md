@@ -62,8 +62,8 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | Flag | Default | What it does |
 |---|---|---|
 | `--project <dir>` | the source's own directory | The Godot project directory. |
-| `--runner {gdunit4,gut,command,godot-command}` | *(required, no default)* | Which test harness runs the suite. See [Runner selection](#runner-selection) below. |
-| `--command <cmd>` | *(none)* | The test command, for `--runner command`/`godot-command`. |
+| `--runner {gdunit4,gut,command}` | *(required, no default)* | Which test harness runs the suite. See [Runner selection](#runner-selection) below. |
+| `--command <cmd>` | *(none)* | The test command, for `--runner command`. |
 | `--godot <path>` | `godot` | The Godot executable. |
 | `--tests <res://...>` | `res://test` | The test directory (gdUnit4's `-a` / GUT's `-gdir`). |
 | `--json [-\|path]` | off | Write the Stryker JSON report. `-` streams to stdout, and a bare `--json` defaults to a timestamped filename. |
@@ -92,16 +92,6 @@ comes from `--command` itself. `--godot` is not read in that mode, so put the fu
 `--command`. See [`docs/decisions/0011`](decisions/0011-runner-agnostic-adapter-seam.md) (the
 runner seam) and [`docs/decisions/0005`](decisions/0005-exit-code-test-runner-convention.md) (the
 exit-code fallback).
-
-For a hand-rolled harness that is specifically a Godot project, `--runner godot-command` is the same
-exit-code contract as `command`, plus two things a Godot-aware runner can do that the generic one
-honestly can't: it warms the import cache itself (`--godot <path>` names the binary, same as
-`gdunit4`/`gut`, so no cold-checkout notice is needed), and it treats a runtime `SCRIPT ERROR` in the
-command's output as a failure even when the command exits 0. That second part matters because
-GDScript has no exceptions — a runtime error (a null access, an out-of-range index, ...) aborts only
-the *current function call* at that exact statement and Godot keeps running, so a hand-rolled harness
-that only checks its own recorded assertion failures can read a test that errored out halfway through
-as a clean pass. See [`docs/decisions/0014`](decisions/0014-godot-aware-command-runner.md).
 
 #### Scoping a run
 
@@ -398,27 +388,19 @@ mutant is killable, it usually is. Write the test.
   installs neither.
 - Everything survives. Usually the tests never ran: run your suite by hand first. Godot exits `0`
   even on a harness that fails to *compile*, so gate a `--command` harness on `can_instantiate()`.
-- A mutant that looks obviously wrong still survives, under `--command`, and your suite passes when
-  you run it by hand too. Check the run's own output for `SCRIPT ERROR`: GDScript has no exceptions,
-  so a runtime error aborts only the current function call and Godot keeps going, which a
-  hand-rolled harness that only checks its own recorded assertion failures can't see — the test that
-  hit the error still exits 0. Switch to `--runner godot-command`, which catches this by reading
-  Godot's own output; see [Runner selection](#runner-selection).
 - It's slow. Godot boots once per mutant. Mutate one file at a time, and use `--jobs N`, real but
   sub-linear (~3× at `--jobs 4`), since the workers contend for CPU and RAM. Watch the closing line
   for how much of the time was timeouts. A few hanging mutants can outweigh every other mutant
   combined, and `--timeout` caps each one.
 - The first run goes quiet for minutes right after it starts. gdmutant does warn you first (the
-  GUT/gdUnit4/`godot-command` runners print a "preparing the project" notice, and plain `--runner
-  command` warns too when the project has no `.godot/` directory, since it's the one runner that
-  can't warm the cache itself), but the wait itself is silent: that's Godot importing every asset in
-  the project, once, which gdmutant can't see into or report on. Run `godot --headless --path
-  <project> --import` yourself first so every later run starts in seconds — or use `--runner
-  godot-command`, which does this for you.
+  GUT/gdUnit4 runners print a "preparing the project" notice, and `--runner command` warns too when
+  the project has no `.godot/` directory), but the wait itself is silent: that's Godot importing
+  every asset in the project, once, which gdmutant can't see into or report on. Run `godot
+  --headless --path <project> --import` yourself first so every later run starts in seconds.
 - No JUnit XML? Point the exit-code runner at any headless command that exits non-zero on failure.
-  `--godot <path>` only applies to the GUT/gdUnit4/`godot-command` runners above. Under `--runner
-  command`, gdmutant runs your `--command` string exactly as given and never edits it, so if `godot`
-  isn't on your PATH, write its full path directly into the command yourself:
+  `--godot <path>` only applies to the GUT/gdUnit4 runners above. Under `--runner command`, gdmutant
+  runs your `--command` string exactly as given and never edits it, so if `godot` isn't on your
+  PATH, write its full path directly into the command yourself:
 
   ```sh
   gdmutant run ../my-project/src/module.gd --project ../my-project --runner command --command "godot --headless --script res://tests/run_tests.gd" --json
@@ -453,7 +435,7 @@ either. The action installs none of that.
 | `godot-version` | Yes | *(none)* | The Godot version to set up, e.g. `4.7.0`. |
 | `project-path` | No | `./` | The Godot project directory (`--project`). |
 | `paths` | No | the whole project | Source file(s)/directories to mutate, space-separated (gdmutant's positional targets). Excludes `addons/` and test files. |
-| `runner` | No | `gdunit4` | Test runner: `gdunit4`, `gut`, `command`, or `godot-command` (`--runner`). |
+| `runner` | No | `gdunit4` | Test runner: `gdunit4`, `gut`, or `command` (`--runner`). |
 | `tests` | No | gdmutant's default, `res://test` | The test directory (`--tests`). |
 | `since` | No | mutate the full target | Only mutate lines changed since this git ref (`--since`): the fast, per-PR diff-scoped mode. |
 | `args` | No | *(none)* | Extra raw arguments appended to the invocation, verbatim. |

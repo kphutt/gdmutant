@@ -3,7 +3,6 @@
 import json
 import os
 import subprocess
-import sys
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -14,7 +13,7 @@ import pytest
 from conftest import MarkerRunner
 
 import gdmutant.cli as cli
-from gdmutant.adapters.gdscript.runner import GodotCommandRunner, GutRunner
+from gdmutant.adapters.gdscript.runner import GutRunner
 from gdmutant.cli import (
     _DEFAULT_REPORT,
     _EXAMPLE_NAME,
@@ -558,9 +557,9 @@ def test_run_mutation_missing_executable_with_no_filename_uses_fallback(
 #: real `FileNotFoundError` a missing `godot` would — no mocking of the failure under test.
 _ABSENT = "gdmutant-no-such-binary"
 _COMMAND_MODE_HINT = (
-    "  The test command's executable comes from the --command string itself. --godot is not "
-    "read in this mode, so setting it changes nothing.\n"
-    "  Put the full path inside --command instead, quoted if it contains spaces:\n"
+    "  With --runner command the executable comes from the --command string itself. --godot\n"
+    "  is not read in this mode, so setting it changes nothing. Put the full path inside\n"
+    "  --command instead, quoted if it contains spaces:\n"
 )
 
 
@@ -631,8 +630,7 @@ def test_junit_runner_keeps_the_godot_advice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # The other half of "mode-aware": for a runner that DOES read --godot, the original advice is
-    # correct and stays. `_command_argv` returns None for anything whose missing executable didn't
-    # come from its own `command` (a plain JUnit runner has no `command` at all).
+    # correct and stays. `_command_argv` returns None for anything that isn't a CommandRunner.
     monkeypatch.setattr(cli.sys, "platform", "linux")
     path = _gd(tmp_path)
     rc = run_mutation(str(path), str(tmp_path), MissingGodotRunner())
@@ -1150,9 +1148,9 @@ def test_parser_help_text(
     for expected in (
         "one or more .gd files or directories to mutate (a directory mutates every .gd under it, recursively, excluding addons/ and dot-dirs)",  # noqa: E501
         "the Godot project dir (default: the source's dir)",
-        "test runner: gdunit4, gut (JUnit XML), command (exit code), or godot-command "
-        "(Godot-aware; see the README). Required, no default. Set here or in .gdmutant.toml",
-        "test command for --runner command/godot-command (exit 0 = pass), e.g. 'godot --headless --script res://tests/run_tests.gd'",  # noqa: E501
+        "test runner: gdunit4 or gut (both JUnit XML) or command (any harness, by exit code). "
+        "Required, no default. Set it here or once in .gdmutant.toml",
+        "test command for --runner command (exit 0 = pass), e.g. 'godot --headless --script res://tests/run_tests.gd'",  # noqa: E501
         "the Godot executable (default: godot)",
         "the test directory (gdunit4's -a / gut's -gdir) (default: res://test)",
         "JUnit-XML report path, relative to the project dir (default: per runner: gdunit4 reports/report_1/results.xml, gut reports/gut_results.xml)",  # noqa: E501
@@ -1256,25 +1254,12 @@ def test_load_config_rejects_bad_typed_values(tmp_path: Path) -> None:
 
 
 def test_load_config_accepts_every_runner_choice(tmp_path: Path) -> None:
-    # All four runners (gdunit4, gut, command, godot-command) are valid config values — pins that
-    # "gut"/"godot-command" are accepted (peer adapters, ADR-0011/ADR-0014), not rejected like
-    # "nope" above.
-    for runner in ("gdunit4", "gut", "command", "godot-command"):
+    # All three runners (gdunit4, gut, command) are valid config values — pins that "gut" is
+    # accepted (a peer JUnit adapter, ADR-0011), not rejected like "nope" above.
+    for runner in ("gdunit4", "gut", "command"):
         cfg = tmp_path / f"{runner}.toml"
         cfg.write_text(f'runner = "{runner}"\n', encoding="utf-8")
         assert _load_config(cfg) == {"runner": runner}
-
-
-def test_load_config_rejects_an_invalid_runner_with_the_full_choice_list(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    cfg = tmp_path / "bad.toml"
-    cfg.write_text('runner = "nope"\n', encoding="utf-8")
-    assert _load_config(cfg) is None
-    assert (
-        f"error: {cfg}: 'runner' must be 'gdunit4', 'gut', 'command', or 'godot-command'"
-        in capsys.readouterr().err
-    )
 
 
 def test_main_uses_config_defaults_when_cli_flags_omitted(
@@ -1561,142 +1546,6 @@ def test_main_command_runner_builds_from_shlex_split_command(
     assert captured["timeout"] == 30.0
 
 
-def test_main_godot_command_runner_builds_from_shlex_split_command_and_godot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # --runner godot-command builds a GodotCommandRunner (ADR-0014), not a CommandRunner, with
-    # --command shlex-split and --godot threaded through (unlike plain --runner command, which
-    # never reads --godot at all).
-    path = _gd(tmp_path)
-    captured: dict[str, object] = {}
-
-    def fake_godot_command_runner(**kwargs: object) -> RecordingRunner:
-        captured.update(kwargs)
-        return RecordingRunner()
-
-    def boom_command(**kwargs: object) -> object:
-        raise AssertionError("CommandRunner must not be built for --runner godot-command")
-
-    monkeypatch.setattr(cli, "GodotCommandRunner", fake_godot_command_runner)
-    monkeypatch.setattr(cli, "CommandRunner", boom_command)
-    rc = main(
-        [
-            "run",
-            str(path),
-            "--project",
-            str(tmp_path),
-            "--runner",
-            "godot-command",
-            "--command",
-            "godot --headless --script res://tests/run.gd",
-            "--godot",
-            "godot4",
-            "--timeout",
-            "30",
-        ]
-    )
-    assert rc == 0
-    assert captured == {
-        "command": ["godot", "--headless", "--script", "res://tests/run.gd"],
-        "godot": "godot4",
-        "timeout": 30.0,
-    }
-
-
-def test_main_godot_command_runner_requires_the_command_flag(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    path = _gd(tmp_path)
-    rc = main(["run", str(path), "--project", str(tmp_path), "--runner", "godot-command"])
-    assert rc == 2
-    assert (
-        capsys.readouterr().err.strip()
-        == "error: --runner godot-command requires a non-empty --command"
-    )
-
-
-def test_godot_command_runner_never_prints_the_cold_import_notice(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # Unlike plain --runner command, godot-command warms the cache itself (Preparable.prepare), so
-    # the "you'll need to import first" notice would be telling the user to do work already done.
-    path = _gd(tmp_path)  # no .godot/ in tmp_path — an un-imported checkout
-    monkeypatch.setattr(cli, "GodotCommandRunner", lambda **kwargs: RecordingRunner())
-    rc = main(
-        [
-            "run",
-            str(path),
-            "--project",
-            str(tmp_path),
-            "--runner",
-            "godot-command",
-            "--command",
-            "run-the-suite",
-        ]
-    )
-    assert rc == 0
-    assert "import cache" not in capsys.readouterr().err
-
-
-def test_missing_godot_flag_on_godot_command_runner_gets_the_godot_advice(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # For GodotCommandRunner specifically, a missing --godot binary (the import warm-up's
-    # executable) must get the "pass its full path with --godot" advice — the SAME advice a
-    # JUnit runner gets — not the "--godot has no effect" wording only true for plain CommandRunner.
-    monkeypatch.setattr(cli.sys, "platform", "linux")
-    path = _gd(tmp_path)
-    runner = GodotCommandRunner(command=["run-my-suite"], godot=_ABSENT)
-    rc = run_mutation(str(path), str(tmp_path), runner)
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "pass its full path with --godot" in err
-    assert "The test command's executable comes from the --command string itself" not in err
-
-
-def test_missing_command_executable_on_godot_command_runner_notes_godot_is_separate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # The other direction: the *test command*'s own executable is missing (not --godot, which is
-    # only used for the warm-up here). The advice must point at --command, but must NOT claim
-    # --godot "has no effect" the way plain CommandRunner's message does — for this runner it does
-    # have an effect, just not on this particular executable.
-    monkeypatch.setattr(cli.sys, "platform", "linux")
-    path = _gd(tmp_path)
-    # godot=sys.executable stands in for a real Godot binary: the import warm-up never checks its
-    # exit code or output (see _warm_import_cache), so any real, fast executable satisfies it —
-    # this test is about the MISSING _ABSENT *command* executable, not the warm-up.
-    runner = GodotCommandRunner(command=[_ABSENT], godot=sys.executable)
-    rc = run_mutation(str(path), str(tmp_path), runner)
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "The test command's executable comes from the --command string itself" in err
-    assert "used separately, only to warm the import cache" in err
-    assert "is not read in this mode, so setting it changes nothing" not in err
-
-
-def test_missing_godot_and_command_sharing_a_name_still_attributes_to_godot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # Regression: the common real shape is --command "godot ..." with --godot left at its own
-    # default of "godot" -- both name the SAME (missing) binary. GodotCommandRunner.run() always
-    # calls prepare() (which can only fail on a missing `godot`) before it ever runs `command`, so
-    # the import warm-up is what actually failed here; the advice must still point at --godot, not
-    # fall through to the --command wording just because command[0] happens to match too (the two
-    # can't both be independently missing in one run: a `godot` that resolved during warm-up would
-    # have resolved identically moments later in `command`).
-    monkeypatch.setattr(cli.sys, "platform", "linux")
-    path = _gd(tmp_path)
-    runner = GodotCommandRunner(
-        command=[_ABSENT, "--headless", "--script", "res://tests/run.gd"], godot=_ABSENT
-    )
-    rc = run_mutation(str(path), str(tmp_path), runner)
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "pass its full path with --godot" in err
-    assert "The test command's executable comes from the --command string itself" not in err
-
-
 def test_main_gut_runner_builds_from_tests_godot_and_default_report_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1908,10 +1757,7 @@ def test_main_command_without_runner_command_is_flagged_not_dropped(
     )
     assert rc == 0
     # Trailing newline so a wrapped "XX...XX" mutant (which keeps the text a substring) still fails.
-    assert (
-        "note: --command is ignored unless --runner command or godot-command is set\n"
-        in capsys.readouterr().err
-    )
+    assert "note: --command is ignored unless --runner command is set\n" in capsys.readouterr().err
 
 
 def test_main_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
