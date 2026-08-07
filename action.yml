@@ -146,29 +146,54 @@ runs:
         GDMUTANT_VERSION: ${{ inputs.gdmutant-version }}
       run: |
         python -m pip install --upgrade pip
-        if [ -n "$GDMUTANT_VERSION" ]; then
-          # An explicit version always installs from PyPI, regardless of any ref.
-          python -m pip install "gdmutant==${GDMUTANT_VERSION#v}"
-        elif [ -n "$GDMUTANT_EXPLICIT_REF" ]; then
-          # The escape hatch: install gdmutant's own code from this exact ref, never PyPI.
-          python -m pip install "git+https://github.com/kphutt/gdmutant@${GDMUTANT_EXPLICIT_REF}"
-        elif [ -z "$GDMUTANT_ACTION_REF" ]; then
-          echo "::error::could not resolve a gdmutant ref to install — github.action_ref is only" \
-               "set for a remote 'uses: owner/repo@ref' invocation. Pass 'ref' or" \
-               "'gdmutant-version' explicitly when consuming this action via a local path or an" \
-               "unversioned ref." >&2
-          exit 1
-        elif [[ "$GDMUTANT_ACTION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          # The common case: a consumer pinned a real version tag (@v0.1.1) in their own `uses:`
-          # line. Install the matching PyPI release, so this Action's own code and the gdmutant
-          # it runs are genuinely the same version, not "whatever git ref happened to resolve".
-          python -m pip install "gdmutant==${GDMUTANT_ACTION_REF#v}"
-        else
-          # A SHA-pinned `uses:` line (the documented, recommended way to pin — see the guide's
-          # Pinning section) or a branch: PyPI has no notion of an arbitrary commit, so install
-          # gdmutant's own code from that exact ref instead.
-          python -m pip install "git+https://github.com/kphutt/gdmutant@${GDMUTANT_ACTION_REF}"
-        fi
+        # Branching logic in Python, not bash: matches the "Run gdmutant" step below, and avoids
+        # bash's own cross-platform fragility for anything past a trivial one-liner (see
+        # tests/test_action_install_step.py's docstring for a concrete instance of that fragility).
+        python - <<'PY'
+        import os
+        import re
+        import subprocess
+        import sys
+
+
+        def resolve_install_spec() -> str:
+            """Which pip install spec to use, and from where: PyPI or git. Priority order matches
+            action.yml's own gdmutant-version/ref input descriptions."""
+            version = os.environ.get("GDMUTANT_VERSION", "").strip()
+            if version:
+                # An explicit version always installs from PyPI, regardless of any ref.
+                return f"gdmutant=={version.removeprefix('v')}"
+
+            explicit_ref = os.environ.get("GDMUTANT_EXPLICIT_REF", "").strip()
+            if explicit_ref:
+                # The escape hatch: install gdmutant's own code from this exact ref, never PyPI.
+                return f"git+https://github.com/kphutt/gdmutant@{explicit_ref}"
+
+            action_ref = os.environ.get("GDMUTANT_ACTION_REF", "").strip()
+            if not action_ref:
+                print(
+                    "::error::could not resolve a gdmutant ref to install — github.action_ref is "
+                    "only set for a remote 'uses: owner/repo@ref' invocation. Pass 'ref' or "
+                    "'gdmutant-version' explicitly when consuming this action via a local path or "
+                    "an unversioned ref.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            if re.fullmatch(r"v\d+\.\d+\.\d+", action_ref):
+                # The common case: a consumer pinned a real version tag (@v0.1.1) in their own
+                # `uses:` line. Install the matching PyPI release, so this Action's own code and
+                # the gdmutant it runs are genuinely the same version, not "whatever ref resolved".
+                return f"gdmutant=={action_ref.removeprefix('v')}"
+
+            # A SHA-pinned `uses:` line (the documented, recommended way to pin — see the guide's
+            # Pinning section) or a branch: PyPI has no notion of an arbitrary commit, so install
+            # gdmutant's own code from that exact ref instead.
+            return f"git+https://github.com/kphutt/gdmutant@{action_ref}"
+
+
+        sys.exit(subprocess.run(["python", "-m", "pip", "install", resolve_install_spec()]).returncode)
+        PY
 
     - name: Run gdmutant
       id: run
