@@ -10,6 +10,18 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-08-07
+
+### Fixed
+
+- The GitHub Action's "Install gdmutant" step now installs the real, published PyPI package
+  (`pip install gdmutant==X.Y.Z`, derived from a consumer's pinned version tag) instead of a git
+  clone of gdmutant's own source. gdmutant has been on PyPI since v0.1.0, but the Action kept
+  installing from git the whole time — a `TODO(launch)` comment left unaddressed since then. A
+  git-install escape hatch (`ref:`) still exists for testing an unreleased commit, and a
+  SHA/branch-pinned `uses:` line still falls back to it automatically, since PyPI has no notion of
+  an arbitrary commit.
+
 ## [0.1.1] - 2026-08-06
 
 ### Added
