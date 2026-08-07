@@ -169,7 +169,9 @@ jobs:
 ```
 
 It sets up Godot, installs gdmutant, and writes each survivor's `gap` / `risk` / `start` explanation
-into the job summary. Your project's existing GUT or gdUnit4 addon is all it needs.
+into the job summary. The step only fails on a real error, like an already-red suite, not on
+survivors. Your project's existing GUT or gdUnit4 addon, and a suite that already passes, are all
+it needs.
 
 The same `since` scoping works locally too. `gdmutant run --since origin/main` checks only your
 latest changes, for fast iteration before you commit. The Action runs it the same way in CI, so
