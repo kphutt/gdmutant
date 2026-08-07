@@ -168,17 +168,12 @@ jobs:
           since: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
 ```
 
-It sets up Godot, installs gdmutant, runs it, and writes every survivor with its `gap` / `risk` /
-`start` explanation into the job summary, where reviewers already look. Survivors are output, not
-failure: the step fails only on a real error, such as a suite that was already red. Your project
-brings its own GUT or gdUnit4 addon, the same one your existing test job uses.
+It sets up Godot, installs gdmutant, and writes each survivor's `gap` / `risk` / `start` explanation
+into the job summary. Your project's existing GUT or gdUnit4 addon is all it needs.
 
-Most iteration happens locally with `gdmutant run` above -- a GitHub Action is too slow a feedback
-loop for that, since you already run your tests before committing. Its value here is as a CI check:
-scoped to just what changed, it catches anything a local run missed, without paying to mutate the
-whole project on every PR and push. Godot boots once per mutant, so that full-project cost is real,
-which is what `since` avoids. Drop it (and `fetch-depth`) for an occasional full-project scan
-instead.
+The same `since` scoping works locally too. `gdmutant run --since origin/main` checks only your
+latest changes, for fast iteration before you commit. The Action runs it the same way in CI, so
+every PR gets checked automatically, even one you didn't run gdmutant against yourself.
 
 Every input and output, and how to pin a version, is in
 [the guide](docs/gdmutant-guide.md#github-actions).
