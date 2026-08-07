@@ -58,16 +58,17 @@ inputs:
     default: "false"
   gdmutant-version:
     description: >-
-      The published gdmutant version to install once it's on PyPI (reserved for the launch switch;
-      see the install step's TODO). Ignored today — the interim install uses `ref`.
+      Install this exact published PyPI version instead of deriving one from the pinned `uses:`
+      ref. Rarely needed: pinning a real `vX.Y.Z` tag already gets you this automatically.
     required: false
     default: ""
   ref:
     description: >-
-      The gdmutant git ref (tag/branch/SHA) to install from during the pre-PyPI interim. Defaults
-      to whatever ref this Action itself was invoked at (e.g. the `@v0.1.0` a consumer already
-      pinned in their own `uses:` line), so installing gdmutant's code never depends on a second,
-      separately-maintained value that could drift from (or simply not exist as) a real ref.
+      Install gdmutant from this git ref (tag/branch/SHA) instead of PyPI — the escape hatch for
+      testing an unreleased commit. Most consumers never need this: pinning a real `vX.Y.Z` tag
+      in the `uses:` line installs the matching PyPI release automatically, and a commit-SHA pin
+      (the documented, recommended way to pin) falls back to this same git-install path on its
+      own, with no config needed.
     required: false
     default: ""
   since:
@@ -132,25 +133,67 @@ runs:
     - name: Install gdmutant
       shell: bash
       env:
-        # inputs.ref, if a consumer set it explicitly, wins; otherwise fall back to the ref this
-        # Action was itself invoked at (github.action_ref) — always a real, resolvable ref for a
-        # remote `uses: owner/repo@ref` invocation, unlike a hardcoded default string that can go
-        # stale the moment this repo's tagging policy changes.
-        GDMUTANT_REF: ${{ inputs.ref || github.action_ref }}
-        # GDMUTANT_VERSION is reserved for the PyPI switch below; unused during the git interim.
+        # Kept separate from GDMUTANT_ACTION_REF below: an explicitly-set `ref` is a deliberate
+        # escape hatch (install from git, never PyPI) and must win regardless of what the
+        # Action's own invocation ref looks like, so it can't be conflated with the "derive a
+        # PyPI version automatically" default path.
+        GDMUTANT_EXPLICIT_REF: ${{ inputs.ref }}
+        # The ref this Action was itself invoked at (e.g. the `@v0.1.1` a consumer already
+        # pinned in their own `uses:` line) — always a real, resolvable ref for a remote
+        # `uses: owner/repo@ref` invocation. Used to derive a PyPI version when it's a real
+        # `vX.Y.Z` tag, or as the git-install fallback otherwise (a SHA or branch).
+        GDMUTANT_ACTION_REF: ${{ github.action_ref }}
         GDMUTANT_VERSION: ${{ inputs.gdmutant-version }}
       run: |
         python -m pip install --upgrade pip
-        if [ -z "$GDMUTANT_REF" ]; then
-          echo "::error::could not resolve a gdmutant ref to install — github.action_ref is only" \
-               "set for a remote 'uses: owner/repo@ref' invocation. Pass 'ref' explicitly (e.g. a" \
-               "branch or SHA) when consuming this action via a local path or an unversioned ref." >&2
-          exit 1
-        fi
-        # INTERIM: gdmutant isn't on PyPI yet, so install it from git at the resolved ref.
-        # TODO(launch): switch to `pip install gdmutant==<ver>` once published to PyPI (drive <ver>
-        # from GDMUTANT_VERSION, keep `ref` only as an escape hatch for testing unreleased commits).
-        python -m pip install "git+https://github.com/kphutt/gdmutant@${GDMUTANT_REF}"
+        # Branching logic in Python, not bash: matches the "Run gdmutant" step below, and avoids
+        # bash's own cross-platform fragility for anything past a trivial one-liner (see
+        # tests/test_action_install_step.py's docstring for a concrete instance of that fragility).
+        python - <<'PY'
+        import os
+        import re
+        import subprocess
+        import sys
+
+
+        def resolve_install_spec() -> str:
+            """Which pip install spec to use, and from where: PyPI or git. Priority order matches
+            action.yml's own gdmutant-version/ref input descriptions."""
+            version = os.environ.get("GDMUTANT_VERSION", "").strip()
+            if version:
+                # An explicit version always installs from PyPI, regardless of any ref.
+                return f"gdmutant=={version.removeprefix('v')}"
+
+            explicit_ref = os.environ.get("GDMUTANT_EXPLICIT_REF", "").strip()
+            if explicit_ref:
+                # The escape hatch: install gdmutant's own code from this exact ref, never PyPI.
+                return f"git+https://github.com/kphutt/gdmutant@{explicit_ref}"
+
+            action_ref = os.environ.get("GDMUTANT_ACTION_REF", "").strip()
+            if not action_ref:
+                print(
+                    "::error::could not resolve a gdmutant ref to install — github.action_ref is "
+                    "only set for a remote 'uses: owner/repo@ref' invocation. Pass 'ref' or "
+                    "'gdmutant-version' explicitly when consuming this action via a local path or "
+                    "an unversioned ref.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            if re.fullmatch(r"v\d+\.\d+\.\d+", action_ref):
+                # The common case: a consumer pinned a real version tag (@v0.1.1) in their own
+                # `uses:` line. Install the matching PyPI release, so this Action's own code and
+                # the gdmutant it runs are genuinely the same version, not "whatever ref resolved".
+                return f"gdmutant=={action_ref.removeprefix('v')}"
+
+            # A SHA-pinned `uses:` line (the documented, recommended way to pin — see the guide's
+            # Pinning section) or a branch: PyPI has no notion of an arbitrary commit, so install
+            # gdmutant's own code from that exact ref instead.
+            return f"git+https://github.com/kphutt/gdmutant@{action_ref}"
+
+
+        sys.exit(subprocess.run(["python", "-m", "pip", "install", resolve_install_spec()]).returncode)
+        PY
 
     - name: Run gdmutant
       id: run

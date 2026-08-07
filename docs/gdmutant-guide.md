@@ -444,8 +444,8 @@ either. The action installs none of that.
 | `job-summary` | No | `true` | Write survivors (with explanations) to the job summary as Markdown (`--report step-summary`). Set `false` to skip. |
 | `godot-use-dotnet` | No | `false` | Set up the .NET (Mono) build of Godot instead of the standard build. |
 | `addon-version` | No | `installed` | How the test-runner addon is provided. Only `installed` (already vendored in your project) ships today. Cloning the addon at a ref is a planned fast-follow. |
-| `ref` | No | the ref this Action was invoked at | The gdmutant git ref (tag/branch/SHA) to install from, during the pre-PyPI interim. |
-| `gdmutant-version` | No | *(unused)* | Reserved for the PyPI switch. Ignored today, since the interim install uses `ref`. |
+| `ref` | No | *(none)* | Install gdmutant from this git ref (tag/branch/SHA) instead of PyPI: the escape hatch for testing an unreleased commit. Most consumers never need this. |
+| `gdmutant-version` | No | *(none)* | Install this exact published PyPI version instead of deriving one from the pinned `uses:` ref. Rarely needed. |
 
 `since` reads the base commit out of your clone, so the workflow's `actions/checkout` step needs
 `fetch-depth: 0`. Its default fetches one commit, the base commit is not among them, and the

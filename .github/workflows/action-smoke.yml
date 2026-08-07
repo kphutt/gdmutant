@@ -4,8 +4,8 @@ name: Action smoke test
 # gdmutant's own corpus: it sets up Godot, installs gdmutant, runs it, and writes the survivor
 # job summary. This is how the action is tested — no unit test can exercise the composite plumbing.
 #
-# The interim git-install (action.yml) makes this work pre-PyPI: the action installs gdmutant from
-# the branch under test, so this smoke run exercises THIS PR's code through the real install path.
+# This smoke run passes `ref:` explicitly (below) to force the action's git-install escape hatch,
+# so it exercises THIS PR's own code (the branch under test) rather than a published PyPI release.
 on:
   pull_request:
     paths:
@@ -39,11 +39,11 @@ jobs:
         with:
           persist-credentials: false # we authorize the git-install explicitly below
 
-      # INTERIM (pre-PyPI): the action installs gdmutant with `pip install git+https://…@<ref>`.
-      # While the repo is private that clone needs auth, so rewrite github.com URLs to carry the
-      # job token. Passed via env (never inlined) so it can't leak into the command line, and
-      # harmless once the repo is public at launch.
-      - name: Authorize the interim git-install (private repo)
+      # The `ref:` below forces the action's git-install escape hatch: `pip install
+      # git+https://…@<ref>`. While the repo is private that clone needs auth, so rewrite
+      # github.com URLs to carry the job token. Passed via env (never inlined) so it can't leak
+      # into the command line, and harmless (a no-op rewrite) once the repo is public.
+      - name: Authorize the git-install escape hatch (private repo)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -65,7 +65,8 @@ jobs:
           paths: corpus/turn_order.gd
           runner: gdunit4
           job-summary: true
-          # Install THIS PR's gdmutant (the branch head) through the action's interim git path.
+          # Install THIS PR's gdmutant (the branch head) through the action's git-install escape
+          # hatch, not a published PyPI release — see the note above.
           ref: ${{ github.head_ref || github.ref_name }}
 
       # End-to-end proof: the action produced a JSON report, and the real Godot run found survivors.
