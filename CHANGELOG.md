@@ -21,6 +21,12 @@ All notable changes to gdmutant are recorded here. The format follows
   git-install escape hatch (`ref:`) still exists for testing an unreleased commit, and a
   SHA/branch-pinned `uses:` line still falls back to it automatically, since PyPI has no notion of
   an arbitrary commit.
+- The README banner (`.github/assets/banner.png`) no longer renders squished on PyPI's narrower
+  description column: it set a fixed `height="320"` alongside `width="1200"`, so `max-width:100%`
+  shrinking the display width left the literal height unchanged while stretching the pixel content.
+  Dropped the `height` attribute, matching the README's other two screenshots. v0.1.1's PyPI
+  description is already frozen and can't be fixed retroactively; this applies starting with this
+  release.
 
 ## [0.1.1] - 2026-08-06
 
