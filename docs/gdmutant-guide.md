@@ -415,7 +415,7 @@ your own workflow (see GitHub's [Quickstart for GitHub
 Actions](https://docs.github.com/en/actions/quickstart) if you haven't written one before):
 
 ```yaml
-- uses: kphutt/gdmutant@REPLACE_WITH_THE_RELEASE_COMMIT_SHA  # v0.1.0
+- uses: kphutt/gdmutant@05728864a1c9330d632e2aab2348ff4442f3d61d # v0.1.0
   with:
     godot-version: "4.7.0"   # the only required input
     project-path: ./

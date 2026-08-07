@@ -12,12 +12,20 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [0.1.1] - 2026-08-06
 
+### Added
+
+- A "GitHub Actions" section on the README: the Action shipped in 0.1.0, but nothing on the
+  README told a visitor it existed.
+
 ### Fixed
 
 - `--runner command` now catches a Godot runtime `SCRIPT ERROR` in the test command's output and
   reports it as a failure regardless of exit code. GDScript has no exceptions, so a runtime error
   mid-test previously could leave a hand-rolled harness's own exit code at 0 even though the test
   never finished, reading as a false survivor. See `docs/decisions/0015`.
+- `action.yml` and the CLI guide's `uses:` example both still carried a literal, never-filled-in
+  `REPLACE_WITH_THE_RELEASE_COMMIT_SHA` placeholder after the real 0.1.0 release. Filled in with
+  the actual `v0.1.0` tag commit.
 
 ## [0.1.0] - 2026-08-04
 
