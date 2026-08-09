@@ -55,8 +55,8 @@ inputs:
   command:
     description: >-
       The test command, for `runner: command` (gdmutant's --command). Required when `runner` is
-      `command`, ignored otherwise. For a command needing shell features `--command` alone can't
-      express (pipes, multiple commands), use `args: --command "..."` instead.
+      `command`, ignored otherwise. Runs directly, not through a shell: for a pipe or several
+      commands chained together, wrap it yourself, e.g. `bash -c "cmd1 | cmd2"`.
     required: false
     default: ""
   godot-use-dotnet:

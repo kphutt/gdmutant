@@ -536,13 +536,15 @@ takes:
     command: godot --headless --script res://tests/run_tests.gd
 ```
 
-For a command needing shell features `command` alone can't express, a pipe, several commands
-chained together, pass it through `args` instead, the same raw-passthrough path everything else
-past this table's inputs goes through:
+`command` runs directly, not through a shell, same as `--command` on the CLI: a pipe or several
+commands chained together needs an explicit shell to interpret them, wrap it yourself:
 
 ```yaml
-    args: --command "godot --headless --script res://tests/run_tests.gd | tee test-output.log"
+    command: bash -c "godot --headless --script res://tests/run_tests.gd | tee test-output.log"
 ```
+
+`args` is for flags this table doesn't model at all (`--trust-config`, `--jobs`, `--timeout`),
+not a second way to reach a shell.
 
 `since` reads the base commit out of your clone, so the workflow's `actions/checkout` step needs
 `fetch-depth: 0`. Its default fetches one commit, the base commit is not among them, and the

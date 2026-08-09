@@ -77,6 +77,19 @@ def _assemble(monkeypatch: pytest.MonkeyPatch, **env: str) -> tuple[list[str], i
     return captured["cmd"], excinfo.value.code
 
 
+def test_action_declares_the_command_input_and_wires_it_into_the_run_step() -> None:
+    # The heredoc-extraction tests below only exercise the assembly script in isolation, so they'd
+    # stay green even if action.yml's `command` input or its env wiring were deleted entirely (the
+    # tests set INPUT_COMMAND directly, they never observe what actually populates it). This pins
+    # the two halves those tests can't see, straight from the parsed action.yml.
+    action = yaml.safe_load((REPO / "action.yml").read_text(encoding="utf-8"))
+    declared = action["inputs"]["command"]
+    assert declared["required"] is False
+    assert declared["default"] == ""
+    run_step = next(s for s in action["runs"]["steps"] if s["name"] == "Run gdmutant")
+    assert run_step["env"]["INPUT_COMMAND"] == "${{ inputs.command }}"
+
+
 def test_minimal_inputs_default_to_the_whole_project(monkeypatch: pytest.MonkeyPatch) -> None:
     cmd, code = _assemble(monkeypatch)
     assert code == 0
@@ -130,11 +143,17 @@ def test_args_can_still_override_after_command(monkeypatch: pytest.MonkeyPatch) 
         INPUT_ARGS='--command "godot --headless --verbose"',
     )
     assert code == 0
-    # Both --command flags are present, in order; argparse keeps the last one it sees.
     positions = [i for i, part in enumerate(cmd) if part == "--command"]
     assert len(positions) == 2
     assert positions[0] < positions[1]
-    assert cmd[positions[1] + 1] == "godot --headless --verbose"
+
+    # Close the loop against gdmutant's own real parser, not just argv ordering: confirm a repeated
+    # --command actually resolves to the later value the way argparse's own dest-overwrite behavior
+    # says it should, rather than trusting a comment about how argparse works.
+    from gdmutant.cli import build_parser
+
+    parsed = build_parser().parse_args(cmd[1:])  # drop the leading "gdmutant" program name
+    assert parsed.test_command == "godot --headless --verbose"
 
 
 def test_tests_and_since_still_work_alongside_command(monkeypatch: pytest.MonkeyPatch) -> None:
