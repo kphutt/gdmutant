@@ -6,6 +6,10 @@ created: 2026-07-11
 
 # Mutation testing gdmutant itself
 
+This page is about gdmutant's own development: how the maintainer holds gdmutant's Python source
+to the standard the tool exists to enforce. Looking for how to run gdmutant on *your* project
+instead? See [the gdmutant guide](gdmutant-guide.md).
+
 gdmutant is a mutation tester, so its own Python suite is held to the standard it exists to enforce:
 a test suite should not just *cover* a line, it should *catch a bug* on that line. We dogfood this
 with [mutmut](https://github.com/boxed/mutmut), which mutates `gdmutant/` and re-runs the suite

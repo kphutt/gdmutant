@@ -8,7 +8,8 @@ created: 2026-07-10
 
 gdmutant's engine, GDScript adapter, runners, reporter, and CLI are built and tested. The most
 useful contributions are issues: bug reports, GDScript patterns that should be mutated, and
-real-world use cases.
+real-world use cases. Pull requests are welcome too, especially small, well-scoped fixes, the
+workflow below covers the whole process.
 
 Taking part here (issues, pull requests, discussion) means agreeing to the
 [Code of Conduct](CODE_OF_CONDUCT.md).
@@ -65,11 +66,24 @@ That script reads its commands out of `ci.yml` rather than restating them, so it
 what the hooks and the release-time gate run. [`AGENTS.md`](AGENTS.md) under "Build · test" spells
 the individual commands out, which is what you want when you only need one of them.
 
+If your change adds or touches pure logic, run a local mutation-test pass too, advisory and
+opt-in, not part of `verify_local.py`:
+
+```sh
+pre-commit run gdmutant-mutation --hook-stage manual
+```
+
+This is the same standard [`docs/mutation-testing.md`](docs/mutation-testing.md) holds this
+project's own suite to: green tests prove they don't fail, a mutation pass proves a bug on that
+line would actually be caught.
+
 The live self-test (`tests/test_selftest_live.py`) auto-skips unless you opt in with a real Godot.
-To run it locally:
+It has separate GdUnit4 and GUT cases, and each one skips on its own if its addon isn't installed,
+so install both to actually run the whole file rather than half of it silently:
 
 ```sh
 python scripts/install_gdunit4.py                            # download + verify the GdUnit4 addon
+python scripts/install_gut.py                                # download + verify the GUT addon
 GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-cov
 ```
 
