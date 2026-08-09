@@ -176,6 +176,13 @@ manual version becomes the way to reproduce a failure by hand.
    gdmutant from the branch under test, so it exercises the composite steps while proving nothing
    about a published ref resolving for somebody else, or about what the published package renders.
 
+   *Automated, and separate from "does it resolve":* `tests/test_action_pin.py` checks that every
+   documented `uses:` pin names *this* release's commit, not just some real commit. A pin that
+   resolves and runs can still be stale: `v0.1.0` stayed pinned through two later releases before
+   anyone noticed, and every one of those runs would have passed the resolves-and-completes check
+   above while installing an old version. Bump the pins to the tag this release just cut, in the
+   same PR as the version bump (step 1), so this check is already green by the time you tag.
+
 4. Look at the repository the way a stranger does. Front page, private window.
 
    *Pass:* the banner renders, every badge shows a real value rather than "no status", "invalid" or
