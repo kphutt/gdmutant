@@ -196,9 +196,11 @@ class CommandRunner:
     timeout: float = 600.0
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
-        """Run `self.command` in `project_dir` and map its exit code to a `SuiteResult`: 0 is a
-        pass (`tests=1`, a placeholder — an exit code can't count tests), non-zero is a failure.
-        Raises `SuiteTimeout` on a hang and `FileNotFoundError` if the command can't be executed.
+        """Run `self.command` in `project_dir` and map its result to a `SuiteResult`: exit 0 is a
+        pass (`tests=1`, a placeholder, since an exit code can't count tests), and non-zero is a
+        failure, unless a `_SCRIPT_ERROR_MARKER` appears in the captured output, which is an error
+        regardless of exit code (see the class docstring). Raises `SuiteTimeout` on a hang and
+        `FileNotFoundError` if the command can't be executed.
         """
         budget = self.timeout if timeout is None else timeout
         try:
