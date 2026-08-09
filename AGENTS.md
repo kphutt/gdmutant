@@ -46,8 +46,8 @@ Godot-free). Run them when touching the adapter, runners, or CLI file-handling:
 ```sh
 # Live self-test: drive the shipped CLI against a real Godot on the corpus.
 GDMUTANT_GODOT=godot uv run pytest tests/test_selftest_live.py
-# Dogfood harness: run gdmutant against a real GdUnit4 checkout — parse coverage + the
-# whole-directory regression guard (Godot-free, ~5s). Point it at any GdUnit4 clone:
+# Dogfood harness: run gdmutant against a real GdUnit4 checkout. Two checks: parse coverage,
+# and the whole-directory regression guard (Godot-free, ~5s). Point it at any GdUnit4 clone:
 GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dogfood_gdunit4.py
 ```
 
@@ -74,9 +74,9 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   CLI people run on Windows, so test on Windows for real, not just Linux. Two concrete traps to
   watch for: console output can crash under the legacy `cp1252` code page, and `python3` can resolve
   to a *different* interpreter than `python` (see `.pre-commit-config.yaml`'s header for the guard).
-- `ci.yml` runs automatically on every pull request and push to `main` (restored 2026-08-04, ahead
-  of going public — why it was ever manual-only, and why it's back:
-  [ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md)). The unbypassable gate is
+- `ci.yml` runs automatically on every pull request and push to `main`, restored 2026-08-04 ahead
+  of going public. [ADR-0012](docs/decisions/0012-merge-time-local-ship-time-cloud.md) covers why
+  it was ever manual-only, and why it's back. The unbypassable gate is
   still `publish.yml`'s release-time run of `verify` on both Linux and Windows, before every real
   release. Run the same checks locally any time:
 
@@ -94,8 +94,8 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
 - Keep the engine language-neutral: no GDScript-specific assumptions in `gdmutant/engine/`.
   Language specifics live only in `gdmutant/adapters/<lang>/`. One narrow, deliberate exception:
   `CommandRunner` (docs/decisions/0005) also checks its output for a GDScript-specific marker
-  string (docs/decisions/0015) — costs nothing for a non-GDScript command (the string never
-  appears), so it was kept there rather than behind a new adapter-level runner and CLI flag.
+  string (docs/decisions/0015). That check costs nothing for a non-GDScript command (the string
+  never appears), so it was kept there rather than behind a new adapter-level runner and CLI flag.
 - The mutation-operator core is deterministic, the reproducible mode a CI check can trust. Any
   future LLM-semantic mode stays out of it.
 - **Recurring bug one: a gate that passes without checking anything.** Seen five times. A test that
@@ -116,7 +116,7 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   maintainer can't approve their own PR). `main` requires a pull request and, alongside
   `Workflow security (zizmor)` (which reads the workflow files and nothing else), the checks
   `ci.yml`'s now-restored triggers make possible: `Verify` on both platforms, `Secret scan
-  (gitleaks)`, and both `Self-test` gates — see `scripts/harden_github.py`'s `REQUIRED_JOBS` for
+  (gitleaks)`, and both `Self-test` gates. See `scripts/harden_github.py`'s `REQUIRED_JOBS` for
   the exact, current list. `.github/CODEOWNERS` carries the full list of what branch protection
   enforces. Read changes to these paths carefully before merging. The GDScript adapter is the real
   technical risk, since a wrong mutant means a silently wrong survivor report.

@@ -65,7 +65,7 @@ Verify the result at https://test.pypi.org/p/gdmutant.
 1. Set the version in `pyproject.toml`. The tag must match it exactly.
    `scripts/check_release_tag.py` fails the release if it doesn't.
 2. Date the changelog. Change `CHANGELOG.md`'s bare `## [Unreleased]` heading (Keep a Changelog's
-   own convention — no version number yet, since nothing under it has shipped) to
+   own convention: no version number yet, since nothing under it has shipped) to
    `## [X.Y.Z] - YYYY-MM-DD`, using the date you expect to publish: one rename adds both the
    version number and the date together. Nothing automates this and no check enforces it, and it
    has to happen before the tag: the tag ships the commit it points at, so tagging first publishes
@@ -73,14 +73,14 @@ Verify the result at https://test.pypi.org/p/gdmutant.
 3. Merge both to `main` through the usual PR. A tag whose commit is not an ancestor of `main` is
    refused.
 4. Push the tag: `git tag vX.Y.Z <commit>` then `git push origin vX.Y.Z`. Get it right the first
-   time. The repo's tag ruleset blocks deleting and re-pointing tags for anyone acting normally —
-   `current_user_can_bypass: never`, confirmed via the API — so a tag naming the wrong version or
-   commit cannot be fixed in place through the ordinary push/delete path; the default recovery is
+   time. The repo's tag ruleset blocks deleting and re-pointing tags for anyone acting normally
+   (`current_user_can_bypass: never`, confirmed via the API), so a tag naming the wrong version or
+   commit cannot be fixed in place through the ordinary push/delete path. The default recovery is
    to burn the version number and cut a new one. A repo admin *can* still disable the ruleset
    itself (a separate, deliberate config change, not a bypass of the active rule), delete the tag,
-   and re-enable it — but treat that as a rare, considered override, only for a tag nothing
-   external has ever referenced (nothing published, no clone or consumer could have pinned to it),
-   never as a routine fix.
+   and re-enable it. Treat that as a rare, considered override, only for a tag nothing external
+   has ever referenced (nothing published, no clone or consumer could have pinned to it), never as
+   a routine fix.
 5. *Automatic.* `release.yml` runs its two guards (the tag matches the packaged version, and the
    tagged commit is on `main`) and then stages a draft Release with generated notes. A guard
    that fails leaves no Release at all, so nothing has shipped.
@@ -233,7 +233,7 @@ manual version becomes the way to reproduce a failure by hand.
   viewer's browser resolves from the `font-family` fallback stack -- confirmed directly by rendering
   the same text with only the font varied and watching the measured width swing by ~90px. A PNG has
   no fallback stack: it is fixed pixels, rendered once, identical for every viewer forever. The SVGs
-  stay as the editable source; the PNGs are what's actually embedded in `README.md` and uploaded to
+  stay as the editable source. The PNGs are what's actually embedded in `README.md` and uploaded to
   GitHub's Social Preview setting.
 
   To regenerate a PNG after an SVG edit: render it with a tool that resolves real system fonts (a
