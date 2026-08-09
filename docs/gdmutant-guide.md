@@ -31,6 +31,7 @@ gdmutant's own source, not how to run it.
   - [The survivor → killing-test loop](#the-survivor--killing-test-loop)
   - [Worked example](#worked-example-the-bundled-corpus)
 - [Troubleshooting](#troubleshooting)
+  - [GitHub Actions-specific failures](#github-actions-specific-failures)
 - [GitHub Actions](#github-actions)
   - [Inputs](#inputs)
   - [Outputs](#outputs)
@@ -43,13 +44,13 @@ gdmutant's own source, not how to run it.
 gdmutant is a Python CLI (Python 3.12+):
 
 ```sh
-pip install gdmutant
+pip install 'gdmutant==0.1.*'   # gdmutant is 0.x: pin the minor so a new one is a move you make on purpose
 ```
 
 Want a global command instead of a project dependency? [`pipx install
-gdmutant`](https://pipx.pypa.io/) or [`uv tool install
-gdmutant`](https://docs.astral.sh/uv/guides/tools/) work the same way, each in its own isolated
-environment.
+'gdmutant==0.1.*'`](https://pipx.pypa.io/) or [`uv tool install
+'gdmutant==0.1.*'`](https://docs.astral.sh/uv/guides/tools/) work the same way, each in its own
+isolated environment, and the same pin applies.
 
 The README's [Quickstart](../README.md#quickstart) has the full setup.
 
@@ -408,27 +409,98 @@ mutant is killable, it usually is. Write the test.
   gdmutant run ../my-project/src/module.gd --project ../my-project --runner command --command "godot --headless --script res://tests/run_tests.gd" --json
   ```
 
+### GitHub Actions-specific failures
+
+- The "Run gdmutant" step logs the fully-resolved CLI invocation inside a collapsible
+  `gdmutant command` group before running it, expand it first: it shows exactly what
+  `--project`/`--runner`/`--tests` and everything else resolved to, which is usually enough to spot
+  a wrong input on its own.
+- `addon-version: <anything other than installed>` fails the step immediately with
+  `::error::addon-version='<value>' is not supported yet — only 'installed'`. Cloning the addon at a
+  ref instead of vendoring it is a planned fast-follow, not built yet.
+- `since` set but the base commit isn't in your clone fails with `error: git diff for --since <ref>
+  failed: <detail>`, or `error: could not run git for --since <ref>: <detail>` if git itself can't
+  run. Add
+  `fetch-depth: 0` to the workflow's `actions/checkout` step, its default fetches one commit, which
+  usually doesn't include the base commit `since` needs.
+- An invalid `godot-version` fails inside the underlying
+  [`chickensoft-games/setup-godot`](https://github.com/chickensoft-games/setup-godot) step, before
+  gdmutant itself ever runs, with whatever message that action produces. Check the version string
+  against [Godot's release list](https://godotengine.org/download/archive/) first.
+
 ## GitHub Actions
 
-gdmutant ships as a GitHub Action too (`kphutt/gdmutant`, wrapping the CLI). Add it as a step in
-your own workflow (see GitHub's [Quickstart for GitHub
-Actions](https://docs.github.com/en/actions/quickstart) if you haven't written one before):
+gdmutant ships as a GitHub Action too (`kphutt/gdmutant`, wrapping the CLI). These examples are
+bare steps to add into a workflow you already have. Starting from nothing instead? [The README's
+GitHub Actions section](../README.md#github-actions) has a complete, standalone workflow file to
+save as-is (see GitHub's [Quickstart for GitHub
+Actions](https://docs.github.com/en/actions/quickstart) too, if you haven't written one before):
 
 ```yaml
 - uses: kphutt/gdmutant@05728864a1c9330d632e2aab2348ff4442f3d61d # v0.1.0
   with:
     godot-version: "4.7.0"   # the only required input
     project-path: ./
+```
+
+This is the gdUnit4 default (`runner: gdunit4`): no `tests:` needed, since gdUnit4's usual layout
+already matches gdmutant's own default, `res://test`. For GUT, whose stock layout puts suites in
+`test/unit/` instead, set both `runner` and `tests` explicitly:
+
+```yaml
+- uses: kphutt/gdmutant@05728864a1c9330d632e2aab2348ff4442f3d61d # v0.1.0
+  with:
+    godot-version: "4.7.0"
+    project-path: ./
+    runner: gut
     tests: res://test/unit
 ```
 
 It sets up Python and Godot, installs gdmutant, runs it, and writes every survivor (with its `gap`
 / `risk` / `start` explanation) to the workflow's job summary, where reviewers already look
-(`job-summary: false` skips that). The `report-json` output holds the path to the
-`mutation-testing-elements` report, ready to hand to an upload-artifact step. Survivors are output,
-not failure: the step exits non-zero only on a real error, such as a red baseline suite. The
-project and a suite that already passes must be there, plus the GUT or gdUnit4 addon if you use
-either. The action installs none of that.
+(`job-summary: false` skips that). The job summary reads like this (a real run against this repo's
+own bundled corpus, trimmed to one survivor):
+
+````markdown
+## gdmutant: mutation report
+
+**Mutation score: 61.1%**
+
+11 killed · 0 timeout · **7 survived** · 0 ignored · 0 invalid · 0 error
+
+### Surviving mutants (7)
+
+Each is a line a bug could live on that no test catches. gdmutant explains the gap, not just the location:
+
+#### `corpus/turn_order.gd:13` · comparison
+
+```gdscript
+    if value < 0:
+```
+
+Changed `<` to `<=`: every test still passed.
+
+**The gap.** Your tests pass whether this says `<` or `<=`. They run this line, but never with an
+input the two decide differently, so what this comparison decides is untested.
+
+**Why it matters, and where to start.**
+
+Passing here is false confidence, not proof. A later refactor or merge that changes this
+comparison slips through green. If it has a right answer, no test guards it.
+
+Add a test that reaches this line with two equal operands (a value compared to itself) and assert
+the result you expect. Equal operands separate every comparison swap gdmutant makes. Only you know
+the result, gdmutant reports the gap, not it.
+
+[Explain the `comparison` operator](https://github.com/kphutt/gdmutant/blob/main/docs/survivors/README.md#comparison)
+````
+
+Every other survivor repeats that same shape (`path:line`, the changed source line, the gap, and
+where to start). The `report-json` output holds the path to the `mutation-testing-elements`
+report, ready to hand to an upload-artifact step. Survivors are output, not failure: the step
+exits non-zero only on a real error, such as a red baseline suite. The project and a suite that
+already passes must be there, plus the GUT or gdUnit4 addon if you use either. The action installs
+none of that.
 
 ### Inputs
 
@@ -437,15 +509,31 @@ either. The action installs none of that.
 | `godot-version` | Yes | *(none)* | The Godot version to set up, e.g. `4.7.0`. |
 | `project-path` | No | `./` | The Godot project directory (`--project`). |
 | `paths` | No | the whole project | Source file(s)/directories to mutate, space-separated (gdmutant's positional targets). Excludes `addons/` and test files. |
-| `runner` | No | `gdunit4` | Test runner: `gdunit4`, `gut`, or `command` (`--runner`). |
+| `runner` | No | `gdunit4` | Test runner: `gdunit4`, `gut`, or `command` (`--runner`). `command` has no dedicated input of its own, see below. |
 | `tests` | No | gdmutant's default, `res://test` | The test directory (`--tests`). |
 | `since` | No | mutate the full target | Only mutate lines changed since this git ref (`--since`): the fast, per-PR diff-scoped mode. |
-| `args` | No | *(none)* | Extra raw arguments appended to the invocation, verbatim. |
+| `args` | No | *(none)* | Extra raw arguments appended to the invocation, verbatim. Also how you pass `--command` (see below). |
 | `job-summary` | No | `true` | Write survivors (with explanations) to the job summary as Markdown (`--report step-summary`). Set `false` to skip. |
 | `godot-use-dotnet` | No | `false` | Set up the .NET (Mono) build of Godot instead of the standard build. |
 | `addon-version` | No | `installed` | How the test-runner addon is provided. Only `installed` (already vendored in your project) ships today. Cloning the addon at a ref is a planned fast-follow. |
 | `ref` | No | *(none)* | Install gdmutant from this git ref (tag/branch/SHA) instead of PyPI: the escape hatch for testing an unreleased commit. Most consumers never need this. |
 | `gdmutant-version` | No | *(none)* | Install this exact published PyPI version instead of deriving one from the pinned `uses:` ref. Rarely needed. |
+
+Setting both `ref` and `gdmutant-version` is unusual, but if you do, `gdmutant-version` wins and
+installs from PyPI, `ref` is ignored entirely for that run. You are very unlikely to hit this: pick
+one or the other.
+
+`runner: command` has no dedicated input, since a headless test command varies too much to model
+as one. Pass it through `args` instead, the same way the CLI's `--command` flag works:
+
+```yaml
+- uses: kphutt/gdmutant@05728864a1c9330d632e2aab2348ff4442f3d61d # v0.1.0
+  with:
+    godot-version: "4.7.0"
+    project-path: ./
+    runner: command
+    args: --command "godot --headless --script res://tests/run_tests.gd"
+```
 
 `since` reads the base commit out of your clone, so the workflow's `actions/checkout` step needs
 `fetch-depth: 0`. Its default fetches one commit, the base commit is not among them, and the

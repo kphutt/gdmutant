@@ -45,7 +45,8 @@ Godot-free). Run them when touching the adapter, runners, or CLI file-handling:
 
 ```sh
 # Live self-test: drive the shipped CLI against a real Godot on the corpus.
-GDMUTANT_GODOT=godot uv run pytest tests/test_selftest_live.py
+# Run `mise install` first: an unset or empty GDMUTANT_GODOT skips this whole file silently.
+GDMUTANT_GODOT=$(mise which godot) uv run pytest tests/test_selftest_live.py
 # Dogfood harness: run gdmutant against a real GdUnit4 checkout. Two checks: parse coverage,
 # and the whole-directory regression guard (Godot-free, ~5s). Point it at any GdUnit4 clone:
 GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dogfood_gdunit4.py

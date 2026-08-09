@@ -13,5 +13,8 @@
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run mypy gdmutant` passes
 - [ ] `uv run pytest` passes (new behavior has tests)
+- [ ] `uv run pip-audit` passes
+- [ ] `uv run python scripts/verify_local.py --job license-check` passes
 - [ ] Any new dependency is recorded in `docs/credits.md`
 - [ ] A design change is captured as an ADR in `docs/decisions/` (if applicable)
+- [ ] New pure logic got a local mutation-test pass, `uv run pre-commit run gdmutant-mutation --hook-stage manual` (if applicable)

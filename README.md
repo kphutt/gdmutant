@@ -47,6 +47,8 @@ and its detail card: what it means, why it's risky, and how to close it.
   already installed and enabled in your project, if you use either. A different test runner works
   too, via `--runner command`: any headless command that exits non-zero on failure.
 - [Python](https://www.python.org/downloads/) 3.12+ (check with `python --version`).
+- A test suite that already passes. gdmutant reruns your tests once per mutant and reports the
+  ones they miss, so it needs a green baseline to compare against, not a red one.
 
 ## Quickstart
 
@@ -141,8 +143,10 @@ isn't a target to hit, it's a direction to watch. There's no universal "good" nu
 
 ## GitHub Actions
 
-gdmutant also ships as a GitHub Action, so a pull request can report its own survivors. Save this as
-`.github/workflows/mutation.yml`:
+gdmutant also ships as a GitHub Action, so a pull request can report its own survivors. This is a
+complete, standalone workflow file. Save it as `.github/workflows/mutation.yml`. Already have a
+workflow and just want to add gdmutant as one more step in it? See [the guide's GitHub Actions
+section](docs/gdmutant-guide.md#github-actions) instead, which shows the bare step on its own.
 
 ```yaml
 name: Mutation testing
