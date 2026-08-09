@@ -178,6 +178,13 @@ class _GodotJUnitRunner:
         )
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        """Run this framework's suite once against `project_dir` and return the parsed result.
+
+        Deletes any stale report at `report_path` first and requires this run to write a fresh
+        one, so a crash or hang can never be mistaken for a leftover pass. Raises
+        `SourceOutsideProject` if `report_path` resolves outside `project_dir`, `SuiteTimeout` on a
+        hang, and this adapter's `_missing_report_error` if no report appears at all.
+        """
         # Checked before any work happens, including the import warm-up below: no reason to spend a
         # Godot boot on a run that's about to be refused anyway.
         project = Path(project_dir).resolve()

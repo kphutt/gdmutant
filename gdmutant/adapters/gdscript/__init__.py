@@ -418,6 +418,8 @@ def _scope_deletable_statements(scope: Tree[Token]) -> list[Tree[Token]]:
     found: list[Tree[Token]] = []
 
     def walk(node: Tree[Token]) -> None:
+        """Recursively add `node`'s deletable statements to `found`, stopping at a nested function
+        scope (its statements belong to that scope, not this one)."""
         for child in node.children:
             if not isinstance(child, Tree) or child.data in _FUNCTION_SCOPE_NODES:
                 continue
