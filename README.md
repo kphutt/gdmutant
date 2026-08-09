@@ -60,7 +60,7 @@ cd gdmutant                                # corpus/ lives right here, at the re
 
 pip install .                              # installs gdmutant and its own dependencies
 
-python scripts/install_gdunit4.py          # gdUnit4 is a Godot addon that isn't vendored in git; this fetches it
+python scripts/install_gdunit4.py          # gdUnit4 is a Godot addon that isn't vendored in git. This fetches it
 
 gdmutant run corpus/turn_order.gd --project corpus --runner gdunit4 --html
 # mutates one file, reruns corpus/'s real GdUnit4 tests against each mutant
@@ -108,8 +108,8 @@ Wrote HTML report to gdmutant-report-turn_order-<timestamp>.html. Open it in a b
 pip install 'gdmutant==0.1.*'   # gdmutant is 0.x: pin the minor so a new one is a move you make on purpose
 ```
 
-Pick your test runner with `--runner` (required). [GUT](https://github.com/bitwes/Gut) or
-[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) — Godot has no built-in test runner, so both
+Pick your test runner with `--runner` (required): [GUT](https://github.com/bitwes/Gut) or
+[gdUnit4](https://github.com/godot-gdunit-labs/gdUnit4). Godot has no built-in test runner, so both
 ship as addons: a plugin folder (`addons/gut/` or `addons/gdUnit4/`) that lives inside a Godot
 project. Whichever you pick needs to already be installed there, in the project you're pointing
 gdmutant at. Godot itself needs to be on PATH, or point at it with `--godot <path>`.

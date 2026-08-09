@@ -58,9 +58,9 @@ small the change is. A pull request never gets one, even when the diff touches `
 `tests/`: a PR is pushed to repeatedly during review, and paying that cost on every push for a
 number that mostly doesn't move isn't worth it. Only a push to `main` (a change that already
 landed) can trigger the full sweep, and even then only if that diff touches `gdmutant/`, `tests/`,
-`corpus/`, `pyproject.toml`, or `uv.lock` — the only paths that can move the score at all. Every
-other push or PR gets a plain `pytest` run instead, which still catches a doc file (`also_copy` in
-`pyproject.toml`) breaking a test that reads it.
+`corpus/`, `pyproject.toml`, or `uv.lock`. Those are the only paths that can move the score at all.
+Every other push or PR gets a plain `pytest` run instead, which still catches a doc file
+(`also_copy` in `pyproject.toml`) breaking a test that reads it.
 
 A second, narrower mutation run happens locally: the manual pre-commit hook (`gdmutant-mutation`)
 runs [poodle](https://github.com/WiredNerd/poodle), diff-scoped to files changed vs `origin/main`.
@@ -74,7 +74,7 @@ change just go untested," not "match CI's number."
 ## Current result
 
 A score on this page would be a snapshot the moment it was written, and stale the moment `main`
-moves without anyone re-measuring it — which is every commit after this one. So this doc does not
+moves without anyone re-measuring it. That is every commit after this one. So this doc does not
 pin one. Run it yourself:
 
 ```sh
@@ -87,12 +87,12 @@ CI measures the same thing on every push to `main` that touches `gdmutant/`, `te
 (see [Running it](#running-it) above), so the current number is always one merged, score-relevant
 change away rather than a hand-updated line in this doc.
 
-Survivors are not triaged as a full set; working through them and deciding which are real gaps and
+Survivors are not triaged as a full set. Working through them and deciding which are real gaps and
 which are equivalents is outstanding work. The 18 below are the ones already confirmed equivalent:
 changes that cannot alter observable behavior, so no test *can* catch them (the well-known
 [equivalent mutant problem](https://en.wikipedia.org/wiki/Mutation_testing#Equivalent_mutants)).
-That finding holds regardless of what the current total is — each was verified against the code
-doing the mutating, not against a score. What they do *not* do is account for the rest: they were
+That finding holds regardless of what the current total is, because each was verified against the
+code doing the mutating, not against a score. What they do *not* do is account for the rest: they were
 enumerated over a run whose own mutant total is withdrawn as unreproducible ([ADR-0008's
 correction](decisions/0008-method-body-mutation-manual-spotcheck.md#correction-2026-07-31)). Read
 whatever score you measure as that measurement only, never as a claim that every behavioral mutant

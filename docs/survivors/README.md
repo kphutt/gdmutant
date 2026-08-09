@@ -9,7 +9,7 @@ created: 2026-07-19
 A surviving mutant is a change gdmutant made to your source that every test still passed,
 proof that the behavior on that line isn't actually checked (coverage says the line *ran*, mutation
 says the result isn't *asserted*). A survivor isn't a bug in your code, and it isn't a bug in
-gdmutant. It's a gap in your tests, a specific, located "here's a change nothing caught.
+gdmutant. It's a gap in your tests, specific and located: "here's a change nothing caught."
 
 Each section below explains one mutation operator: what the change is, why a survivor matters, how
 to kill it, and when it legitimately survives (an *equivalent mutant*). The `more` link in each
