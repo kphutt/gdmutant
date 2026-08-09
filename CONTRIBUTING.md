@@ -8,7 +8,7 @@ created: 2026-07-10
 
 gdmutant's engine, GDScript adapter, runners, reporter, and CLI are built and tested. The most
 useful contributions are issues: bug reports, GDScript patterns that should be mutated, and
-real-world use cases. Pull requests are welcome too, especially small, well-scoped fixes, the
+real-world use cases. Pull requests are welcome too, especially small, well-scoped fixes. The
 workflow below covers the whole process.
 
 Taking part here (issues, pull requests, discussion) means agreeing to the
@@ -70,7 +70,7 @@ If your change adds or touches pure logic, run a local mutation-test pass too, a
 opt-in, not part of `verify_local.py`:
 
 ```sh
-pre-commit run gdmutant-mutation --hook-stage manual
+uv run pre-commit run gdmutant-mutation --hook-stage manual
 ```
 
 This is the same standard [`docs/mutation-testing.md`](docs/mutation-testing.md) holds this

@@ -31,6 +31,7 @@ gdmutant's own source, not how to run it.
   - [The survivor → killing-test loop](#the-survivor--killing-test-loop)
   - [Worked example](#worked-example-the-bundled-corpus)
 - [Troubleshooting](#troubleshooting)
+  - [GitHub Actions-specific failures](#github-actions-specific-failures)
 - [GitHub Actions](#github-actions)
   - [Inputs](#inputs)
   - [Outputs](#outputs)
@@ -47,9 +48,9 @@ pip install 'gdmutant==0.1.*'   # gdmutant is 0.x: pin the minor so a new one is
 ```
 
 Want a global command instead of a project dependency? [`pipx install
-gdmutant`](https://pipx.pypa.io/) or [`uv tool install
-gdmutant`](https://docs.astral.sh/uv/guides/tools/) work the same way, each in its own isolated
-environment.
+'gdmutant==0.1.*'`](https://pipx.pypa.io/) or [`uv tool install
+'gdmutant==0.1.*'`](https://docs.astral.sh/uv/guides/tools/) work the same way, each in its own
+isolated environment, and the same pin applies.
 
 The README's [Quickstart](../README.md#quickstart) has the full setup.
 
@@ -418,7 +419,8 @@ mutant is killable, it usually is. Write the test.
   `::error::addon-version='<value>' is not supported yet — only 'installed'`. Cloning the addon at a
   ref instead of vendoring it is a planned fast-follow, not built yet.
 - `since` set but the base commit isn't in your clone fails with `error: git diff for --since <ref>
-  failed`, or `error: could not run git for --since <ref>: <detail>` if git itself can't run. Add
+  failed: <detail>`, or `error: could not run git for --since <ref>: <detail>` if git itself can't
+  run. Add
   `fetch-depth: 0` to the workflow's `actions/checkout` step, its default fetches one commit, which
   usually doesn't include the base commit `since` needs.
 - An invalid `godot-version` fails inside the underlying

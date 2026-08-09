@@ -17,4 +17,4 @@
 - [ ] `uv run python scripts/verify_local.py --job license-check` passes
 - [ ] Any new dependency is recorded in `docs/credits.md`
 - [ ] A design change is captured as an ADR in `docs/decisions/` (if applicable)
-- [ ] New pure logic got a local mutation-test pass, `pre-commit run gdmutant-mutation --hook-stage manual` (if applicable)
+- [ ] New pure logic got a local mutation-test pass, `uv run pre-commit run gdmutant-mutation --hook-stage manual` (if applicable)
