@@ -1593,10 +1593,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI end to end (config, argument parsing, dispatch to the `run`/`example`
     subcommand) and return the process exit code.
 
-    0 on a completed pass (survivors are report output, not a failure — FG-6.2), 1 if the
+    0 on a completed pass (survivors are report output, not a failure, per FG-6.2), 1 if the
     unmutated baseline suite fails, 2 for a setup/usage error (bad config, bad flags, an unreadable
-    source, a missing test-runner executable, …). No args (or an unrecognized subcommand) prints
-    help and returns 0.
+    source, a missing test-runner executable, and so on). No args prints help and returns 0.
+    An unrecognized subcommand never reaches this function's own return paths: argparse rejects it
+    inside `parser.parse_args`, printing a usage error and raising `SystemExit(2)` directly.
     """
     # Make the CLI's Unicode output survive a Windows cp1252 console (see `_force_utf8`).
     for _stream in (sys.stdout, sys.stderr):
