@@ -2,13 +2,14 @@
 # contributor's) gets the same checks with `pre-commit install --hook-type pre-commit --hook-type
 # pre-push`.
 #
-# NOT JUST A CONVENIENCE ANYMORE (ADR-0012). ci.yml is `workflow_dispatch`-only while this repo is
-# private — these hooks are the ONLY merge-time gate there is; nothing mechanical stops a bad
-# commit from reaching `main` if they're skipped or not installed. The authoritative, unbypassable
-# check is publish.yml's release-time gate (runs live, in the cloud, on the exact commit, every
-# real release) — not GitHub Actions running on every push, which is what this comment used to say
-# and is no longer true. If ci.yml's automatic triggers come back (e.g. once this repo is public),
-# these hooks return to being a convenience mirror rather than the only gate.
+# A CONVENIENCE MIRROR, NOT THE GATE (ADR-0012, corrected 2026-08-04). ci.yml's pull_request and
+# push triggers are restored, and this repo is public: cloud CI is the check every PR gets,
+# regardless of whether a contributor has these hooks installed. These hooks exist to catch the
+# same problems earlier, on your own machine, before you even push, not because the cloud check is
+# otherwise missing. The authoritative, unbypassable check is still publish.yml's release-time gate
+# (runs live, in the cloud, on the exact commit, every real release). That part never changed:
+# what changed is that ci.yml is no longer the manual-only, workflow_dispatch-only setup an earlier
+# version of this comment described. See ADR-0012's "Correction (2026-08-04)" for the full reasoning.
 #
 # Three stages:
 #   - pre-commit (every commit): gitleaks only — cheap, catches a secret before it's even committed.
