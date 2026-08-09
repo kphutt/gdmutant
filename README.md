@@ -162,7 +162,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0        # `since` below needs the base commit in the clone
-      - uses: kphutt/gdmutant@05728864a1c9330d632e2aab2348ff4442f3d61d # v0.1.0
+      - uses: kphutt/gdmutant@284f185f1495f2d79150781cf2e6de618ed11327 # v0.1.2
         with:
           godot-version: "4.7.0"   # the only required input
           paths: src                # what to mutate (default: the whole project)

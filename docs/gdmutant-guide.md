@@ -437,7 +437,7 @@ save as-is (see GitHub's [Quickstart for GitHub
 Actions](https://docs.github.com/en/actions/quickstart) too, if you haven't written one before):
 
 ```yaml
-- uses: kphutt/gdmutant@05728864a1c9330d632e2aab2348ff4442f3d61d # v0.1.0
+- uses: kphutt/gdmutant@284f185f1495f2d79150781cf2e6de618ed11327 # v0.1.2
   with:
     godot-version: "4.7.0"   # the only required input
     project-path: ./
@@ -448,7 +448,7 @@ already matches gdmutant's own default, `res://test`. For GUT, whose stock layou
 `test/unit/` instead, set both `runner` and `tests` explicitly:
 
 ```yaml
-- uses: kphutt/gdmutant@05728864a1c9330d632e2aab2348ff4442f3d61d # v0.1.0
+- uses: kphutt/gdmutant@284f185f1495f2d79150781cf2e6de618ed11327 # v0.1.2
   with:
     godot-version: "4.7.0"
     project-path: ./
@@ -528,7 +528,7 @@ one or the other.
 takes:
 
 ```yaml
-- uses: kphutt/gdmutant@05728864a1c9330d632e2aab2348ff4442f3d61d # v0.1.0
+- uses: kphutt/gdmutant@284f185f1495f2d79150781cf2e6de618ed11327 # v0.1.2
   with:
     godot-version: "4.7.0"
     project-path: ./
