@@ -82,6 +82,29 @@ def test_the_guide_says_there_is_no_floating_tag() -> None:
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
+def _latest_tag_commit(version: str) -> str:
+    """The commit `vVERSION` points at, read straight from `origin` rather than local refs.
+
+    `ci.yml`'s `verify` job checks out with no `fetch-depth` set, the actions/checkout default of
+    1, a single commit and no tags at all. `git rev-parse vX.Y.Z^{commit}` only works if that tag
+    ref exists locally, so it fails there with exit 128, "unknown revision", even though the tag
+    is real and published. `git ls-remote` asks the remote directly and needs no local history at
+    any depth. Prefer the `^{}`-dereferenced line, which is what an *annotated* tag's own commit
+    resolves to. A lightweight tag (this repo's kind, as of writing) has no such line, and the
+    plain ref is already the commit."""
+    tag = f"v{version}"
+    output = subprocess.run(
+        ["git", "ls-remote", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    shas = {ref: sha for sha, ref in (line.split("\t") for line in output.splitlines() if line)}
+    assert shas, f"origin has no tag named {tag!r} at all, the release may not be pushed yet"
+    return shas.get(f"refs/tags/{tag}^{{}}", shas[f"refs/tags/{tag}"])
+
+
 @pytest.mark.parametrize("path", DOCS_SHOWING_A_USES_LINE, ids=lambda p: p.name)
 def test_every_shipped_uses_line_pins_the_latest_released_version(path: Path) -> None:
     # A `uses:` line that names a real, valid, non-floating ref still goes stale the moment a new
@@ -90,13 +113,7 @@ def test_every_shipped_uses_line_pins_the_latest_released_version(path: Path) ->
     # `command` input, one shipped later. `test_no_shipped_uses_line_pins_a_floating_tag` above
     # only checks the ref isn't unsatisfiable, not that it's current -- this closes that gap.
     version = check_release_tag.packaged_version()
-    latest_tag_sha = subprocess.run(
-        ["git", "rev-parse", f"v{version}^{{commit}}"],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+    latest_tag_sha = _latest_tag_commit(version)
 
     refs = _USES.findall(path.read_text(encoding="utf-8"))
     assert refs, f"{path.relative_to(REPO)} shows no `uses:` line to check"
