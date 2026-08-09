@@ -19,12 +19,12 @@ gdmutant is a [uv](https://docs.astral.sh/uv/) project. Follow [`AGENTS.md`](AGE
 "Setup" to install uv and sync the pinned toolchain (`uv sync --frozen`), then run commands with
 `uv run` (e.g. `uv run pytest`).
 
-### Install the local checks — fast, optional feedback
+### Install the local checks: fast, optional feedback
 
-`ci.yml` runs automatically on every pull request and push to `main` — lint, types, tests, audit,
+`ci.yml` runs automatically on every pull request and push to `main`: lint, types, tests, audit,
 license, and a secret scan, all in the cloud, whether or not you set anything up locally. That's
 the real gate. The git hooks in `.pre-commit-config.yaml` exist to catch the same problems earlier,
-on your own machine, before you even push — not because the cloud check is otherwise missing.
+on your own machine, before you even push, not because the cloud check is otherwise missing.
 Installing them is optional but saves a round trip to the cloud run. Install them:
 
 ```sh
@@ -77,7 +77,7 @@ GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-
 
 - One focused change per PR, with a clear description of what and why.
 - Lint, types, tests, audit, and secret scan all pass. `ci.yml` checks all of this in the cloud on
-  every PR regardless, so it's covered either way — the pre-commit and pre-push hooks just surface
+  every PR regardless, so it's covered either way. The pre-commit and pre-push hooks just surface
   the same failures locally, sooner (see "Install the local checks" above).
 - New behavior comes with tests. This is a testing tool, and we hold ourselves to it.
 - Larger design changes are recorded as an ADR in `docs/decisions/` (append-only, see the

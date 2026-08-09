@@ -1,5 +1,5 @@
 ---
-type: how-to
+type: reference
 status: active
 created: 2026-07-31
 ---

@@ -369,13 +369,13 @@ mutant is killable, it usually is. Write the test.
   missing `gut`, or any other flag behaving like an old version). `pip install .`/`pip install
   gdmutant` warns when its `gdmutant.exe` lands somewhere not on PATH ("The script gdmutant.exe is
   installed in ... which is not on PATH"). If an older `gdmutant` from a different Python install
-  is earlier on PATH, that's the one your shell runs, silently. Check `gdmutant --version` first —
-  if it names an older release than the one you meant to install, or a tool run from a checkout
-  silently prefers a stale git-pinned dependency over the one you just installed (`tool.uv.sources`
-  in `pyproject.toml`, if the project has one), that is the mismatch. Otherwise check the path
-  instead: `Get-Command gdmutant` (PowerShell) or `which gdmutant` (bash/zsh) shows which
-  `gdmutant.exe` actually answers, and compare it against the path pip's warning named. Fix by adding
-  that directory to PATH, or by uninstalling the older `gdmutant` first.
+  is earlier on PATH, that's the one your shell runs, silently. Check `gdmutant --version` first.
+  If it names an older release than the one you meant to install, that is the mismatch. Same if a
+  tool run from a checkout silently prefers a stale git-pinned dependency over the one you just
+  installed (`tool.uv.sources` in `pyproject.toml`, if the project has one). If the version looks
+  right, check the path instead: `Get-Command gdmutant` (PowerShell) or `which gdmutant` (bash/zsh)
+  shows which `gdmutant.exe` actually answers, and compare it against the path pip's warning named.
+  Fix by adding that directory to PATH, or by uninstalling the older `gdmutant` first.
 - "GUT found no tests …" on the baseline run. Nothing is broken: `--tests` defaults to
   `res://test`, GUT's layout puts suites in `test/unit/`, and `-gdir` doesn't search
   subdirectories. Pass `--tests res://test/unit`. For a *tree* of suites, run GUT yourself with
