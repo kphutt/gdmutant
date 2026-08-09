@@ -684,6 +684,8 @@ def _diff_scoped(base: Adapter, changed: dict[str, set[int]]) -> Adapter:
     Application is unchanged, so this rides the engine's adapter seam (NF-3) with no engine edit."""
 
     def generate(path: str, source: str, catalog: tuple[Operator, ...]) -> list[Mutant]:
+        """Generate `path`'s mutants via `base`, then drop any not on a line `changed` since the
+        base ref."""
         lines = changed.get(str(Path(path).resolve()), set())
         return [m for m in base.generate_mutants(path, source, catalog) if m.span.line in lines]
 
@@ -1366,6 +1368,8 @@ def _untrusted_config_message(keys: list[str]) -> str:
 
 
 def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentParser:
+    """Build the `run`/`example` subcommand parser, seeding `run`'s flag defaults from `config` (an
+    already-validated `.gdmutant.toml`, or `None`) so an explicit CLI flag still overrides it."""
     parser = argparse.ArgumentParser(
         prog="gdmutant",
         description="Mutation testing for GDScript (and, in time, other languages).",
@@ -1586,6 +1590,15 @@ def _normalize_windows_token(token: str) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the CLI end to end (config, argument parsing, dispatch to the `run`/`example`
+    subcommand) and return the process exit code.
+
+    0 on a completed pass (survivors are report output, not a failure, per FG-6.2), 1 if the
+    unmutated baseline suite fails, 2 for a setup/usage error (bad config, bad flags, an unreadable
+    source, a missing test-runner executable, and so on). No args prints help and returns 0.
+    An unrecognized subcommand never reaches this function's own return paths: argparse rejects it
+    inside `parser.parse_args`, printing a usage error and raising `SystemExit(2)` directly.
+    """
     # Make the CLI's Unicode output survive a Windows cp1252 console (see `_force_utf8`).
     for _stream in (sys.stdout, sys.stderr):
         _force_utf8(_stream)

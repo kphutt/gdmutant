@@ -67,6 +67,10 @@ class SourceOutsideProject(Exception):
 
 
 class Verdict(Enum):
+    """What happened when one mutant's suite ran: caught (`KILLED`, including a suite `TIMEOUT`,
+    which counts as caught — see `SuiteTimeout`), missed (`SURVIVED`), skipped without a run
+    (`IGNORED`, `INVALID`), or the run itself failed (`ERROR`)."""
+
     KILLED = "killed"
     SURVIVED = "survived"
     TIMEOUT = "timeout"
@@ -77,6 +81,8 @@ class Verdict(Enum):
 
 @dataclass(frozen=True)
 class MutantOutcome:
+    """One mutant paired with the `Verdict` its evaluation reached."""
+
     mutant: Mutant
     verdict: Verdict
 
@@ -92,26 +98,34 @@ class MutationRun:
 
     @property
     def killed(self) -> int:
+        """Count of mutants a test caught outright (excludes timeouts, tallied separately)."""
         return self._count(Verdict.KILLED)
 
     @property
     def survived(self) -> int:
+        """Count of mutants no test caught — the run's reportable survivors."""
         return self._count(Verdict.SURVIVED)
 
     @property
     def timeouts(self) -> int:
+        """Count of mutants that hung the suite — a detection, so it counts toward `detected`."""
         return self._count(Verdict.TIMEOUT)
 
     @property
     def ignored(self) -> int:
+        """Count of mutants skipped without a run, via a `# gdmutant: ignore` comment."""
         return self._count(Verdict.IGNORED)
 
     @property
     def invalid(self) -> int:
+        """Count of mutants dropped without a run because they failed the re-parse guard (NF-5) —
+        the mutation would not have compiled in Godot."""
         return self._count(Verdict.INVALID)
 
     @property
     def errors(self) -> int:
+        """Count of mutants whose evaluation itself failed (a crash, a missing report, …) rather
+        than reaching a kill/survive verdict."""
         return self._count(Verdict.ERROR)
 
     @property
@@ -651,6 +665,9 @@ def _run_mutants_parallel(
     lock = threading.Lock()
 
     def worker(worker_dir: str) -> None:
+        """Drain `work` against this worker's own project copy at `worker_dir`, recording each
+        mutant's outcome (or, on an exception, stashing it in `errors` for the main thread to
+        re-raise) until the queue is empty."""
         target = str(Path(worker_dir) / rel)
         while True:
             try:

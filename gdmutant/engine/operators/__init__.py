@@ -55,6 +55,7 @@ class TableOperator:
     table: Mapping[str, tuple[str, ...]]
 
     def replacements(self, token: str) -> tuple[str, ...]:
+        """`token`'s replacements per `table`, or empty if `token` isn't one of its keys."""
         return self.table.get(token, ())
 
 
@@ -73,6 +74,8 @@ class NumericBumpOperator:
     id: str = "numeric"
 
     def replacements(self, token: str) -> tuple[str, ...]:
+        """`token` bumped by +1 and -1 (as strings), or empty if `token` isn't a bare decimal
+        integer literal, or is the non-canonical literal ``"-0"``."""
         digits = token[1:] if token.startswith("-") else token
         if not (digits.isascii() and digits.isdigit()):
             return ()

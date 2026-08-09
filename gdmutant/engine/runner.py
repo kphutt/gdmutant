@@ -75,6 +75,7 @@ class SuiteResult:
 
     @property
     def passed(self) -> bool:
+        """True if no test failed or errored — the signal that a mutant survived."""
         return not self.failed
 
 
@@ -117,7 +118,10 @@ class Runner(Protocol):
     non-zero when it finds no tests. The JUnit adapters have real counts and are fully covered.
     """
 
-    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult: ...
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        """Run `project_dir`'s test suite once and return the aggregate result, upholding the
+        crash-safety contract documented on this class."""
+        ...
 
 
 @runtime_checkable
@@ -131,7 +135,10 @@ class Preparable(Protocol):
     setup *is*. `prepare` must be idempotent: it may also be called defensively from ``run``.
     """
 
-    def prepare(self, project_dir: str) -> None: ...
+    def prepare(self, project_dir: str) -> None:
+        """Run this runner's one-time, potentially slow setup for `project_dir`, before the engine
+        starts timing the baseline. Must be idempotent."""
+        ...
 
 
 @runtime_checkable
@@ -149,7 +156,10 @@ class RunWarning(Protocol):
     surface as the "all mutants survived" warning.
     """
 
-    def run_warning(self) -> str | None: ...
+    def run_warning(self) -> str | None:
+        """A stderr warning to print once the whole mutation run ends, or `None` if there's
+        nothing to flag. Never affects the mutation score or the exit code."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -186,6 +196,12 @@ class CommandRunner:
     timeout: float = 600.0
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        """Run `self.command` in `project_dir` and map its result to a `SuiteResult`: exit 0 is a
+        pass (`tests=1`, a placeholder, since an exit code can't count tests), and non-zero is a
+        failure, unless a `_SCRIPT_ERROR_MARKER` appears in the captured output, which is an error
+        regardless of exit code (see the class docstring). Raises `SuiteTimeout` on a hang and
+        `FileNotFoundError` if the command can't be executed.
+        """
         budget = self.timeout if timeout is None else timeout
         try:
             completed = subprocess.run(
