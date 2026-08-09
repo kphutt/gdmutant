@@ -10,6 +10,16 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- The GitHub Action's `runner: command` mode now has its own `command` input, matching the
+  first-class inputs `gdunit4` and `gut` already get (`tests`, etc.). Previously the only way to
+  supply the test command was through the generic `args` passthrough (`args: --command "..."`),
+  undocumented until recently. `args` still works for the rare command that needs shell features
+  `command` alone can't express, a pipe, several commands chained together.
+
 ## [0.1.2] - 2026-08-07
 
 ### Fixed

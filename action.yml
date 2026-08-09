@@ -52,6 +52,13 @@ inputs:
       default (res://test).
     required: false
     default: ""
+  command:
+    description: >-
+      The test command, for `runner: command` (gdmutant's --command). Required when `runner` is
+      `command`, ignored otherwise. For a command needing shell features `--command` alone can't
+      express (pipes, multiple commands), use `args: --command "..."` instead.
+    required: false
+    default: ""
   godot-use-dotnet:
     description: Set up the .NET (Mono) build of Godot instead of the standard build.
     required: false
@@ -203,6 +210,7 @@ runs:
         INPUT_PROJECT: ${{ inputs.project-path }}
         INPUT_RUNNER: ${{ inputs.runner }}
         INPUT_TESTS: ${{ inputs.tests }}
+        INPUT_COMMAND: ${{ inputs.command }}
         INPUT_SINCE: ${{ inputs.since }}
         INPUT_ARGS: ${{ inputs.args }}
         INPUT_JOB_SUMMARY: ${{ inputs.job-summary }}
@@ -226,6 +234,8 @@ runs:
         cmd += ["--runner", os.environ["INPUT_RUNNER"]]
         if os.environ.get("INPUT_TESTS", "").strip():
             cmd += ["--tests", os.environ["INPUT_TESTS"].strip()]
+        if os.environ.get("INPUT_COMMAND", "").strip():
+            cmd += ["--command", os.environ["INPUT_COMMAND"].strip()]
         if os.environ.get("INPUT_SINCE", "").strip():
             cmd += ["--since", os.environ["INPUT_SINCE"].strip()]
         cmd += ["--json", os.environ["REPORT_JSON"]]

@@ -509,10 +509,11 @@ none of that.
 | `godot-version` | Yes | *(none)* | The Godot version to set up, e.g. `4.7.0`. |
 | `project-path` | No | `./` | The Godot project directory (`--project`). |
 | `paths` | No | the whole project | Source file(s)/directories to mutate, space-separated (gdmutant's positional targets). Excludes `addons/` and test files. |
-| `runner` | No | `gdunit4` | Test runner: `gdunit4`, `gut`, or `command` (`--runner`). `command` has no dedicated input of its own, see below. |
+| `runner` | No | `gdunit4` | Test runner: `gdunit4`, `gut`, or `command` (`--runner`). |
 | `tests` | No | gdmutant's default, `res://test` | The test directory (`--tests`). |
+| `command` | No | *(none)* | The test command, for `runner: command` (`--command`). Required when `runner` is `command`, ignored otherwise. |
 | `since` | No | mutate the full target | Only mutate lines changed since this git ref (`--since`): the fast, per-PR diff-scoped mode. |
-| `args` | No | *(none)* | Extra raw arguments appended to the invocation, verbatim. Also how you pass `--command` (see below). |
+| `args` | No | *(none)* | Extra raw arguments appended to the invocation, verbatim. |
 | `job-summary` | No | `true` | Write survivors (with explanations) to the job summary as Markdown (`--report step-summary`). Set `false` to skip. |
 | `godot-use-dotnet` | No | `false` | Set up the .NET (Mono) build of Godot instead of the standard build. |
 | `addon-version` | No | `installed` | How the test-runner addon is provided. Only `installed` (already vendored in your project) ships today. Cloning the addon at a ref is a planned fast-follow. |
@@ -523,8 +524,8 @@ Setting both `ref` and `gdmutant-version` is unusual, but if you do, `gdmutant-v
 installs from PyPI, `ref` is ignored entirely for that run. You are very unlikely to hit this: pick
 one or the other.
 
-`runner: command` has no dedicated input, since a headless test command varies too much to model
-as one. Pass it through `args` instead, the same way the CLI's `--command` flag works:
+`runner: command` needs `command` set too, the same headless command the CLI's `--command` flag
+takes:
 
 ```yaml
 - uses: kphutt/gdmutant@05728864a1c9330d632e2aab2348ff4442f3d61d # v0.1.0
@@ -532,7 +533,15 @@ as one. Pass it through `args` instead, the same way the CLI's `--command` flag 
     godot-version: "4.7.0"
     project-path: ./
     runner: command
-    args: --command "godot --headless --script res://tests/run_tests.gd"
+    command: godot --headless --script res://tests/run_tests.gd
+```
+
+For a command needing shell features `command` alone can't express, a pipe, several commands
+chained together, pass it through `args` instead, the same raw-passthrough path everything else
+past this table's inputs goes through:
+
+```yaml
+    args: --command "godot --headless --script res://tests/run_tests.gd | tee test-output.log"
 ```
 
 `since` reads the base commit out of your clone, so the workflow's `actions/checkout` step needs
