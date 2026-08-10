@@ -548,6 +548,11 @@ def test_the_only_external_links_are_documentation_a_reader_may_click() -> None:
     )
     urls = set(re.findall(r"https?://[^\s\"'<>)]+", page))
     assert urls == {"http://www.w3.org/2000/svg", DOC_BASE_URL, REPO_URL}
+    # A bare `//`-prefixed href (protocol-relative) is exactly as much a fetch-back-to-the-network
+    # risk as a full `https://` one, but the `https?://` pattern above does not match that shape.
+    # The guard this test replaced checked for it; this keeps that coverage from quietly narrowing.
+    for href in re.findall(r'href\s*=\s*"([^"]*)"', page):
+        assert not href.startswith("//"), href
 
 
 def test_frank_and_the_tagline_ride_along_in_the_page() -> None:

@@ -1366,8 +1366,9 @@ $('#theme').onclick = () => {
 // A small reward for the curious, nothing more: Frank winks and sticks his tongue out, held for
 // a full second so even a quick mouse pass-through is long enough to actually see, then he
 // settles back to his usual face. Removing a class that is already gone is a harmless no-op, so a
-// burst of triggers needs no debounce to stay correct: it just settles on whichever of the
-// stacked revert timers fires last.
+// rapid re-trigger never gets stuck mid-wink: worst case is an earlier revert timer firing before
+// a later trigger's own 1100ms is up, a brief flicker back to the plain face rather than a stuck
+// state, harmless on a purely cosmetic reaction with no debounce needed to stay correct.
 function wink() {
   const btn = $('#frank');
   btn.classList.add('wink');
