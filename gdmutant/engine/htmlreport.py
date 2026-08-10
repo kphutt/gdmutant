@@ -93,6 +93,11 @@ _RARE_STATUSES = frozenset(status for _, status in _RARE)
 
 TAGLINE = "Mutation testing for GDScript and Godot: find the bugs your green tests would miss."
 
+#: A report is made to travel (mailed, attached to a review, forwarded to someone who has never
+#: heard of gdmutant) — so the masthead names what produced it and links to the README, the same
+#: shareability reasoning `_display_path` already applies to paths in this module's docstring.
+REPO_URL = "https://github.com/kphutt/gdmutant"
+
 #: Frank, inlined. The repo's copy at ``.github/assets/frank.svg`` is a README asset and ships in no
 #: distribution (see the sdist allowlist in ``pyproject.toml``), and a URL would put the page
 #: back on the network — so the markup lives here. ``tests/test_htmlreport.py`` pins it to that
@@ -114,6 +119,27 @@ FRANK_SVG = (
     '<circle cx="41" cy="41" r="2" fill="#20242b"/>'
     '<path d="M23 49 q9 5 18 -1" stroke="#20242b" stroke-width="2.5" stroke-linecap="round"'
     ' fill="none"/>'
+    "</svg>"
+)
+
+#: The Easter egg: hovering Frank makes him wink and stick his tongue out for a beat
+#: (`.frank-btn.wink`, `$('#frank').onmouseenter`). A separate, absolutely-positioned overlay
+#: rather than a second whole mascot or a modified copy of `FRANK_SVG` — `FRANK_SVG` itself is
+#: pinned byte-for-byte to the favicon and to ``.github/assets/frank.svg``, so it stays untouched
+#: and this is purely cosmetic set-dressing layered on top. The rect first covers his normal eyes
+#: and mouth in his own body colour (``#6fbf5e``), then redraws a wink, a wide surprised eye, and
+#: an open grin with a tongue over the blank patch — his eyebrows sit above this rect and are left
+#: alone, which reads as raised in surprise for free.
+_FRANK_SILLY_SVG = (
+    '<svg class="frank-silly" viewBox="0 0 64 64" aria-hidden="true">'
+    '<rect x="15" y="32" width="32" height="22" rx="6" fill="#6fbf5e"/>'
+    '<path d="M18 40 q6 4 12 0" stroke="#20242b" stroke-width="2.2" stroke-linecap="round"'
+    ' fill="none"/>'
+    '<circle cx="41" cy="40" r="5.5" fill="#ffffff"/>'
+    '<circle cx="42.5" cy="39" r="2.8" fill="#20242b"/>'
+    '<path d="M20 47 q12 11 24 0" stroke="#20242b" stroke-width="2.5" stroke-linecap="round"'
+    ' fill="none"/>'
+    '<ellipse cx="32" cy="52" rx="3.4" ry="5" fill="#e0607a"/>'
     "</svg>"
 )
 
@@ -490,9 +516,37 @@ code,pre,.code,.mono{font-family:var(--mono)}
 /* ---- masthead ---- */
 .mast{display:flex;align-items:center;gap:14px;margin-bottom:18px}
 .frank{width:44px;height:44px;flex:none}
+/* A real <button>, not a <div>, so the Easter egg is reachable by Tab, the same accessibility
+   rule the file index headings follow (see .fhead button above): tabbing to Frank triggers the
+   wink exactly as hovering him does (see the shared onmouseenter/onfocus handler below).
+   `position:relative` makes it the positioning root for `.frank-silly`, which sits exactly over
+   Frank's own face. */
+.frank-btn{position:relative;width:44px;height:44px;flex:none;padding:0;margin:0;border:0;
+  background:none;cursor:pointer;border-radius:8px}
+.frank-btn:hover{background:var(--surface)}
+/* Hidden until hovered or focused: covers Frank's normal eyes/mouth in his own body colour, then
+   redraws a wink and a tongue on top. Absolutely positioned over the plain Frank SVG rather than
+   a second copy of the whole mascot, so FRANK_SVG itself (pinned byte-for-byte to the favicon and
+   to the README's own mascot asset) never has to change for a purely cosmetic reaction. */
+.frank-silly{position:absolute;inset:0;width:44px;height:44px;opacity:0;
+  transition:opacity .12s ease}
+.frank-btn.wink .frank-silly{opacity:1}
 .mast h1{font:600 19px/1.2 var(--sans);margin:0;letter-spacing:-.01em}
+/* Accent-coloured and underlined AT REST, not only on hover: the point is that a reader who has
+   never seen this report before can find their way to the README, and a link that looks identical
+   to plain heading text until the pointer happens to land on it is not discoverable at all. */
+.mast h1 a{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
+.mast h1 a:hover{text-decoration-thickness:2px}
 .mast p{margin:3px 0 0;font-size:12.5px;color:var(--text-muted);line-height:1.45}
 .mast .acts{margin-left:auto;display:flex;align-items:center;gap:8px}
+
+/* ---- footer ---- */
+/* The masthead link answers "what is this" for a reader who opens the report cold; this answers
+   the same question for one who has scrolled all the way through instead and wants to know where
+   the report came from without scrolling back up. */
+.foot{margin-top:36px;padding-top:16px;border-top:1px solid var(--border);
+  font-size:12px;color:var(--text-muted);text-align:center}
+.foot a{color:var(--accent)}
 
 /* ---- header: sparse by design. No score bar. ---- */
 .head{display:flex;align-items:flex-end;gap:34px;flex-wrap:wrap;
@@ -1309,6 +1363,29 @@ $('#theme').onclick = () => {
   const r = document.documentElement;
   r.dataset.theme = r.dataset.theme === 'dark' ? 'light' : 'dark';
 };
+// A small reward for the curious, nothing more: Frank winks and sticks his tongue out, held for
+// a full second so even a quick mouse pass-through is long enough to actually see, then he
+// settles back to his usual face. Removing a class that is already gone is a harmless no-op, so a
+// burst of triggers needs no debounce to stay correct: it just settles on whichever of the
+// stacked revert timers fires last.
+function wink() {
+  const btn = $('#frank');
+  btn.classList.add('wink');
+  setTimeout(() => btn.classList.remove('wink'), 1100);
+}
+// Hovering triggers it; `focus` gets the same treatment so tabbing to him does what hovering him
+// does for a mouse user.
+$('#frank').onmouseenter = $('#frank').onfocus = wink;
+// He also winks entirely on his own now and then, unprompted, a small surprise for someone just
+// reading the report with the tab open rather than only for someone who happens to hover or tab
+// to him. Rescheduled from inside its own callback rather than `setInterval`, so a FRESH random
+// delay picks the next wink each time instead of repeating on one fixed cadence.
+(function scheduleAutoWink() {
+  setTimeout(() => {
+    wink();
+    scheduleAutoWink();
+  }, 9000 + Math.random() * 14000);
+})();
 
 // ---- getting the JSON back out ---------------------------------------------------------------
 //
@@ -1443,8 +1520,11 @@ def render_html(report: dict[str, Any], project_dir: str | None = None) -> str:
 <body>
 <div class="wrap">
   <div class="mast">
-    {FRANK_SVG}
-    <div><h1>gdmutant</h1><p>{html.escape(TAGLINE)}</p></div>
+    <button class="frank-btn" id="frank" type="button" title="Frank the Mutant"
+      aria-label="Frank the Mutant">
+      {FRANK_SVG}{_FRANK_SILLY_SVG}
+    </button>
+    <div><h1><a href="{REPO_URL}">gdmutant</a></h1><p>{html.escape(TAGLINE)}</p></div>
     <div class="acts">
       <button class="tbtn dl" id="dl" title="Download the full report as JSON"
         aria-label="Download the full report as JSON">&#11015; JSON</button>
@@ -1457,6 +1537,8 @@ def render_html(report: dict[str, Any], project_dir: str | None = None) -> str:
     {_head_stats(view)}
   </div>
   <div id="body"></div>
+  <div class="foot">Generated by <a href="{REPO_URL}">gdmutant</a>
+    &mdash; {html.escape(TAGLINE)}</div>
 </div>
 <script type="application/json" id="mutation-test-report">{data}</script>
 <script>{script}</script>

@@ -12,7 +12,9 @@ from typing import Any
 
 from gdmutant.engine.explain import DOC_BASE_URL
 from gdmutant.engine.htmlreport import (
+    _FRANK_SILLY_SVG,
     FRANK_SVG,
+    REPO_URL,
     TAGLINE,
     _render_inline_markdown,
     change_note,
@@ -514,9 +516,14 @@ def _page() -> str:
 
 def test_the_page_fetches_nothing_it_needs_to_render() -> None:
     # The whole point: no CDN, no fonts, no images, no XHR. A report that goes blank without a
-    # network cannot be a CI artifact, an email attachment, or an offline read.
+    # network cannot be a CI artifact, an email attachment, or an offline read. `src=` (img/script/
+    # iframe) is the attribute that actually fetches something to render, so it is checked here.
+    # `<a href>` is deliberately excluded: it is a link the reader may click, never a resource the
+    # page loads to render itself — the test right below this one constrains which of those may
+    # exist. `<link href>` is checked separately below, since the page's one `<link>` (the favicon)
+    # legitimately has an href that is not `src`.
     page = _page()
-    for attribute in re.findall(r'\b(?:src|href)\s*=\s*"([^"]*)"', page):
+    for attribute in re.findall(r'\bsrc\s*=\s*"([^"]*)"', page):
         assert not attribute.startswith(("http://", "https://", "//")), attribute
     # The page carries exactly one <link>: the favicon, inlined as a `data:` URI. The old guard —
     # "no <link> at all" — only ever stood in for the real rule, which is "no <link> that fetches".
@@ -530,8 +537,9 @@ def test_the_page_fetches_nothing_it_needs_to_render() -> None:
 
 
 def test_the_only_external_links_are_documentation_a_reader_may_click() -> None:
-    # Anchors to the operator reference are fine — they are an offer, not a dependency. Pin that
-    # they are the *only* absolute URLs, so a resource can never sneak in as one.
+    # Anchors to the operator reference and the masthead's README link are fine — they are an
+    # offer, not a dependency. Pin that they are the *only* absolute URLs, so a resource can never
+    # sneak in as one.
     page = render_html(
         _report(
             "return a > b\n",
@@ -539,7 +547,7 @@ def test_the_only_external_links_are_documentation_a_reader_may_click() -> None:
         )
     )
     urls = set(re.findall(r"https?://[^\s\"'<>)]+", page))
-    assert urls == {"http://www.w3.org/2000/svg", DOC_BASE_URL}
+    assert urls == {"http://www.w3.org/2000/svg", DOC_BASE_URL, REPO_URL}
 
 
 def test_frank_and_the_tagline_ride_along_in_the_page() -> None:
@@ -548,6 +556,39 @@ def test_frank_and_the_tagline_ride_along_in_the_page() -> None:
     assert TAGLINE in page
     # Inlined, not linked: a URL would put the page back on the network.
     assert "frank.svg" not in page
+
+
+def test_the_masthead_names_gdmutant_and_links_to_the_readme() -> None:
+    # A report is made to travel — mailed, attached to a review, forwarded to someone who has
+    # never heard of gdmutant. Without this, a reader who only ever sees the report has no way to
+    # find out what produced it or where its README lives.
+    page = _page()
+    assert f'<h1><a href="{REPO_URL}">gdmutant</a></h1>' in page
+
+
+def test_the_footer_names_gdmutant_and_links_to_the_readme() -> None:
+    # The masthead answers "what is this" for a reader who opens the report cold; the footer
+    # answers it again for one who scrolled all the way through and wants to know where the report
+    # came from without scrolling back up.
+    page = _page()
+    assert 'class="foot"' in page
+    foot = page[page.index('class="foot"') :]
+    assert f'<a href="{REPO_URL}">gdmutant</a>' in foot
+    assert TAGLINE in foot
+
+
+def test_frank_has_a_hoverable_silly_face_layered_on_top() -> None:
+    # The wink itself (hovering or focusing actually toggling the class and reverting) is
+    # behaviour, proven against the real script in test_htmlreport_behaviour.py. This is the
+    # markup half: the button exists, is keyboard-reachable, and the overlay it reveals is really
+    # there to reveal.
+    page = _page()
+    assert '<button class="frank-btn" id="frank" type="button"' in page
+    assert FRANK_SVG in page
+    assert _FRANK_SILLY_SVG in page
+    # The silly face is a cosmetic overlay drawn separately, never a change to FRANK_SVG itself —
+    # that constant is pinned byte-for-byte to the favicon and to the README's own mascot asset.
+    assert "wink" not in FRANK_SVG
 
 
 def test_the_tab_icon_is_frank_himself_inlined_and_decodes_back_to_the_same_markup() -> None:
