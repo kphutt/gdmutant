@@ -709,8 +709,13 @@ def _run_mutants_parallel(
     lottery (fail toward slower, never toward fewer — the prime directive).
 
     `jobs_auto` (set only by `--jobs auto`, never by an explicit `--jobs N`) holds off starting
-    worker index 1 and up while the load average is at or above the CPU count, polling via
-    `_wait_for_load_capacity`. Worker 0 always starts immediately regardless — an auto run should
+    worker index 1 and up while the load average is at or above `jobs` itself, polling via
+    `_wait_for_load_capacity`. `jobs` IS the CPU ceiling here, not a separate figure to keep in
+    sync: `--jobs auto` resolves to `_cpu_worker_ceiling()` once in `cli.py` and that value flows
+    down as `jobs` through every layer, so the throttle threshold is read off the parameter already
+    in scope rather than recomputed from `os.cpu_count()` a second time — two independently
+    hardcoded copies of the same formula would agree today by coincidence and silently drift the
+    moment either one changed. Worker 0 always starts immediately regardless — an auto run should
     never do *less* than a serial one would. `worker_count` and the contention-scaled timeout are
     still computed from the full `jobs` ceiling up front, so a worker delayed by load still runs
     against the same budget every other worker got, not a recomputed one.
@@ -769,7 +774,7 @@ def _run_mutants_parallel(
                 # the last-beat marks are only ever touched by one worker at a time.
                 clock.record(verdict, ran)
 
-    load_threshold = float(os.cpu_count() or 4)
+    load_threshold = float(jobs)
     with tempfile.TemporaryDirectory(prefix="gdmutant-jobs-") as tmp:
         threads: list[threading.Thread] = []
         for w in range(worker_count):
