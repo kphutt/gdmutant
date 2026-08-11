@@ -73,7 +73,7 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | `--report step-summary` | off | Also write survivors to the GitHub Actions job summary (or stdout, if that variable is unset). |
 | `--since <ref>` | mutate everything | Only mutate lines changed since a git ref: the per-PR mode. |
 | `--exclude <glob>` | *(none)* | Skip matching files when expanding a directory (repeatable). |
-| `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. |
+| `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. `auto` picks a worker count from your CPU count and throttles under load instead of a fixed N. |
 | `--timeout <seconds>` | 10x the baseline run | Per-mutant test timeout. |
 | `--require-clean` / `--no-require-clean` | warn only | Refuse to run on an uncommitted source file. |
 | `--trust-config` | off | Act on `.gdmutant.toml`'s `command`/`godot`/`project` keys. |
@@ -111,7 +111,24 @@ exit-code fallback).
 
 `--jobs N` runs N mutants at once, each inside its own copy of the project. Your own file is never
 touched (see [How gdmutant writes to your files](#how-gdmutant-writes-to-your-files)). One
-restriction: every file to mutate must sit inside `--project`, or the run exits 2.
+restriction on an explicit `N`: every file to mutate must sit inside `--project`, or the run exits 2.
+
+`--jobs auto` picks a worker ceiling from your CPU count instead of a fixed number, the same
+default mutmut uses (poodle reserves one core instead). Before starting each worker past the
+first, it checks the system's 1-minute load average and holds off starting it while the system is
+already at or above that ceiling, the same technique GNU make's `-j`/`-l` combo uses. The wait is
+bounded to 30 seconds, not indefinite, so a busy machine slows a run down rather than making it
+look hung.
+There's no load signal on Windows, so `auto` there just starts the CPU-based worker count
+immediately, no throttling to get wrong. `auto` never errors on a file outside `--project`, it
+falls back to running that file serially instead, unlike an explicit `--jobs N` above 1, which
+still exits 2 there: `auto` picks its own count, so it shouldn't turn a working default into an
+error over a layout an explicit N was allowed to reject.
+
+The default stays `1` (serial) even though `auto` is available: the load-average throttle only
+watches CPU/IO contention, never disk, and disk (a full project copy per worker) is this tool's
+real binding constraint. Opt in with `--jobs auto` deliberately, especially on a machine with
+plenty of cores but a small or shared disk.
 
 #### Refusing a dirty tree
 

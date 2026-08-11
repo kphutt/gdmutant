@@ -780,6 +780,29 @@ def _resolve_default_report_paths(
     return json_path, html_path
 
 
+def _cpu_worker_ceiling() -> int:
+    """The worker count `--jobs auto` picks: mutmut's own default (`os.cpu_count() or 4`). Only a
+    ceiling, not a promise every worker starts immediately — `--jobs auto` still holds off starting
+    one while the system's under load (`_load_average_allows_more_workers` in engine/loop.py)."""
+    return os.cpu_count() or 4
+
+
+def _resolve_jobs(raw: str) -> tuple[int | None, bool]:
+    """Parse `--jobs`'s raw string into `(ceiling, auto)`. `ceiling` is `None` on anything that
+    isn't 'auto' or a positive integer — the caller prints the error and exits 2, same as an
+    explicit bad value always has. `auto` means: pick the ceiling from the CPU count and hold off
+    starting a new worker under load (see `_run_mutants_parallel`); an explicit N never throttles —
+    the caller asked for exactly N, so gdmutant gives them exactly N, matching every prior release's
+    behavior for anyone already passing `--jobs N`."""
+    if raw == "auto":
+        return _cpu_worker_ceiling(), True
+    try:
+        n = int(raw)
+    except ValueError:
+        return None, False
+    return (n, False) if n >= 1 else (None, False)
+
+
 def _report_path_problem(path: str | None, flag: str, *, stdout_ok: bool) -> str | None:
     """A human message (naming `flag`) if a report `path` can't be written, else None — checked
     *before* the run so a long pass (minutes of booting Godot per mutant) never ends on an avoidable
@@ -948,6 +971,7 @@ def run_mutation(
     require_clean: bool = False,
     changed: dict[str, set[int]] | None = None,
     jobs: int = 1,
+    jobs_auto: bool = False,
     step_summary: bool = False,
     progress_style: ProgressStyle = ProgressStyle.RICH,
 ) -> int:
@@ -991,6 +1015,7 @@ def run_mutation(
             timeout=timeout,
             progress=_progress_emitter(progress_style),
             jobs=jobs,
+            jobs_auto=jobs_auto,
             progress_style=progress_style,
         )
     except (SourceOutsideProject, SourceWriteFailed) as error:
@@ -1171,6 +1196,7 @@ def run_mutation_paths(
     require_clean: bool = False,
     changed: dict[str, set[int]] | None = None,
     jobs: int = 1,
+    jobs_auto: bool = False,
     step_summary: bool = False,
     progress_style: ProgressStyle = ProgressStyle.RICH,
 ) -> int:
@@ -1205,6 +1231,7 @@ def run_mutation_paths(
             timeout=timeout,
             progress=_progress_emitter(progress_style),
             jobs=jobs,
+            jobs_auto=jobs_auto,
             progress_style=progress_style,
         )
     except (SourceOutsideProject, SourceWriteFailed) as error:
@@ -1491,13 +1518,15 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     run_parser.add_argument(
         "--jobs",
         "-j",
-        type=int,
         metavar="N",
-        default=1,
+        default="1",
         help="evaluate N mutants in parallel, each on its own copy of the project (default: 1 = "
         "serial), for a faster run with the same verdicts: process isolation, and the per-mutant "
         "timeout is scaled by N so contention can't cause a false timeout. Bounded by your "
-        "cores/RAM; a plain per-worker copy is made per job.",
+        "cores/RAM; a plain per-worker copy is made per job. Pass 'auto' instead of a number to "
+        "pick a worker count from your CPU count and hold off starting another worker while the "
+        "system is already under load (POSIX only, via the load average make -l uses; always "
+        "starts the fixed count immediately on Windows, which has no such signal).",
     )
     run_parser.add_argument(
         "--report",
@@ -1631,8 +1660,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.json_path, args.html_path = _resolve_default_report_paths(
             args.json_path, args.html_path, args.source
         )
-        if args.jobs < 1:
-            print("error: --jobs must be a positive integer", file=sys.stderr)
+        args.jobs, args.jobs_auto = _resolve_jobs(args.jobs)
+        if args.jobs is None:
+            print("error: --jobs must be a positive integer or 'auto'", file=sys.stderr)
             return 2
         # Excludes are additive: any .gdmutant.toml `exclude` list plus every --exclude on the CLI
         # (both narrow a directory target; neither can drop an explicitly named file).
@@ -1785,6 +1815,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "require_clean": args.require_clean,
             "changed": changed,
             "jobs": args.jobs,
+            "jobs_auto": args.jobs_auto,
             "step_summary": _wants_step_summary(args.report),
             "progress_style": _resolve_progress_style(args.progress_style),
         }
