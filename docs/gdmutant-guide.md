@@ -114,7 +114,8 @@ touched (see [How gdmutant writes to your files](#how-gdmutant-writes-to-your-fi
 restriction on an explicit `N`: every file to mutate must sit inside `--project`, or the run exits 2.
 
 `--jobs auto` picks a worker ceiling from your CPU count instead of a fixed number (the same
-default mutmut and poodle use), and, before starting each worker past the first, checks the
+default mutmut uses, poodle reserves one core instead), and, before starting each worker past the
+first, checks the
 system's 1-minute load average and holds off starting it while the system is already at or above
 that ceiling, the same technique GNU make's `-j`/`-l` combo uses. The wait is bounded to 30
 seconds, not indefinite, so a busy machine slows a run down rather than making it look hung.
