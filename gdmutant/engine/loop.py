@@ -204,6 +204,43 @@ def _contention_budget(per_mutant_timeout: float, workers: int) -> float:
     return per_mutant_timeout * max(workers, 1)
 
 
+#: How often `_wait_for_load_capacity` re-checks the load average, and how long it waits at most
+#: before giving up and starting the worker anyway. `make -l` can defer a job indefinitely under
+#: sustained load; gdmutant doesn't, because "looks hung" is already the #1 documented reason
+#: people abandon a mutation run (`_progress_plan`), so this bounds the wait instead. A worker that
+#: waited its full budget and started anyway is still covered by the contention-scaled per-mutant
+#: timeout (`_contention_budget`) — failing toward slower, never toward a lost result.
+_LOAD_THROTTLE_POLL_SECS = 1.0
+_LOAD_THROTTLE_MAX_WAIT_SECS = 30.0
+
+
+def _load_average_allows_more_workers(threshold: float) -> bool:
+    """True if the 1-minute load average is below `threshold`, or if the platform has no load
+    average to check at all. `os.getloadavg` doesn't exist on Windows at all (not merely raise-y —
+    the typeshed stub omits it there), which this project treats as a real deployment target
+    (AGENTS.md), not just a dev machine — `getattr` (rather than a plain attribute access mypy
+    would flag as undefined on that platform) is what makes this legal to even write. There, this
+    always allows, the same as an explicit `--jobs N` always has (`--jobs auto` only throttles
+    where it can)."""
+    get_loadavg = getattr(os, "getloadavg", None)
+    if get_loadavg is None:
+        return True
+    try:
+        load1, _, _ = get_loadavg()
+    except OSError:
+        return True
+    return bool(load1 < threshold)
+
+
+def _wait_for_load_capacity(threshold: float) -> None:
+    """Poll the load average for up to `_LOAD_THROTTLE_MAX_WAIT_SECS`, returning as soon as it
+    drops below `threshold`. Past the cap it returns anyway — a bounded wait for a resource
+    gdmutant doesn't own, not an unbounded one."""
+    deadline = time.monotonic() + _LOAD_THROTTLE_MAX_WAIT_SECS
+    while not _load_average_allows_more_workers(threshold) and time.monotonic() < deadline:
+        time.sleep(_LOAD_THROTTLE_POLL_SECS)
+
+
 def _progress_plan(runnable: int, total: int, jobs: int) -> str:
     """The pre-run line: **what the run is**, with no prediction of how long it will take.
 
@@ -359,6 +396,7 @@ def run(
     timeout: float | None = None,
     progress: Callable[[str], None] | None = None,
     jobs: int = 1,
+    jobs_auto: bool = False,
     progress_style: ProgressStyle = ProgressStyle.RICH,
 ) -> MutationRun:
     """Run the full mutation pass over `source` (the contents of `path`) using `runner`.
@@ -380,6 +418,13 @@ def run(
     the per-mutant time budget is scaled by the worker count so CPU/RAM contention can't turn a
     genuinely-passing suite into a false TIMEOUT (see `_run_mutants_parallel`).
 
+    `jobs_auto` holds off starting a worker beyond the first while the system's already under
+    load, checked live via the system load average (POSIX only; a no-op elsewhere) each time the
+    parallel path is about to start another one (see `_load_average_allows_more_workers`). It never
+    reduces `jobs` itself, only how eagerly the run reaches for it — the caller who passed an
+    explicit `jobs=N` (rather than resolving ``--jobs auto``) always gets exactly N with no
+    throttling, matching every prior release's behavior.
+
     If `progress` is given, it is called with the baseline notice, the pre-run plan
     (`_progress_plan`), then a rate-limited heartbeat (`_Progress.beat`) as mutants finish — never
     one line per mutant: that repeated the per-mutant timeout budget over and over for no reason,
@@ -400,6 +445,7 @@ def run(
         catalog,
         progress,
         jobs,
+        jobs_auto,
         clock,
     )
     clock.finish()
@@ -484,6 +530,7 @@ def _mutate_file(
     catalog: tuple[Operator, ...],
     progress: Callable[[str], None] | None,
     jobs: int,
+    jobs_auto: bool,
     clock: _Progress,
     *,
     is_last_file: bool = True,
@@ -497,11 +544,21 @@ def _mutate_file(
     that beat's job is proving the file reached n/n before the *next* file's plan line, and reaching
     the whole run's actual end is `_Progress.finish`'s job — a forced beat immediately followed by
     `finish` on the same numbers is pure restatement, not a second fact.
+
+    `--jobs auto` (`jobs_auto`) picks its own worker count, so it must not hand a user an error an
+    explicit `--jobs N` never would have: a source outside `--project` can't be parallelized at all
+    (`SourceOutsideProject`), a legitimate and documented layout (`--project ../my-project`, this
+    engine's own README). An auto run downgrades to serial for that file instead — silently, before
+    the pre-run line below is even printed, so what's announced and what actually runs never
+    disagree. An explicit `--jobs N>1` still raises exactly as before: the user asked for isolation
+    by name, so gdmutant tells them it can't deliver it rather than quietly doing less.
     """
     mutants = adapter.generate_mutants(path, source, catalog)
     total = len(mutants)
     runnable = sum(1 for m in mutants if m.ignore_reason is None)
     clock.begin_file(runnable)
+    if jobs_auto and jobs > 1 and not _source_is_inside_project(path, project_dir):
+        jobs = 1
     if progress is not None:
         progress(_progress_plan(runnable, total, jobs))
     if jobs > 1 and total > 0:
@@ -514,6 +571,7 @@ def _mutate_file(
             mutants,
             per_mutant_timeout,
             jobs,
+            jobs_auto,
             clock,
         )
     else:
@@ -600,6 +658,19 @@ def _project_relative(path: str, project_dir: str) -> str:
         ) from None
 
 
+def _source_is_inside_project(path: str, project_dir: str) -> bool:
+    """The same check `_project_relative` enforces by raising, as a non-raising sibling — for a
+    caller (`--jobs auto`'s fallback in `_mutate_file`) that wants to decide *before* committing to
+    the parallel path, rather than attempt it and handle the failure. Delegates to
+    `_project_relative` itself rather than re-deriving the relative-path logic, so the two can't
+    silently drift apart on what "inside the project" means."""
+    try:
+        _project_relative(path, project_dir)
+    except SourceOutsideProject:
+        return False
+    return True
+
+
 def _run_mutants_parallel(
     project_dir: str,
     path: str,
@@ -609,6 +680,7 @@ def _run_mutants_parallel(
     mutants: Sequence[Mutant],
     per_mutant_timeout: float,
     jobs: int,
+    jobs_auto: bool,
     clock: _Progress,
 ) -> list[MutantOutcome]:
     """Evaluate mutants concurrently, each worker on its OWN copy of the project so the in-place
@@ -635,6 +707,13 @@ def _run_mutants_parallel(
     (scored as killed) — silently hiding a survivor. Multiplying the budget by W restores the same
     10x headroom in per-worker-second terms, so a timeout still means a real hang, not a lost CPU
     lottery (fail toward slower, never toward fewer — the prime directive).
+
+    `jobs_auto` (set only by `--jobs auto`, never by an explicit `--jobs N`) holds off starting
+    worker index 1 and up while the load average is at or above the CPU count, polling via
+    `_wait_for_load_capacity`. Worker 0 always starts immediately regardless — an auto run should
+    never do *less* than a serial one would. `worker_count` and the contention-scaled timeout are
+    still computed from the full `jobs` ceiling up front, so a worker delayed by load still runs
+    against the same budget every other worker got, not a recomputed one.
     """
     total = len(mutants)
     rel = _project_relative(path, project_dir)
@@ -690,9 +769,12 @@ def _run_mutants_parallel(
                 # the last-beat marks are only ever touched by one worker at a time.
                 clock.record(verdict, ran)
 
+    load_threshold = float(os.cpu_count() or 4)
     with tempfile.TemporaryDirectory(prefix="gdmutant-jobs-") as tmp:
         threads: list[threading.Thread] = []
         for w in range(worker_count):
+            if jobs_auto and w > 0:
+                _wait_for_load_capacity(load_threshold)
             worker_dir = str(Path(tmp) / f"w{w}")
             shutil.copytree(project_dir, worker_dir)
             thread = threading.Thread(target=worker, args=(worker_dir,))
@@ -715,13 +797,15 @@ def run_paths(
     timeout: float | None = None,
     progress: Callable[[str], None] | None = None,
     jobs: int = 1,
+    jobs_auto: bool = False,
     progress_style: ProgressStyle = ProgressStyle.RICH,
 ) -> dict[str, MutationRun]:
     """Mutate several files against one project — the baseline runs **once**, then each file's
     mutants run in turn. `sources` maps each file path to its contents (each held on entry,
     restored after its own mutants). `adapter` is the injected language adapter (NF-3, like `run`).
-    `jobs` parallelizes each file's mutants exactly as `run` does. Returns ``{path: MutationRun}``
-    in `sources` order. Raises `BaselineFailed` (like `run`) if the baseline can't run or is red.
+    `jobs` (and `jobs_auto`) parallelize each file's mutants exactly as `run` does. Returns
+    ``{path: MutationRun}`` in `sources` order. Raises `BaselineFailed` (like `run`) if the baseline
+    can't run or is red.
     """
     per_mutant_timeout, _baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
     clock = _Progress(emit=progress, style=progress_style)
@@ -740,6 +824,7 @@ def run_paths(
             catalog,
             progress,
             jobs,
+            jobs_auto,
             clock,
             is_last_file=path == last_path,
         )

@@ -2,6 +2,7 @@
 
 import os
 import stat
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,9 +23,11 @@ from gdmutant.engine.loop import (
     _derive_timeout,
     _detect_eol,
     _format_duration,
+    _load_average_allows_more_workers,
     _plain_beat_every,
     _Progress,
     _progress_plan,
+    _wait_for_load_capacity,
     _write_source,
 )
 from gdmutant.engine.loop import run as _run
@@ -909,6 +912,102 @@ def test_parallel_scales_the_per_mutant_timeout_by_worker_count(tmp_path: Path) 
     assert len(mutant_timeouts) == 3  # every mutant ran
     # worker_count = min(jobs=2, mutants=3) = 2, so each budget is the 5.0s serial value x2.
     assert all(t == 5.0 * 2 for t in mutant_timeouts)
+
+
+def test_load_average_allows_more_workers_with_no_getloadavg_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Windows has no os.getloadavg at all (not merely raise-y) — the platform gdmutant treats as a
+    # real deployment target must still get a plain answer, not a crash.
+    monkeypatch.delattr(os, "getloadavg", raising=False)
+    assert _load_average_allows_more_workers(4.0) is True
+
+
+def test_load_average_allows_more_workers_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(os, "getloadavg", lambda: (1.0, 1.0, 1.0), raising=False)
+    assert _load_average_allows_more_workers(4.0) is True
+
+
+def test_load_average_blocks_more_workers_at_or_above_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "getloadavg", lambda: (4.0, 4.0, 4.0), raising=False)
+    assert _load_average_allows_more_workers(4.0) is False
+
+
+def test_load_average_allows_more_workers_when_getloadavg_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A platform that HAS getloadavg but can't answer right now (OSError is documented) must fail
+    # open, the same as no signal at all — never block a run over the tool's own uncertainty.
+    def boom() -> tuple[float, float, float]:
+        raise OSError("load average unavailable")
+
+    monkeypatch.setattr(os, "getloadavg", boom, raising=False)
+    assert _load_average_allows_more_workers(4.0) is True
+
+
+def test_wait_for_load_capacity_returns_immediately_once_load_allows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gdmutant.engine import loop as loop_mod
+
+    monkeypatch.setattr(loop_mod, "_load_average_allows_more_workers", lambda threshold: True)
+    slept: list[float] = []
+    monkeypatch.setattr(loop_mod.time, "sleep", slept.append)
+    _wait_for_load_capacity(4.0)
+    assert slept == []  # never polled — capacity was already there
+
+
+def test_wait_for_load_capacity_gives_up_after_the_bounded_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Never blocks forever under sustained load (unlike `make -l`, which can defer a job
+    # indefinitely) — "looks hung" is already the #1 documented reason people abandon a run.
+    from gdmutant.engine import loop as loop_mod
+
+    monkeypatch.setattr(loop_mod, "_load_average_allows_more_workers", lambda threshold: False)
+    monkeypatch.setattr(loop_mod, "_LOAD_THROTTLE_MAX_WAIT_SECS", 0.05)
+    monkeypatch.setattr(loop_mod, "_LOAD_THROTTLE_POLL_SECS", 0.01)
+    started = time.monotonic()
+    _wait_for_load_capacity(4.0)
+    assert time.monotonic() - started < 2.0  # bounded, not indefinite
+
+
+def test_jobs_auto_holds_off_every_worker_but_the_first_under_load(tmp_path: Path) -> None:
+    # --jobs auto (jobs_auto=True) must check load before starting worker 1 and up, but never
+    # before worker 0 — an auto run should never do LESS than a serial one would.
+    from gdmutant.engine import loop as loop_mod
+
+    src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"  # 3 runnable mutants
+    path = _write(tmp_path, "f.gd", src)
+    calls: list[float] = []
+    original = loop_mod._wait_for_load_capacity
+
+    def counting(threshold: float) -> None:
+        calls.append(threshold)
+        original(threshold)
+
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(loop_mod, "_wait_for_load_capacity", counting)
+        m.setattr(loop_mod, "_load_average_allows_more_workers", lambda threshold: True)
+        run(str(tmp_path), path, src, TimeoutRecordingRunner(), jobs=3, jobs_auto=True)
+    # worker_count = min(jobs=3, mutants=3) = 3 workers, so 2 are checked (index 1 and 2), never 0.
+    assert len(calls) == 2
+
+
+def test_explicit_jobs_never_throttles_even_with_more_workers_than_cores(tmp_path: Path) -> None:
+    # An explicit --jobs N (jobs_auto=False, the default) must behave exactly as every prior
+    # release did: no load check at all, ever — only 'auto' opts in to throttling.
+    from gdmutant.engine import loop as loop_mod
+
+    src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"  # 3 runnable mutants
+    path = _write(tmp_path, "f.gd", src)
+    calls: list[float] = []
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(loop_mod, "_wait_for_load_capacity", lambda threshold: calls.append(threshold))
+        run(str(tmp_path), path, src, TimeoutRecordingRunner(), jobs=3)
+    assert calls == []
 
 
 def test_the_runner_is_given_the_contention_scaled_cap(tmp_path: Path) -> None:

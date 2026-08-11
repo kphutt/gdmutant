@@ -17,11 +17,13 @@ from gdmutant.adapters.gdscript.runner import GutRunner
 from gdmutant.cli import (
     _DEFAULT_REPORT,
     _EXAMPLE_NAME,
+    _cpu_worker_ceiling,
     _default_report_stem,
     _git_backup,
     _load_config,
     _report_path_problem,
     _resolve_default_report_paths,
+    _resolve_jobs,
     _resolve_progress_style,
     _write_example,
     build_parser,
@@ -739,6 +741,72 @@ def test_a_config_supplied_runner_satisfies_the_requirement(
     runner = RecordingRunner()
     monkeypatch.setattr(cli, "GutRunner", lambda **kwargs: runner)
     assert main(["run", str(path), "--project", str(tmp_path)]) == 0
+
+
+def test_jobs_rejects_a_non_numeric_non_auto_value(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _gd(tmp_path)
+    rc = main(["run", str(path), "--jobs", "nope"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--jobs must be a positive integer" in err and "'auto'" in err
+
+
+def test_resolve_jobs_parses_auto_explicit_and_invalid_values() -> None:
+    assert _resolve_jobs("auto") == (_cpu_worker_ceiling(), True)
+    assert _resolve_jobs("4") == (4, False)
+    assert _resolve_jobs("1") == (1, False)
+    assert _resolve_jobs("0") == (None, False)  # not positive
+    assert _resolve_jobs("-1") == (None, False)  # not positive
+    assert _resolve_jobs("nope") == (None, False)  # not an integer, not 'auto'
+
+
+def test_cpu_worker_ceiling_matches_os_cpu_count_or_four(monkeypatch: pytest.MonkeyPatch) -> None:
+    # mutmut's own default, so a machine with no reported CPU count still gets a sane ceiling.
+    monkeypatch.setattr(os, "cpu_count", lambda: None)
+    assert _cpu_worker_ceiling() == 4
+    monkeypatch.setattr(os, "cpu_count", lambda: 8)
+    assert _cpu_worker_ceiling() == 8
+
+
+def test_main_jobs_auto_resolves_to_the_cpu_ceiling_with_throttling_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No chdir, no real Godot run: capture what main() hands run_mutation, the same pattern
+    # test_main_bare_json_and_html_resolve_to_paired_timestamped_paths uses for --json/--html.
+    path = _gd(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_run_mutation(*args: object, **kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli, "run_mutation", fake_run_mutation)
+    monkeypatch.setattr(os, "cpu_count", lambda: 6)
+    rc = main(
+        ["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4", "--jobs", "auto"]
+    )
+    assert rc == 0
+    assert captured["jobs"] == 6
+    assert captured["jobs_auto"] is True
+
+
+def test_main_explicit_jobs_never_sets_the_auto_throttle_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _gd(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_run_mutation(*args: object, **kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli, "run_mutation", fake_run_mutation)
+    rc = main(["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4", "--jobs", "3"])
+    assert rc == 0
+    assert captured["jobs"] == 3
+    assert captured["jobs_auto"] is False
 
 
 def test_run_mutation_nonexistent_project_dir_reports_directory_not_executable(
@@ -3400,6 +3468,27 @@ def test_jobs_with_a_source_outside_the_project_exits_two_with_an_explanation(
     err = capsys.readouterr().err
     assert "is not inside the project directory" in err
     assert "Traceback" not in err
+
+
+def test_jobs_auto_with_a_source_outside_the_project_falls_back_to_serial(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --jobs auto (the default) picks its own worker count, so a layout an explicit --jobs N would
+    # reject outright (a source outside --project, which the engine can't isolate for a worker) must
+    # not surface as an error here — that's the exact documented "point it at your own project"
+    # layout in the README. It should just run serially, silently, with a real result.
+    project, outside = _outside_project(tmp_path)
+
+    rc = run_mutation(
+        str(outside), str(project), MarkerRunner(str(outside), "zzz"), jobs=2, jobs_auto=True
+    )
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "is not inside the project directory" not in combined
+    assert "Traceback" not in combined
+    assert "Running" not in combined  # the announced plan matches what actually ran: serial
 
 
 def test_multi_file_jobs_with_a_source_outside_the_project_exits_two(
