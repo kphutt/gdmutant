@@ -323,6 +323,43 @@ def test_gdunit4_crash_safety_never_reports_a_false_survivor_at_n_gt_1(tmp_path:
     )
 
 
+def test_gdunit4_report_cleanup_never_touches_an_unrelated_directory(tmp_path: Path) -> None:
+    """GdUnit4's own end-of-session cleanup (``cleanup_report_history``) deletes any directory under
+    the report base path whose name starts with ``report_``, reading whatever follows the prefix
+    as an integer via GDScript's ``String.to_int()`` — which silently returns ``0`` for non-numeric
+    text instead of erroring. A directory that merely shares the prefix (some other tool's output, a
+    manually named folder) is therefore treated as index 0 and deleted alongside GdUnit4's own old
+    numbered reports, confirmed directly against real GdUnit4 v6.1.3 source.
+
+    ``GdUnit4Runner.command``'s ``-rc 1`` flag happens to make this unreachable here: GdUnit4's own
+    ``current_report_history_index`` getter is hardcoded to ``1`` whenever ``max_report_history`` is
+    not greater than 1, skipping the directory scan entirely, so the cleanup threshold is always
+    ``1 - 1 - 1 == -1`` and nothing can ever satisfy the deletion check. That is an accident of
+    GdUnit4's own branching, not a documented guarantee, so this pins it directly against the real
+    runner: an unrelated ``report_``-prefixed directory sitting next to gdmutant's own report must
+    survive real, repeated GdUnit4 runs (one per mutant, in practice) untouched.
+    """
+    if not ADDON.is_dir():
+        pytest.skip("GdUnit4 addon not installed — run python scripts/install_gdunit4.py")
+    from gdmutant.adapters.gdscript.runner import GdUnit4Runner
+
+    project = _corpus_copy(tmp_path)
+    unrelated = project / "reports" / "report_coverage_html"
+    unrelated.mkdir(parents=True)
+    marker = unrelated / "marker.txt"
+    marker.write_text("not a GdUnit4 report — some other tool's output", encoding="utf-8")
+
+    runner = GdUnit4Runner(test_path="res://test", godot=str(_GODOT))
+    # Run it more than once: gdmutant calls this once per mutant, so the property must hold across
+    # repeated invocations against the same project, not just the first.
+    for _ in range(2):
+        result = runner.run(str(project))
+        assert result.passed
+
+    assert unrelated.is_dir(), "an unrelated report_-prefixed directory was deleted"
+    assert marker.is_file(), "the unrelated directory's contents were deleted"
+
+
 def test_gdunit4_empty_discovery_is_diagnosed_as_discovery_not_a_crash(tmp_path: Path) -> None:
     """A wrong ``--tests`` path must not be reported as a Godot crash.
 

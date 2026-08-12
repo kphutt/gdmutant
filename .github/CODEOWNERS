@@ -5,28 +5,30 @@
 # separately set to 0, for a related but distinct reason: a sole code owner cannot approve
 # their own pull request, so any nonzero count would deadlock every merge.
 #
-# What main's protection actually enforces: a pull request is required, one status check —
-# `Workflow security (zizmor)`, from .github/workflows/zizmor.yml — must pass, and force-push
-# and deletion are blocked. That is the whole list. Merging is not gated on the branch being up
-# to date with main, and admin enforcement is off — so an owner with admin rights can push
-# straight to main and bypass all of it. This paragraph is a copy of a setting that lives on
-# GitHub; read the setting itself with
-# `gh api repos/kphutt/gdmutant/branches/main/protection`.
+# What main's protection actually enforces (checked live, not assumed, read the setting
+# itself with `gh api repos/kphutt/gdmutant/branches/main/protection`): a pull request is
+# required, six status checks must pass (`Workflow security (zizmor)`, `Verify (ubuntu-24.04)`,
+# `Verify (windows-2025)`, `Secret scan (gitleaks)`, and both `Self-test` (real Godot) jobs), the
+# branch must be up to date with main before merging, admin enforcement is ON (an admin cannot
+# bypass any of this by pushing straight to main), and force-push and deletion are blocked.
 #
-# That one required check reads the workflow files and nothing else. No check on the code —
-# lint, types, tests, dependency audit — can block a merge. ci.yml is workflow_dispatch-only
-# (docs/decisions/0012-merge-time-local-ship-time-cloud.md), so those checks
-# run on the machine making the change, from .pre-commit-config.yaml's pre-push stage. Those
-# hooks must be installed per clone (`pre-commit install --hook-type pre-commit --hook-type
-# pre-push`); a clone where that has not run has no automated gate at all.
+# ci.yml runs automatically on every pull request and push to main (restored 2026-08-04, ahead
+# of going public, see docs/decisions/0012-merge-time-local-ship-time-cloud.md's "Correction
+# (2026-08-04)"), so lint, types, tests, and the Godot self-tests all genuinely block a merge now,
+# not just the workflow-security check. Local hooks (.pre-commit-config.yaml's pre-push stage,
+# installed per clone via `pre-commit install --hook-type pre-commit --hook-type pre-push`) are
+# the fast, optional, catches-it-earlier layer now, not the only gate a clone without them would
+# be missing.
 #
-# The gate on the code that nothing local can skip is publish.yml's release-time job, which
-# re-runs verify on Linux and Windows, the license check, and both Godot self-tests live, on the
-# exact commit being shipped. Merging is discipline; shipping is enforced.
+# The one check nothing above can skip is still publish.yml's release-time job, which re-runs
+# verify on Linux and Windows, the license check, and both Godot self-tests live, on the exact
+# commit being shipped. That stays true regardless of branch-protection settings, which an admin
+# could in principle change. Merging is now mechanically enforced too, but shipping is the one
+# gate that can never be turned off.
 #
-# So read the list below as "read this carefully before merging it yourself", not as an
-# automatic stop. Sensitive surfaces = the places where tests can't save you (config, CI,
-# secrets, self-executing code).
+# So read the list below as "read this carefully before merging it yourself", not as the only
+# thing standing between a bad change and main. Sensitive surfaces = the places where tests can't
+# save you (config, CI, secrets, self-executing code).
 
 # Default owner for everything.
 * @kphutt

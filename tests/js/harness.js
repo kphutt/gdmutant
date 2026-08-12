@@ -165,9 +165,16 @@ function openTab(file, hash) {
   // The page defers its revoke by a tick so it cannot pull the URL out from under a download that
   // has only just started. Nothing here is about timing, so the queue is drained on demand by
   // `downloads()`, which empties it before reporting.
+  //
+  // A SINGLE PASS over exactly what was queued when `drain()` was called, not "loop until empty":
+  // Frank's auto-wink reschedules itself from inside its own callback (a fresh random delay picks
+  // the next wink), and every stub `setTimeout` fires on the next drain regardless of the delay it
+  // was given. A "keep going until nothing is left" loop would drain that freshly-scheduled timer
+  // too, whose callback schedules another, forever — an infinite loop in the test, not in a real
+  // browser, where the delay is honoured. Whatever a callback schedules waits for the NEXT drain.
   const timers = [];
   const setTimeout_ = fn => { timers.push(fn); };
-  const drain = () => { while (timers.length) timers.shift()(); };
+  const drain = () => { const batch = timers.splice(0); batch.forEach(fn => fn()); };
 
   const context = vm.createContext({
     document, window, location, history, console, JSON, Blob, URL,
@@ -210,6 +217,14 @@ function openTab(file, hash) {
     clickMark: ids => hit(target('.mark', { ids })),
     clickRef: fid => hit(target('.refbtn', { ref: fid })),
     clickTheme: () => byId('#theme').onclick(),
+    // Frank's own handler, same reason the theme toggle keeps its own: both live in the masthead,
+    // outside `#body`'s delegated handler. He triggers on hover (and, separately, on focus — see
+    // focusFrank below), not a click. `advance()` drains the queued timers, which is how the
+    // wink's own revert (a `setTimeout`) is observed rather than assumed.
+    hoverFrank: () => byId('#frank').onmouseenter(),
+    focusFrank: () => byId('#frank').onfocus(),
+    frankWinking: () => byId('#frank').classList.contains('wink'),
+    advance: () => drain(),
     next: () => byId('#next'),
     prev: () => byId('#prev'),
     // The legend is rebuilt from the marks the pane just drew, so it is an observation of the
@@ -355,6 +370,32 @@ out.clicks.refAfter = /class="ref"/.test(c.card());
 out.clicks.themeBefore = c.theme();
 c.clickTheme();
 out.clicks.themeAfter = c.theme();
+
+// A FRESH tab, never hovered or focused at all — proves Frank winks entirely on his own. The
+// recurring part of the schedule (that he keeps doing it, not just once) is left to reading the
+// code: `scheduleAutoWink` reschedules itself with a fresh delay from inside its own callback,
+// which is simple, self-evidently-correct recursion, not runtime behaviour worth chasing through
+// several stacked drains here.
+const auto = openTab(PAGE, '');
+out.frankAuto = { before: auto.frankWinking() };
+auto.advance();
+out.frankAuto.afterFirstDrain = auto.frankWinking();
+
+// Frank lives in the masthead too, and reacts to hover rather than a click — proven by NOT
+// calling c.clickSel/hit on him at all here, only the hover/focus handlers below. The wink is
+// timed, so this also proves the revert actually fires rather than leaving him stuck mid-face.
+out.clicks.frankBefore = c.frankWinking();
+c.hoverFrank();
+out.clicks.frankDuring = c.frankWinking();
+c.advance();
+out.clicks.frankAfter = c.frankWinking();
+// Tabbing to him must do the same thing hovering him does, for a reader who never touches a
+// mouse.
+out.clicks.frankFocusBefore = c.frankWinking();
+c.focusFrank();
+out.clicks.frankFocusDuring = c.frankWinking();
+c.advance();
+out.clicks.frankFocusAfter = c.frankWinking();
 
 // The index: its rows and its back button only exist on a multi-file report.
 // Which VIEW is on screen, read off `#body` itself. `#pos` is a cached stub here and keeps its

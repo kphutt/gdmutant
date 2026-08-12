@@ -305,6 +305,36 @@ def test_the_theme_toggle_responds_to_a_click(observed: dict[str, Any]) -> None:
     assert observed["clicks"]["themeAfter"] == "dark"
 
 
+def test_frank_winks_on_hover_and_reverts(observed: dict[str, Any]) -> None:
+    # He lives in the masthead too, and keeps his own handler for the same reason the theme toggle
+    # does — except his trigger is a hover, not a click (see hoverFrank in the harness, which never
+    # goes through the delegated #body click path at all). The wink is timed (a setTimeout revert),
+    # so this also proves the revert actually fires rather than leaving him stuck mid-face — a
+    # markup-only check could not tell that apart from a class that never gets removed.
+    clicks = observed["clicks"]
+    assert clicks["frankBefore"] is False
+    assert clicks["frankDuring"] is True
+    assert clicks["frankAfter"] is False
+
+
+def test_frank_also_winks_entirely_on_his_own(observed: dict[str, Any]) -> None:
+    # A fresh tab, never hovered or focused at all: proves the auto-wink schedule really does
+    # trigger him unprompted, not only in response to a reader's own hover or focus.
+    auto = observed["frankAuto"]
+    assert auto["before"] is False
+    assert auto["afterFirstDrain"] is True
+
+
+def test_frank_also_winks_on_keyboard_focus(observed: dict[str, Any]) -> None:
+    # A reader who never touches a mouse still tabs to every other control in the masthead, so
+    # focusing Frank has to trigger the same reaction hovering him does, not a mouse-only Easter
+    # egg a keyboard user cannot reach at all.
+    clicks = observed["clicks"]
+    assert clicks["frankFocusBefore"] is False
+    assert clicks["frankFocusDuring"] is True
+    assert clicks["frankFocusAfter"] is False
+
+
 def test_an_index_row_opens_its_file_and_the_back_button_returns(observed: dict[str, Any]) -> None:
     index = observed["index"]
     # A two-file run opens on the index, which has no address of its own.

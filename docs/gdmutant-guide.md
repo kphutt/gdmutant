@@ -73,7 +73,7 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | `--report step-summary` | off | Also write survivors to the GitHub Actions job summary (or stdout, if that variable is unset). |
 | `--since <ref>` | mutate everything | Only mutate lines changed since a git ref: the per-PR mode. |
 | `--exclude <glob>` | *(none)* | Skip matching files when expanding a directory (repeatable). |
-| `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. |
+| `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. `auto` picks a worker count from your CPU count and throttles under load instead of a fixed N. |
 | `--timeout <seconds>` | 10x the baseline run | Per-mutant test timeout. |
 | `--require-clean` / `--no-require-clean` | warn only | Refuse to run on an uncommitted source file. |
 | `--trust-config` | off | Act on `.gdmutant.toml`'s `command`/`godot`/`project` keys. |
@@ -104,14 +104,32 @@ exit-code fallback).
 - `--dry-run` lists the mutants gdmutant *would* generate, without Godot and without running any
   tests: a fast, dependency-free preview, useful before wiring up `--exclude` or scoping a large
   file. Not a substitute for a real run: it can't tell you anything your tests would actually catch.
-  `gdmutant example && gdmutant run gdmutant-hello-world.gd --dry-run` shows the shape on the bundled
-  demo file.
+  `gdmutant example` (a separate subcommand that writes a small bundled demo file,
+  `gdmutant-hello-world.gd`, to try things on without a project of your own) followed by
+  `gdmutant run gdmutant-hello-world.gd --dry-run` shows the shape on that file.
 
 #### Parallelism
 
 `--jobs N` runs N mutants at once, each inside its own copy of the project. Your own file is never
 touched (see [How gdmutant writes to your files](#how-gdmutant-writes-to-your-files)). One
-restriction: every file to mutate must sit inside `--project`, or the run exits 2.
+restriction on an explicit `N`: every file to mutate must sit inside `--project`, or the run exits 2.
+
+`--jobs auto` picks a worker ceiling from your CPU count instead of a fixed number, the same
+default mutmut uses (poodle reserves one core instead). Before starting each worker past the
+first, it checks the system's 1-minute load average and holds off starting it while the system is
+already at or above that ceiling, the same technique GNU make's `-j`/`-l` combo uses. The wait is
+bounded to 30 seconds, not indefinite, so a busy machine slows a run down rather than making it
+look hung.
+There's no load signal on Windows, so `auto` there just starts the CPU-based worker count
+immediately, no throttling to get wrong. `auto` never errors on a file outside `--project`, it
+falls back to running that file serially instead, unlike an explicit `--jobs N` above 1, which
+still exits 2 there: `auto` picks its own count, so it shouldn't turn a working default into an
+error over a layout an explicit N was allowed to reject.
+
+The default stays `1` (serial) even though `auto` is available: the load-average throttle only
+watches CPU/IO contention, never disk, and disk (a full project copy per worker) is this tool's
+real binding constraint. Opt in with `--jobs auto` deliberately, especially on a machine with
+plenty of cores but a small or shared disk.
 
 #### Refusing a dirty tree
 
@@ -271,7 +289,10 @@ two comes back entirely CRLF.
 - `status` is one of `Killed`, `Survived`, `Timeout` (the mutation hung the suite: a detection, so
   it counts as killed), `Ignored` (a `# gdmutant: ignore` annotation suppressed it, excluded
   from the score), `CompileError` (the mutant didn't parse, never counted as killed), or
-  `RuntimeError` (the runner failed to execute it, e.g. a Godot crash).
+  `RuntimeError` (the runner failed to execute it, e.g. a Godot crash). The console summary and
+  the job summary use different names for these last two: `invalid` is `CompileError`, `error` is
+  `RuntimeError`. Same counts, same meaning, just spelled differently between the human-facing
+  summary and the JSON `status` enum.
 - Every `Survived` mutant carries two prose fields, and they are the reason to read this report
   rather than only its locations: `description` states the gap, what no test pins, and
   `statusReason` states why that matters and where to start a test. Relay both to whoever writes
@@ -427,6 +448,9 @@ mutant is killable, it usually is. Write the test.
   [`chickensoft-games/setup-godot`](https://github.com/chickensoft-games/setup-godot) step, before
   gdmutant itself ever runs, with whatever message that action produces. Check the version string
   against [Godot's release list](https://godotengine.org/download/archive/) first.
+- `runner: command` set with no `command:` (or a blank one) fails the "Run gdmutant" step with
+  `error: --runner command requires a non-empty --command`, exit code 2, the same message and exit
+  code the CLI's `--command` flag gives for the identical mistake.
 
 ## GitHub Actions
 
@@ -497,10 +521,24 @@ the result, gdmutant reports the gap, not it.
 
 Every other survivor repeats that same shape (`path:line`, the changed source line, the gap, and
 where to start). The `report-json` output holds the path to the `mutation-testing-elements`
-report, ready to hand to an upload-artifact step. Survivors are output, not failure: the step
-exits non-zero only on a real error, such as a red baseline suite. The project and a suite that
-already passes must be there, plus the GUT or gdUnit4 addon if you use either. The action installs
-none of that.
+report, ready to hand to an upload-artifact step (worked example under Outputs below). Survivors
+are output, not failure: the step exits non-zero only on a real error, such as a red baseline
+suite. The project and a suite that already passes must be there, plus the GUT or gdUnit4 addon if
+you use either. The action installs none of that.
+
+Godot itself is cached between runs (the underlying `chickensoft-games/setup-godot` step sets
+`cache: true`), so only the first run on a given runner pays Godot's own download cost. What
+caching does not touch is gdmutant's own per-mutant cost, Godot boots once per mutant either way,
+the same real but sub-linear `--jobs N` scaling the CLI Troubleshooting section describes above
+applies here too, budget CI minutes accordingly rather than assuming the cached step made the run
+itself fast. No secrets and no elevated `permissions:` are needed, the action reads only the
+checked-out code and writes a step output plus, optionally, the job summary.
+
+OS support: the only workflow that exercises this action end to end
+(`.github/workflows/action-smoke.yml`) runs on `ubuntu-24.04`, so that's the one platform actually
+verified. Most of the action's steps run via `shell: bash` (the three that `run:` a script), which
+GitHub-hosted Windows runners provide too (Git Bash), so it plausibly works there and on macOS
+runners as well, but neither is independently tested today.
 
 ### Inputs
 
@@ -560,6 +598,21 @@ config](#project-config-gdmutanttoml) above.
 | Output | Description |
 |---|---|
 | `report-json` | Path to the Stryker-format JSON mutation report the run wrote. |
+
+Give the gdmutant step an `id` to reach its output from a later step:
+
+```yaml
+- uses: kphutt/gdmutant@284f185f1495f2d79150781cf2e6de618ed11327 # v0.1.2
+  id: gdmutant
+  with:
+    godot-version: "4.7.0"
+    project-path: ./
+
+- uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+  with:
+    name: mutation-report
+    path: ${{ steps.gdmutant.outputs.report-json }}
+```
 
 ### Pinning
 
