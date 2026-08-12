@@ -536,9 +536,9 @@ checked-out code and writes a step output plus, optionally, the job summary.
 
 OS support: the only workflow that exercises this action end to end
 (`.github/workflows/action-smoke.yml`) runs on `ubuntu-24.04`, so that's the one platform actually
-verified. Every step runs via `shell: bash`, which GitHub-hosted Windows runners provide too (Git
-Bash), so it plausibly works there and on macOS runners as well, but neither is independently
-tested today.
+verified. Most of the action's steps run via `shell: bash` (the three that `run:` a script), which
+GitHub-hosted Windows runners provide too (Git Bash), so it plausibly works there and on macOS
+runners as well, but neither is independently tested today.
 
 ### Inputs
 
