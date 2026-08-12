@@ -14,6 +14,12 @@ workflow below covers the whole process.
 Taking part here (issues, pull requests, discussion) means agreeing to the
 [Code of Conduct](CODE_OF_CONDUCT.md).
 
+Before writing any code, check [`AGENTS.md`'s "Non-goals
+(v0.1)"](AGENTS.md#non-goals-v01) section for what's explicitly out of scope right now (coverage-
+gated mutant selection, an LLM-semantic mode, a second-language adapter). For anything nontrivial
+that isn't already covered there, open an issue first to talk it through, before sinking real time
+into a PR that might not fit.
+
 ## Development setup
 
 gdmutant is a [uv](https://docs.astral.sh/uv/) project. Follow [`AGENTS.md`](AGENTS.md) under

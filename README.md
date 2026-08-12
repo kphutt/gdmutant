@@ -64,6 +64,8 @@ pip install .                              # installs gdmutant and its own depen
 
 python scripts/install_gdunit4.py          # gdUnit4 is a Godot addon that isn't vendored in git. This fetches it
 
+# The first run below goes quiet for a bit right after it starts: that's Godot importing every
+# asset in the project, a one-time cost, not a hang.
 gdmutant run corpus/turn_order.gd --project corpus --runner gdunit4 --html
 # mutates one file, reruns corpus/'s real GdUnit4 tests against each mutant
 ```
@@ -138,7 +140,7 @@ See the [survivor reference](docs/survivors/README.md) for what
 ## Killing Survivors
 
 Kill each survivor with a real test, or mark a genuine equivalent with `# gdmutant: ignore` and a
-reason ([details](docs/survivors/README.md)). Re-run until nothing survives. A mutation score
+reason ([annotation syntax](docs/gdmutant-guide.md#the-survivor--killing-test-loop)). Re-run until nothing survives. A mutation score
 isn't a target to hit, it's a direction to watch. There's no universal "good" number.
 
 ## GitHub Actions
