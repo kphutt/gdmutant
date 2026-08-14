@@ -5,12 +5,16 @@ review: a fresh clone with no local gitleaks binary crashed the pre-commit-stage
 
 Still exit 0 on purpose, not a hard requirement: this repo's own header comment on
 `.pre-commit-config.yaml` already explains why a hook that can reliably block a contributor gets
-bypassed with `--no-verify` instead, which skips EVERY hook, not just this one. But this repo also
-has no automatic cloud CI while private (ADR-0012), which makes this hook the ONLY secret-scan
-gate there is — silently exiting 0 with a one-line note a contributor can easily read as "scanned,
-clean" is exactly the "gate that passes without checking anything" shape AGENTS.md calls out. So
-this stays non-blocking, but the warning is now loud enough that skipping it has to be a conscious
-choice, not something that blends into normal hook output.
+bypassed with `--no-verify` instead, which skips EVERY hook, not just this one. That header also
+explains the other half of why exit 0 is safe here: `ci.yml`'s `Secret scan (gitleaks)` job runs on
+every pull request and push to `main` (triggers restored 2026-08-04, ADR-0012's Correction) and is
+a required branch-protection status check on `main` — the real, unbypassable gate every contributor
+gets regardless of whether they've installed these local hooks. This script is a fast, optional,
+catches-it-earlier convenience layer on top of that, not the only gate. Even so, silently exiting 0
+with a one-line note a contributor can easily read as "scanned, clean" is exactly the "gate that
+passes without checking anything" shape AGENTS.md calls out — so this stays non-blocking, but the
+warning is loud enough that skipping it has to be a conscious choice, not something that blends
+into normal hook output.
 """
 
 import shutil
@@ -21,10 +25,11 @@ GITLEAKS_INSTALL_DOCS = "https://github.com/gitleaks/gitleaks#installing"
 
 _NOT_SCANNED_WARNING = f"""
 {"!" * 78}
-gitleaks NOT FOUND on PATH -- THIS COMMIT WAS NOT SCANNED FOR SECRETS.
+gitleaks NOT FOUND on PATH -- THIS COMMIT WAS NOT SCANNED LOCALLY FOR SECRETS.
 Install it ({GITLEAKS_INSTALL_DOCS}), then re-run `pre-commit run gitleaks`
-to confirm it works. This repo has no automatic cloud secret scan while private (ADR-0012),
-so this hook is the only gate there is -- don't mistake this message for a clean scan.
+to confirm it works. Cloud CI's "Secret scan (gitleaks)" job still gates every pull request
+(a required branch-protection check on main) -- but don't mistake this message for a clean
+local scan, and don't rely on the cloud gate alone to catch a secret before it's committed.
 {"!" * 78}
 """
 

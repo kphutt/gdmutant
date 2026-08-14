@@ -1,9 +1,11 @@
 """Tests for `scripts/run_gitleaks.py`, the pre-commit secret-scan wrapper.
 
-This repo has no automatic cloud secret scan while private (ADR-0012), which makes this hook the
-only gate there is — so a machine without `gitleaks` on PATH must never look indistinguishable
-from a clean scan. Reviewed live: it used to (a quiet one-line note to stdout), which is exactly
-the "gate that passes without checking anything" shape AGENTS.md calls out.
+Cloud CI's `Secret scan (gitleaks)` job is the real, unbypassable gate now (a required
+branch-protection check on `main`, per ADR-0012's 2026-08-04 Correction) — but this local hook is
+still the fast, catches-it-earlier layer run before a secret is even committed, so a machine
+without `gitleaks` on PATH must never look indistinguishable from a clean scan. Reviewed live: it
+used to (a quiet one-line note to stdout), which is exactly the "gate that passes without checking
+anything" shape AGENTS.md calls out.
 """
 
 from __future__ import annotations
