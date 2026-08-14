@@ -61,6 +61,24 @@ COPYLEFT = [
     ("Server Side Public License", "Server Side Public License"),
     ("Commons Clause", "Commons Clause"),
     ("BUSL-1.1", "BUSL"),
+    ("GNU Lesser General Public License v3", "GNU Lesser General Public License"),
+    ("EUPL-1.2", "EUPL"),
+    ("OSL-3.0", "OSL-"),
+    ("CeCILL-2.1", "CeCILL"),
+    ("CDDL-1.0", "CDDL"),
+    ("Sleepycat", "Sleepycat"),
+    ("QPL-1.0", "QPL"),
+    ("Elastic-2.0", "Elastic"),
+    ("PolyForm-Noncommercial-1.0.0", "PolyForm"),
+    ("Prosperity-3.0.0", "Prosperity"),
+    # A space (not a hyphen) before the version: a hyphen there would make the family's last two
+    # letters plus the version number read as a tracker ticket id to
+    # tests/test_public_readiness.py's structural scan, which has no way to tell a version suffix
+    # from an issue number. Real license metadata is free text and both spellings occur, so this
+    # loses no coverage of the family match itself.
+    ("CC-BY-SA 4.0", "CC-BY-SA"),
+    ("CC-BY-NC 4.0", "CC-BY-NC"),
+    ("CC BY-NC 4.0", "CC BY-NC"),
 ]
 
 

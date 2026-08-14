@@ -278,11 +278,15 @@ jobs:
       - name: Install shipped dependencies only (no dev group)
         run: uv sync --frozen --no-dev
 
-      # --with pip-licenses layers the scanner on top without adding it to the locked runtime set;
-      # the script excludes it (and its two deps) from the report so the output stays honest about
-      # what actually ships.
+      # --with "pip-licenses==5.5.5" layers the pinned scanner on top without adding it to the
+      # locked runtime set; the script excludes it (and its two deps) from the report so the output
+      # stays honest about what actually ships. Pinned rather than a bare `--with pip-licenses`:
+      # unpinned, `--with` resolves fresh from PyPI on every run and consults neither uv.lock nor
+      # its hashes -- an unlocked install inside the supply-chain gate itself, in a repo that
+      # SHA-pins every action and pins uv's own version. Let Dependabot bump this pin (and uv.lock,
+      # where pip-licenses is also a locked dev dependency) together.
       - name: License gate
-        run: uv run --no-sync --with pip-licenses python scripts/check_licenses.py
+        run: uv run --no-sync --with "pip-licenses==5.5.5" python scripts/check_licenses.py
 
   # --- Reporter shim: "Self-test (real Godot)" ------------------------------------------------------
   # WAS a branch-protection required check ("Self-test (real Godot)" — this job's `name:`) while this

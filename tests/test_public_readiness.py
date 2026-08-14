@@ -157,6 +157,10 @@ _PUBLIC_ID_PREFIXES = (
     "SSPL",
     "BUSL",
     "PSF",  # SPDX licence ids, in docs/credits.md
+    "EUPL",
+    "OSL",
+    "CDDL",
+    "QPL",  # SPDX licence ids, in scripts/check_licenses.py's DENIED list
     "GUT",
     "GDUNIT",  # the two supported test frameworks
     "BLE",

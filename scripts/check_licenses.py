@@ -7,7 +7,8 @@ Two deliberate scoping choices:
 **Runtime dependencies only.** Only what a user installs alongside gdmutant affects distribution
 compliance. A copyleft *dev* tool (a linter, a test runner) is perfectly legal to use and must not
 fail this gate, so the caller installs with ``uv sync --no-dev`` and this script reads whatever is
-in the active environment. Today that closure is ten packages, all permissive.
+in the active environment. Today that closure is eleven packages (including ``setuptools``, a
+system package surfaced only because the scan runs with ``--with-system``), all permissive.
 
 **A deny-list of copyleft families, plus a hard failure on UNKNOWN — not an allow-list of
 permissive names.** Package metadata spells the same license many ways: ``MIT`` and
@@ -32,6 +33,7 @@ DENIED = (
     "AGPL",
     "Affero",
     "LGPL",
+    "GNU Lesser General Public License",
     "GPL",
     "GNU General Public License",
     "SSPL",
@@ -39,6 +41,20 @@ DENIED = (
     "Commons Clause",
     "Business Source License",
     "BUSL",
+    "EUPL",
+    "OSL-",
+    "CeCILL",
+    "CDDL",
+    "Sleepycat",
+    "QPL",
+    # "Elastic", not "Elastic License": the license's own SPDX identifier is "Elastic-2.0" (no
+    # "License" substring), which is what pip-licenses actually reports.
+    "Elastic",
+    "PolyForm",
+    "Prosperity",
+    "CC-BY-NC",
+    "CC BY-NC",
+    "CC-BY-SA",
 )
 
 #: Missing or unresolvable license metadata. Not a copyleft hit, but never silently allowed.
@@ -48,6 +64,13 @@ UNKNOWN = ("UNKNOWN", "", None)
 #: layers pip-licenses on top to do the scanning, so these three would otherwise be counted as
 #: things gdmutant ships. They are not; excluding them keeps the report honest about what a user
 #: actually installs. (All three are permissive, so this is accuracy, not a carve-out.)
+#:
+#: pip-licenses itself skips packages on its own ``SYSTEM_PACKAGES`` list (pip-licenses, pip,
+#: prettytable, wcwidth, setuptools, wheel) unless told otherwise -- so ``--with-system`` below is
+#: what actually surfaces ``setuptools``, a real runtime dependency pulled in transitively via
+#: gdtoolkit. This list stays in ``--ignore-packages`` regardless, so ``--with-system`` widens
+#: scanning to real system-listed runtime deps (setuptools) without re-flagging the scanner's own
+#: three tooling packages as something gdmutant ships.
 TOOLING = ("pip-licenses", "prettytable", "wcwidth")
 
 
@@ -75,6 +98,7 @@ def main() -> int:
                 "-m",
                 "piplicenses",
                 "--format=json",
+                "--with-system",
                 "--ignore-packages",
                 *TOOLING,
             ],
