@@ -38,7 +38,10 @@ A few token positions produce a mutant
 that is not a *changed program* at all. In the first three shapes below the mutant is code GDScript
 rejects, so no test could ever have disagreed with it. In the fourth it is valid GDScript that is
 *inert*: it stores a value nothing can read back, so it behaves exactly like the original whatever
-your tests do. gdmutant does not generate any of them, which means they appear in no
+your tests do. In the fifth it is valid GDScript that was never arithmetic in the first place: the
+`/` in `$Sprite2D/Label` separates the steps of a path to a node, so changing it names a different
+node rather than computing a different number. gdmutant does not generate any of them, which means
+they appear in no
 category above: they leave the denominator entirely, and the score is higher than it would be if
 they were counted as survivors. That is the honest number, not a flattering one. A mutant the
 language has already settled measures nothing about your tests, and counting it as a gap would say
@@ -48,6 +51,7 @@ your suite misses something it cannot possibly catch. The excluded shapes:
 - a `+` that concatenates strings, because GDScript's `String` defines no `-`
 - a `+=` that appends to a string, for the same reason
 - a property declaration's initializer whose stored value no getter can read back (the inert shape)
+- a `/` or `%` that punctuates a node path (`$Sprite2D/Label`, `%HealthBar`), which is not an operator
 
 Each is decided from the parse tree, and only where the shape is certain: a `String`-typed
 *variable* is still mutated, because nothing in the source proves what it holds. The bias is
@@ -141,7 +145,7 @@ Not an operator: [Assert](#assert) · [Enum member](#enum-member)
 
 ## Numeric
 
-**The change:** gdmutant changed an integer literal (e.g. `0` → `1`, bumped a bound). Only bare decimal integers are mutated today: a float, a hex literal or a digit-separated form (`0.5`, `0xFF`, `1_000`) produces no mutant, so a bound written one of those ways is not covered by this operator.
+**The change:** gdmutant changed a number by one unit of its last written digit (e.g. `0` → `1`, `0.5` → `0.6`, `0xFF` → `0x100`, bumped a bound). Every literal form is covered: integers, floats, hex, binary, and separated forms like `1_000`. A float moves by one unit of the precision you wrote rather than by a whole `1.0`, so the mutant is the off-by-a-bit value the constant plausibly has, not one any test would reject on sight.
 
 **Why it survived:** no test pins the exact value or the boundary this number sets.
 

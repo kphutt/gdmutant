@@ -236,6 +236,127 @@ def test_find_sites_and_generate_thread_a_custom_catalog_through() -> None:
     assert mutants and {(m.original, m.replacement) for m in mutants} == {("b", "c")}
 
 
+def test_a_node_path_separator_is_not_a_mutation_site() -> None:
+    # `$Sprite2D/Label` is Godot's shorthand for a path to a node, not a division, so the `/` is
+    # punctuation and swapping it for `*` does not make a changed program -- it names a different
+    # node. NF-5 cannot catch that: `$Sprite2D*Label` parses cleanly as two names multiplied. The
+    # skip has to happen at generation time, from the token's position in the grammar.
+    src = 'func f():\n\t$Sprite2D/Label.text = "x"\n'
+    assert not any(s.token == "/" for s in find_sites(src))
+    assert not any(m.operator_id == "arithmetic" for m in generate_mutants("f.gd", src))
+
+
+def test_every_separator_of_a_deep_node_path_is_skipped() -> None:
+    # One flat `path` node holds all three separators, the same shape as a multi-operand string
+    # concatenation: skipping only the first would leave the rest exactly as wrong as before.
+    assert find_sites("func f():\n\tvar n = $A/B/C/D\n") == []
+
+
+def test_a_unique_name_node_paths_marker_is_not_a_mutation_site() -> None:
+    # `%HealthBar` names a scene-unique node; that `%` is not modulo. Its mutants are dropped today
+    # only because `*HealthBar` happens not to parse, which is an accident rather than a decision --
+    # and the accident does nothing for the `/` in `%HealthBar/Bar`, which parses fine.
+    assert find_sites("func f():\n\tvar n = %HealthBar\n") == []
+    assert find_sites("func f():\n\tvar n = %HealthBar/Bar\n") == []
+
+
+def test_a_unique_name_segment_inside_a_path_is_skipped_too() -> None:
+    # `$A/%B` puts the `%` inside the `path` node itself rather than in a `unique_node_path`
+    # wrapper, so both spellings have to be read, not just the leading one.
+    assert find_sites("func f():\n\tvar n = $A/%B\n") == []
+
+
+def test_real_division_is_still_a_mutation_site() -> None:
+    # The direction that matters most: the skip is about where a `/` sits in the grammar, never
+    # about the character, so ordinary arithmetic keeps every site it had.
+    src = "func f(a, b):\n\treturn a / b\n"
+    assert any(s.token == "/" for s in find_sites(src))
+    assert any(m.operator_id == "arithmetic" for m in generate_mutants("f.gd", src))
+
+
+def test_a_division_sharing_a_line_with_a_node_path_is_still_a_mutation_site() -> None:
+    # Positions are skipped, not lines: the path's `/` (column 6) goes and the real division
+    # (column 22) stays, on the one line that holds both.
+    src = "func f(a):\n\t$Bar/Fill.scale = a / 2\n"
+    assert [(s.token, s.span.column) for s in find_sites(src)] == [("/", 22), ("2", 24)]
+
+
+def test_a_node_path_line_keeps_its_statement_deletion_mutant() -> None:
+    # The skip is scoped to the tokens that were never operators. Deleting the whole statement is
+    # still a genuine, killable change, so the line goes on being measured.
+    src = 'func f():\n\t$Sprite2D/Label.text = "x"\n'
+    assert {m.operator_id for m in generate_mutants("f.gd", src)} == {STATEMENT_DELETION_ID}
+
+
+#: One literal per numeric shape gdtoolkit tokenizes: plain, negative and zero-padded integers,
+#: floats written with a leading, trailing or bare point, exponents in both cases, hex and binary,
+#: and digit separators in each. Used to check the numeric operator against gdtoolkit itself.
+_NUMERIC_LITERAL_FORMS = (
+    "0",
+    "42",
+    "-5",
+    "007",
+    "3.5",
+    "-3.5",
+    "0.016",
+    "1.0",
+    ".5",
+    ".9",
+    "1.",
+    "1e3",
+    "1.5e-3",
+    "1.5E+10",
+    "0x1f",
+    "0xFF",
+    "0x0F",
+    "-0xff",
+    "0b1010",
+    "1_000_000",
+    "999_999",
+    "1_000.5",
+    "0xFF_FF",
+    "0b1010_1010",
+)
+
+
+def test_float_hex_and_separated_literals_are_located_and_mutated() -> None:
+    # These forms produced zero mutants until the numeric operator learned to write them back, so a
+    # bound written `0.016` or `0xFF` was uncovered while the score read as though it were not.
+    # Floats are the costly half in Godot code: deltas, speeds, damping and durations are all one.
+    src = "func f():\n\tvar step = 0.016\n\tvar mask = 0xFF\n\tvar budget = 1_000_000\n"
+    assert [s.token for s in find_sites(src)] == ["0.016", "0xFF", "1_000_000"]
+    changes = {
+        (m.original, m.replacement)
+        for m in generate_mutants("f.gd", src)
+        if m.operator_id == "numeric"
+    }
+    assert changes == {
+        ("0.016", "0.017"),
+        ("0.016", "0.015"),
+        ("0xFF", "0x100"),
+        ("0xFF", "0xFE"),
+        ("1_000_000", "1_000_001"),
+        ("1_000_000", "999_999"),
+    }
+
+
+def test_every_numeric_literal_form_yields_two_mutants_that_are_valid_gdscript() -> None:
+    # The numeric operator now *writes* literals instead of only recognising them, so a rendering
+    # bug (a stray separator, a lost `0x`, a dropped point) would put source in front of Godot that
+    # it cannot load. gdtoolkit is the oracle: bump each form in real source and re-parse it. The
+    # last assertion is the strict one -- the replacement has to come back as a single literal
+    # token, which is what proves the operator's output is closed under its own recognition.
+    for literal in _NUMERIC_LITERAL_FORMS:
+        src = f"func f():\n\tvar x = {literal}\n"
+        assert [s.token for s in find_sites(src)] == [literal], literal
+        mutants = [m for m in generate_mutants("f.gd", src) if m.operator_id == "numeric"]
+        assert len(mutants) == 2, literal
+        for mutant in mutants:
+            mutated, valid = apply_mutant(mutant, src)
+            assert valid, f"{literal} -> {mutant.replacement!r} is not valid GDScript"
+            assert [s.token for s in find_sites(mutated)] == [mutant.replacement], mutant
+
+
 def test_negative_literal_is_located_and_mutated() -> None:
     # gdtoolkit tokenizes -5 as a single NUMBER token; the numeric operator must still bump it.
     src = "func f():\n\treturn -5\n"

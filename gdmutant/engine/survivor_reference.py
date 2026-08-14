@@ -182,10 +182,12 @@ SURVIVOR_REFERENCE: dict[str, tuple[tuple[str, str], ...]] = {
     "numeric": (
         (
             "The change",
-            "gdmutant changed an integer literal (e.g. `0` → `1`, bumped a bound). Only bare "
-            "decimal integers are mutated today: a float, a hex literal or a digit-separated form "
-            "(`0.5`, `0xFF`, `1_000`) produces no mutant, so a bound written one of those ways is "
-            "not covered by this operator.",
+            "gdmutant changed a number by one unit of its last written digit (e.g. `0` → `1`, "
+            "`0.5` → `0.6`, `0xFF` → `0x100`, bumped a bound). Every literal form is covered: "
+            "integers, floats, hex, binary, and separated forms like `1_000`. A float moves by one "
+            "unit of the precision you wrote rather than by a whole `1.0`, so the mutant is the "
+            "off-by-a-bit value the constant plausibly has, not one any test would reject on "
+            "sight.",
         ),
         (
             "Why it survived",

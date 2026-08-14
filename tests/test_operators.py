@@ -80,17 +80,132 @@ def test_numeric_bump_handles_negative_literals() -> None:
     assert NUMERIC.replacements("-1") == ("0", "-2")
 
 
-def test_numeric_only_applies_to_bare_decimal_integers() -> None:
-    # "-0" is excluded too: it isn't a real negative literal and wouldn't round-trip.
-    for non_int in ("and", "3.5", "-3.5", "0x1f", "1_000", "", "-", "-0", "٣"):  # noqa: RUF001 (AN 3)
-        assert NUMERIC.replacements(non_int) == (), f"unexpectedly mutated {non_int!r}"
+def test_numeric_bump_moves_a_float_by_one_unit_of_its_written_precision() -> None:
+    # A whole 1.0 would be the wrong size of change: a 0.016 frame delta shifted to 1.016 is a
+    # mutant any test that reaches the line kills, which raises the score without measuring
+    # anything. One unit of the precision the author wrote is instead the off-by-a-bit bug a tuned
+    # constant plausibly has, so a survivor there is a real, unpinned value.
+    assert NUMERIC.replacements("3.5") == ("3.6", "3.4")
+    assert NUMERIC.replacements("0.016") == ("0.017", "0.015")
+    assert NUMERIC.replacements("-3.5") == ("-3.4", "-3.6")
 
 
-def test_numeric_bump_is_reversible() -> None:
-    # n is reachable from each of its bumps, so every numeric mutation can be undone.
-    for token in ("0", "1", "7", "100", "-1", "-5"):
+def test_numeric_bump_carries_a_float_across_its_own_decimal_point() -> None:
+    # The bump is arithmetic on the whole number, not a digit edit, so 0.9 bumped up is 1.0 rather
+    # than a rolled-over 0.0 and 1.0 bumped down is 0.9 rather than a borrowed 0.10.
+    assert NUMERIC.replacements("0.9") == ("1.0", "0.8")
+    assert NUMERIC.replacements("1.0") == ("1.1", "0.9")
+
+
+def test_numeric_bump_keeps_a_floats_bare_or_trailing_point() -> None:
+    # GDScript accepts both `.5` and `1.`, and a mutant has to stay the form it started as, or it
+    # reformats the line as well as mutating it. `.9` is where that gives way: the integer digit is
+    # needed to write the value at all, so it appears.
+    assert NUMERIC.replacements(".5") == (".6", ".4")
+    assert NUMERIC.replacements("1.") == ("2.", "0.")
+    assert NUMERIC.replacements(".9") == ("1.0", ".8")
+
+
+def test_numeric_bump_leaves_an_exponent_suffix_alone() -> None:
+    # Bumping the mantissa bumps the value; rewriting the exponent would be a far larger, different
+    # mutation. The suffix comes back exactly as written, sign and case included.
+    assert NUMERIC.replacements("1.5e-3") == ("1.6e-3", "1.4e-3")
+    assert NUMERIC.replacements("1.5E+10") == ("1.6E+10", "1.4E+10")
+    assert NUMERIC.replacements("1e3") == ("2e3", "0e3")
+
+
+def test_numeric_bump_works_in_a_hex_or_binary_literals_own_base() -> None:
+    # ±1 means ±1 of the value, written back in the base the literal uses -- not ±1 on its digits.
+    assert NUMERIC.replacements("0x1f") == ("0x20", "0x1e")
+    assert NUMERIC.replacements("0b1010") == ("0b1011", "0b1001")
+    assert NUMERIC.replacements("-0xff") == ("-0xfe", "-0x100")
+
+
+def test_numeric_bump_keeps_hex_digit_case_and_written_width() -> None:
+    # `0x0F` is a deliberate two-nibble constant and its mutants read as ones too. Padding only ever
+    # adds, so the bump that needs a third nibble still gets it.
+    assert NUMERIC.replacements("0xFF") == ("0x100", "0xFE")
+    assert NUMERIC.replacements("0x0F") == ("0x10", "0x0E")
+
+
+def test_numeric_bump_keeps_decimal_zero_padding() -> None:
+    # `007` is written three digits wide on purpose; bumping it to `8` would reformat the line.
+    assert NUMERIC.replacements("007") == ("008", "006")
+
+
+def test_numeric_bump_regroups_digit_separators() -> None:
+    # A separated literal keeps its spacing, including through the bump that changes the digit
+    # count -- `1_000_000` down is `999_999`, not `1000_000` or an unreadable `999999`.
+    assert NUMERIC.replacements("1_000_000") == ("1_000_001", "999_999")
+    assert NUMERIC.replacements("999_999") == ("1_000_000", "999_998")
+    assert NUMERIC.replacements("0b1010_1010") == ("0b1010_1011", "0b1010_1001")
+    assert NUMERIC.replacements("1_000.5") == ("1_000.6", "1_000.4")
+    assert NUMERIC.replacements("0.000_001") == ("0.000_002", "0.000_000")
+
+
+def test_an_irregularly_separated_literal_loses_its_spacing_not_its_mutants() -> None:
+    # Separators that aren't evenly spaced describe no grouping to carry onto a different digit
+    # count, so the mutant is written plain. That is not the same as dropping it: the operator used
+    # to skip every separated literal outright, which is the coverage hole this all closes.
+    assert NUMERIC.replacements("1_00_000") == ("100001", "99999")
+
+
+def test_numeric_skips_anything_that_is_not_a_literal() -> None:
+    # "-0" and "-0.0" are excluded as well: neither is a real negative literal, and their bumps
+    # wouldn't round-trip. `0b1234` is shaped like a radix literal but does not fit base 2, and
+    # `1__0` / `1_` put a separator where no language allows one, so none of them is a number.
+    for non_literal in (
+        "and",
+        "",
+        "-",
+        ".",
+        "e3",
+        "-0",
+        "-0.0",
+        "-0x0",
+        "0b1234",
+        "1__0",
+        "1_",
+        "0X1f",
+        "٣",  # noqa: RUF001 (Arabic-Indic 3: a digit, but not one any of these languages writes)
+    ):
+        assert NUMERIC.replacements(non_literal) == (), f"unexpectedly mutated {non_literal!r}"
+
+
+def test_numeric_bump_is_reversible_across_every_literal_form() -> None:
+    # n is reachable from each of its bumps, so every numeric mutation can be undone -- and for
+    # each form below the *spelling* comes back too, not just the value.
+    for token in (
+        "0",
+        "1",
+        "7",
+        "100",
+        "-1",
+        "-5",
+        "007",
+        "3.5",
+        "-3.5",
+        "0.016",
+        ".5",
+        "1.",
+        "1.5e-3",
+        "0x1f",
+        "0b1010",
+        "1_000_000",
+        "999_999",
+    ):
         for repl in NUMERIC.replacements(token):
-            assert token in NUMERIC.replacements(repl)
+            assert token in NUMERIC.replacements(repl), f"{token} -> {repl} is not reversible"
+
+
+def test_a_bump_that_loses_its_hex_letters_returns_the_value_not_the_spelling() -> None:
+    # The one place the round trip cannot restore the original text, pinned so it stays a known,
+    # bounded limit rather than a surprise: `0x100` has no letters left to record that it was
+    # written uppercase, so its own bump back down is `0x0ff`. Same number, different spelling.
+    bumped_up = NUMERIC.replacements("0xFF")[0]
+    assert bumped_up == "0x100"
+    assert NUMERIC.replacements(bumped_up)[1] == "0x0ff"
+    assert int("0x0ff", 16) == int("0xFF", 16)
 
 
 def test_non_applicable_token_yields_nothing() -> None:
