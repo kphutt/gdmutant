@@ -1406,6 +1406,103 @@ def _untrusted_config_message(keys: list[str]) -> str:
     )
 
 
+def _detect_runner(directory: Path) -> str | None:
+    """Which JUnit runner's addon is installed under `directory` (gdUnit4 checked first, then GUT),
+    or `None` if neither is there. Reuses the same `_GDUNIT_ADDON_REL`/`_GUT_ADDON_REL` constants
+    the post-failure addon hints (`_gdunit4_addon_hint`/`_gut_addon_hint`) already check against —
+    just run proactively here, at scaffold time, instead of reactively after a baseline failure."""
+    if (directory / _GDUNIT_ADDON_REL).is_dir():
+        return "gdunit4"
+    if (directory / _GUT_ADDON_REL).is_dir():
+        return "gut"
+    return None
+
+
+def _scaffold_config_text(runner: str | None) -> str:
+    """The starter `.gdmutant.toml` body `init` writes.
+
+    Every key named here — commented or not — is a real key of `_CONFIG_KEY_TO_DEST`; nothing is
+    invented. Two keys are set outright, uncommented, because they are never trust-required and
+    always have a safe, project-agnostic value: `tests` (the same `res://test` the `run` subparser
+    already defaults to) and `runner`, set to what `_detect_runner` found — but only when it found
+    something; guessing a runner nobody confirmed would be worse than leaving it for the user to
+    pick. That keeps the file non-empty and useful even in a fresh directory with no addon
+    installed yet, which is the common case right after `gdmutant init`. Every other key
+    (`report-path`, `timeout`, `require-clean`, `exclude`, and the three trust-required keys
+    `project`/`command`/`godot`) is documented as a commented example instead of a guess: none of
+    them has a value that's right for every project, and the trust-required three additionally need
+    `--trust-config` before gdmutant will act on them at all (see `_TRUST_REQUIRED_CONFIG_KEYS`).
+    """
+    lines = [
+        "# Written by `gdmutant init`. An explicit CLI flag always overrides what's set here.",
+        "",
+    ]
+    if runner is not None:
+        lines.append(f'runner = "{runner}"  # detected from addons/ in this directory')
+    else:
+        lines += [
+            "# No gdUnit4 or GUT addon was found under addons/ in this directory, so `runner` is",
+            "# left for you to set (required, no default):",
+            '# runner = "gdunit4"  # or "gut", or "command" (any harness, by exit code)',
+        ]
+    lines += [
+        "",
+        "tests = \"res://test\"  # the test directory (gdunit4's -a / gut's -gdir)",
+        "",
+        "# Optional, and never trust-required:",
+        f'# report-path = "{DEFAULT_REPORT_PATH}"  # gdunit4 default; gut default: '
+        f'"{DEFAULT_GUT_REPORT_PATH}"',
+        "# timeout = 30  # per-mutant timeout in seconds; left unset, gdmutant derives one from "
+        "the",
+        "# baseline run's own wall-clock (10x it) instead of a fixed number",
+        "# require-clean = true  # refuse to run on an uncommitted source file "
+        "(default: warn only)",
+        '# exclude = ["*_generated.gd", "*/vendor/*"]  # globs to skip when expanding a directory',
+        "",
+        "# These need --trust-config: they say what gdmutant reads (project) or runs (command,",
+        "# godot), and .gdmutant.toml may not be a file you wrote yourself.",
+        '# project = "."',
+        '# command = "godot --headless --script res://tests/run_tests.gd"',
+        '# godot = "/path/to/godot"',
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _write_init_config(directory: Path | None = None, *, force: bool = False) -> int:
+    """Write a starter `.gdmutant.toml` under `directory` (default: the current directory),
+    auto-detecting the runner from an installed gdUnit4/GUT addon (see `_detect_runner`) and
+    documenting every other `_CONFIG_KEY_TO_DEST` key as a commented example (see
+    `_scaffold_config_text`), so a user does not hand-write the file. Refuses to overwrite an
+    existing `.gdmutant.toml` unless `force` is set — silently clobbering a hand-tuned config is
+    the one genuinely destructive way this command can go wrong. Returns 0, or 2 if the file
+    exists without `--force`, or can't be written.
+    """
+    base = directory if directory is not None else Path()
+    path = base / _CONFIG_FILENAME
+    if path.exists() and not force:
+        print(
+            f"error: {path} already exists, not overwriting it (pass --force to overwrite)",
+            file=sys.stderr,
+        )
+        return 2
+    runner = _detect_runner(base)
+    try:
+        path.write_text(_scaffold_config_text(runner), encoding="utf-8")
+    except OSError as error:
+        print(f"error: cannot write {path}: {error}", file=sys.stderr)
+        return 2
+    print(f"Wrote {path}")
+    if runner is not None:
+        print(f"Detected the {runner} addon under {base / 'addons'}; runner is set in {path.name}.")
+    else:
+        print(
+            f"No gdUnit4 or GUT addon found under {base / 'addons'}; set 'runner' in {path.name} "
+            "yourself, or pass --runner on the command line."
+        )
+    return 0
+
+
 def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentParser:
     """Build the `run`/`example` subcommand parser, seeding `run`'s flag defaults from `config` (an
     already-validated `.gdmutant.toml`, or `None`) so an explicit CLI flag still overrides it."""
@@ -1568,6 +1665,16 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         help=f"where to write it: a file path, or a directory to write {_EXAMPLE_NAME} into "
         f"(default: ./{_EXAMPLE_NAME})",
     )
+    init_parser = sub.add_parser(
+        "init",
+        help=f"scaffold a starter {_CONFIG_FILENAME} in the current directory",
+    )
+    init_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=f"overwrite an existing {_CONFIG_FILENAME} (default: refuse, so a tuned config is "
+        "never silently clobbered)",
+    )
     return parser
 
 
@@ -1625,7 +1732,7 @@ def _normalize_windows_token(token: str) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the CLI end to end (config, argument parsing, dispatch to the `run`/`example`
+    """Run the CLI end to end (config, argument parsing, dispatch to the `run`/`example`/`init`
     subcommand) and return the process exit code.
 
     0 on a completed pass (survivors are report output, not a failure, per FG-6.2), 1 if the
@@ -1648,6 +1755,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "example":
         return _write_example(args.dest)
+    if args.command == "init":
+        return _write_init_config(force=args.force)
     if args.command == "run":
         if untrusted_keys:
             # The file sets a trust-required key — that alone needs the user's say-so, whether or
