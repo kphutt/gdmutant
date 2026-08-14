@@ -72,6 +72,18 @@ That script reads its commands out of `ci.yml` rather than restating them, so it
 what the hooks and the release-time gate run. [`AGENTS.md`](AGENTS.md) under "Build · test" spells
 the individual commands out, which is what you want when you only need one of them.
 
+While you're still writing a change, `scripts/dev.py` gives the everyday subset of those a single
+discoverable name, so you don't have to remember the individual `uv run` invocations:
+
+```sh
+uv run python scripts/dev.py lint    # ruff check + ruff format --check + mypy
+uv run python scripts/dev.py test    # pytest
+uv run python scripts/dev.py build   # uv build
+```
+
+It dispatches to the same real commands (never a reimplementation), and it is not a substitute for
+`verify_local.py` above -- run that one before opening the PR.
+
 If your change adds or touches pure logic, run a local mutation-test pass too, advisory and
 opt-in, not part of `verify_local.py`:
 
