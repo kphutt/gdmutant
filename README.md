@@ -52,15 +52,30 @@ and its detail card: what it means, why it's risky, and how to close it.
 
 ## Quickstart
 
-This mutates `corpus/`, a small real Godot project bundled in this repo just for this: a real
-script and a real GUT/gdUnit4 suite to try gdmutant against before pointing it at your own.
+The fastest way to try it needs no install and no Godot:
+[`uvx`](https://docs.astral.sh/uv/guides/tools/) runs gdmutant straight from PyPI, once, without
+adding it to anything.
+
+```sh
+uvx gdmutant example                       # writes a small starter script, gdmutant-hello-world.gd
+uvx gdmutant run gdmutant-hello-world.gd --dry-run
+# preview: lists the mutants gdmutant would try. No Godot, no test run, nothing installed.
+```
+
+That's a preview, not the payoff: `--dry-run` only lists mutants, it never runs a test against
+them. The actual point of gdmutant is the **survivor**: a mutant whose test run still passed,
+meaning it marks a line where a real bug could hide and nothing would catch it. Seeing one for
+real means rerunning an actual test suite, which needs an actual Godot project. This repo ships
+one just for that: `corpus/`, a small real Godot project with a real GUT/gdUnit4 suite.
 
 ```sh
 git clone https://github.com/kphutt/gdmutant
 
 cd gdmutant                                # corpus/ lives right here, at the repo root
 
-pip install .                              # installs gdmutant and its own dependencies
+pip install .                              # installs gdmutant and its own dependencies into this checkout
+# Prefer a global `gdmutant` command instead? `uv tool install 'gdmutant==0.1.*'` (or
+# `pipx install 'gdmutant==0.1.*'`) installs it once, isolated, usable from any directory.
 
 python scripts/install_gdunit4.py          # gdUnit4 is a Godot addon that isn't vendored in git. This fetches it
 
