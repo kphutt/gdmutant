@@ -131,9 +131,11 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   `Workflow security (zizmor)` (which reads the workflow files and nothing else), the checks
   `ci.yml`'s now-restored triggers make possible: `Verify` on both platforms, `Secret scan
   (gitleaks)`, and both `Self-test` gates. See `scripts/harden_github.py`'s `REQUIRED_JOBS` for
-  the exact, current list. `.github/CODEOWNERS` carries the full list of what branch protection
-  enforces. Read changes to these paths carefully before merging. The GDScript adapter is the real
-  technical risk, since a wrong mutant means a silently wrong survivor report.
+  the exact, current list of workflow-derived checks. Socket Security (a GitHub App, not a
+  workflow job) adds two more, listed in that same script's `REQUIRED_APP_CHECKS`.
+  `.github/CODEOWNERS` carries the full list of what branch protection enforces. Read changes to
+  these paths carefully before merging. The GDScript adapter is the real technical risk, since a
+  wrong mutant means a silently wrong survivor report.
 
 ## Design goals (keep these in mind)
 

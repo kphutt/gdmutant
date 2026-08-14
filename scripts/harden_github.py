@@ -83,6 +83,28 @@ def _workflows_dir(workflows: pathlib.Path | None) -> pathlib.Path:
 # `workflow_dispatch`-only; it stays required alongside the restored four, not in place of them.
 REQUIRED_JOBS = ("zizmor", "verify", "secret-scan", "selftest-godot", "selftest-gut")
 
+# Status checks posted by a GitHub App rather than a workflow job. An App calls the Checks API
+# directly, so its context string appears in no `.github/workflows/*.yml` file, and
+# `required_contexts()` (which derives everything above from those files) has no way to see it.
+# Listed here explicitly, by the exact context string GitHub reports, so an App-based check can
+# still be made required and this stays config-as-code rather than a one-time console click.
+#
+# Unlike REQUIRED_JOBS, nothing here is verified against the repo: there is no file to check an
+# App's behavior against, so this list is a trusted assertion, not a derivation. Requiring a
+# context that turns out not to fire on every pull request blocks every PR forever, same as an
+# unproducible workflow-derived context (`producible_contexts()`'s job) — before adding a new
+# entry, confirm it actually posted on a recent PR, e.g. `gh pr checks <number>`.
+#
+# Socket Security is installed as a GitHub App and posts two checks on every pull request: a
+# supply-chain project report and a pull-request alert summary. Neither was a required check
+# before this was added, so a PR carrying a Socket alert (install scripts, obfuscation,
+# typosquats, behavioral signals — none of which `pip-audit`'s known-CVE scan in `verify` covers)
+# merged clean.
+REQUIRED_APP_CHECKS = (
+    "Socket Security: Project Report",
+    "Socket Security: Pull Request Alerts",
+)
+
 
 def _ok(msg: str) -> None:
     print(f"\033[1;32m[ok]\033[0m   {msg}")
@@ -402,6 +424,10 @@ def producible_contexts(workflows: pathlib.Path | None = None) -> set[str]:
     This is the universe a required check may be drawn from. A job whose name cannot be predicted
     (a templated `name:`) is left out rather than guessed: it cannot vouch for a required context,
     and leaving it out can only cause a refusal to write, never a bad write.
+
+    Workflow-derived only — deliberately excludes `REQUIRED_APP_CHECKS`, which no workflow file can
+    vouch for. Callers that need to validate the full required set (workflow jobs + App checks) use
+    `all_producible_contexts()` instead.
     """
     contexts: set[str] = set()
     for definitions in all_jobs(workflows).values():
@@ -413,6 +439,28 @@ def producible_contexts(workflows: pathlib.Path | None = None) -> set[str]:
             except ValueError:
                 continue
     return contexts
+
+
+def all_required_contexts(workflows: pathlib.Path | None = None) -> list[str]:
+    """Every context branch protection should require: workflow-derived jobs plus App checks.
+
+    `required_contexts()` alone stays workflow-only and raises on a stale `REQUIRED_JOBS` entry;
+    `REQUIRED_APP_CHECKS` is appended here, after that validation, so the two "how do we know this
+    reports" stories — derived-and-checked vs. trusted literal — stay visibly separate in the code
+    that produces each half, even though both end up in the one list GitHub is told to require.
+    """
+    return required_contexts(workflows) + list(REQUIRED_APP_CHECKS)
+
+
+def all_producible_contexts(workflows: pathlib.Path | None = None) -> set[str]:
+    """`producible_contexts()` plus the trusted `REQUIRED_APP_CHECKS` literals.
+
+    This is the set the "would this required context ever report" ratchet checks against once
+    `REQUIRED_APP_CHECKS` is folded into the required list — otherwise every App check would look
+    unproducible forever (no workflow file can vouch for it) and permanently block the write meant
+    to require it.
+    """
+    return producible_contexts(workflows) | set(REQUIRED_APP_CHECKS)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -536,7 +584,7 @@ def report_state(
         _warn(f"Checks this spec would ADD: {sorted(added)}")
 
     if computed:
-        unproducible = sorted(computed - producible_contexts())
+        unproducible = sorted(computed - all_producible_contexts())
         if unproducible:
             _warn(f"Required contexts that NO job can report on a pull request: {unproducible}")
             print("         GitHub waits for a required context forever, so writing this spec")
@@ -604,7 +652,7 @@ def protection_payload(workflows: pathlib.Path | None = None) -> dict:
     would deadlock every PR). CODEOWNERS review stays advisory.
     """
     return {
-        "required_status_checks": {"strict": True, "contexts": required_contexts(workflows)},
+        "required_status_checks": {"strict": True, "contexts": all_required_contexts(workflows)},
         "enforce_admins": True,
         "required_pull_request_reviews": {
             "required_approving_review_count": 0,
@@ -635,7 +683,7 @@ def main(argv: list[str] | None = None) -> int:
     contexts: list[str] | None = None
     derivation_error: ValueError | None = None
     try:
-        contexts = required_contexts()
+        contexts = all_required_contexts()
     except ValueError as exc:
         derivation_error = exc
 
@@ -653,7 +701,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     _log(f"Hardening {args.repo}{' (dry run)' if args.dry_run else ''}")
-    _log(f"Required status checks, derived from the workflows: {contexts}")
+    _log(f"Required status checks (workflow-derived + App checks): {contexts}")
 
     # Every `_apply` call's success is tracked here so `main`'s exit code reflects whether the
     # writes actually landed — collecting failures, not just warning about them, is what lets a
@@ -742,7 +790,7 @@ def main(argv: list[str] | None = None) -> int:
     # and the same PUT sets `enforce_admins: True`, which closes the escape hatch that would let
     # an admin merge past it. This is the failure that follows removing a workflow's pull_request
     # trigger: the required list stops matching anything CI can produce.
-    unproducible = sorted(set(contexts) - producible_contexts())
+    unproducible = sorted(set(contexts) - all_producible_contexts())
     if unproducible:
         _warn(f"Branch protection NOT written: no job reports {unproducible} on a pull request.")
         print("         With strict: True that would block every PR on 'main' permanently, and")
