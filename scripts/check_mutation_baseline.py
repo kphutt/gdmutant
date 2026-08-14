@@ -190,6 +190,19 @@ def main(argv: list[str] | None = None) -> int:
         f"cap is {max_mutants}"
     )
 
+    if total == 0:
+        # Files changed, but poodle's own mutant generation found nothing to mutate in any of
+        # them (e.g. the diff only touched blank lines, comments, or constructs no mutator
+        # covers). Running poodle here would report "0 survivors out of 0 mutants" -- a passing
+        # score that measured nothing, indistinguishable from a real clean run. That is exactly
+        # the "gate that passes without checking anything" shape AGENTS.md calls out, so this
+        # fails loud instead of falling through to the poodle run below.
+        print(
+            "check_mutation_baseline: 0 mutants generated for the changed file(s) -- nothing was "
+            "actually checked, not a clean run. Failing instead of reporting a false pass."
+        )
+        return 1
+
     if total > max_mutants:
         files, skipped = select_files_within_cap(files, counts, max_mutants)
         skipped_total = sum(n for _, n in skipped)
