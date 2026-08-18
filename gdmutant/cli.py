@@ -30,8 +30,6 @@ from gdmutant.adapters.gdscript import (
     unknown_ignore_operators,
 )
 from gdmutant.adapters.gdscript.runner import (
-    DEFAULT_GUT_REPORT_PATH,
-    DEFAULT_REPORT_PATH,
     DEFAULT_TIMEOUT,
     GdUnit4Runner,
     GutRunner,
@@ -941,7 +939,13 @@ def _write_example(dest: str | None) -> int:
 def list_mutants(source_path: str, only_lines: set[int] | None = None) -> int:
     """Print every mutant gdmutant would generate for `source_path` **without running any tests** —
     a Godot-free way to see the tool work. With `only_lines` (diff-scoped) only mutants on
-    those lines are listed. Returns 0, or 2 if the source can't be read/parsed."""
+    those lines are listed. Returns 0, or 2 if the source can't be read/parsed.
+
+    Both the header and every per-mutant location are displayed as POSIX paths (forward slashes),
+    regardless of host OS: `m.path` comes from ``str(Path(source_path))``, the OS separator on
+    Windows, and printing it unnormalized disagreed with a header built straight from the
+    (typically forward-slash) string the caller typed — one console listing, two separators.
+    """
     source = _load_gdscript(source_path)
     if source is None:
         return 2
@@ -949,9 +953,9 @@ def list_mutants(source_path: str, only_lines: set[int] | None = None) -> int:
     mutants = generate_mutants(str(Path(source_path)), source)
     if only_lines is not None:
         mutants = [m for m in mutants if m.span.line in only_lines]
-    print(f"{len(mutants)} mutants for {source_path}:")
+    print(f"{len(mutants)} mutants for {Path(source_path).as_posix()}:")
     for m in mutants:
-        loc = f"{m.path}:{m.span.line}:{m.span.column}"
+        loc = f"{Path(m.path).as_posix()}:{m.span.line}:{m.span.column}"
         # A suppressed mutant is still listed (it's generated), flagged so the annotation shows.
         suppressed = ""
         if m.ignore_reason is not None:
@@ -1088,7 +1092,14 @@ def _write_reports(
 
     `project_dir` reaches the HTML page so it can show paths relative to the project instead of
     absolute ones from the machine that produced the report. The JSON is written unchanged: its
-    keys are the report's identifiers and other tooling resolves them."""
+    keys are the report's identifiers and other tooling resolves them.
+
+    Both confirmation lines print the *resolved absolute* path, not the possibly-relative string
+    the caller passed in — `--html report.html` on its own says nothing about which directory the
+    file landed in, and that directory is not necessarily the project dir or the mutated file's own
+    directory (the three commonly differ in a real run). A write-error message still echoes the
+    literal string as given, so a mistyped path's typo stays visible instead of being resolved into
+    something that looks plausible."""
     if json_path == "-":
         print(json.dumps(stryker, indent=2))
     elif json_path is not None:
@@ -1099,7 +1110,7 @@ def _write_reports(
             return 2
         # Only reachable when the report went to a file, so stdout is not the report's channel and
         # this confirmation cannot land in the middle of anything.
-        print(f"\nWrote report to {json_path}")
+        print(f"\nWrote report to {Path(json_path).resolve()}")
     if html_path is not None:
         try:
             Path(html_path).write_text(html_report(stryker, project_dir), encoding="utf-8")
@@ -1112,7 +1123,7 @@ def _write_reports(
         # piping the run into `json.loads` got a parse error naming a column in the trailing prose
         # with nothing to say that `--html` had caused it.
         print(
-            f"\nWrote HTML report to {html_path}. Open it in a browser.",
+            f"\nWrote HTML report to {Path(html_path).resolve()}. Open it in a browser.",
             file=sys.stderr if json_path == "-" else sys.stdout,
         )
     return 0
@@ -1265,16 +1276,16 @@ def run_mutation_paths(
 
 
 #: Config-file (`.gdmutant.toml`) key -> argparse dest. Keys mirror the CLI flag names (so a project
-#: writes `runner = "command"`, `report-path = "..."`), except `command` maps to the `test_command`
+#: writes `runner = "command"`, `godot = "..."`), except `command` maps to the `test_command`
 #: dest. `source`, `--json`, and `--dry-run` are deliberately absent — they're per-invocation, not
-#: persistent project settings.
+#: persistent project settings. `report-path` is deliberately absent too: gdmutant locates the
+#: JUnit report internally now, so there is no flag or config key left to map it to.
 _CONFIG_KEY_TO_DEST = {
     "project": "project",
     "runner": "runner",
     "command": "test_command",
     "godot": "godot",
     "tests": "tests",
-    "report-path": "report_path",
     "timeout": "timeout",
     "require-clean": "require_clean",
     "exclude": "exclude",
@@ -1292,8 +1303,9 @@ _CONFIG_FILENAME = ".gdmutant.toml"
 #: `.gdmutant.toml` is read from the working directory, so on a project you cloned it is a file
 #: somebody else wrote. Every OTHER key it can set is genuinely inert against this file's own
 #: reach — a glob, a number, a `res://` path relative to whatever `project` resolves to (itself
-#: gated, so a gated `project` bounds every path key that follows it, including `report-path`,
-#: which additionally refuses to resolve outside the project at all — see `_GodotJUnitRunner.run`).
+#: gated, so a gated `project` bounds every path key that follows it). The JUnit report path is
+#: located internally now, with no config key for it, and still refuses to resolve outside the
+#: project at all as a defense-in-depth guard — see `_GodotJUnitRunner.run`.
 #: So the run refuses outright unless the person at the keyboard vouches for the file with
 #: ``--trust-config`` — no exception for also passing the same key as a flag, which never actually
 #: helped a project set one of these once in its own config and never repeat it: that legitimate
@@ -1328,7 +1340,7 @@ def _load_config(path: Path | None = None) -> dict[str, object] | None:
         settings[dest] = value
     # Validate settings types up front — set_defaults bypasses argparse's own type/choices
     # checks, so a bad value would otherwise fail confusingly deep in the run.
-    for key in ("project", "godot", "tests", "report-path"):
+    for key in ("project", "godot", "tests"):
         dest = _CONFIG_KEY_TO_DEST[key]
         val = settings.get(dest)
         if val is not None and not isinstance(val, str):
@@ -1449,12 +1461,6 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "--tests",
         default="res://test",
         help="the test directory (gdunit4's -a / gut's -gdir) (default: res://test)",
-    )
-    run_parser.add_argument(
-        "--report-path",
-        default=None,
-        help="JUnit-XML report path, relative to the project dir (default: per runner: "
-        f"gdunit4 {DEFAULT_REPORT_PATH}, gut {DEFAULT_GUT_REPORT_PATH})",
     )
     run_parser.add_argument(
         "--timeout",
@@ -1730,7 +1736,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--command", args.test_command, None),
                     ("--godot", args.godot, "godot"),
                     ("--tests", args.tests, "res://test"),
-                    ("--report-path", args.report_path, None),
                     ("--timeout", args.timeout, None),
                     ("--require-clean", args.require_clean, False),
                     ("--json", args.json_path, None),
@@ -1793,19 +1798,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 # --command only applies to --runner command; flag it rather than silently drop it.
                 print("note: --command is ignored unless --runner command is set", file=sys.stderr)
             # gdunit4 and gut are peer JUnit adapters over one contract (docs/decisions/0011); each
-            # owns its own default report layout, resolved here when --report-path is omitted.
+            # owns its own default report layout internally, with no flag or config key left to
+            # override it — each dataclass's own field default applies.
             if args.runner == "gut":
                 runner = GutRunner(
                     test_dir=args.tests,
                     godot=args.godot,
-                    report_path=args.report_path or DEFAULT_GUT_REPORT_PATH,
                     timeout=baseline_timeout,
                 )
             else:
                 runner = GdUnit4Runner(
                     test_path=args.tests,
                     godot=args.godot,
-                    report_path=args.report_path or DEFAULT_REPORT_PATH,
                     timeout=baseline_timeout,
                 )
         common = {

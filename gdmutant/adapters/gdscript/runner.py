@@ -44,9 +44,11 @@ _GUT_CMD_TOOL = "res://addons/gut/gut_cmdln.gd"
 #: no-report error is raised as before — the run still fails, it is only diagnosed less precisely.
 _GDUNIT_NO_TESTS_MARKER = "No test cases found"
 
-# The runners' defaults, exposed so the CLI can present them (and its --report-path/--timeout
-# defaults) from one source, without reading them off a class at parse time (which breaks when a
-# test monkeypatches a runner).
+# The runners' defaults. DEFAULT_TIMEOUT is exposed so the CLI can present it (its --timeout
+# default) from one source, without reading it off a class at parse time (which breaks when a test
+# monkeypatches a runner). DEFAULT_REPORT_PATH / DEFAULT_GUT_REPORT_PATH are no longer surfaced
+# anywhere outside this module: there is no CLI flag or .gdmutant.toml key for the report path any
+# more, so each dataclass field default below is the sole place the report location is decided.
 DEFAULT_REPORT_PATH = "reports/report_1/results.xml"  # GdUnit4's CI-runner report layout
 DEFAULT_GUT_REPORT_PATH = "reports/gut_results.xml"  # GUT's -gjunit_xml_file target
 DEFAULT_TIMEOUT = 600.0
@@ -191,15 +193,16 @@ class _GodotJUnitRunner:
         report = (project / self.report_path).resolve()
         if not report.is_relative_to(project):
             # `Path.__truediv__` silently discards `project` if `report_path` is absolute, and
-            # `../` walks upward the ordinary way either path gets here: --report-path on the
-            # command line, or an untrusted project's own .gdmutant.toml. Every run below this
-            # point deletes whatever sits at `report` first (the freshness guard, right below), so
-            # a report path that escapes the project is a delete-anything primitive, not just a
-            # misconfiguration. Refuse instead of ever resolving outside the project. Reuses
+            # `../` walks upward the ordinary way. There is no CLI flag or config key left that can
+            # set `report_path`, so this can only be reached by a direct, programmatic construction
+            # of a runner — but every run below this point deletes whatever sits at `report` first
+            # (the freshness guard, right below), so a report path that escapes the project is a
+            # delete-anything primitive, not just a misconfiguration. Refuse instead of ever
+            # resolving outside the project, as defense in depth. Reuses
             # SourceOutsideProject (loop.py's "path outside the project" case for a source file)
             # rather than a second, parallel exception for the same shape of problem.
             raise SourceOutsideProject(
-                f"--report-path {self.report_path!r} resolves to {report}, outside the project "
+                f"report path {self.report_path!r} resolves to {report}, outside the project "
                 f"{project}. gdmutant deletes this file before every run to guarantee it reads "
                 "this run's own result, never a stale one, so it refuses to point outside the "
                 "project it was given."

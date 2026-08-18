@@ -19,6 +19,25 @@ All notable changes to gdmutant are recorded here. The format follows
   supply the test command was through the generic `args` passthrough (`args: --command "..."`),
   undocumented until recently.
 
+### Changed
+
+- `--json`/`--html` report-written confirmations now print the resolved absolute path, not the
+  relative string typed on the command line, so the report is findable regardless of the process's
+  working directory. A write-error message still echoes the literal path as typed, so a mistyped
+  path's typo stays visible.
+- User-facing paths — the console `--dry-run` mutant listing and the JSON/HTML report's `files`
+  map keys — are now normalized to forward slashes on every OS, instead of the host separator. A
+  Windows run previously showed `corpus\turn_order.gd` in these two places while the console
+  header and the docs both used `corpus/turn_order.gd`; reports generated on Windows and Linux for
+  the same source tree now share the same keys.
+
+### Removed
+
+- The `--report-path` CLI flag and `.gdmutant.toml`'s `report-path` key. GdUnit4 always forces
+  `-rc 1`, so it only ever writes its report to one fixed location; a user-set read path could only
+  diverge from that hardcoded write path and break the run. gdmutant now locates the report
+  internally on both the GdUnit4 and GUT paths, with no override.
+
 ## [0.1.2] - 2026-08-07
 
 ### Fixed

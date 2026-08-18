@@ -60,9 +60,9 @@ class SourceOutsideProject(Exception):
       works by giving each worker its own copy of the project and mutating the file *inside that
       copy*. A file outside the project is in no copy, so there is nothing to isolate and nothing
       sound to run — see `_project_relative`.
-    - A `--report-path` that resolves outside the project: every run deletes whatever sits at that
-      path first, so a path that escapes the project is a delete-anything primitive, not just a
-      misconfiguration — see `_GodotJUnitRunner.run` in `adapters/gdscript/runner.py`.
+    - A JUnit report path that resolves outside the project: every run deletes whatever sits at
+      that path first, so a path that escapes the project is a delete-anything primitive, not just
+      a misconfiguration — see `_GodotJUnitRunner.run` in `adapters/gdscript/runner.py`.
     """
 
 

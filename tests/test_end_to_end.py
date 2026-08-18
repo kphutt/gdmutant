@@ -48,5 +48,7 @@ def test_end_to_end_mutate_run_and_report(tmp_path: Path) -> None:
     assert result.killed >= 1 and result.survived >= 1
     assert result.mutation_score is not None
     assert "Survivors" in console_summary(result)
-    assert stryker_report(result, str(target), source, "gdscript")["files"][str(target)]["mutants"]
+    # The report's `files` keys are POSIX-normalized regardless of host OS.
+    report = stryker_report(result, str(target), source, "gdscript")
+    assert report["files"][target.as_posix()]["mutants"]
     assert target.read_text(encoding="utf-8") == source  # restored

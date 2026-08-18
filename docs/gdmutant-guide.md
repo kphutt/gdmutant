@@ -69,7 +69,6 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | `--tests <res://...>` | `res://test` | The test directory (gdUnit4's `-a` / GUT's `-gdir`). |
 | `--json [-\|path]` | off | Write the Stryker JSON report. `-` streams to stdout, and a bare `--json` defaults to a timestamped filename. |
 | `--html [path]` | off | Write a self-contained HTML report. A bare `--html` defaults to a timestamped filename. |
-| `--report-path <rel>` | per-runner default | Where the JUnit XML report lands, relative to the project. |
 | `--report step-summary` | off | Also write survivors to the GitHub Actions job summary (or stdout, if that variable is unset). |
 | `--since <ref>` | mutate everything | Only mutate lines changed since a git ref: the per-PR mode. |
 | `--exclude <glob>` | *(none)* | Skip matching files when expanding a directory (repeatable). |
