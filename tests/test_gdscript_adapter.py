@@ -289,8 +289,9 @@ def test_a_node_path_line_keeps_its_statement_deletion_mutant() -> None:
 
 
 #: One literal per numeric shape gdtoolkit tokenizes: plain, negative and zero-padded integers,
-#: floats written with a leading, trailing or bare point, exponents in both cases, hex and binary,
-#: and digit separators in each. Used to check the numeric operator against gdtoolkit itself.
+#: floats written with a leading, trailing or bare point, exponents in both cases, hex and binary
+#: (including each at zero, where a bump decides its own sign), and digit separators in each.
+#: Used to check the numeric operator against gdtoolkit itself.
 _NUMERIC_LITERAL_FORMS = (
     "0",
     "42",
@@ -309,11 +310,15 @@ _NUMERIC_LITERAL_FORMS = (
     "0x1f",
     "0xFF",
     "0x0F",
+    "0x0",
     "-0xff",
     "0b1010",
+    "0b0",
+    "07",
     "1_000_000",
     "999_999",
     "1_000.5",
+    "0_007",
     "0xFF_FF",
     "0b1010_1010",
 )

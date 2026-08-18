@@ -128,9 +128,24 @@ def test_numeric_bump_keeps_hex_digit_case_and_written_width() -> None:
     assert NUMERIC.replacements("0x0F") == ("0x10", "0x0E")
 
 
+def test_a_radix_literal_is_bumped_correctly_across_zero() -> None:
+    # Zero is where a radix bump has to decide its own sign, and it is reachable from both sides:
+    # `0x1` down is `0x0`, and `0x0` down is `-0x1`. Getting the boundary wrong writes either a
+    # non-canonical `-0x0` or a literal whose sign is silently flipped -- an off-by-one in a sign
+    # test, which is the exact shape of bug this tool exists to catch in other people's code.
+    assert NUMERIC.replacements("0x1") == ("0x2", "0x0")
+    assert NUMERIC.replacements("0x0") == ("0x1", "-0x1")
+    assert NUMERIC.replacements("0b1") == ("0b10", "0b0")
+    assert NUMERIC.replacements("0b0") == ("0b1", "-0b1")
+
+
 def test_numeric_bump_keeps_decimal_zero_padding() -> None:
     # `007` is written three digits wide on purpose; bumping it to `8` would reformat the line.
+    # Two digits is the narrowest padding there is, so it is the boundary worth naming. The width
+    # is counted in digits, so a separator sitting between them must not be counted into it.
     assert NUMERIC.replacements("007") == ("008", "006")
+    assert NUMERIC.replacements("07") == ("08", "06")
+    assert NUMERIC.replacements("0_007") == ("0_008", "0_006")
 
 
 def test_numeric_bump_regroups_digit_separators() -> None:
