@@ -256,10 +256,18 @@ class NumericBumpOperator:
     survive the bump.
 
     Every replacement is itself a literal this operator recognizes, so a bump can always be bumped
-    back to the value it started from, and its spelling comes back too wherever the spelling is
-    recoverable. What a round trip cannot restore is a shape the number itself no longer records:
-    ``0xFF`` bumped up is ``0x100``, which has no letters left to tell anyone it was written
-    uppercase, so its own bump down is ``0x0ff``. Same value, different spelling.
+    back to the **value** it started from. The **spelling** comes back only while the digits still
+    record it, and a bump that changes how many digits there are can erase the very thing that did.
+    Four shapes, one cause: ``0xFF`` bumped up is ``0x100``, with no letters left to say it was
+    written uppercase; ``099`` bumped up is ``100``, as wide as the original and so no longer
+    visibly padded; ``1_00`` bumped down is ``99``, too short to place a separator in; and ``.9``
+    bumped up is ``1.0``, which had to grow the integer digit the original left off. Each of those
+    still bumps back to the right number, spelled the ordinary way.
+
+    Nothing in the engine ever reads a mutation backwards (`mutants.generate` only calls
+    `replacements` forward), so none of this costs anything at run time. It is stated exactly rather
+    than approximately because an operator that claims more than it does is how a wrong mutant gets
+    trusted.
     """
 
     id: str = "numeric"

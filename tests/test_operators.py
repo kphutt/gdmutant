@@ -198,14 +198,25 @@ def test_numeric_bump_is_reversible_across_every_literal_form() -> None:
             assert token in NUMERIC.replacements(repl), f"{token} -> {repl} is not reversible"
 
 
-def test_a_bump_that_loses_its_hex_letters_returns_the_value_not_the_spelling() -> None:
-    # The one place the round trip cannot restore the original text, pinned so it stays a known,
-    # bounded limit rather than a surprise: `0x100` has no letters left to record that it was
-    # written uppercase, so its own bump back down is `0x0ff`. Same number, different spelling.
-    bumped_up = NUMERIC.replacements("0xFF")[0]
-    assert bumped_up == "0x100"
-    assert NUMERIC.replacements(bumped_up)[1] == "0x0ff"
+def test_a_bump_that_changes_the_digit_count_returns_the_value_not_the_spelling() -> None:
+    # Reversibility's bounded limit, pinned as a class rather than by example, because the token
+    # list above deliberately holds only forms that round-trip exactly and would otherwise make the
+    # gap look narrower than it is. A literal's written shape lives in its digits, so a bump that
+    # changes how many there are can erase the thing recording it. Four mechanisms, one cause.
+    for original, bumped, restored in (
+        ("0xFF", "0x100", "0x0ff"),  # no letters left to say it was written uppercase
+        ("099", "100", "99"),  # as wide as the original, so no longer visibly zero-padded
+        ("1_00", "99", "100"),  # too short to place a separator in
+        (".9", "1.0", "0.9"),  # had to grow the integer digit the original left off
+    ):
+        assert bumped in NUMERIC.replacements(original), original
+        assert original not in NUMERIC.replacements(bumped), original
+        assert restored in NUMERIC.replacements(bumped), original
+    # The value always does come back; it is only the spelling that does not.
     assert int("0x0ff", 16) == int("0xFF", 16)
+    assert int("99") == int("099")
+    assert int("100") == int("1_00")
+    assert float("0.9") == float(".9")
 
 
 def test_non_applicable_token_yields_nothing() -> None:
