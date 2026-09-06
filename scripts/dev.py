@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """One discoverable entry point for the everyday dev loop: lint, test, build.
 
-Each subcommand is a thin dispatcher over the real tools, never a reimplementation, so it can
-never drift from what those tools actually do:
+Each subcommand is a thin dispatcher over the real tools, never a reimplementation of what they
+check:
 
     lint  -> uv run ruff check . / uv run ruff format --check . / uv run mypy gdmutant
     test  -> uv run pytest
     build -> uv build
+
+Unlike `scripts/verify_local.py` (below), `COMMANDS` is a hand-copied list, not a live read of
+ci.yml -- there is no `verify` job step to parse `build` out of, and ci.yml's own lint step is one
+`errexit` bash block that stops at the first failure, while this file deliberately keeps going so
+one run reports everything broken at once. Those are different, deliberate shapes, not a bug, but
+it does mean this file can go stale if a command changes in ci.yml and nobody updates the copy
+here -- unlike verify_local.py, which cannot drift by construction.
 
 This is a convenience shortcut for the fast inner loop, not a replacement for
 `scripts/verify_local.py` (the full ci.yml `verify` job, parsed from the workflow itself so it
