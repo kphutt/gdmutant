@@ -62,6 +62,26 @@ def test_required_contexts_are_derived_from_this_repos_workflows() -> None:
     assert harden_github.required_contexts() == EXPECTED_CONTEXTS
 
 
+def test_all_required_contexts_appends_the_trusted_app_checks() -> None:
+    """The workflow-derived list plus `REQUIRED_APP_CHECKS`, in that order — nothing dropped,
+    nothing reordered, and `required_contexts()` itself stays App-check-free."""
+    assert harden_github.all_required_contexts() == [
+        *EXPECTED_CONTEXTS,
+        *harden_github.REQUIRED_APP_CHECKS,
+    ]
+    assert not set(harden_github.REQUIRED_APP_CHECKS) & set(harden_github.required_contexts())
+
+
+def test_all_producible_contexts_trusts_app_checks_that_producible_contexts_cannot_see() -> None:
+    """No workflow file can vouch for a GitHub App's check, so `producible_contexts()` must not
+    contain it — but `all_producible_contexts()` (what the write-time ratchet checks against once
+    App checks are folded into the required list) must, or the ratchet would refuse forever to
+    require a check that genuinely reports on every pull request."""
+    app_checks = set(harden_github.REQUIRED_APP_CHECKS)
+    assert not app_checks & harden_github.producible_contexts()
+    assert app_checks <= harden_github.all_producible_contexts()
+
+
 def test_a_name_with_parentheses_is_the_context_verbatim() -> None:
     """`zizmor` is `name: Workflow security (zizmor)`, and the whole string is the context.
 
@@ -114,7 +134,10 @@ def test_publish_and_release_jobs_are_not_required() -> None:
 
 def test_protection_payload_keeps_the_hardening_settings() -> None:
     payload = harden_github.protection_payload()
-    assert payload["required_status_checks"]["contexts"] == EXPECTED_CONTEXTS
+    assert payload["required_status_checks"]["contexts"] == [
+        *EXPECTED_CONTEXTS,
+        *harden_github.REQUIRED_APP_CHECKS,
+    ]
     assert payload["required_status_checks"]["strict"] is True
     assert payload["enforce_admins"] is True
     assert payload["required_conversation_resolution"] is True
@@ -607,7 +630,11 @@ def test_check_says_absent_loudly_instead_of_printing_a_row_of_matches(
 def test_check_reports_a_true_match_differently_from_an_absent_set(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(harden_github, "_gh", _FakeGh(list(EXPECTED_CONTEXTS)))
+    # "Live" must include the App checks too: `--check` now compares against
+    # `all_required_contexts()`, so a live set missing them would show a real (and correctly
+    # reported) ADD, not a true match.
+    live = [*EXPECTED_CONTEXTS, *harden_github.REQUIRED_APP_CHECKS]
+    monkeypatch.setattr(harden_github, "_gh", _FakeGh(live))
 
     assert harden_github.main(["kphutt/gdmutant", "--check"]) == 0
     out = capsys.readouterr().out
@@ -615,7 +642,7 @@ def test_check_reports_a_true_match_differently_from_an_absent_set(
     assert "requires NO status checks at all" not in out
     assert "ABSENT" not in out
     assert "would ADD" not in out
-    for context in EXPECTED_CONTEXTS:
+    for context in live:
         assert f"[  live/spec] {context}" in out
 
 
@@ -694,3 +721,16 @@ def test_write_proceeds_onto_a_branch_that_requires_nothing_when_the_checks_are_
 
     assert harden_github.main(["kphutt/gdmutant"]) == 0
     assert fake.wrote_protection()
+
+
+def test_codeowners_stated_check_count_matches_the_derived_list() -> None:
+    # CODEOWNERS' "eight status checks" prose has no code tying it to REQUIRED_JOBS/
+    # REQUIRED_APP_CHECKS -- Litmus caught exactly this drifting once already (six -> eight, when
+    # Socket Security was added) before anything here would have noticed. Pin the number so a
+    # future edit to either constant fails loud instead of leaving stale prose behind.
+    codeowners = (_REPO_ROOT / ".github" / "CODEOWNERS").read_text(encoding="utf-8")
+    assert "eight status checks" in codeowners, (
+        "CODEOWNERS' stated count has changed -- update this test's expected number too, "
+        "not just the one in that comment"
+    )
+    assert len(harden_github.all_required_contexts()) == 8

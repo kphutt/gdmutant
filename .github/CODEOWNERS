@@ -7,10 +7,14 @@
 #
 # What main's protection actually enforces (checked live, not assumed, read the setting
 # itself with `gh api repos/kphutt/gdmutant/branches/main/protection`): a pull request is
-# required, six status checks must pass (`Workflow security (zizmor)`, `Verify (ubuntu-24.04)`,
-# `Verify (windows-2025)`, `Secret scan (gitleaks)`, and both `Self-test` (real Godot) jobs), the
-# branch must be up to date with main before merging, admin enforcement is ON (an admin cannot
-# bypass any of this by pushing straight to main), and force-push and deletion are blocked.
+# required, eight status checks must pass (`Workflow security (zizmor)`, `Verify (ubuntu-24.04)`,
+# `Verify (windows-2025)`, `Secret scan (gitleaks)`, both `Self-test` (real Godot) jobs, and the
+# two Socket Security GitHub App checks, `Socket Security: Project Report` and `Socket Security:
+# Pull Request Alerts`), the branch must be up to date with main before merging, admin enforcement
+# is ON (an admin cannot bypass any of this by pushing straight to main), and force-push and
+# deletion are blocked. (A test in `tests/test_harden_github.py` asserts this file's stated
+# count equals `len(harden_github.all_required_contexts())`, so this comment can't drift
+# silently again the way it already did once.)
 #
 # ci.yml runs automatically on every pull request and push to main (restored 2026-08-04, ahead
 # of going public, see docs/decisions/0012-merge-time-local-ship-time-cloud.md's "Correction
@@ -18,7 +22,9 @@
 # not just the workflow-security check. Local hooks (.pre-commit-config.yaml's pre-push stage,
 # installed per clone via `pre-commit install --hook-type pre-commit --hook-type pre-push`) are
 # the fast, optional, catches-it-earlier layer now, not the only gate a clone without them would
-# be missing.
+# be missing. Socket Security is a GitHub App, not a workflow job, so it reports independently of
+# ci.yml; `scripts/harden_github.py`'s `REQUIRED_APP_CHECKS` is the config-as-code source for
+# those two contexts, the same way `REQUIRED_JOBS` is for the workflow-derived six.
 #
 # The one check nothing above can skip is still publish.yml's release-time job, which re-runs
 # verify on Linux and Windows, the license check, and both Godot self-tests live, on the exact
