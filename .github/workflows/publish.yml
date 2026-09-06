@@ -312,6 +312,26 @@ jobs:
           fetch-depth: 0 # full history — the question here is "ever leaked", not "leaked in this diff"
           persist-credentials: false
 
+      # Same asymmetry `build` (above, in this same file) guards against with its own "Confirm the
+      # build is on provenance's commit" step: the `ref:` expression above evaluates to an empty
+      # string on a bug, `actions/checkout` falls back to the default ref instead of failing, and
+      # the run stays green having silently scanned the wrong commit. Traced whether that is
+      # actually reachable and it is not today (`provenance`'s own `resolve` step either prints a
+      # real sha or exits non-zero, which already fails `needs.provenance.result == 'success'` and
+      # skips this job via the `if:` above) -- but `build`'s check makes the same non-exploitability
+      # argument for itself, not for this job, so this stays honest on its own rather than relying
+      # on a sibling job's check to transitively cover it.
+      - name: Confirm the scan is on provenance's commit
+        if: github.event_name == 'release'
+        env:
+          EXPECTED_SHA: ${{ needs.provenance.outputs.sha }}
+        run: |
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$EXPECTED_SHA" ]; then
+            echo "::error::secret-scan checked out $actual but provenance attested '${EXPECTED_SHA}'. Refusing to trust a scan of a commit the release gate did not verify."
+            exit 1
+          fi
+
       # gitleaks/gitleaks-action (the wrapper this job used to reach for, and that ci.yml's
       # secret-scan job used until this same fast-follow) hardcodes its own supported-event list
       # (its src/index.js, checked directly at SHA e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e / v3.0.0):
