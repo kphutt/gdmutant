@@ -339,6 +339,51 @@ def _dead_property_initializers(tree: Tree[Token]) -> set[tuple[int | None, int 
     return skip
 
 
+#: The grammar nodes that spell a Godot node path. ``path`` holds the segments of
+#: ``$Sprite2D/Label`` (``NAME`` tokens with ``SLASH`` between them, plus a ``PERCENT`` before any
+#: unique-name segment), and ``unique_node_path`` wraps a leading ``%`` around a whole path
+#: (``%HealthBar/Bar``).
+_NODE_PATH_NODES = frozenset({"path", "unique_node_path"})
+#: The token types inside a node path whose *text* the catalog would otherwise mutate: ``/`` (which
+#: ARITHMETIC swaps for ``*``) and ``%`` (which MODULO swaps for ``*``/``/``). The ``NAME`` segments
+#: are left alone: they are ordinary identifier tokens, and a catalog that mutates identifiers
+#: should reach a node name like any other.
+_NODE_PATH_SEPARATORS = frozenset({"SLASH", "PERCENT"})
+
+
+def _node_path_separators(tree: Tree[Token]) -> set[tuple[int | None, int | None]]:
+    """Positions ``(line, column)`` of the ``/`` and ``%`` tokens that punctuate a Godot **node
+    path**, which the arithmetic and modulo operators must not mutate.
+
+    ``$Sprite2D/Label`` is not a division. Godot's ``$`` shorthand takes a slash-separated path to a
+    node, and gdtoolkit parses it into a ``path`` node whose separators are ordinary ``SLASH``
+    tokens, indistinguishable by value from a real ``/``. Selecting sites by token value alone
+    therefore mutated every one of them, and both directions that produces are wrong: the mutant is
+    not a changed program whose behavior a test could disagree with, it is a *different node*.
+
+    NF-5 cannot catch it, because the mutant parses perfectly: ``$Sprite2D*Label`` is a valid
+    multiplication of two names. So a path segment naming something that exists at runtime turns
+    into a fake kill, and one on a line no test reaches turns into a survivor pointing at a ``/``
+    that was never arithmetic. This is the same generation-time filtering the string-overload skips
+    above do, applied to the other token GDScript overloads.
+
+    The ``%`` unique-name marker (``%HealthBar``, and ``$A/%B`` mid-path) is skipped here too. It is
+    the same construct read the same way, and leaving it out would rest the whole guard on an
+    accident: ``*HealthBar`` happens not to parse, so NF-5 drops those mutants today rather than
+    anything deciding they were never modulo.
+    """
+    skip: set[tuple[int | None, int | None]] = set()
+    for node in tree.iter_subtrees():
+        if node.data not in _NODE_PATH_NODES:
+            continue
+        skip.update(
+            (child.line, child.column)
+            for child in node.children
+            if isinstance(child, Token) and child.type in _NODE_PATH_SEPARATORS
+        )
+    return skip
+
+
 def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[MutationSite]:
     """Every token in `source` that `catalog` can mutate, located via gdtoolkit.
 
@@ -346,14 +391,16 @@ def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[Mut
     tokens from inside string literals or comments, so this never edits within one. `catalog` is
     threaded through so site selection matches generation (a custom catalog finds its own sites).
 
-    Four syntactic exclusions drop tokens that cannot yield a meaningful mutant — each one a shape
+    Five syntactic exclusions drop tokens that cannot yield a meaningful mutant — each one a shape
     the language rules out, never a shape that merely tends to survive:
 
     * a ``%`` used as the string-format operator (`_string_format_percents`);
     * a ``+`` that is string concatenation (`_string_concatenation_pluses`);
     * a ``+=`` that appends to a string (`_string_compound_assigns`);
     * a property declaration's initializer whose stored value is unreadable
-      (`_dead_property_initializers`).
+      (`_dead_property_initializers`);
+    * a ``/`` or ``%`` punctuating a node path, which is not arithmetic at all
+      (`_node_path_separators`).
 
     ``# gdmutant: ignore`` annotations are **not** filtered here: a suppressed mutant is still
     *generated*, then marked ``ignore_reason`` in `generate_mutants` so it surfaces in the report as
@@ -365,6 +412,7 @@ def find_sites(source: str, catalog: tuple[Operator, ...] = CATALOG) -> list[Mut
         | _string_concatenation_pluses(tree)
         | _string_compound_assigns(tree)
         | _dead_property_initializers(tree)
+        | _node_path_separators(tree)
     )
     return [
         MutationSite(tok.value, _span_of(tok))

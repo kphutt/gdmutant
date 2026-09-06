@@ -167,14 +167,21 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   dedicated `godot --check-only` parse-agreement probe over arbitrary mutants is a fast-follow.
 
   Generation-time exclusions: the re-parse check is only the second half of the validity story, and
-  it cannot see the first. gdtoolkit's grammar carries no type information, so it accepts source
-  Godot later rejects. The GDScript adapter therefore refuses to generate four shapes at all: a `%`
-  that formats a string, a `+` that joins strings, a `+=` that appends to one, and a property
-  initializer whose stored value can never be read back. GDScript's `String` defines no `-`, so each
+  it cannot see the first. gdtoolkit's grammar carries no type information, and it carries no
+  reading of what an overloaded token *means* where it sits, so it accepts source Godot later
+  rejects and source that was never the operation the catalog took it for. The GDScript adapter
+  therefore refuses to generate five shapes at all: a `%`
+  that formats a string, a `+` that joins strings, a `+=` that appends to one, a property
+  initializer whose stored value can never be read back, and a `/` or `%` punctuating a node path.
+  GDScript's `String` defines no `-`, so each
   of the first three would yield a mutant Godot rejects rather than one a test could disagree with.
   The fourth is inert by language rule: GDScript does not run a property's setter on the initializer
   in its own declaration, so when a custom getter means nothing ever reads the backing field again,
-  no change to that initializer can alter behavior. FG-2.1's return-path guard on statement deletion
+  no change to that initializer can alter behavior. The fifth is a mutant of the wrong thing
+  entirely: `$Sprite2D/Label` is a path to a node, so its `/` is a separator and swapping it for `*`
+  addresses a different node instead of computing a different number. NF-5 cannot see that one at
+  all, because `$Sprite2D*Label` parses perfectly well. FG-2.1's return-path guard on statement
+  deletion
   is the same policy applied to a whole statement. An excluded mutant is never generated, so it never
   reaches the denominator, and the score reads higher than a run that emitted it. That is the honest
   direction, because the excluded shapes are broken or inert mutants rather than gaps a test could

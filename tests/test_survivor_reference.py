@@ -95,12 +95,15 @@ def test_the_comparison_entry_covers_the_equality_swaps_it_is_used_for() -> None
     assert "`==`" in body and "`!=`" in body
 
 
-def test_the_numeric_entry_says_integer_because_that_is_all_that_is_mutated() -> None:
-    # A reader with a float bound would otherwise believe it is covered.
+def test_the_numeric_entry_covers_every_literal_form_the_operator_mutates() -> None:
+    # The entry used to tell a reader that a float, hex or separated literal produced no mutant.
+    # That was true, and it is the gap that got closed, so the disclosure had to go with it: a stale
+    # limitation is worse than none, because it sends someone to widen a test already covered.
     for literal in ("0.5", "2.5", "0xFF", "1_000"):
-        assert NUMERIC.replacements(literal) == (), literal
+        assert NUMERIC.replacements(literal) != (), literal
     body = _body("numeric", "The change")
-    assert "integer literal" in body
+    assert "floats" in body and "hex" in body
+    assert "no mutant" not in body
 
 
 def test_the_enum_entry_is_as_wide_as_the_router_that_sends_mutants_to_it() -> None:

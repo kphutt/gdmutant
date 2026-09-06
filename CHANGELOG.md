@@ -38,6 +38,24 @@ All notable changes to gdmutant are recorded here. The format follows
   diverge from that hardcoded write path and break the run. gdmutant now locates the report
   internally on both the GdUnit4 and GUT paths, with no override.
 
+### Fixed
+
+- The numeric operator now mutates every numeric literal form, not just bare decimal integers. A
+  float, a hex or binary literal, and a digit-separated form (`0.5`, `0xFF`, `0b1010`, `1_000_000`)
+  each used to produce zero mutants while the score read as though the line were covered, which is
+  the wrong direction for a testing tool to be wrong in. Floats were the costly half: on a Godot
+  codebase, deltas, speeds, damping, thresholds and tween durations are almost all floats. The rule
+  is one bump of the literal's last written digit, so an integer moves by 1 and `0.016` moves to
+  `0.017` rather than to a `1.016` that any test reaching the line would kill. A mutant keeps the
+  shape it was written in: zero padding, digit separators, hex digit case, a bare or trailing
+  decimal point, and an exponent suffix all survive the bump.
+- gdmutant no longer treats the `/` in a Godot node path (`$Sprite2D/Label`) as a division, or the
+  `%` of a unique node name (`%HealthBar`) as modulo. Sites were selected by token text alone, so
+  every path separator became an arithmetic mutation site. The mutant is not a changed program: it
+  addresses a different node. The re-parse check could not catch it either, because
+  `$Sprite2D*Label` is valid GDScript. Measured over three real projects, these were 20% of all
+  arithmetic mutants generated, each one either a fake kill inflating the score or a survivor
+  pointing at a `/` that was never arithmetic.
 ## [0.1.2] - 2026-08-07
 
 ### Fixed
