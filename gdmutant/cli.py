@@ -1428,7 +1428,7 @@ def _scaffold_config_text(runner: str | None) -> str:
     something; guessing a runner nobody confirmed would be worse than leaving it for the user to
     pick. That keeps the file non-empty and useful even in a fresh directory with no addon
     installed yet, which is the common case right after `gdmutant init`. Every other key
-    (`report-path`, `timeout`, `require-clean`, `exclude`, and the three trust-required keys
+    (`timeout`, `require-clean`, `exclude`, and the three trust-required keys
     `project`/`command`/`godot`) is documented as a commented example instead of a guess: none of
     them has a value that's right for every project, and the trust-required three additionally need
     `--trust-config` before gdmutant will act on them at all (see `_TRUST_REQUIRED_CONFIG_KEYS`).
@@ -1450,8 +1450,6 @@ def _scaffold_config_text(runner: str | None) -> str:
         "tests = \"res://test\"  # the test directory (gdunit4's -a / gut's -gdir)",
         "",
         "# Optional, and never trust-required:",
-        f'# report-path = "{DEFAULT_REPORT_PATH}"  # gdunit4 default; gut default: '
-        f'"{DEFAULT_GUT_REPORT_PATH}"',
         "# timeout = 30  # per-mutant timeout in seconds; left unset, gdmutant derives one from "
         "the",
         "# baseline run's own wall-clock (10x it) instead of a fixed number",
@@ -1504,8 +1502,9 @@ def _write_init_config(directory: Path | None = None, *, force: bool = False) ->
 
 
 def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentParser:
-    """Build the `run`/`example` subcommand parser, seeding `run`'s flag defaults from `config` (an
-    already-validated `.gdmutant.toml`, or `None`) so an explicit CLI flag still overrides it."""
+    """Build the `run`/`example`/`init` subcommand parser, seeding `run`'s flag defaults from
+    `config` (an already-validated `.gdmutant.toml`, or `None`) so an explicit CLI flag still
+    overrides it."""
     parser = argparse.ArgumentParser(
         prog="gdmutant",
         description="Mutation testing for GDScript (and, in time, other languages).",
@@ -1744,6 +1743,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Make the CLI's Unicode output survive a Windows cp1252 console (see `_force_utf8`).
     for _stream in (sys.stdout, sys.stderr):
         _force_utf8(_stream)
+
+    # `init` never reads an existing config's *values* -- only whether the file is there at all,
+    # which `_write_init_config` checks for itself -- so it must not be blocked by one that fails
+    # to load. That's the main reason someone would reach for `init --force` in the first place: a
+    # `.gdmutant.toml` broken enough to need regenerating. Parse once with config=None first (that
+    # only affects `run`'s seeded defaults, not `init`'s own args or validity) to find out which
+    # subcommand this is before deciding whether a broken config is fatal.
+    peek_args = build_parser(None).parse_args(argv)
+    if peek_args.command == "init":
+        return _write_init_config(force=peek_args.force)
+
     config = _load_config()
     if config is None:
         return 2  # a malformed/invalid .gdmutant.toml is a setup error
@@ -1755,8 +1765,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "example":
         return _write_example(args.dest)
-    if args.command == "init":
-        return _write_init_config(force=args.force)
     if args.command == "run":
         if untrusted_keys:
             # The file sets a trust-required key — that alone needs the user's say-so, whether or

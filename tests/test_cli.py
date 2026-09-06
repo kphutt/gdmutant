@@ -4031,7 +4031,22 @@ def test_main_init_force_overwrites(
     assert main(["init", "--force"]) == 0
 
 
-def test_main_run_subcommand_is_unaffected_by_init_existing(
+def test_main_init_force_recovers_from_a_malformed_existing_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The main reason to reach for `init --force` in the first place: the existing config is broken
+    # enough that you want to regenerate it. `main()` used to call `_load_config()` unconditionally
+    # before dispatch, so a `.gdmutant.toml` that fails to parse returned 2 right there -- before
+    # `init`'s own dispatch, `--force` included, was ever reached.
+    cfg = tmp_path / _CONFIG_FILENAME
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
+    cfg.write_text("this is not valid toml [[[", encoding="utf-8")
+
+    assert main(["init", "--force"]) == 0
+    assert "this is not valid toml" not in cfg.read_text(encoding="utf-8")
+
+
+def test_main_run_subcommand_is_unaffected_by_the_init_subparser(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Adding the `init` subparser must leave `run`'s own behaviour and defaults untouched.

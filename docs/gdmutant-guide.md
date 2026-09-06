@@ -188,10 +188,11 @@ command = "godot --headless --script res://tests/run_tests.gd"
 ```
 
 `gdmutant init` writes a starter version of that file for you, so the first one you ever see
-doesn't have to be hand-typed. It looks for an installed `addons/gdUnit4` or `addons/gut` in the
-current directory and sets `runner` to whatever it finds (uncommented); every other key, including
-the three trust-required ones below, is written as a commented example instead of a guess. It
-refuses to overwrite an existing `.gdmutant.toml` unless you pass `--force`:
+doesn't have to be hand-typed. It sets `tests` to gdmutant's own default (`res://test`) and looks
+for an installed `addons/gdUnit4` or `addons/gut` in the current directory, setting `runner` to
+whatever it finds -- both uncommented. Every other key, including the three trust-required ones
+below, is written as a commented example instead of a guess. It refuses to overwrite an existing
+`.gdmutant.toml` unless you pass `--force`:
 
 ```sh
 gdmutant init            # writes ./.gdmutant.toml, refusing if one is already there
