@@ -40,6 +40,19 @@ uv run pytest                  # tests + coverage
 uv run pip-audit               # dependency audit
 ```
 
+`scripts/dev.py` groups the everyday subset of those into one discoverable command, for the fast
+inner loop while you're still writing a change (a dispatcher over the same commands above, so it
+can't drift from them):
+
+```sh
+uv run python scripts/dev.py lint    # ruff check + ruff format --check + mypy
+uv run python scripts/dev.py test    # pytest
+uv run python scripts/dev.py build   # uv build
+```
+
+It is not a replacement for `scripts/verify_local.py` below, which is the one command that mirrors
+the full CI `verify` job and is what you run before opening a pull request.
+
 Two suites are env-gated and auto-skip in a plain `uv run pytest` (so `verify` stays
 Godot-free). Run them when touching the adapter, runners, or CLI file-handling:
 

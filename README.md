@@ -213,7 +213,7 @@ Every input and output, and how to pin a version, is in
 - [Survivor reference](docs/survivors/README.md): every operator explained, the score formula, how to kill or justify each.
 - [Design & architecture](docs/design/DESIGN.md): the engine and the "Saboteur & the Jury" design.
 - [The gdmutant guide](docs/gdmutant-guide.md): the CLI, troubleshooting, and the GitHub Action, in one place.
-- [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Credits](docs/credits.md)
+- [Contributing](CONTRIBUTING.md) (dev loop: `uv run python scripts/dev.py lint|test|build`) · [Changelog](CHANGELOG.md) · [Credits](docs/credits.md)
 
 ## License
 
