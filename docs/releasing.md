@@ -34,6 +34,31 @@ one is a web-login step only the account owner can do. Values (full table in the
   GitHub publisher: Owner `kphutt`, Repository `gdmutant`, Workflow `publish.yml`, Environment `pypi`
   (on PyPI) / `testpypi` (on TestPyPI), PyPI Project Name `gdmutant`.
 - Create the GitHub Environments `pypi` and `testpypi` under repo Settings -> Environments.
+- Give each environment a deployment branch policy. This is the half of the publish posture that
+  lives in repository configuration rather than in `publish.yml`, so nothing in the workflow file
+  can show you whether it is set. Without one, an environment accepts a deployment from *any* ref,
+  which means any ref can reach a public index under this project's trusted-publishing identity.
+  `pypi` allows only version tags; `testpypi` also allows `main`, because a rehearsal builds an
+  untagged commit on purpose:
+
+  ```sh
+  # Read what is set today. `null` means no policy: every ref is allowed.
+  gh api repos/kphutt/gdmutant/environments/testpypi --jq .deployment_branch_policy
+  gh api repos/kphutt/gdmutant/environments/testpypi/deployment-branch-policies --jq '.branch_policies[].name'
+
+  # Set it. The first call turns on custom policies; the next two say what they are. The nested
+  # body goes in on stdin, because `-f key=value` cannot express a nested object.
+  echo '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' \
+    | gh api -X PUT repos/kphutt/gdmutant/environments/testpypi --input -
+  gh api -X POST repos/kphutt/gdmutant/environments/testpypi/deployment-branch-policies \
+    -f name=main -f type=branch
+  gh api -X POST repos/kphutt/gdmutant/environments/testpypi/deployment-branch-policies \
+    -f 'name=v*' -f type=tag
+  ```
+
+  *Pass:* the first read prints an object rather than `null`, and the second prints `main` and `v*`.
+  The same two reads against `pypi` print an object and `v*`. A `POST` for a policy that already
+  exists is rejected, so the reads are how you check this, not a re-run of the writes.
 
 A publish that fails at the publish step with an OIDC-trust error means this registration is
 missing or does not match the workflow, environment and repository it names.
@@ -54,11 +79,27 @@ trust error whose real cause, an earlier upload that succeeded, appears nowhere 
 ## Dry-run -> TestPyPI (`workflow_dispatch`)
 Rehearse the full OIDC + upload path against the throwaway index without cutting a release:
 
-- GitHub -> Actions -> Publish -> Run workflow (on the branch/tag you want to build).
+- GitHub -> Actions -> Publish -> Run workflow, on `main` or on a version tag.
 - Or from the CLI: `gh workflow run publish.yml`.
 
-This runs the `build` job then `publish-testpypi` (uploading to `https://test.pypi.org/legacy/`).
-Verify the result at https://test.pypi.org/p/gdmutant.
+This runs `build` and `secret-scan`, then `publish-testpypi` (uploading to
+`https://test.pypi.org/legacy/`). Verify the result at https://test.pypi.org/p/gdmutant.
+
+TestPyPI is a public index and the upload happens under this project's own trusted-publishing
+identity, so this path is guarded, not open. Two things constrain it, and they answer different
+questions. The secret scan is in `publish-testpypi`'s `needs:`, exactly like every guard on the
+real release, so a leaked credential anywhere in the history reachable from the commit being
+rehearsed stops the upload. The `testpypi` environment's deployment branch policy is what decides
+which refs may reach the environment at all: dispatch from some other branch and the run stops at
+the environment gate with a deployment-rejected error, which is the policy working rather than a
+broken workflow. Set it (or read it back) with the commands under
+[the one-time seed](#prerequisite-the-one-time-manual-seed-maintainer).
+
+The tag-shaped guards do not run here and cannot: `provenance`'s two checks and `readme-images`
+need a tag, and a rehearsal builds an untagged commit on purpose. Nor does `verify` re-run, since
+the dry-run exists to rehearse the upload path rather than to repeat what `ci.yml` already ran on
+the pull request. A green TestPyPI run is a rehearsal of the OIDC + upload mechanics, and it is not
+a release gate.
 
 ## Real release -> PyPI (push a tag, then press Publish)
 
@@ -286,6 +327,9 @@ manual version becomes the way to reproduce a failure by hand.
 - Nothing is stored. There is no token secret, and the index mints a one-shot credential per upload.
 - The build backend runs only in the low-privilege `build` job. The OIDC token is granted only to the
   publish jobs, each gated behind a GitHub Environment.
+- On a release, `build` checks out the commit `provenance` resolved, the same one every guard
+  verifies, and refuses to build anything else. So "the gate passed" and "this is what was
+  packaged" are statements about one commit, not two that happen to agree.
 - Creating *and* publishing a Release straight from the GitHub web UI skips `release.yml` entirely.
   `publish.yml`'s gate still runs, which is why it repeats the provenance guards rather than trusting
   that the tag path already ran them.

@@ -7,12 +7,25 @@ name: Publish
 # seed the maintainer must do on pypi.org / test.pypi.org before either path can succeed.
 #
 # Two paths:
-#   - workflow_dispatch  -> build + publish to TestPyPI  (the deliberate dry-run)
+#   - workflow_dispatch  -> build + secret scan + publish to TestPyPI  (the deliberate dry-run)
 #   - release: published -> build + gate + publish to PyPI  (a real release)
 #
 # The build runs in its own job with NO elevated permissions; only the publish jobs get
 # `id-token: write`, and each is gated behind a protection-capable GitHub Environment
 # (`testpypi` / `pypi`). This keeps the OIDC-token job doing nothing but download+upload.
+#
+# THE DRY-RUN PATH IS NOT UNGUARDED. TestPyPI is a PUBLIC index and the upload happens under this
+# project's own trusted-publishing identity, so "it is only the throwaway index" is not a reason to
+# let an unreviewed, unscanned ref reach it. `workflow_dispatch` can be fired against any ref the
+# repository has, so `publish-testpypi` carries the one guard that is meaningful without a tag:
+# `secret-scan`, which runs on BOTH events and scans whichever commit is being built. The
+# tag-shaped guards cannot apply here and are not silently skipped by accident: `provenance`'s two
+# checks and `readme-images` need a tag that a rehearsal deliberately does not have. The `verify`
+# suite is deliberately not repeated either -- the dry-run exists to rehearse the OIDC upload path,
+# not to re-run CI, which `ci.yml` already ran on the pull request. The other half of this posture
+# is a deployment branch policy on the `testpypi` GitHub Environment, which is repository
+# configuration rather than workflow text; docs/releasing.md's one-time seed section carries it,
+# next to the `pypi` environment's own policy.
 #
 # THIS FILE HOLDS THE AUTHORITATIVE RELEASE GATE (ADR-0012) — see `provenance` and the five
 # verification jobs below it. It is authoritative because `release: published` is reachable
@@ -50,7 +63,8 @@ name: Publish
 # step comments for the full story. `ci.yml`'s secret-scan job runs the same direct-CLI approach,
 # pinned to the same v8.30.1, so the two paths can't quietly diverge again.
 #
-# Eight guards, all fail-closed, all before `publish-pypi` gets `id-token: write`:
+# Eight guards, all fail-closed, all before `publish-pypi` gets `id-token: write`. Guard 3 is the
+# only one that also gates the TestPyPI dry-run; the rest need a tag, which a rehearsal has not got:
 #   1. the tag matches the version in pyproject.toml      (scripts/check_release_tag.py)
 #   2. the released commit is an ancestor of main          (git merge-base --is-ancestor)
 #   3. no secret in history reachable from this commit     (gitleaks CLI direct, full history)
@@ -81,14 +95,53 @@ jobs:
   # --- Build once: sdist + wheel, metadata-validated -------------------------
   # Runs with only the workflow-level `contents: read` — no OIDC here, so the build
   # backend's code never executes in a job that can mint a publishing credential.
+  #
+  # IT BUILDS PROVENANCE'S COMMIT, NOT WHATEVER THE DEFAULT REF RESOLVES TO. `provenance` exists to
+  # authoritatively resolve the released commit, and every verification job below checks out its
+  # answer. The artifact that actually gets UPLOADED has to come from that same commit, or the gate
+  # verifies one commit while the package ships another. This job used to have neither `needs:` nor
+  # a `ref:`, so the match rested on an implicit default (a `release` event's default ref happens to
+  # be `refs/tags/<tag>`) plus the tag ruleset that stops a tag being re-pointed. Both hold today,
+  # and neither was checked here. The job built to answer "which commit?" simply was not in the path
+  # of the job that produces the thing being uploaded. Now it is.
   build:
     name: Build distributions
+    # `provenance` is `release`-only, so on the workflow_dispatch dry-run it is skipped — and a
+    # skipped `needs:` skips this job too unless the `if:` overrides that default. `!cancelled()`
+    # rather than `always()`: it restores the job the same way without also resurrecting it on a
+    # cancelled run. The second clause keeps the release path fail-closed — no provenance success,
+    # no build — so this dependency can never soften the gate it was added to tighten.
+    needs: [provenance]
+    if: >-
+      !cancelled() && (github.event_name == 'workflow_dispatch'
+      || needs.provenance.result == 'success')
     runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so a runner-image migration can't silently break us
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # On a release: the exact commit `provenance` resolved. On the dry-run: the dispatched
+          # ref, because there is no provenance job and no tag to resolve.
+          ref: ${{ github.event_name == 'release' && needs.provenance.outputs.sha || github.ref }}
           persist-credentials: false # this job never uses git creds — don't leave them on the runner
+
+      # The `ref:` above is an expression, and an expression that evaluates to an empty string does
+      # not fail — `actions/checkout` falls back to the default ref and the run stays green. That is
+      # the "gate that passes without checking anything" shape, so this says out loud which commit
+      # was built and refuses on a release if it is not the one provenance attested.
+      - name: Confirm the build is on provenance's commit
+        if: github.event_name == 'release'
+        env:
+          EXPECTED_SHA: ${{ needs.provenance.outputs.sha }}
+        run: |
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$EXPECTED_SHA" ]; then
+            # ASCII only, for the same reason guard 2 is: a guard that crashes on an encoding
+            # instead of reporting the problem is worse than no guard.
+            echo "::error::build checked out $actual but provenance attested '${EXPECTED_SHA}'. Refusing to build an artifact the release gate is not verifying."
+            exit 1
+          fi
+          echo "building provenance's commit: $actual"
 
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -109,9 +162,15 @@ jobs:
           if-no-files-found: error
 
   # --- Dry-run path: TestPyPI via workflow_dispatch --------------------------
+  # `secret-scan` is a hard dependency, exactly like every guard in `publish-pypi`'s `needs:` — a
+  # red scan skips this job, and no `if: always()` exists to wave it through. It is here because
+  # this path uploads to a public index under the project's own trusted-publishing identity and can
+  # be fired against any ref: without it, a branch carrying a leaked credential could be packaged
+  # and published publicly with nothing having looked. See the header for why the tag-shaped guards
+  # are not (and cannot be) on this path.
   publish-testpypi:
     name: Publish to TestPyPI (dry-run)
-    needs: build
+    needs: [build, secret-scan]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -228,10 +287,18 @@ jobs:
   # (`fetch-depth: 0`), scanning the exact commit being released, not just its own diff. Runs the
   # gitleaks CLI directly (see the step below) -- the `gitleaks/gitleaks-action` wrapper doesn't
   # support `release` events at all.
+  #
+  # IT GUARDS BOTH PATHS. This is the one guard that does not need a tag to mean something, so it
+  # runs on the workflow_dispatch dry-run too and sits in `publish-testpypi`'s `needs:` — that path
+  # can be fired against any ref and uploads to a public index under this project's own identity.
+  # Same `!cancelled()` shape as `build` above, for the same reason and with the same fail-closed
+  # second clause: on a release, no provenance success means no scan and therefore no publish.
   secret-scan:
     name: Secret scan (gitleaks, full history)
-    needs: provenance
-    if: github.event_name == 'release'
+    needs: [provenance]
+    if: >-
+      !cancelled() && (github.event_name == 'workflow_dispatch'
+      || needs.provenance.result == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -239,9 +306,31 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.provenance.outputs.sha }}
+          # The released commit on a release; the dispatched ref on a dry-run, which is the commit
+          # `build` packaged and `publish-testpypi` is about to upload.
+          ref: ${{ github.event_name == 'release' && needs.provenance.outputs.sha || github.ref }}
           fetch-depth: 0 # full history — the question here is "ever leaked", not "leaked in this diff"
           persist-credentials: false
+
+      # Same asymmetry `build` (above, in this same file) guards against with its own "Confirm the
+      # build is on provenance's commit" step: the `ref:` expression above evaluates to an empty
+      # string on a bug, `actions/checkout` falls back to the default ref instead of failing, and
+      # the run stays green having silently scanned the wrong commit. Traced whether that is
+      # actually reachable and it is not today (`provenance`'s own `resolve` step either prints a
+      # real sha or exits non-zero, which already fails `needs.provenance.result == 'success'` and
+      # skips this job via the `if:` above) -- but `build`'s check makes the same non-exploitability
+      # argument for itself, not for this job, so this stays honest on its own rather than relying
+      # on a sibling job's check to transitively cover it.
+      - name: Confirm the scan is on provenance's commit
+        if: github.event_name == 'release'
+        env:
+          EXPECTED_SHA: ${{ needs.provenance.outputs.sha }}
+        run: |
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$EXPECTED_SHA" ]; then
+            echo "::error::secret-scan checked out $actual but provenance attested '${EXPECTED_SHA}'. Refusing to trust a scan of a commit the release gate did not verify."
+            exit 1
+          fi
 
       # gitleaks/gitleaks-action (the wrapper this job used to reach for, and that ci.yml's
       # secret-scan job used until this same fast-follow) hardcodes its own supported-event list
