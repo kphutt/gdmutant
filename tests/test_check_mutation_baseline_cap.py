@@ -147,6 +147,30 @@ def test_zero_measured_mutants_on_changed_files_fails_instead_of_reporting_a_cle
     assert rc != 0, f"zero measured mutants on changed files must not report a clean pass, got {rc}"
 
 
+def test_every_file_over_the_cap_individually_still_fails_instead_of_a_clean_pass() -> None:
+    # Same "gate that passes without checking anything" shape as the zero-measured-mutants case
+    # above, reached from the sibling branch: every changed file alone exceeds --max-mutants, so
+    # select_files_within_cap() skips all of them, files ends up empty, and poodle never runs.
+    # That must not report the same clean exit code as a run that actually measured something.
+    with (
+        mock.patch.object(
+            check_mutation_baseline,
+            "changed_gdmutant_files",
+            return_value=["huge.py"],
+        ),
+        mock.patch.object(
+            check_mutation_baseline,
+            "count_mutants_per_file",
+            return_value={"huge.py": 500},
+        ),
+    ):
+        rc = check_mutation_baseline.main(["--max-mutants", "50"])
+    assert rc != 0, (
+        f"every changed file exceeding the cap individually must not report a clean pass "
+        f"(nothing was measured), got {rc}"
+    )
+
+
 def test_a_real_nonzero_mutant_run_reported_clean_by_poodle_still_passes() -> None:
     # Same shape, but with a real nonzero mutant count and poodle reporting a clean run: the
     # ordinary passing case must still pass. Guards against an over-broad fix that fails every run.

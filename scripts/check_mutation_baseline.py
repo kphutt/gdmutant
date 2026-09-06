@@ -215,11 +215,16 @@ def main(argv: list[str] | None = None) -> int:
         for f, n in skipped:
             print(f"  SKIPPED {f} ({n} mutants)")
         if not files:
+            # Same shape as the `total == 0` guard above: every changed file individually exceeds
+            # the cap, poodle never runs, and nothing was actually measured. Returning 0 here would
+            # be the same false "clean pass" this PR's other fix exists to close, just reached from
+            # the sibling branch instead.
             print(
                 "check_mutation_baseline: every changed file alone exceeds the cap -- nothing "
-                "left to run this pass."
+                "was actually checked, not a clean run. Raise --max-mutants (or "
+                f"{MAX_MUTANTS_ENV_VAR}) to cover at least one, or split the diff."
             )
-            return 0
+            return 1
         print(f"check_mutation_baseline: running poodle on the remaining {len(files)} file(s)")
 
     only_args: list[str] = []
