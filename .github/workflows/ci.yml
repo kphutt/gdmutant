@@ -24,6 +24,13 @@ on:
   push:
     branches: [main]
   workflow_dispatch: # manual too — Actions -> CI -> "Run workflow", for an ad-hoc cloud check
+  schedule:
+    # Every job above only ever runs on a push or PR. A quiet main (nothing merged for weeks,
+    # which has actually happened) means nothing re-checks main against the outside world in the
+    # meantime — a newly-disclosed CVE in an already-locked dependency (pip-audit's job) or a
+    # runner-image drift goes undetected until someone happens to touch the repo again. Weekly on
+    # main closes that gap; free on a public repo, same as the push/PR runs already are.
+    - cron: "17 6 * * 1" # Monday ~06:17 UTC — off-peak, minute offset avoids the top-of-hour crowd
 
 # Least privilege at the workflow level; jobs opt into more only where needed.
 permissions:
