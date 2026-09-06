@@ -218,7 +218,7 @@ jobs:
           node-version: "22.14.0"
 
       # uv installs the exact locked deps (hashes) — reproducible across machines.
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.11.28"
           enable-cache: true # cache uv's global store — skips re-downloading the locked deps each job
@@ -268,7 +268,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.11.28"
           enable-cache: true
@@ -346,7 +346,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.11.28"
           enable-cache: true # cache uv's global store — skips re-downloading the locked deps each job
@@ -355,7 +355,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Set up Godot
-        uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2.4.1
+        uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2.4.2
         with:
           version: 4.7.0
           use-dotnet: false
@@ -458,7 +458,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.11.28"
           enable-cache: true # cache uv's global store — skips re-downloading the locked deps each job
@@ -467,7 +467,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Set up Godot
-        uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2.4.1
+        uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2.4.2
         with:
           version: 4.7.0
           use-dotnet: false

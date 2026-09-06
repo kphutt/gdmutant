@@ -131,7 +131,7 @@ runs:
 
     # SHA-pinned, mirroring ci.yml's selftest jobs (a runner-image migration can't silently break us).
     - name: Set up Godot
-      uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2.4.1
+      uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2.4.2
       with:
         version: ${{ inputs.godot-version }}
         use-dotnet: ${{ inputs.godot-use-dotnet }}
