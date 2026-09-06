@@ -7,7 +7,7 @@ prints what the page displayed; this module drives that and checks it.
 
 The rest of the suite (and the whole CLI) stays Node-free, but this module does not: it fails
 loudly, rather than skipping, when `node` is not on PATH. A silent skip here would let a machine
-missing `node` report a clean `pytest` run without ever exercising these 42 tests — exactly the
+missing `node` report a clean `pytest` run without ever exercising these 39 tests — exactly the
 "gate that passes without checking anything" shape AGENTS.md calls out. `node` is pinned in
 `mise.toml`; run `mise install` to get it.
 """
@@ -27,10 +27,10 @@ HARNESS = Path(__file__).resolve().parent / "js" / "harness.js"
 
 if shutil.which("node") is None:
     # Not a skip: a skip exits 0, and a machine missing `node` would then report a clean `pytest`
-    # run without ever having exercised these 42 tests. Fail the collection instead, so the run's
+    # run without ever having exercised these 39 tests. Fail the collection instead, so the run's
     # exit code is non-zero and the reason is unmistakable in the output ("NOTCHECKED").
     pytest.fail(
-        "NOTCHECKED: node is not on PATH, so tests/test_htmlreport_behaviour.py's 42 tests never "
+        "NOTCHECKED: node is not on PATH, so tests/test_htmlreport_behaviour.py's 39 tests never "
         "ran. node is pinned in mise.toml -- run `mise install` to get it.",
         pytrace=False,
     )
