@@ -208,7 +208,7 @@ def test_run_mutation_writes_html_report(
 
 
 def test_write_reports_confirmations_print_the_resolved_absolute_path(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     # The confirmation lines must name where the report actually landed, not echo back
     # whatever (possibly relative) string the caller passed in — the process's working directory is
@@ -216,16 +216,24 @@ def test_write_reports_confirmations_print_the_resolved_absolute_path(
     # real run), so a bare filename alone doesn't locate the file. Built from relpath rather than
     # os.chdir(): a global cwd change breaks mutmut's mutated-module resolution (see
     # tests/test_mutation_baseline_inputs.py), so this stays chdir-free like every other test here.
-    json_rel = os.path.relpath(str(tmp_path / "r.json"))
-    html_rel = os.path.relpath(str(tmp_path / "r.html"))
-    rc = cli._write_reports({"schemaVersion": "2", "files": {}}, json_rel, html_rel, str(tmp_path))
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert os.path.abspath(json_rel) in out
-    assert os.path.abspath(html_rel) in out
-    # The relative strings themselves are gone, not just overshadowed by the absolute ones.
-    assert json_rel not in out.replace(os.path.abspath(json_rel), "")
-    assert html_rel not in out.replace(os.path.abspath(html_rel), "")
+    #
+    # `tmp_path` is deliberately not used: `os.path.relpath` defaults its `start` to the cwd and
+    # raises `ValueError` when that cwd is on a different drive than the target, which is exactly
+    # how a hosted Windows runner's checkout (`D:`) and `tmp_path` (`%TEMP%`, `C:`) commonly land —
+    # see `test_an_ordinary_file_is_named_once_and_only_once` for the same trap. A scratch dir made
+    # with `tempfile.TemporaryDirectory(dir=".")` sits inside the checkout itself, same drive as the
+    # cwd by construction.
+    with tempfile.TemporaryDirectory(dir=".") as scratch:
+        json_rel = os.path.relpath(str(Path(scratch) / "r.json"))
+        html_rel = os.path.relpath(str(Path(scratch) / "r.html"))
+        rc = cli._write_reports({"schemaVersion": "2", "files": {}}, json_rel, html_rel, scratch)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert os.path.abspath(json_rel) in out
+        assert os.path.abspath(html_rel) in out
+        # The relative strings themselves are gone, not just overshadowed by the absolute ones.
+        assert json_rel not in out.replace(os.path.abspath(json_rel), "")
+        assert html_rel not in out.replace(os.path.abspath(html_rel), "")
 
 
 def test_write_reports_write_errors_still_echo_the_literal_path(
@@ -1088,7 +1096,7 @@ def test_list_mutants_prints_every_mutant_and_returns_zero(
 
 
 def test_list_mutants_header_and_locations_agree_on_posix_separators(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     # On Windows, the header used to print the raw (often forward-slash, as-typed) source path
     # while every per-mutant line printed `str(Path(source_path))` (the OS separator) — one
@@ -1096,16 +1104,24 @@ def test_list_mutants_header_and_locations_agree_on_posix_separators(
     # leading "./" (pathlib's own normal form) must vanish from both alike. Built from relpath
     # rather than os.chdir(): a global cwd change breaks mutmut's mutated-module resolution (see
     # tests/test_mutation_baseline_inputs.py), so this stays chdir-free like every other test here.
-    path = _gd(tmp_path)
-    rel = Path(os.path.relpath(str(path))).as_posix()
-    dotted = f"./{rel}"
-    rc = list_mutants(dotted)
-    assert rc == 0
-    out = capsys.readouterr().out
-    header = out.splitlines()[0].split(" mutants for ", 1)[1].rstrip(":")
-    locs = {line.strip().split(":", 1)[0] for line in out.splitlines()[1:] if line.strip()}
-    assert header == rel  # the leading "./" is normalized away too
-    assert locs == {rel}  # header and every per-mutant line agree, both POSIX
+    #
+    # `tmp_path` is deliberately not used: `os.path.relpath` defaults its `start` to the cwd and
+    # raises `ValueError` when that cwd is on a different drive than the target, which is exactly
+    # how a hosted Windows runner's checkout (`D:`) and `tmp_path` (`%TEMP%`, `C:`) commonly land —
+    # see `test_an_ordinary_file_is_named_once_and_only_once` for the same trap. A scratch dir made
+    # with `tempfile.TemporaryDirectory(dir=".")` sits inside the checkout itself, same drive as the
+    # cwd by construction.
+    with tempfile.TemporaryDirectory(dir=".") as scratch:
+        path = _gd(Path(scratch))
+        rel = Path(os.path.relpath(str(path))).as_posix()
+        dotted = f"./{rel}"
+        rc = list_mutants(dotted)
+        assert rc == 0
+        out = capsys.readouterr().out
+        header = out.splitlines()[0].split(" mutants for ", 1)[1].rstrip(":")
+        locs = {line.strip().split(":", 1)[0] for line in out.splitlines()[1:] if line.strip()}
+        assert header == rel  # the leading "./" is normalized away too
+        assert locs == {rel}  # header and every per-mutant line agree, both POSIX
 
 
 def test_list_mutants_marks_ignored_and_warns_on_unknown_operator(
