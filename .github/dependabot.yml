@@ -1,5 +1,13 @@
 # Dependabot — the counterweight to SHA-pinning + hash-locking: keeps pinned
 # GitHub Actions and Python deps from silently rotting.
+#
+# `applies-to: "version-updates"` on both groups is load-bearing, not
+# decoration: an ungrouped Dependabot fires an individual PR the moment a
+# vulnerability is disclosed. Group everything (the bare `patterns: ["*"]`
+# this repo used to have) and GitHub folds security fixes into the same
+# weekly batch as routine bumps too, silently losing that immediacy — a pip
+# CVE (GHSA-qwm4-qh6w-59xr / PYSEC-2026-3721) sat un-PR'd for 5 days this way
+# before anyone noticed via a stale PR's CI run, not via Dependabot.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
@@ -8,6 +16,7 @@ updates:
       interval: "weekly"
     groups:
       github-actions:
+        applies-to: "version-updates"
         patterns: ["*"]
     commit-message:
       prefix: "ci"
@@ -20,6 +29,7 @@ updates:
       interval: "weekly"
     groups:
       python:
+        applies-to: "version-updates"
         patterns: ["*"]
     commit-message:
       prefix: "deps"
