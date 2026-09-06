@@ -721,3 +721,16 @@ def test_write_proceeds_onto_a_branch_that_requires_nothing_when_the_checks_are_
 
     assert harden_github.main(["kphutt/gdmutant"]) == 0
     assert fake.wrote_protection()
+
+
+def test_codeowners_stated_check_count_matches_the_derived_list() -> None:
+    # CODEOWNERS' "eight status checks" prose has no code tying it to REQUIRED_JOBS/
+    # REQUIRED_APP_CHECKS -- Litmus caught exactly this drifting once already (six -> eight, when
+    # Socket Security was added) before anything here would have noticed. Pin the number so a
+    # future edit to either constant fails loud instead of leaving stale prose behind.
+    codeowners = (_REPO_ROOT / ".github" / "CODEOWNERS").read_text(encoding="utf-8")
+    assert "eight status checks" in codeowners, (
+        "CODEOWNERS' stated count has changed -- update this test's expected number too, "
+        "not just the one in that comment"
+    )
+    assert len(harden_github.all_required_contexts()) == 8

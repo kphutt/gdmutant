@@ -12,7 +12,9 @@
 # two Socket Security GitHub App checks, `Socket Security: Project Report` and `Socket Security:
 # Pull Request Alerts`), the branch must be up to date with main before merging, admin enforcement
 # is ON (an admin cannot bypass any of this by pushing straight to main), and force-push and
-# deletion are blocked.
+# deletion are blocked. (A test in `tests/test_harden_github.py` asserts this file's stated
+# count equals `len(harden_github.all_required_contexts())`, so this comment can't drift
+# silently again the way it already did once.)
 #
 # ci.yml runs automatically on every pull request and push to main (restored 2026-08-04, ahead
 # of going public, see docs/decisions/0012-merge-time-local-ship-time-cloud.md's "Correction
