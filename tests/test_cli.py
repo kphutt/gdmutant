@@ -180,10 +180,14 @@ def test_run_mutation_writes_valid_json(tmp_path: Path, capsys: pytest.CaptureFi
     assert '\n  "schemaVersion"' in text
     data = json.loads(text)
     assert data["schemaVersion"] == "2"
-    assert str(path) in data["files"]
-    assert data["files"][str(path)]["mutants"]
-    assert data["files"][str(path)]["language"] == "gdscript"  # CLI passes the language through
-    assert data["files"][str(path)]["source"] == path.read_text(encoding="utf-8")  # real source
+    # Report `files` keys are POSIX-normalized regardless of host OS, so compare against
+    # `.as_posix()`, never a raw `str(Path(...))` (which renders backslashes on Windows — see
+    # AGENTS.md's platform-path-rendering warning).
+    key = path.as_posix()
+    assert key in data["files"]
+    assert data["files"][key]["mutants"]
+    assert data["files"][key]["language"] == "gdscript"  # CLI passes the language through
+    assert data["files"][key]["source"] == path.read_text(encoding="utf-8")  # real source
     assert "Wrote report to" in capsys.readouterr().out  # the confirmation line is printed
 
 
@@ -201,6 +205,51 @@ def test_run_mutation_writes_html_report(
     assert "<html" in html and "mutation score" in html
     assert 'src="http' not in html
     assert "Wrote HTML report to" in capsys.readouterr().out
+
+
+def test_write_reports_confirmations_print_the_resolved_absolute_path(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The confirmation lines must name where the report actually landed, not echo back
+    # whatever (possibly relative) string the caller passed in — the process's working directory is
+    # not necessarily the project dir or the mutated file's own dir (the three commonly differ in a
+    # real run), so a bare filename alone doesn't locate the file. Built from relpath rather than
+    # os.chdir(): a global cwd change breaks mutmut's mutated-module resolution (see
+    # tests/test_mutation_baseline_inputs.py), so this stays chdir-free like every other test here.
+    #
+    # `tmp_path` is deliberately not used: `os.path.relpath` defaults its `start` to the cwd and
+    # raises `ValueError` when that cwd is on a different drive than the target, which is exactly
+    # how a hosted Windows runner's checkout (`D:`) and `tmp_path` (`%TEMP%`, `C:`) commonly land —
+    # see `test_an_ordinary_file_is_named_once_and_only_once` for the same trap. A scratch dir made
+    # with `tempfile.TemporaryDirectory(dir=".")` sits inside the checkout itself, same drive as the
+    # cwd by construction.
+    with tempfile.TemporaryDirectory(dir=".") as scratch:
+        json_rel = os.path.relpath(str(Path(scratch) / "r.json"))
+        html_rel = os.path.relpath(str(Path(scratch) / "r.html"))
+        rc = cli._write_reports({"schemaVersion": "2", "files": {}}, json_rel, html_rel, scratch)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert os.path.abspath(json_rel) in out
+        assert os.path.abspath(html_rel) in out
+        # The relative strings themselves are gone, not just overshadowed by the absolute ones.
+        assert json_rel not in out.replace(os.path.abspath(json_rel), "")
+        assert html_rel not in out.replace(os.path.abspath(html_rel), "")
+
+
+def test_write_reports_write_errors_still_echo_the_literal_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A write failure must keep quoting the path exactly as the caller typed it, so a mistyped path
+    # is visible as a typo rather than resolved into something that looks like a real location.
+    bad_json = str(tmp_path / "missing-dir" / "r.json")
+    rc = cli._write_reports({"schemaVersion": "2", "files": {}}, bad_json, None, str(tmp_path))
+    assert rc == 2
+    assert bad_json in capsys.readouterr().err
+
+    bad_html = str(tmp_path / "missing-dir" / "r.html")
+    rc = cli._write_reports({"schemaVersion": "2", "files": {}}, None, bad_html, str(tmp_path))
+    assert rc == 2
+    assert bad_html in capsys.readouterr().err
 
 
 def test_run_mutation_shows_paths_relative_to_the_project_in_the_html_report(
@@ -227,8 +276,8 @@ def test_run_mutation_shows_paths_relative_to_the_project_in_the_html_report(
     # Nothing a reader sees carries the absolute path.
     visible = page.split('<script type="application/json"', 1)[0]
     assert str(tmp_path).replace("\\", "/") not in visible
-    # The JSON report is deliberately unchanged: its keys are identifiers other tooling resolves.
-    assert str(source) in json.loads(json_file.read_text(encoding="utf-8"))["files"]
+    # The JSON report's keys are POSIX-normalized, regardless of host OS.
+    assert source.as_posix() in json.loads(json_file.read_text(encoding="utf-8"))["files"]
 
 
 def test_run_mutation_emits_progress_to_stderr(
@@ -266,7 +315,7 @@ def test_run_mutation_json_dash_writes_pure_json_to_stdout(
     captured = capsys.readouterr()
     data = json.loads(captured.out)  # stdout is valid JSON, nothing else mixed in
     assert data["schemaVersion"] == "2"
-    assert data["files"][str(path)]["language"] == "gdscript"
+    assert data["files"][path.as_posix()]["language"] == "gdscript"  # POSIX-keyed regardless of OS
     assert "Mutation score:" in captured.err  # the human summary went to stderr
     assert "Mutation score:" not in captured.out
 
@@ -1039,9 +1088,40 @@ def test_list_mutants_prints_every_mutant_and_returns_zero(
     assert rc == 0
     out = capsys.readouterr().out
     assert out.startswith("3 mutants for ")
-    assert f"  {path}:2:11  comparison  > -> >=" in out  # exact loc + format for the '>' mutant
+    # The location is POSIX-normalized (forward slashes) regardless of host OS — never
+    # `f"{path}"`, which renders backslashes on Windows (AGENTS.md's platform-path-rendering trap).
+    assert f"  {path.as_posix()}:2:11  comparison  > -> >=" in out  # exact loc for the '>' mutant
     assert "boolean  and -> or" in out
     assert "comparison  < -> <=" in out
+
+
+def test_list_mutants_header_and_locations_agree_on_posix_separators(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # On Windows, the header used to print the raw (often forward-slash, as-typed) source path
+    # while every per-mutant line printed `str(Path(source_path))` (the OS separator) — one
+    # console listing, disagreeing with itself. Both must now render the same POSIX path, and a
+    # leading "./" (pathlib's own normal form) must vanish from both alike. Built from relpath
+    # rather than os.chdir(): a global cwd change breaks mutmut's mutated-module resolution (see
+    # tests/test_mutation_baseline_inputs.py), so this stays chdir-free like every other test here.
+    #
+    # `tmp_path` is deliberately not used: `os.path.relpath` defaults its `start` to the cwd and
+    # raises `ValueError` when that cwd is on a different drive than the target, which is exactly
+    # how a hosted Windows runner's checkout (`D:`) and `tmp_path` (`%TEMP%`, `C:`) commonly land —
+    # see `test_an_ordinary_file_is_named_once_and_only_once` for the same trap. A scratch dir made
+    # with `tempfile.TemporaryDirectory(dir=".")` sits inside the checkout itself, same drive as the
+    # cwd by construction.
+    with tempfile.TemporaryDirectory(dir=".") as scratch:
+        path = _gd(Path(scratch))
+        rel = Path(os.path.relpath(str(path))).as_posix()
+        dotted = f"./{rel}"
+        rc = list_mutants(dotted)
+        assert rc == 0
+        out = capsys.readouterr().out
+        header = out.splitlines()[0].split(" mutants for ", 1)[1].rstrip(":")
+        locs = {line.strip().split(":", 1)[0] for line in out.splitlines()[1:] if line.strip()}
+        assert header == rel  # the leading "./" is normalized away too
+        assert locs == {rel}  # header and every per-mutant line agree, both POSIX
 
 
 def test_list_mutants_marks_ignored_and_warns_on_unknown_operator(
@@ -1121,8 +1201,6 @@ def test_main_dry_run_lists_every_ignored_flag_in_order(
             "g",
             "--tests",
             "t",
-            "--report-path",
-            "r",
             "--timeout",
             "1",
             "--require-clean",
@@ -1134,7 +1212,7 @@ def test_main_dry_run_lists_every_ignored_flag_in_order(
     # the ", " join, so a mutated label or a dropped flag is caught.
     assert capsys.readouterr().err.strip() == (
         "note: --dry-run runs no tests, so --project, --runner, --command, --godot, --tests, "
-        "--report-path, --timeout, --require-clean, --json are ignored"
+        "--timeout, --require-clean, --json are ignored"
     )
 
 
@@ -1172,8 +1250,7 @@ def test_parser_defaults() -> None:
     assert args.project is None
     assert args.json_path is None
     assert args.dry_run is False
-    # --report-path defaults to None so the per-runner default (gdunit4 vs gut) is resolved in main.
-    assert args.report_path is None
+    assert not hasattr(args, "report_path")  # no --report-path flag; the runner picks it itself
     assert args.timeout is None  # default: derived per-mutant from the baseline run time
     assert args.require_clean is False
     assert args.runner is None  # no silent default — main() refuses a real run without one
@@ -1221,7 +1298,6 @@ def test_parser_help_text(
         "test command for --runner command (exit 0 = pass), e.g. 'godot --headless --script res://tests/run_tests.gd'",  # noqa: E501
         "the Godot executable (default: godot)",
         "the test directory (gdunit4's -a / gut's -gdir) (default: res://test)",
-        "JUnit-XML report path, relative to the project dir (default: per runner: gdunit4 reports/report_1/results.xml, gut reports/gut_results.xml)",  # noqa: E501
         "per-mutant test-run timeout, in seconds (default: derived from the baseline run: 10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",  # noqa: E501
         "refuse to run if the source file has uncommitted git changes (default: warn only)",
         "write the Stryker JSON report here (use - for stdout; bare --json defaults to a "
@@ -1229,6 +1305,7 @@ def test_parser_help_text(
         "list the mutants without running any tests (no Godot needed)",
     ):
         assert f"{expected}\n" in run_help
+    assert "--report-path" not in run_help  # the flag is gone, not just undocumented
 
 
 def test_main_dispatches_run_with_injected_runner(
@@ -1273,16 +1350,26 @@ def test_load_config_absent_returns_empty(tmp_path: Path) -> None:
 def test_load_config_maps_flag_named_keys_to_dests(tmp_path: Path) -> None:
     cfg = tmp_path / ".gdmutant.toml"
     cfg.write_text(
-        'project = "p"\ncommand = "c"\nreport-path = "r"\ntimeout = 30\nrequire-clean = true\n',
+        'project = "p"\ncommand = "c"\ntimeout = 30\nrequire-clean = true\n',
         encoding="utf-8",
     )
     assert _load_config(cfg) == {
         "project": "p",
         "test_command": "c",  # `command` maps to the test_command dest
-        "report_path": "r",
         "timeout": 30,
         "require_clean": True,
     }
+
+
+def test_load_config_warns_on_removed_report_path_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `report-path` is no longer a recognized config key — it warns and is skipped, same as any
+    # other unknown key, rather than being silently accepted and then ignored.
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text('report-path = "r"\n', encoding="utf-8")
+    assert _load_config(cfg) == {}
+    assert "unknown key 'report-path'" in capsys.readouterr().err
 
 
 def test_load_config_warns_and_skips_unknown_keys(
@@ -1314,7 +1401,6 @@ def test_load_config_rejects_bad_typed_values(tmp_path: Path) -> None:
         ("t6", "command = true"),  # string setting as bool
         ("t7", "godot = 456"),  # string setting as int
         ("t8", "tests = false"),  # string setting as bool
-        ("t9", "report-path = 789"),  # string setting as int
     ):
         cfg = tmp_path / f"{name}.toml"
         cfg.write_text(body, encoding="utf-8")
@@ -1431,20 +1517,19 @@ def test_main_constructs_runner_with_test_path_and_godot(
             "res://custom",
         ]
     )
-    # report_path/timeout are passed too — defaulted here (not on the command line).
+    # timeout is passed too — defaulted here (not on the command line). No report_path kwarg: with
+    # no --report-path flag, main() no longer threads one through — GdUnit4Runner's own dataclass
+    # default (DEFAULT_REPORT_PATH) applies.
     assert captured == {
         "test_path": "res://custom",
         "godot": "godot4",
-        "report_path": "reports/report_1/results.xml",
         "timeout": 600.0,
     }
 
 
-def test_main_threads_report_path_and_timeout_to_runner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # --report-path and --timeout must reach the GdUnit4Runner (both kwargs, parsed values; the
-    # timeout coerced to float). A mutant that drops either kwarg or skips the type= coercion fails.
+def test_main_threads_timeout_to_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # --timeout must reach the GdUnit4Runner (parsed value, coerced to float). A mutant that drops
+    # the kwarg or skips the type= coercion fails.
     path = _gd(tmp_path)
     captured: dict[str, object] = {}
 
@@ -1461,13 +1546,11 @@ def test_main_threads_report_path_and_timeout_to_runner(
             str(tmp_path),
             "--runner",
             "gdunit4",
-            "--report-path",
-            "out/custom.xml",
             "--timeout",
             "42",
         ]
     )
-    assert captured["report_path"] == "out/custom.xml"
+    assert "report_path" not in captured  # no longer threaded by main() at all
     assert captured["timeout"] == 42.0 and isinstance(captured["timeout"], float)
 
 
@@ -1614,12 +1697,13 @@ def test_main_command_runner_builds_from_shlex_split_command(
     assert captured["timeout"] == 30.0
 
 
-def test_main_gut_runner_builds_from_tests_godot_and_default_report_path(
+def test_main_gut_runner_builds_from_tests_and_godot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # --runner gut builds a GutRunner from --tests (-> test_dir) and --godot, defaulting report_path
-    # to GUT's own layout (reports/gut_results.xml, NOT GdUnit4's), and must NOT build a
-    # GdUnit4Runner. Pins the peer-adapter wiring (ADR-0011).
+    # --runner gut builds a GutRunner from --tests (-> test_dir) and --godot, threading no
+    # report_path (no --report-path flag; GUT's own dataclass default, reports/gut_results.xml,
+    # applies), and must NOT build a GdUnit4Runner. Pins the peer-adapter
+    # wiring (ADR-0011).
     path = _gd(tmp_path)
     captured: dict[str, object] = {}
 
@@ -1650,37 +1734,8 @@ def test_main_gut_runner_builds_from_tests_godot_and_default_report_path(
     assert captured == {
         "test_dir": "res://gut_test",
         "godot": "godot4",
-        "report_path": "reports/gut_results.xml",  # GUT's default layout, not report_1/results.xml
         "timeout": 600.0,
     }
-
-
-def test_main_gut_runner_honours_an_explicit_report_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # An explicit --report-path overrides GUT's default (proves the `args.report_path or DEFAULT`
-    # resolution passes the user's value through, not the default).
-    path = _gd(tmp_path)
-    captured: dict[str, object] = {}
-
-    def fake_gut_runner(**kwargs: object) -> RecordingRunner:
-        captured.update(kwargs)
-        return RecordingRunner()
-
-    monkeypatch.setattr(cli, "GutRunner", fake_gut_runner)
-    main(
-        [
-            "run",
-            str(path),
-            "--project",
-            str(tmp_path),
-            "--runner",
-            "gut",
-            "--report-path",
-            "out/gut.xml",
-        ]
-    )
-    assert captured["report_path"] == "out/gut.xml"
 
 
 def test_main_command_runner_requires_the_command_flag(
@@ -2212,7 +2267,12 @@ def test_main_exclude_flag_combines_with_config(
     # config drops a.gd; CLI drops c.gd → only b.gd is listed.
     assert main(["run", str(tmp_path), "--dry-run", "--exclude", "c.gd"]) == 0
     out = capsys.readouterr().out
-    assert b in out and a not in out and str(tmp_path / "c.gd") not in out
+    # --dry-run's console listing is POSIX-normalized regardless of host OS.
+    assert (
+        Path(b).as_posix() in out
+        and Path(a).as_posix() not in out
+        and (tmp_path / "c.gd").as_posix() not in out
+    )
 
 
 def test_load_config_rejects_non_list_exclude(
@@ -2264,7 +2324,8 @@ def test_run_mutation_paths_aggregates_and_writes_merged_report(
     out = capsys.readouterr().out
     assert "2 files:" in out and "Mutation score:" in out  # per-file breakdown + one aggregate
     data = json.loads(report.read_text(encoding="utf-8"))
-    assert set(data["files"]) == {a, b}  # one merged report keyed by path
+    # Report keys are POSIX-normalized regardless of host OS.
+    assert set(data["files"]) == {Path(a).as_posix(), Path(b).as_posix()}
 
 
 def test_all_survived_warning_fires_on_a_multi_file_run_with_no_kills(
@@ -2342,7 +2403,8 @@ def test_main_dry_run_lists_each_file_under_a_directory(
     a, b = _multi_project(tmp_path)
     assert main(["run", str(tmp_path), "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert a in out and b in out  # every .gd under the dir is listed
+    # --dry-run's console listing is POSIX-normalized regardless of host OS.
+    assert Path(a).as_posix() in out and Path(b).as_posix() in out  # every .gd under the dir
 
 
 def test_run_mutation_paths_dirty_tree_warns_or_refuses(
@@ -2637,7 +2699,8 @@ def test_main_since_no_changes_writes_an_empty_report_to_stdout(
     captured = capsys.readouterr()
     data = json.loads(captured.out)
     assert data["schemaVersion"] == "2"
-    entry = data["files"][path]  # the file is present, so `files[<path>]` needs no special case
+    # Report keys are POSIX-normalized regardless of host OS.
+    entry = data["files"][Path(path).as_posix()]  # the file is present, no special case needed
     assert entry["mutants"] == []
     assert entry["language"] == "gdscript"
     assert entry["source"] == Path(path).read_text(encoding="utf-8")
@@ -2656,7 +2719,8 @@ def test_main_since_no_changes_lists_every_given_file(
     _git(tmp_path, "commit", "-m", "add g.gd")
     assert main(["run", first, str(second), "--since", "HEAD", "--json", "-"]) == 0
     data = json.loads(capsys.readouterr().out)
-    assert set(data["files"]) == {first, str(second)}
+    # Report keys are POSIX-normalized regardless of host OS.
+    assert set(data["files"]) == {Path(first).as_posix(), second.as_posix()}
     assert all(entry["mutants"] == [] for entry in data["files"].values())
 
 
@@ -2669,7 +2733,9 @@ def test_main_since_no_changes_writes_an_empty_report_to_a_file(
     report = tmp_path / "r.json"
     page = tmp_path / "r.html"
     assert main(["run", path, "--since", "HEAD", "--json", str(report), "--html", str(page)]) == 0
-    assert json.loads(report.read_text(encoding="utf-8"))["files"][path]["mutants"] == []
+    # Report keys are POSIX-normalized regardless of host OS.
+    data = json.loads(report.read_text(encoding="utf-8"))
+    assert data["files"][Path(path).as_posix()]["mutants"] == []
     assert "<html" in page.read_text(encoding="utf-8")
     assert "Wrote report to" in capsys.readouterr().out
 
@@ -2740,7 +2806,9 @@ def test_main_since_no_changes_emits_the_job_summary_when_asked(
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
     assert main(["run", path, "--since", "HEAD", "--json", "-", "--report", "step-summary"]) == 0
-    assert json.loads(capsys.readouterr().out)["files"][path]["mutants"] == []
+    # Report keys are POSIX-normalized regardless of host OS.
+    data = json.loads(capsys.readouterr().out)
+    assert data["files"][Path(path).as_posix()]["mutants"] == []
     written = summary.read_text(encoding="utf-8")
     assert "gdmutant: mutation report" in written
     assert "No surviving mutants" in written
@@ -2924,7 +2992,8 @@ def test_run_mutation_with_changed_scopes_the_real_run(
     )
     assert rc == 0
     data = json.loads(report.read_text(encoding="utf-8"))
-    lines = {m["location"]["start"]["line"] for m in data["files"][str(path)]["mutants"]}
+    # Report keys are POSIX-normalized regardless of host OS.
+    lines = {m["location"]["start"]["line"] for m in data["files"][path.as_posix()]["mutants"]}
     assert lines == {2}  # only the changed line was mutated
 
 

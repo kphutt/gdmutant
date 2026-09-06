@@ -369,9 +369,11 @@ def test_run_refuses_a_report_path_that_escapes_the_project(
     # whatever `Path(project_dir) / report_path` resolved to, with nothing stopping report_path
     # from walking out via `../..` (or, worse, an absolute path — pathlib silently discards the
     # left side of `/` when the right side is absolute, so an absolute report_path replaced
-    # project_dir entirely). A `.gdmutant.toml` in a cloned project sets report-path today with no
-    # --trust-config needed, so this was a delete-anything-on-the-victim's-machine primitive on a
-    # plain `gdmutant run` with no flags at all.
+    # project_dir entirely). A `.gdmutant.toml` in a cloned project used to be able to set
+    # report-path with no --trust-config needed, making this a
+    # delete-anything-on-the-victim's-machine primitive on a plain `gdmutant run` with no flags at
+    # all — that config key is gone now, but the containment check stays as defense in depth even
+    # though nothing public can set report_path any more.
     project = tmp_path / "project"
     project.mkdir()
     decoy = tmp_path / "decoy.txt"

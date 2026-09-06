@@ -98,6 +98,14 @@ def stryker_report_multi(
     each file path to its ``(run, source)``. The schema keys `files` by path, so a whole-directory
     run renders as one report with per-file drill-down and one overall score in the viewer.
 
+    Every key is normalized to POSIX form (forward slashes) regardless of host OS: an incoming key
+    built from ``str(Path(...))`` carries the OS separator, and on Windows that made
+    the JSON/HTML `files` map keyed on backslash paths. Two concrete costs that fixed: the HTML
+    viewer's file-explorer tree splits each key on ``/`` to build its folders, so a backslash key
+    never split and rendered as one flat entry instead of a real tree; and the same logical report
+    generated on Windows and on Linux CI carried different keys for the same source tree, breaking
+    the "safe to diff between attempts" guarantee `docs/agent-guide.md` documents.
+
     `language` is supplied by the caller (the adapter/CLI knows it) — the reporter stays
     language-neutral and carries no default.
     """
@@ -105,7 +113,8 @@ def stryker_report_multi(
         "schemaVersion": SCHEMA_VERSION,
         "thresholds": {"high": 80, "low": 60},
         "files": {
-            path: _file_entry(run, source, language) for path, (run, source) in files.items()
+            Path(path).as_posix(): _file_entry(run, source, language)
+            for path, (run, source) in files.items()
         },
     }
 
