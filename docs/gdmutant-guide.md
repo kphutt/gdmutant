@@ -187,6 +187,18 @@ command = "godot --headless --script res://tests/run_tests.gd"
 # exclude = ["*_generated.gd", "*/vendor/*"]
 ```
 
+`gdmutant init` writes a starter version of that file for you, so the first one you ever see
+doesn't have to be hand-typed. It sets `tests` to gdmutant's own default (`res://test`) and looks
+for an installed `addons/gdUnit4` or `addons/gut` in the current directory, setting `runner` to
+whatever it finds -- both uncommented. Every other key, including the three trust-required ones
+below, is written as a commented example instead of a guess. It refuses to overwrite an existing
+`.gdmutant.toml` unless you pass `--force`:
+
+```sh
+gdmutant init            # writes ./.gdmutant.toml, refusing if one is already there
+gdmutant init --force    # overwrite an existing one
+```
+
 Three of those keys are trust-required: `command` and `godot` name a program gdmutant would
 execute, and `project` names the directory every other operation is rooted in, the `cwd` of every
 subprocess and, under `--jobs N`, a tree copied once per worker. In a checkout you did not write,

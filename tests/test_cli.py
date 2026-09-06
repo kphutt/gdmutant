@@ -15,10 +15,15 @@ from conftest import MarkerRunner
 import gdmutant.cli as cli
 from gdmutant.adapters.gdscript.runner import GutRunner
 from gdmutant.cli import (
+    _CONFIG_FILENAME,
+    _CONFIG_KEY_TO_DEST,
     _DEFAULT_REPORT,
     _EXAMPLE_NAME,
+    _GDUNIT_ADDON_REL,
+    _GUT_ADDON_REL,
     _cpu_worker_ceiling,
     _default_report_stem,
+    _detect_runner,
     _git_backup,
     _load_config,
     _report_path_problem,
@@ -26,6 +31,7 @@ from gdmutant.cli import (
     _resolve_jobs,
     _resolve_progress_style,
     _write_example,
+    _write_init_config,
     build_parser,
     list_mutants,
     main,
@@ -3888,3 +3894,166 @@ def test_example_refuses_to_overwrite_an_existing_file(
     assert "already exists" in capsys.readouterr().err
     # Untouched -- a silent overwrite is exactly the failure this guard exists to prevent.
     assert target.read_text(encoding="utf-8") == "something the caller already had\n"
+
+
+# --- `gdmutant init`: scaffold a starter .gdmutant.toml, so nobody hand-writes the first one ------
+
+
+def test_detect_runner_prefers_gdunit4_when_both_addons_present(tmp_path: Path) -> None:
+    (tmp_path / _GDUNIT_ADDON_REL).mkdir(parents=True)
+    (tmp_path / _GUT_ADDON_REL).mkdir(parents=True)
+    assert _detect_runner(tmp_path) == "gdunit4"
+
+
+def test_detect_runner_finds_gut_when_only_gut_is_installed(tmp_path: Path) -> None:
+    (tmp_path / _GUT_ADDON_REL).mkdir(parents=True)
+    assert _detect_runner(tmp_path) == "gut"
+
+
+def test_detect_runner_returns_none_with_no_addon_installed(tmp_path: Path) -> None:
+    assert _detect_runner(tmp_path) is None
+
+
+def test_write_init_config_creates_a_file_of_only_valid_keys(tmp_path: Path) -> None:
+    import tomllib
+
+    rc = _write_init_config(tmp_path)
+
+    assert rc == 0
+    cfg = tmp_path / _CONFIG_FILENAME
+    assert cfg.is_file()
+    keys = set(tomllib.loads(cfg.read_text(encoding="utf-8")))
+    assert keys, "the scaffold must not be empty"
+    assert keys <= set(_CONFIG_KEY_TO_DEST), f"unknown keys the loader would reject: {keys}"
+
+
+def test_write_init_config_detects_and_sets_the_runner(tmp_path: Path) -> None:
+    import tomllib
+
+    (tmp_path / _GDUNIT_ADDON_REL).mkdir(parents=True)
+
+    assert _write_init_config(tmp_path) == 0
+
+    cfg = tmp_path / _CONFIG_FILENAME
+    parsed = tomllib.loads(cfg.read_text(encoding="utf-8"))
+    assert parsed["runner"] == "gdunit4"
+
+
+def test_write_init_config_leaves_runner_unset_when_undetected(tmp_path: Path) -> None:
+    import tomllib
+
+    assert _write_init_config(tmp_path) == 0
+
+    cfg = tmp_path / _CONFIG_FILENAME
+    parsed = tomllib.loads(cfg.read_text(encoding="utf-8"))
+    assert "runner" not in parsed  # nothing to guess from -- left commented, not invented
+
+
+def test_write_init_config_scaffold_is_readable_by_load_config(tmp_path: Path) -> None:
+    # The file init writes must be exactly what the loader accepts -- not just parseable TOML, but
+    # a config _load_config validates cleanly, with nothing trust-required set (init never guesses
+    # project/command/godot).
+    (tmp_path / _GUT_ADDON_REL).mkdir(parents=True)
+    assert _write_init_config(tmp_path) == 0
+
+    settings = _load_config(tmp_path / _CONFIG_FILENAME)
+    assert settings is not None
+    assert settings == {"runner": "gut", "tests": "res://test"}
+
+
+def test_write_init_config_refuses_to_overwrite_an_existing_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = tmp_path / _CONFIG_FILENAME
+    cfg.write_text("runner = 'command'\n", encoding="utf-8")
+
+    rc = _write_init_config(tmp_path)
+
+    assert rc == 2
+    assert "already exists" in capsys.readouterr().err
+    assert cfg.read_text(encoding="utf-8") == "runner = 'command'\n"  # untouched
+
+
+def test_write_init_config_force_overwrites_an_existing_file(tmp_path: Path) -> None:
+    cfg = tmp_path / _CONFIG_FILENAME
+    cfg.write_text("runner = 'command'\n", encoding="utf-8")
+
+    rc = _write_init_config(tmp_path, force=True)
+
+    assert rc == 0
+    assert "runner = 'command'" not in cfg.read_text(encoding="utf-8")
+
+
+def test_write_init_config_unwritable_destination_returns_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    not_a_dir = tmp_path / "not_a_dir"
+    not_a_dir.write_text("x", encoding="utf-8")
+
+    rc = _write_init_config(not_a_dir)
+
+    assert rc == 2
+    assert "cannot write" in capsys.readouterr().err
+
+
+def test_main_init_dispatches_to_write_init_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # No addons/ next to the repo checkout's cwd, so this exercises the undetected-runner path too.
+    cfg = tmp_path / _CONFIG_FILENAME
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
+
+    assert main(["init"]) == 0
+
+    assert cfg.is_file()
+    assert "Wrote" in capsys.readouterr().out
+
+
+def test_main_init_a_second_time_refuses_without_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = tmp_path / _CONFIG_FILENAME
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
+
+    assert main(["init"]) == 0
+    before = cfg.read_bytes()
+    assert main(["init"]) == 2
+    assert cfg.read_bytes() == before
+
+
+def test_main_init_force_overwrites(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = tmp_path / _CONFIG_FILENAME
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
+
+    assert main(["init"]) == 0
+    assert main(["init", "--force"]) == 0
+
+
+def test_main_init_force_recovers_from_a_malformed_existing_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The main reason to reach for `init --force` in the first place: the existing config is broken
+    # enough that you want to regenerate it. `main()` used to call `_load_config()` unconditionally
+    # before dispatch, so a `.gdmutant.toml` that fails to parse returned 2 right there -- before
+    # `init`'s own dispatch, `--force` included, was ever reached.
+    cfg = tmp_path / _CONFIG_FILENAME
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
+    cfg.write_text("this is not valid toml [[[", encoding="utf-8")
+
+    assert main(["init", "--force"]) == 0
+    assert "this is not valid toml" not in cfg.read_text(encoding="utf-8")
+
+
+def test_main_run_subcommand_is_unaffected_by_the_init_subparser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Adding the `init` subparser must leave `run`'s own behaviour and defaults untouched.
+    path = _gd(tmp_path)
+    cfg = tmp_path / "no-such-config.toml"  # absent -- _load_config returns {} either way
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
+    runner = RecordingRunner()
+    monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
+
+    assert main(["run", str(path), "--runner", "gdunit4"]) == 0
