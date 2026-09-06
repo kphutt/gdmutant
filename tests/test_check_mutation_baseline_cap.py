@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -103,3 +104,91 @@ def test_count_mutants_per_file_matches_a_real_poodle_generation_pass() -> None:
     counts = check_mutation_baseline.count_mutants_per_file(["gdmutant/engine/spans.py"])
     assert counts.keys() == {"gdmutant/engine/spans.py"}
     assert counts["gdmutant/engine/spans.py"] > 0
+
+
+# --- main: the zero-mutant case ------------------------------------------------------------------
+
+
+class _FakeResult:
+    def __init__(self, returncode: int, stdout: str) -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+
+
+def test_no_files_changed_still_passes() -> None:
+    # Short-circuits before any counting, so this must stay a clean pass.
+    with mock.patch.object(check_mutation_baseline, "changed_gdmutant_files", return_value=[]):
+        assert check_mutation_baseline.main([]) == 0
+
+
+def test_zero_measured_mutants_on_changed_files_fails_instead_of_reporting_a_clean_pass() -> None:
+    # Files changed, but poodle's own mutant generation found nothing to mutate in any of them.
+    # Running poodle here would print "0 survivors out of 0 mutants" -- a passing score that
+    # measured nothing. That must not report the same clean exit code as a run that measured
+    # everything and found no survivors.
+    with (
+        mock.patch.object(
+            check_mutation_baseline,
+            "changed_gdmutant_files",
+            return_value=["gdmutant/engine/spans.py"],
+        ),
+        mock.patch.object(
+            check_mutation_baseline,
+            "count_mutants_per_file",
+            return_value={"gdmutant/engine/spans.py": 0},
+        ),
+        mock.patch.object(
+            check_mutation_baseline.subprocess,
+            "run",
+            return_value=_FakeResult(0, "no mutants found"),
+        ),
+    ):
+        rc = check_mutation_baseline.main([])
+    assert rc != 0, f"zero measured mutants on changed files must not report a clean pass, got {rc}"
+
+
+def test_every_file_over_the_cap_individually_still_fails_instead_of_a_clean_pass() -> None:
+    # Same "gate that passes without checking anything" shape as the zero-measured-mutants case
+    # above, reached from the sibling branch: every changed file alone exceeds --max-mutants, so
+    # select_files_within_cap() skips all of them, files ends up empty, and poodle never runs.
+    # That must not report the same clean exit code as a run that actually measured something.
+    with (
+        mock.patch.object(
+            check_mutation_baseline,
+            "changed_gdmutant_files",
+            return_value=["huge.py"],
+        ),
+        mock.patch.object(
+            check_mutation_baseline,
+            "count_mutants_per_file",
+            return_value={"huge.py": 500},
+        ),
+    ):
+        rc = check_mutation_baseline.main(["--max-mutants", "50"])
+    assert rc != 0, (
+        f"every changed file exceeding the cap individually must not report a clean pass "
+        f"(nothing was measured), got {rc}"
+    )
+
+
+def test_a_real_nonzero_mutant_run_reported_clean_by_poodle_still_passes() -> None:
+    # Same shape, but with a real nonzero mutant count and poodle reporting a clean run: the
+    # ordinary passing case must still pass. Guards against an over-broad fix that fails every run.
+    with (
+        mock.patch.object(
+            check_mutation_baseline,
+            "changed_gdmutant_files",
+            return_value=["gdmutant/engine/spans.py"],
+        ),
+        mock.patch.object(
+            check_mutation_baseline,
+            "count_mutants_per_file",
+            return_value={"gdmutant/engine/spans.py": 5},
+        ),
+        mock.patch.object(
+            check_mutation_baseline.subprocess,
+            "run",
+            return_value=_FakeResult(0, "poodle report: 5 mutants, 0 survivors"),
+        ),
+    ):
+        assert check_mutation_baseline.main([]) == 0

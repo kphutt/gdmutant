@@ -190,6 +190,19 @@ def main(argv: list[str] | None = None) -> int:
         f"cap is {max_mutants}"
     )
 
+    if total == 0:
+        # Files changed, but poodle's own mutant generation found nothing to mutate in any of
+        # them (e.g. the diff only touched blank lines, comments, or constructs no mutator
+        # covers). Running poodle here would report "0 survivors out of 0 mutants" -- a passing
+        # score that measured nothing, indistinguishable from a real clean run. That is exactly
+        # the "gate that passes without checking anything" shape AGENTS.md calls out, so this
+        # fails loud instead of falling through to the poodle run below.
+        print(
+            "check_mutation_baseline: 0 mutants generated for the changed file(s) -- nothing was "
+            "actually checked, not a clean run. Failing instead of reporting a false pass."
+        )
+        return 1
+
     if total > max_mutants:
         files, skipped = select_files_within_cap(files, counts, max_mutants)
         skipped_total = sum(n for _, n in skipped)
@@ -202,11 +215,16 @@ def main(argv: list[str] | None = None) -> int:
         for f, n in skipped:
             print(f"  SKIPPED {f} ({n} mutants)")
         if not files:
+            # Same shape as the `total == 0` guard above: every changed file individually exceeds
+            # the cap, poodle never runs, and nothing was actually measured. Returning 0 here would
+            # be the same false "clean pass" this PR's other fix exists to close, just reached from
+            # the sibling branch instead.
             print(
                 "check_mutation_baseline: every changed file alone exceeds the cap -- nothing "
-                "left to run this pass."
+                "was actually checked, not a clean run. Raise --max-mutants (or "
+                f"{MAX_MUTANTS_ENV_VAR}) to cover at least one, or split the diff."
             )
-            return 0
+            return 1
         print(f"check_mutation_baseline: running poodle on the remaining {len(files)} file(s)")
 
     only_args: list[str] = []
