@@ -186,7 +186,13 @@ def main(argv: list[str] | None = None) -> int:
 
     files = changed_gdmutant_files()
     if not files:
-        print("no gdmutant/ files changed vs origin/main -- nothing to mutate")
+        # Names all three sources this checks, not just the commit range. The message used to say
+        # "vs origin/main" alone, which sent anyone debugging "why was my dirty-tree change not
+        # mutated?" back to the one front that was never the problem.
+        print(
+            "no gdmutant/ .py files changed vs origin/main, in the working tree, "
+            "or untracked -- nothing to mutate"
+        )
         return 0
 
     print(f"check_mutation_baseline: mutating {len(files)} changed file(s): {', '.join(files)}")
