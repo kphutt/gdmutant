@@ -243,13 +243,17 @@ def _survivor_markdown(mutant: Mutant, source_lines: list[str] | None) -> list[s
     of box-drawing; the code slot drops out gracefully when the source is unreadable. The narrative
     is `survivor_report_fields` — the exact copy the console block and the Stryker JSON carry, so
     the three surfaces can never drift (including its assert handling: an assert survivor gets the
-    assert explanation and the assert link here too, exactly as it does on the console)."""
+    assert explanation and the assert link here too, exactly as it does on the console).
+
+    That parity covers the path too: the heading renders `.as_posix()`, like the console block and
+    the report's `files` keys, so a Windows run's job summary cannot disagree with the other two
+    surfaces about the same survivor's path."""
     line_no = mutant.span.line
     src = None
     if source_lines is not None and 1 <= line_no <= len(source_lines):
         src = source_lines[line_no - 1]
     gap, risk_start = survivor_report_fields(mutant, source_lines)
-    out = [f"#### `{mutant.path}:{line_no}` · {mutant.operator_id}", ""]
+    out = [f"#### `{Path(mutant.path).as_posix()}:{line_no}` · {mutant.operator_id}", ""]
     if src is not None:
         out += [
             "```gdscript",

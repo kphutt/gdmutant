@@ -448,4 +448,7 @@ def test_survivor_block_renders_its_path_posix_on_every_os() -> None:
     block = "\n".join(render_survivor(mutant, ["func can_act():", "\tif a > b:"]))
 
     assert block.startswith("  corpus/turn_order.gd:2")
-    assert "corpus\turn_order.gd" not in block
+    # Raw string, deliberately: written as "corpus\turn_order.gd" this is `corpus` + TAB, which no
+    # output can ever contain, so the assertion passes whether or not the fix works -- a gate that
+    # checks nothing. It shipped that way and a reviewer caught it.
+    assert r"corpus\turn_order.gd" not in block

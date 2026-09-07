@@ -484,3 +484,36 @@ def test_stryker_report_carries_the_enum_explanation(tmp_path: Path) -> None:
     # Still SURVIVED, still scored: the explanation changed, the accounting did not.
     assert entry["status"] == "Survived"
     assert run.mutation_score == 0.0
+
+
+def test_all_three_survivor_surfaces_render_the_same_posix_path(tmp_path: Path) -> None:
+    """The job summary, the console block and the report keys must agree on a survivor's path.
+
+    `_survivor_markdown`'s own docstring promises the three surfaces "can never drift", but the
+    path was not part of that parity: it printed `mutant.path` raw while the other two had been
+    moved to `.as_posix()`, so a Windows run's job summary disagreed with its own console output
+    about the same survivor. Caught in review, after a fix that closed two of the three.
+
+    The path is built with `Path` rather than a hardcoded separator: `str()` renders a backslash on
+    Windows and a forward slash on POSIX, so a literal would make this unsatisfiable on one of them.
+    """
+    source = "func can_act():\n\treturn alive and not stunned\n"
+    nested = tmp_path / "corpus"
+    nested.mkdir()
+    path = nested / "turn_order.gd"
+    path.write_text(source, encoding="utf-8")
+    mutant = Mutant(str(path), Span(2, 15, 2, 18), "boolean", "and", "or")
+    run = MutationRun((MutantOutcome(mutant, Verdict.SURVIVED),))
+
+    markdown = job_summary_markdown(run)
+    console = "\n".join(render_survivor(mutant, source.splitlines()))
+
+    expected = Path(path).as_posix()
+    assert f"#### `{expected}:2`" in markdown
+    assert expected in console
+    # And no host-separator rendering: on Windows `str(path)` is the backslash form the job summary
+    # used to print, which must now appear in neither surface. On POSIX the two forms are equal, so
+    # the guard is skipped rather than asserting something trivially true.
+    if str(path) != expected:
+        assert str(path) not in markdown
+        assert str(path) not in console

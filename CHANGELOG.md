@@ -26,7 +26,8 @@ All notable changes to gdmutant are recorded here. The format follows
   working directory. A write-error message still echoes the literal path as typed, so a mistyped
   path's typo stays visible.
 - User-facing paths — the console `--dry-run` mutant listing, the survivor blocks, the per-file
-  score lines, and the JSON/HTML report's `files` map keys — are now normalized to forward slashes
+  score lines, the GitHub Actions job-summary Markdown, and the JSON/HTML report's `files` map
+  keys — are now normalized to forward slashes
   on every OS, instead of the host separator. A Windows run previously showed
   `corpus\turn_order.gd` in some of these places and `corpus/turn_order.gd` in others, so one
   report disagreed with itself; reports generated on Windows and Linux for the same source tree now
