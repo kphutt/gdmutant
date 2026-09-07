@@ -301,10 +301,15 @@ class _FakeGh:
 
     `live_contexts=None` reproduces the state that matters most: branch protection is enabled but
     carries no `required_status_checks` key at all, so nothing gates a merge.
+
+    Environments answer as already-converged by default, so a test about status checks is not also
+    asserting against environment drift it never set up. `environments_absent=True` flips them to
+    the real-world state found on 2026-09-07: `deployment_branch_policy: null`, every ref allowed.
     """
 
-    def __init__(self, live_contexts: list[str] | None) -> None:
+    def __init__(self, live_contexts: list[str] | None, environments_absent: bool = False) -> None:
         self.live_contexts = live_contexts
+        self.environments_absent = environments_absent
         self.calls: list[list[str]] = []
 
     def __call__(self, args: list[str], *, stdin: str | None = None) -> tuple[bool, str]:
@@ -316,9 +321,33 @@ class _FakeGh:
             return True, json.dumps(
                 {"required_status_checks": {"strict": True, "contexts": self.live_contexts}}
             )
+        if "/deployment-branch-policies" in joined and "-X" not in args:
+            environment = joined.split("environments/")[1].split("/")[0]
+            required = harden_github.REQUIRED_ENVIRONMENTS.get(environment, ())
+            return True, json.dumps(
+                {"branch_policies": [{"name": n, "type": t} for n, t in required]}
+            )
+        if "/environments/" in joined and "-X" not in args:
+            if self.environments_absent:
+                return True, '{"deployment_branch_policy": null}'
+            return True, json.dumps(
+                {
+                    "deployment_branch_policy": {
+                        "protected_branches": False,
+                        "custom_branch_policies": True,
+                    }
+                }
+            )
         if joined.startswith("api repos/") and "-X" not in args:
             return True, "{}"
         return True, ""
+
+    def wrote_environment_policy(self, environment: str) -> bool:
+        return any(
+            f"environments/{environment}/deployment-branch-policies" in " ".join(call)
+            and "POST" in call
+            for call in self.calls
+        )
 
     def wrote_protection(self) -> bool:
         return any(
@@ -366,9 +395,12 @@ def test_main_fails_when_every_gh_api_write_fails(
     assert harden_github.main(["kphutt/gdmutant"]) == 1
     out = capsys.readouterr().out
     assert "Branch protection NOT set" in out
-    # Pins the exact "N of M" wording (not just a substring) -- all six `_apply` calls fail here,
-    # so a mutation that corrupts the literal joining them ("of") must change this exact count.
-    assert "6 of 6 setting(s) failed to apply" in out
+    # Pins the exact "N of M" wording (not just a substring), so a mutation that corrupts the
+    # literal joining them ("of") must change this exact count. Eight, not six: the six `_apply`
+    # writes, plus the two environment READS, which now count as failures too -- an environment
+    # this run could not read is one whose policy it never verified, and reporting success about
+    # that is the shape this script exists to close.
+    assert "8 of 8 setting(s) failed to apply" in out
 
 
 @pytest.mark.usefixtures("_has_gh")
@@ -734,3 +766,136 @@ def test_codeowners_stated_check_count_matches_the_derived_list() -> None:
         "not just the one in that comment"
     )
     assert len(harden_github.all_required_contexts()) == 8
+
+
+# --------------------------------------------------------------------------------------------
+# Deployment branch policies. The gap these close: every other check in the script reads branch
+# protection, so an environment silently reverting to "no policy, every ref may publish" was
+# invisible to all of them -- which is exactly how `testpypi` came to have none while two shipping
+# docs described the policy as live (2026-09-07).
+# --------------------------------------------------------------------------------------------
+
+
+def test_absent_policy_reads_as_dangerous_not_as_an_empty_match() -> None:
+    # `deployment_branch_policy: null` means EVERY ref may deploy. Collapsing that to an empty set
+    # would make the most dangerous state render identically to a satisfied one.
+    absent = harden_github.LiveEnvironmentPolicy(readable=True, absent=True)
+    assert "EVERY ref" in absent.describe()
+    assert absent.missing((("v*", "tag"),)) == {("v*", "tag")}
+
+    unreadable = harden_github.LiveEnvironmentPolicy(readable=False, absent=False)
+    assert "UNREADABLE" in unreadable.describe()
+
+    empty = harden_github.LiveEnvironmentPolicy(readable=True, absent=False)
+    assert "EMPTY" in empty.describe()  # policies on, but nothing allowed -- distinct from absent
+
+
+def test_a_satisfied_environment_is_missing_nothing() -> None:
+    required = harden_github.REQUIRED_ENVIRONMENTS["testpypi"]
+    live = harden_github.LiveEnvironmentPolicy(
+        readable=True, absent=False, policies=frozenset(required)
+    )
+    assert live.missing(required) == set()
+
+
+def test_an_extra_live_policy_is_reported_but_never_counted_as_missing() -> None:
+    # Extras are surfaced, never deleted: silently removing a deliberate manual addition would make
+    # this script REDUCE a control it exists to hold.
+    required = harden_github.REQUIRED_ENVIRONMENTS["pypi"]
+    live = harden_github.LiveEnvironmentPolicy(
+        readable=True, absent=False, policies=frozenset({*required, ("release/*", "branch")})
+    )
+    assert live.missing(required) == set()
+    assert ("release/*", "branch") in live.policies
+
+
+def test_required_environments_match_what_the_release_runbook_documents() -> None:
+    # docs/releasing.md is the operator-facing description of these gates. If the spec here and the
+    # runbook disagree, one of them is lying to whoever reads it -- the "two paths that should
+    # agree" shape. Pins the direction that actually bit: `testpypi` must allow `main` (a rehearsal
+    # builds an untagged commit on purpose) while `pypi` must NOT.
+    assert ("main", "branch") in harden_github.REQUIRED_ENVIRONMENTS["testpypi"]
+    assert ("main", "branch") not in harden_github.REQUIRED_ENVIRONMENTS["pypi"]
+    assert ("v*", "tag") in harden_github.REQUIRED_ENVIRONMENTS["pypi"]
+
+    runbook = (Path(__file__).resolve().parent.parent / "docs" / "releasing.md").read_text(
+        encoding="utf-8"
+    )
+    assert "deployment-branch-policies" in runbook
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_a_run_adds_a_missing_deployment_branch_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The regression this closes end to end: an environment with no policy at all must be detected
+    # and written, not merely reported. Before environments were managed here, a converge run
+    # touched them not at all, so `testpypi` sat wide open while the tree said otherwise.
+    fake = _FakeGh(list(EXPECTED_CONTEXTS), environments_absent=True)
+    monkeypatch.setattr(harden_github, "_gh", fake)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 0
+    for environment in harden_github.REQUIRED_ENVIRONMENTS:
+        assert fake.wrote_environment_policy(environment), environment
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_a_converged_environment_is_not_rewritten(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Idempotence: POSTing a policy that already exists is an error, so a converged environment
+    # must be left alone rather than blindly re-POSTed on every run.
+    fake = _FakeGh(list(EXPECTED_CONTEXTS))
+    monkeypatch.setattr(harden_github, "_gh", fake)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 0
+    for environment in harden_github.REQUIRED_ENVIRONMENTS:
+        assert not fake.wrote_environment_policy(environment), environment
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_environment_converges_even_when_branch_protection_refuses_to_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A branch-protection drift guard must not also skip the environment policies.
+
+    The two are independent controls: one governs who may merge, the other which refs may publish
+    to an index. The environment loop originally sat AFTER the `return 1` guards that refuse a
+    reducing branch-protection write, so a repo with a required-check drift silently stopped
+    converging its publish gate too -- at exactly the moment it was already misconfigured. Caught
+    in review of PR #273.
+    """
+    # A live context the spec does not cover triggers the "would DROP" guard and its `return 1`.
+    fake = _FakeGh([*EXPECTED_CONTEXTS, "Some check the spec forgot"], environments_absent=True)
+    monkeypatch.setattr(harden_github, "_gh", fake)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 1  # still refuses the protection write
+    assert not fake.wrote_protection()
+    # ...but every environment still converged.
+    for environment in harden_github.REQUIRED_ENVIRONMENTS:
+        assert fake.wrote_environment_policy(environment), environment
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_an_unreadable_environment_makes_the_run_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed environment READ must fail the run, not just warn.
+
+    `main`'s exit code is the operator's only signal that a converge run actually converged. An
+    environment this run could not even read is one whose publish gate went unverified, so exiting
+    0 would report success about something never looked at -- the pass-without-checking shape this
+    script exists to close. Caught in review of PR #273.
+    """
+    fake = _FakeGh(list(EXPECTED_CONTEXTS))
+    real_call = fake.__call__
+
+    def failing_env_read(args: list[str], *, stdin: str | None = None) -> tuple[bool, str]:
+        joined = " ".join(args)
+        # Fail only the read of one environment; everything else behaves normally.
+        if "/environments/testpypi" in joined and "-X" not in args:
+            fake.calls.append(args)
+            return False, "boom"
+        return real_call(args, stdin=stdin)
+
+    monkeypatch.setattr(harden_github, "_gh", failing_env_read)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 1
+    # The readable one still converged: one bad read must not abandon the rest.
+    assert not fake.wrote_environment_policy("testpypi")
