@@ -287,3 +287,35 @@ def test_all_replacements_respects_a_custom_catalog() -> None:
     only_bool = (BOOLEAN,)
     assert all_replacements(">", catalog=only_bool) == []
     assert all_replacements("or", catalog=only_bool) == [("boolean", "and")]
+
+
+def test_numeric_bump_drops_a_float_mutant_the_double_cannot_represent() -> None:
+    # A float literal is an IEEE-754 double, so past ~17 significant digits a +/-1 in the last
+    # written place lands on the SAME double -- a mutant that is a byte-identical program. It can
+    # never be killed, so it would be reported as a survivor forever, telling a reader to close a
+    # gap where no bug can exist: a silently wrong survivor report, the one failure this engine
+    # must not have. `0.0174532925199432957` is degrees-to-radians, a constant real Godot code
+    # carries, and BOTH its bumps are unrepresentable -- so it yields no mutant at all, which is
+    # correct: at that precision there is no off-by-one this file can express.
+    assert NUMERIC.replacements("0.0174532925199432957") == ()
+    assert float("0.0174532925199432958") == float("0.0174532925199432957")  # why: same double
+
+    # Only the unrepresentable side is dropped, never a real one. sqrt(2)'s down-bump is a genuinely
+    # different double and survives; its up-bump is not and does not.
+    assert NUMERIC.replacements("1.4142135623730951") == ("1.4142135623730950",)
+    assert float("1.4142135623730950") != float("1.4142135623730951")
+
+    # An ordinary float is untouched: every bump here is exactly representable.
+    assert NUMERIC.replacements("0.5") == ("0.6", "0.4")
+    # An int literal is never float-tested at all -- GDScript stores it as an int, so it is exact
+    # at any width a real program uses, and 64-bit overflow is a separate question this bump does
+    # not try to answer.
+    assert NUMERIC.replacements("9007199254740993") == ("9007199254740994", "9007199254740992")
+
+
+def test_numeric_bump_survives_an_absurdly_long_literal_instead_of_aborting_the_run() -> None:
+    # Python refuses int() on a >4300-digit string, and that is a hard error, not a value. No real
+    # GDScript carries such a literal, but one pathological constant must not take down a whole
+    # mutation run -- the file is simply left with no mutant at that site.
+    assert NUMERIC.replacements("1" * 4400) == ()
+    assert NUMERIC.replacements("1" * 40) != ()  # a merely-long literal still bumps normally

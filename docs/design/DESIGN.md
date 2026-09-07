@@ -139,9 +139,10 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   LLM-semantic mode is nondeterministic and stays out of this core.)
 - NF-2: Standalone / no AI. No runtime dependency on any AI service. The core prerequisites are
   *Godot (already installed by a Godot dev) + the gdmutant CLI*, installed from PyPI with `pip`,
-  `pipx` or `uv` (see the README). Two things sit just outside that core. The JUnit runners need the
-  project's test-framework addon present, which any project already using GdUnit4 or GUT has, and
-  `--since` and `--require-clean` call git, so they need git on the path and the file in a repo.
+  `pipx` or `uv` (see the guide's Install section). Two things sit just outside that core. The
+  JUnit runners need the project's test-framework addon present, which any project already using
+  GdUnit4 or GUT has, and `--since` and `--require-clean` call git, so they need git on the path
+  and the file in a repo.
 - NF-3: Engine ⊥ adapter decoupling. `engine/` contains no GDScript-specific assumptions. Everything
   language-specific lives in `adapters/<lang>/`. A new language must not require touching the engine.
 

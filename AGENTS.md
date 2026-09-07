@@ -41,8 +41,8 @@ uv run pip-audit               # dependency audit
 ```
 
 `scripts/dev.py` groups the everyday subset of those into one discoverable command, for the fast
-inner loop while you're still writing a change (a dispatcher over the same commands above, so it
-can't drift from them):
+inner loop while you're still writing a change (a hand-copied list of the same commands above, so
+unlike `scripts/verify_local.py` it *can* go stale if `ci.yml` changes and nobody updates it):
 
 ```sh
 uv run python scripts/dev.py lint    # ruff check + ruff format --check + mypy

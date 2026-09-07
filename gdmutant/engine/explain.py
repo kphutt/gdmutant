@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 import textwrap
 from collections.abc import Sequence
+from pathlib import Path
 
 from gdmutant.engine.mutants import Mutant
 
@@ -442,8 +443,13 @@ def render_survivor(mutant: Mutant, source_lines: list[str] | None) -> list[str]
     # the kind of change obvious, and the doc link still resolves to the right operator page. What a
     # reader scanning many entries across many files actually needs first is the file and the
     # function, so that's the leading line instead.
-    # The full path (as given, editors linkify ``path:line``) — unambiguous across a multi-file run.
-    out = [f"  {mutant.path}:{line_no}" + (f"   func {func}" if func else ""), ""]
+    # The full path (editors linkify ``path:line``) — unambiguous across a multi-file run. Rendered
+    # with `.as_posix()`, never a raw `str(Path(...))` (which renders backslashes on Windows), so a
+    # survivor reads identically on Linux, macOS and Windows and can be diffed across machines. This
+    # is the same reported-findings rule the `--dry-run` listing and the report's `files` keys
+    # follow; diagnostics that echo a path the caller typed (config errors, write failures) stay
+    # literal on purpose, so a typo stays visible.
+    out = [f"  {Path(mutant.path).as_posix()}:{line_no}" + (f"   func {func}" if func else ""), ""]
     if src is not None:
         out.append(f"   {line_no:>4} | {src.expandtabs(4)}")
         caret_at = _display_col(src[: col - 1])

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from gdmutant.engine.explain import (
     ASSERT_SECTION,
     ENUM_SECTION,
@@ -428,3 +430,25 @@ def test_rendered_survivors_link_to_the_section_that_explains_them() -> None:
 
     on_enum_mutant = _mutant("numeric", "0", "1", line=3, col=20)
     assert render_survivor(on_enum_mutant, _ENUM_LINES)[-2] == f"  more   {doc_url(ENUM_SECTION)}"
+
+
+def test_survivor_block_renders_its_path_posix_on_every_os() -> None:
+    # A survivor block is reported output: a reader reads it on one machine, a CI log shows it from
+    # another, and the two must agree. So its leading `path:line` renders POSIX everywhere, the same
+    # rule the --dry-run listing and the report's `files` keys already follow. Only the *reported*
+    # paths take this rule -- a diagnostic that echoes a path the caller typed (a config error, a
+    # write failure) still prints it literally, so a typo stays visible.
+    #
+    # The input is built with `Path(...)` instead of a hardcoded separator on purpose: `str()` here
+    # renders a backslash on Windows and a forward slash on POSIX, so a literal would make this
+    # assertion unsatisfiable on one of the two (see AGENTS.md's note on platform path rendering).
+    native = str(Path("corpus") / "turn_order.gd")
+    mutant = Mutant(native, Span(2, 12, 2, 13), "comparison", ">", ">=")
+
+    block = "\n".join(render_survivor(mutant, ["func can_act():", "\tif a > b:"]))
+
+    assert block.startswith("  corpus/turn_order.gd:2")
+    # Raw string, deliberately: written as "corpus\turn_order.gd" this is `corpus` + TAB, which no
+    # output can ever contain, so the assertion passes whether or not the fix works -- a gate that
+    # checks nothing. It shipped that way and a reviewer caught it.
+    assert r"corpus\turn_order.gd" not in block

@@ -161,6 +161,7 @@ _PUBLIC_ID_PREFIXES = (
     "OSL",
     "CDDL",
     "QPL",  # SPDX licence ids, in scripts/check_licenses.py's DENIED list
+    "IEEE",  # the floating-point standard (IEEE-754), named where float precision is reasoned about
     "GUT",
     "GDUNIT",  # the two supported test frameworks
     "BLE",

@@ -1257,7 +1257,12 @@ def run_mutation_paths(
         score = file_run.mutation_score
         score_str = "n/a" if score is None else f"{score * 100:.1f}%"
         scored = file_run.detected + file_run.survived
-        print(f"  {path}: {score_str}  ({file_run.detected} detected / {scored})", file=out)
+        # POSIX-normalized for the same reason the survivor blocks below it are: this line and those
+        # sit in one report, so a host separator here would disagree with them on Windows.
+        print(
+            f"  {Path(path).as_posix()}: {score_str}  ({file_run.detected} detected / {scored})",
+            file=out,
+        )
     print("", file=out)
     # Survivors carry their own path, so one aggregate summary lists them per file with the overall
     # score across every file's mutants.

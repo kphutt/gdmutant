@@ -195,7 +195,12 @@ def _decimal_bumps(match: re.Match[str]) -> tuple[str, ...]:
         return ()  # a bare `.`, `-`, `e3` or empty token: the pattern allows it, GDScript doesn't
     # Read the literal as an integer count of its own last decimal place, so one bump is one unit
     # of the precision the author wrote: `42` -> `43`, `0.016` -> `0.017`, `1.5e-3` -> `1.6e-3`.
-    units = int(match["sign"] + integer_digits + fraction_digits)
+    try:
+        units = int(match["sign"] + integer_digits + fraction_digits)
+    except ValueError:
+        # Python caps int()-from-string at 4300 digits. No real GDScript carries such a literal,
+        # but the cap is a hard error, and one absurd constant must not abort the whole run.
+        return ()
     if match["sign"] and units == 0:
         return ()  # `-0`/`-0.0` isn't a real negative literal; skip it (keeps bumps reversible)
     form = _DecimalForm(
@@ -207,7 +212,19 @@ def _decimal_bumps(match: re.Match[str]) -> tuple[str, ...]:
         point=match["point"] or "",
         exponent=match["exponent"] or "",
     )
-    return (form.render(units + 1), form.render(units - 1))
+    bumps = (form.render(units + 1), form.render(units - 1))
+    if not (form.point or form.exponent):
+        return bumps  # an int literal: GDScript stores it as an int, so every bump is exact
+    # A literal with a point or an exponent is an IEEE-754 double, and a bump in a decimal place
+    # the double cannot represent produces a byte-identical PROGRAM. `0.0174532925199432957`
+    # (degrees-to-radians, a constant real Godot code carries) and both its bumps are the same
+    # double, so such a mutant can never be killed: it would be reported as a survivor forever,
+    # telling a reader to close a gap where no bug can exist. That is a silently wrong survivor
+    # report, the one failure this engine must not have, so the unrepresentable bumps are dropped
+    # rather than emitted. A literal whose bumps BOTH vanish yields no mutant at all, which is
+    # correct: at that precision there is no off-by-one this file can express.
+    original = float(match[0])
+    return tuple(bump for bump in bumps if float(bump) != original)
 
 
 def _radix_bumps(match: re.Match[str]) -> tuple[str, ...]:
@@ -254,6 +271,14 @@ class NumericBumpOperator:
     (``1_000_000`` -> ``1_000_001``), a bare or trailing point (``.5`` -> ``.6``, ``1.`` -> ``2.``),
     hex digit case (``0xFF`` -> ``0x100``) and an exponent suffix (``1.5e-3`` -> ``1.6e-3``) all
     survive the bump.
+
+    **A float bump the double cannot represent is not emitted.** A literal carrying a point or an
+    exponent is an IEEE-754 double, so past roughly 17 significant digits a ±1 in the last written
+    place lands on the same double and the "mutant" is a byte-identical program — unkillable, and
+    therefore a survivor reported forever against a line where no bug can exist. Such bumps are
+    dropped, so a very high-precision constant (``0.0174532925199432957``, degrees-to-radians)
+    yields one mutant or none rather than a false gap. Integer literals never take this test:
+    GDScript stores them as ints, so their bumps are exact.
 
     Every replacement is itself a literal this operator recognizes, so a bump can always be bumped
     back to the **value** it started from. The **spelling** comes back only while the digits still
