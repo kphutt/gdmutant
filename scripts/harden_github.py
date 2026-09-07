@@ -863,7 +863,13 @@ def main(argv: list[str] | None = None) -> int:
     for environment, required in sorted(REQUIRED_ENVIRONMENTS.items()):
         policy = live_environment_policy(args.repo, environment)
         if not policy.readable:
-            _warn(f"Could not read the '{environment}' environment; leaving its policy alone.")
+            # Counted as a failure, not merely warned about. Leaving it out of `applied` let a run
+            # that never managed to READ an environment still exit 0 -- the operator's only signal
+            # would say "converged" about a publish gate this run never even looked at. That is the
+            # same pass-without-checking shape this script exists to close, so an unreadable
+            # environment is a failed run, exactly as a failed write is.
+            _warn(f"Could not read the '{environment}' environment; its policy was NOT verified.")
+            applied.append(False)
             continue
         if policy.absent:
             applied.append(

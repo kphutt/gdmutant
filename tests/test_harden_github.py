@@ -395,9 +395,12 @@ def test_main_fails_when_every_gh_api_write_fails(
     assert harden_github.main(["kphutt/gdmutant"]) == 1
     out = capsys.readouterr().out
     assert "Branch protection NOT set" in out
-    # Pins the exact "N of M" wording (not just a substring) -- all six `_apply` calls fail here,
-    # so a mutation that corrupts the literal joining them ("of") must change this exact count.
-    assert "6 of 6 setting(s) failed to apply" in out
+    # Pins the exact "N of M" wording (not just a substring), so a mutation that corrupts the
+    # literal joining them ("of") must change this exact count. Eight, not six: the six `_apply`
+    # writes, plus the two environment READS, which now count as failures too -- an environment
+    # this run could not read is one whose policy it never verified, and reporting success about
+    # that is the shape this script exists to close.
+    assert "8 of 8 setting(s) failed to apply" in out
 
 
 @pytest.mark.usefixtures("_has_gh")
@@ -869,3 +872,30 @@ def test_environment_converges_even_when_branch_protection_refuses_to_write(
     # ...but every environment still converged.
     for environment in harden_github.REQUIRED_ENVIRONMENTS:
         assert fake.wrote_environment_policy(environment), environment
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_an_unreadable_environment_makes_the_run_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed environment READ must fail the run, not just warn.
+
+    `main`'s exit code is the operator's only signal that a converge run actually converged. An
+    environment this run could not even read is one whose publish gate went unverified, so exiting
+    0 would report success about something never looked at -- the pass-without-checking shape this
+    script exists to close. Caught in review of PR #273.
+    """
+    fake = _FakeGh(list(EXPECTED_CONTEXTS))
+    real_call = fake.__call__
+
+    def failing_env_read(args: list[str], *, stdin: str | None = None) -> tuple[bool, str]:
+        joined = " ".join(args)
+        # Fail only the read of one environment; everything else behaves normally.
+        if "/environments/testpypi" in joined and "-X" not in args:
+            fake.calls.append(args)
+            return False, "boom"
+        return real_call(args, stdin=stdin)
+
+    monkeypatch.setattr(harden_github, "_gh", failing_env_read)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 1
+    # The readable one still converged: one bad read must not abandon the rest.
+    assert not fake.wrote_environment_policy("testpypi")
