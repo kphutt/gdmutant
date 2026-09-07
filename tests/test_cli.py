@@ -105,7 +105,9 @@ def test_run_mutation_prints_summary_and_returns_zero_with_survivors(
     out = capsys.readouterr().out
     assert "Mutation score:" in out
     assert "Survivors" in out
-    assert str(path) in out  # each survivor line names the real source path
+    # Each survivor line names the real source path, POSIX-rendered on every OS (never `str(path)`,
+    # which is a backslash form on Windows that the report deliberately no longer prints).
+    assert Path(path).as_posix() in out
 
 
 def test_all_survived_warning_reaches_stderr_when_no_mutant_is_killed(
@@ -2332,6 +2334,25 @@ def test_run_mutation_paths_aggregates_and_writes_merged_report(
     data = json.loads(report.read_text(encoding="utf-8"))
     # Report keys are POSIX-normalized regardless of host OS.
     assert set(data["files"]) == {Path(a).as_posix(), Path(b).as_posix()}
+
+
+def test_per_file_score_lines_and_survivor_blocks_agree_on_posix_separators(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The "N files:" per-file score lines and the survivor blocks below them are one report, printed
+    # by two different modules (cli.py and engine/explain.py). On Windows the score line used to
+    # render the host separator while the report's own `files` keys were already POSIX -- one report
+    # disagreeing with itself, the shape AGENTS.md names. Both render POSIX now. `sub/b.gd` is the
+    # nested source from `_multi_project`, so it actually carries a separator to get wrong.
+    a, b = _multi_project(tmp_path)
+    rc = cli.run_mutation_paths([a, b], str(tmp_path), RecordingRunner())
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    for source in (a, b):
+        # Built via as_posix(), never a hardcoded separator: a literal is unsatisfiable on one OS.
+        assert f"  {Path(source).as_posix()}: " in out
+    assert str(Path(b)) not in out or os.sep == "/"  # no host-separator rendering on Windows
 
 
 def test_all_survived_warning_fires_on_a_multi_file_run_with_no_kills(

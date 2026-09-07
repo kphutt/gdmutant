@@ -219,7 +219,9 @@ def test_readme_shows_the_current_console_format_not_the_retired_one() -> None:
     # the example and is pinned EQUIVALENT by tests/test_selftest_live.py, so its `start` line sent
     # readers to write a test that passes under the mutant. This one is a real coverage gap.
     src = (repo / "corpus" / "turn_order.gd").read_text(encoding="utf-8").splitlines()
-    m = Mutant(r"corpus\turn_order.gd", Span(27, 15, 27, 18), "boolean", "and", "or")
+    # The path is built from `Path`, not a hardcoded separator: the renderer POSIX-normalizes it, so
+    # the README shows one form on every OS and this stays satisfiable on Windows and POSIX alike.
+    m = Mutant(str(Path("corpus") / "turn_order.gd"), Span(27, 15, 27, 18), "boolean", "and", "or")
     assert "\n".join(render_survivor(m, src)) in readme
 
 

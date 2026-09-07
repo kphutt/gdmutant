@@ -52,31 +52,26 @@ and its detail card: what it means, why it's risky, and how to close it.
 
 ## Quickstart
 
-The fastest way to try it needs no install and no Godot:
-[`uvx`](https://docs.astral.sh/uv/guides/tools/) runs gdmutant straight from PyPI, once, without
-adding it to anything.
+This mutates `corpus/`, a small real Godot project bundled in this repo just for this: a real
+script and a real GUT/gdUnit4 suite to try gdmutant against before pointing it at your own.
 
 ```sh
-uvx gdmutant example                       # writes a small starter script, gdmutant-hello-world.gd
-uvx gdmutant run gdmutant-hello-world.gd --dry-run
-# preview: lists the mutants gdmutant would try. No Godot, no test run, nothing installed.
+git clone https://github.com/kphutt/gdmutant   # for corpus/, the sample project you'll mutate
+
+cd gdmutant                                # corpus/ lives right here, at the repo root
+
+pip install 'gdmutant==0.1.*'              # the released CLI, from PyPI (0.x: pin the minor)
+
+gdmutant run corpus/turn_order.gd --dry-run
+# preview: lists the mutants gdmutant would try. No Godot needed, no test run, no survivors yet.
 ```
 
 That's a preview, not the payoff: `--dry-run` only lists mutants, it never runs a test against
 them. The actual point of gdmutant is the **survivor**: a mutant whose test run still passed,
 meaning it marks a line where a real bug could hide and nothing would catch it. Seeing one for
-real means rerunning an actual test suite, which needs an actual Godot project. This repo ships
-one just for that: `corpus/`, a small real Godot project with a real GUT/gdUnit4 suite.
+real means rerunning `corpus/`'s actual GUT/gdUnit4 suite:
 
 ```sh
-git clone https://github.com/kphutt/gdmutant
-
-cd gdmutant                                # corpus/ lives right here, at the repo root
-
-pip install .                              # installs gdmutant and its own dependencies into this checkout
-# Prefer a global `gdmutant` command instead? `uv tool install 'gdmutant==0.1.*'` (or
-# `pipx install 'gdmutant==0.1.*'`) installs it once, isolated, usable from any directory.
-
 python scripts/install_gdunit4.py          # gdUnit4 is a Godot addon that isn't vendored in git. This fetches it
 
 # The first run below goes quiet for a bit right after it starts: that's Godot importing every
@@ -90,7 +85,7 @@ Output:
 ```
 ...
 
-  corpus\turn_order.gd:27   func can_act
+  corpus/turn_order.gd:27   func can_act
 
      27 |     return alive and not stunned
         |                  ^  changed  and  to  or: every test still passed
@@ -194,7 +189,7 @@ into the job summary. The step only fails on a real error, like an already-red s
 survivors. Your project's existing GUT or gdUnit4 addon, and a suite that already passes, are all
 it needs.
 
-The same `since` scoping works locally too. `gdmutant run --since origin/main` checks only your
+The same `since` scoping works locally too. Adding `--since origin/main` to a run checks only your
 latest changes, for fast iteration before you commit. The Action runs it the same way in CI, so
 every PR gets checked automatically, even one you didn't run gdmutant against yourself.
 

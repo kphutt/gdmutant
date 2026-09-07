@@ -25,11 +25,13 @@ All notable changes to gdmutant are recorded here. The format follows
   relative string typed on the command line, so the report is findable regardless of the process's
   working directory. A write-error message still echoes the literal path as typed, so a mistyped
   path's typo stays visible.
-- User-facing paths — the console `--dry-run` mutant listing and the JSON/HTML report's `files`
-  map keys — are now normalized to forward slashes on every OS, instead of the host separator. A
-  Windows run previously showed `corpus\turn_order.gd` in these two places while the console
-  header and the docs both used `corpus/turn_order.gd`; reports generated on Windows and Linux for
-  the same source tree now share the same keys.
+- User-facing paths — the console `--dry-run` mutant listing, the survivor blocks, the per-file
+  score lines, and the JSON/HTML report's `files` map keys — are now normalized to forward slashes
+  on every OS, instead of the host separator. A Windows run previously showed
+  `corpus\turn_order.gd` in some of these places and `corpus/turn_order.gd` in others, so one
+  report disagreed with itself; reports generated on Windows and Linux for the same source tree now
+  read identically and share the same keys. Diagnostics that echo a path the caller typed (a config
+  error, a write failure) still print it literally, so a mistyped path's typo stays visible.
 
 ### Removed
 
@@ -56,6 +58,15 @@ All notable changes to gdmutant are recorded here. The format follows
   `$Sprite2D*Label` is valid GDScript. Measured over three real projects, these were 20% of all
   arithmetic mutants generated, each one either a fake kill inflating the score or a survivor
   pointing at a `/` that was never arithmetic.
+- A float bump the IEEE-754 double cannot represent is no longer emitted. Past roughly 17
+  significant digits, ±1 in the last written place lands on the same double, so the "mutant" was a
+  byte-identical program: unkillable, and therefore reported as a survivor forever against a line
+  where no bug can exist. `0.0174532925199432957` (degrees-to-radians, a constant real Godot code
+  carries) produced two such false survivors. Only the unrepresentable side is dropped, so a
+  literal with one representable bump still yields that one. Integer literals are unaffected.
+- An absurdly long decimal literal (over 4300 digits, past Python's `int()`-from-string limit) no
+  longer aborts the whole run with an unhandled error; the site simply yields no mutant.
+
 ## [0.1.2] - 2026-08-07
 
 ### Fixed
