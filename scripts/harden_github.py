@@ -105,6 +105,23 @@ REQUIRED_APP_CHECKS = (
     "Socket Security: Pull Request Alerts",
 )
 
+# Deployment branch policies for the two publish environments: which refs may reach an index at
+# all. Config-as-code here rather than a one-time manual seed, because this script's other checks
+# read branch protection ONLY — an environment whose policy silently reverts to "every ref
+# allowed" was invisible to every one of them. That is not hypothetical: on 2026-09-07 `testpypi`
+# was found with no policy at all (`deployment_branch_policy: null`) while BOTH `publish.yml`'s
+# header and `docs/releasing.md` described the policy as a live control, so the tree asserted a
+# gate that did not exist and nothing here could contradict it — this repo's recurring bug one,
+# one layer up. A policy listed here is required to exist; extra policies are reported, not
+# deleted, so a deliberate manual addition is never silently reverted.
+#
+# `pypi` is the real index: only a version tag may reach it. `testpypi` is the rehearsal index,
+# and a dispatch builds an untagged commit on purpose, so `main` is allowed alongside the tags.
+REQUIRED_ENVIRONMENTS: dict[str, tuple[tuple[str, str], ...]] = {
+    "pypi": (("v*", "tag"),),
+    "testpypi": (("main", "branch"), ("v*", "tag")),
+}
+
 
 def _ok(msg: str) -> None:
     print(f"\033[1;32m[ok]\033[0m   {msg}")
@@ -515,6 +532,54 @@ def live_required_checks(repo: str) -> LiveRequiredChecks:
     return required_checks_of(json.loads(out))
 
 
+@dataclass(frozen=True)
+class LiveEnvironmentPolicy:
+    """One environment's deployment branch policy today — as states, not just a list.
+
+    Mirrors `LiveRequiredChecks`, and for the same reason: "this environment allows every ref"
+    and "this environment allows exactly these refs" are opposite facts, and collapsing both to an
+    empty set is precisely how a report reads as fine while nothing is gating anything. `absent`
+    is the dangerous one (`deployment_branch_policy: null` — every ref may deploy); `readable`
+    keeps "we could not ask" apart from both.
+    """
+
+    readable: bool
+    absent: bool
+    policies: frozenset[tuple[str, str]] = frozenset()
+
+    def describe(self) -> str:
+        # ASCII only: printed, and a Windows console in cp1252 mangles anything else.
+        if not self.readable:
+            return "UNREADABLE: the environment endpoint did not answer"
+        if self.absent:
+            return "ABSENT: no policy at all, so EVERY ref may deploy to this environment"
+        if not self.policies:
+            return "EMPTY: custom policies are on but no ref pattern is allowed"
+        return ", ".join(sorted(f"{name} ({kind})" for name, kind in self.policies))
+
+    def missing(self, required: tuple[tuple[str, str], ...]) -> set[tuple[str, str]]:
+        """Required ref patterns this environment does not currently allow."""
+        return set(required) - set(self.policies)
+
+
+def live_environment_policy(repo: str, name: str) -> LiveEnvironmentPolicy:
+    """One environment's deployment branch policy today, fetched read-only."""
+    succeeded, out = _gh(["api", f"repos/{repo}/environments/{name}"])
+    if not succeeded:
+        return LiveEnvironmentPolicy(readable=False, absent=False)
+    if json.loads(out).get("deployment_branch_policy") is None:
+        return LiveEnvironmentPolicy(readable=True, absent=True)
+    succeeded, out = _gh(["api", f"repos/{repo}/environments/{name}/deployment-branch-policies"])
+    if not succeeded:
+        return LiveEnvironmentPolicy(readable=False, absent=False)
+    listed = json.loads(out).get("branch_policies") or []
+    return LiveEnvironmentPolicy(
+        readable=True,
+        absent=False,
+        policies=frozenset((p["name"], p.get("type", "branch")) for p in listed),
+    )
+
+
 def report_state(
     repo: str,
     contexts: list[str] | None = None,
@@ -595,6 +660,22 @@ def report_state(
         _log("Jobs that report on every PR but are not required checks (they cannot block):")
         for context in advisory:
             print(f"    {context}")
+
+    _log("Deployment branch policies  [which refs may reach a publish index]:")
+    for environment, required in sorted(REQUIRED_ENVIRONMENTS.items()):
+        policy = live_environment_policy(repo, environment)
+        print(f"    {environment:34} {policy.describe()}")
+        if policy.absent:
+            _warn(f"'{environment}' has NO deployment branch policy: every ref may publish to it.")
+            print("         publish.yml and docs/releasing.md both describe this as a live gate.")
+        missing = policy.missing(required)
+        if missing and policy.readable:
+            _warn(f"Ref patterns this spec would ADD to '{environment}': {sorted(missing)}")
+        extra = sorted(set(policy.policies) - set(required))
+        if extra:
+            # Reported, never written away: an extra pattern may be a deliberate manual addition,
+            # and silently deleting one would make this script reduce a control it exists to hold.
+            _log(f"    '{environment}' also allows (not managed here): {extra}")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -818,6 +899,49 @@ def main(argv: list[str] | None = None) -> int:
             args.dry_run,
         )
     )
+
+    # Environment policies come last: they are independent of branch protection, so a failure to
+    # derive or write that must not skip them (and vice versa). Each required pattern is applied
+    # on its own — POSTing one that already exists is an error GitHub reports, so the live set is
+    # read first and only genuinely-missing patterns are written. Nothing is ever deleted here.
+    for environment, required in sorted(REQUIRED_ENVIRONMENTS.items()):
+        policy = live_environment_policy(args.repo, environment)
+        if not policy.readable:
+            _warn(f"Could not read the '{environment}' environment; leaving its policy alone.")
+            continue
+        if policy.absent:
+            applied.append(
+                _apply(
+                    f"'{environment}': custom deployment branch policies turned on.",
+                    ["-X", "PUT", f"repos/{args.repo}/environments/{environment}"],
+                    {
+                        "deployment_branch_policy": {
+                            "protected_branches": False,
+                            "custom_branch_policies": True,
+                        }
+                    },
+                    f"Could not turn on custom branch policies for '{environment}'.",
+                    args.dry_run,
+                )
+            )
+        for name, kind in sorted(policy.missing(required)):
+            applied.append(
+                _apply(
+                    f"'{environment}': allow {name} ({kind}) to deploy.",
+                    [
+                        "-X",
+                        "POST",
+                        f"repos/{args.repo}/environments/{environment}/deployment-branch-policies",
+                        "-f",
+                        f"name={name}",
+                        "-f",
+                        f"type={kind}",
+                    ],
+                    None,
+                    f"Could not add the {name} ({kind}) policy to '{environment}'.",
+                    args.dry_run,
+                )
+            )
 
     if not args.dry_run:
         print()

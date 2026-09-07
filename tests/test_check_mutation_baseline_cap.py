@@ -192,3 +192,51 @@ def test_a_real_nonzero_mutant_run_reported_clean_by_poodle_still_passes() -> No
         ),
     ):
         assert check_mutation_baseline.main([]) == 0
+
+
+# --- changed_gdmutant_files ---------------------------------------------------------------------
+
+
+def test_uncommitted_and_untracked_changes_are_mutated_too(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The regression: this gate used to read a commit-range diff only.
+
+    Mutation testing here is a manual definition-of-done ("run it on changed logic before merge"),
+    so the natural moment to run it locally is with the work still dirty -- and `base...HEAD` sees
+    nothing then. It printed "nothing to mutate" and exited 0, which cannot be told apart from a
+    real pass: this repo's recurring bug one, in the script hardened against that very shape by
+    #260. Found 2026-09-07, when three genuinely-changed files were reported as no change.
+    """
+    committed = tmp_path / "committed.py"
+    dirty = tmp_path / "dirty.py"
+    brand_new = tmp_path / "brand_new.py"
+    for path in (committed, dirty, brand_new):
+        path.write_text("x = 1\n", encoding="utf-8")
+
+    def fake_git(args: list[str]) -> list[str]:
+        if "ls-files" in args:
+            return [str(brand_new)]
+        # The commit-range form passes one "base...HEAD" element; the working-tree form a bare
+        # "HEAD". Matching on "HEAD" alone would not tell them apart.
+        if any("..." in arg for arg in args):
+            return [str(committed)]
+        return [str(dirty)]
+
+    with mock.patch.object(check_mutation_baseline, "_git_lines", side_effect=fake_git):
+        found = check_mutation_baseline.changed_gdmutant_files()
+
+    # All three sources, or the gate measures less than the change it claims to cover.
+    assert set(found) == {str(committed), str(dirty), str(brand_new)}
+
+
+def test_a_file_named_by_two_sources_is_mutated_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A file both committed on the branch AND edited again since appears in two of the three
+    # sources. Mutating it twice would double its cost against the cap for no extra coverage.
+    same = tmp_path / "same.py"
+    same.write_text("x = 1\n", encoding="utf-8")
+
+    with mock.patch.object(check_mutation_baseline, "_git_lines", return_value=[str(same)]):
+        assert check_mutation_baseline.changed_gdmutant_files() == [str(same)]

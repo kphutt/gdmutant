@@ -83,14 +83,32 @@ print(json.dumps(counts))
 """
 
 
+def _git_lines(args: list[str]) -> list[str]:
+    result = subprocess.run(["git", *args], capture_output=True, text=True, check=True)
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def changed_gdmutant_files(base_ref: str = "origin/main") -> list[str]:
-    result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base_ref}...HEAD", "--", "gdmutant"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    """Every `gdmutant/` Python file this working tree changes relative to `base_ref`.
+
+    Three sources, unioned, because leaving any one out makes this gate silently measure nothing:
+
+    * ``{base_ref}...HEAD`` — what a pull request contains. This alone is what CI needs.
+    * ``git diff HEAD`` — staged and unstaged edits that are not committed yet.
+    * untracked files — a brand-new module is the change most worth mutating, and it appears in
+      neither diff.
+
+    The uncommitted sources are the reason this is not just the first one. Mutation testing is a
+    manual definition-of-done here ("run it on changed logic before merge"), so the natural moment
+    to run it locally is with the work still dirty — and a commit-range diff sees nothing then.
+    That printed "nothing to mutate" and exited 0, which is indistinguishable from a real pass:
+    this repo's recurring bug one, in the script hardened against exactly that shape by #260.
+    Measured 2026-09-07 on three genuinely-changed files that this gate reported as no change.
+    """
+    committed = _git_lines(["diff", "--name-only", f"{base_ref}...HEAD", "--", "gdmutant"])
+    uncommitted = _git_lines(["diff", "--name-only", "HEAD", "--", "gdmutant"])
+    untracked = _git_lines(["ls-files", "--others", "--exclude-standard", "--", "gdmutant"])
+    files = dict.fromkeys([*committed, *uncommitted, *untracked])  # de-duped, order kept
     return [f for f in files if f.endswith(".py") and Path(f).is_file()]
 
 
