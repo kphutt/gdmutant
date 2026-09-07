@@ -852,6 +852,53 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
 
+    # Environment policies converge BEFORE the branch-protection drift guards below, which can
+    # `return 1`. They are genuinely independent controls -- one governs who may merge, the other
+    # which refs may publish to an index -- so a branch-protection problem must not silently stop
+    # the publish gate from converging. Placing this after those guards did exactly that, which a
+    # reviewer caught: the failure fired precisely when the repo was already misconfigured, the
+    # worst moment to also lose the supply-chain control. Each required pattern is applied on its
+    # own -- POSTing one that already exists is an error GitHub reports, so the live set is read
+    # first and only genuinely-missing patterns are written. Nothing is ever deleted here.
+    for environment, required in sorted(REQUIRED_ENVIRONMENTS.items()):
+        policy = live_environment_policy(args.repo, environment)
+        if not policy.readable:
+            _warn(f"Could not read the '{environment}' environment; leaving its policy alone.")
+            continue
+        if policy.absent:
+            applied.append(
+                _apply(
+                    f"'{environment}': custom deployment branch policies turned on.",
+                    ["-X", "PUT", f"repos/{args.repo}/environments/{environment}"],
+                    {
+                        "deployment_branch_policy": {
+                            "protected_branches": False,
+                            "custom_branch_policies": True,
+                        }
+                    },
+                    f"Could not turn on custom branch policies for '{environment}'.",
+                    args.dry_run,
+                )
+            )
+        for name, kind in sorted(policy.missing(required)):
+            applied.append(
+                _apply(
+                    f"'{environment}': allow {name} ({kind}) to deploy.",
+                    [
+                        "-X",
+                        "POST",
+                        f"repos/{args.repo}/environments/{environment}/deployment-branch-policies",
+                        "-f",
+                        f"name={name}",
+                        "-f",
+                        f"type={kind}",
+                    ],
+                    None,
+                    f"Could not add the {name} ({kind}) policy to '{environment}'.",
+                    args.dry_run,
+                )
+            )
+
     # The ratchet, in both directions. Removing a live check and adding a check nothing reports are
     # equally destructive, and only one of them used to be caught.
     #
@@ -899,49 +946,6 @@ def main(argv: list[str] | None = None) -> int:
             args.dry_run,
         )
     )
-
-    # Environment policies come last: they are independent of branch protection, so a failure to
-    # derive or write that must not skip them (and vice versa). Each required pattern is applied
-    # on its own — POSTing one that already exists is an error GitHub reports, so the live set is
-    # read first and only genuinely-missing patterns are written. Nothing is ever deleted here.
-    for environment, required in sorted(REQUIRED_ENVIRONMENTS.items()):
-        policy = live_environment_policy(args.repo, environment)
-        if not policy.readable:
-            _warn(f"Could not read the '{environment}' environment; leaving its policy alone.")
-            continue
-        if policy.absent:
-            applied.append(
-                _apply(
-                    f"'{environment}': custom deployment branch policies turned on.",
-                    ["-X", "PUT", f"repos/{args.repo}/environments/{environment}"],
-                    {
-                        "deployment_branch_policy": {
-                            "protected_branches": False,
-                            "custom_branch_policies": True,
-                        }
-                    },
-                    f"Could not turn on custom branch policies for '{environment}'.",
-                    args.dry_run,
-                )
-            )
-        for name, kind in sorted(policy.missing(required)):
-            applied.append(
-                _apply(
-                    f"'{environment}': allow {name} ({kind}) to deploy.",
-                    [
-                        "-X",
-                        "POST",
-                        f"repos/{args.repo}/environments/{environment}/deployment-branch-policies",
-                        "-f",
-                        f"name={name}",
-                        "-f",
-                        f"type={kind}",
-                    ],
-                    None,
-                    f"Could not add the {name} ({kind}) policy to '{environment}'.",
-                    args.dry_run,
-                )
-            )
 
     if not args.dry_run:
         print()

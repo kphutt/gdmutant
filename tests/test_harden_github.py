@@ -846,3 +846,26 @@ def test_a_converged_environment_is_not_rewritten(monkeypatch: pytest.MonkeyPatc
     assert harden_github.main(["kphutt/gdmutant"]) == 0
     for environment in harden_github.REQUIRED_ENVIRONMENTS:
         assert not fake.wrote_environment_policy(environment), environment
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_environment_converges_even_when_branch_protection_refuses_to_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A branch-protection drift guard must not also skip the environment policies.
+
+    The two are independent controls: one governs who may merge, the other which refs may publish
+    to an index. The environment loop originally sat AFTER the `return 1` guards that refuse a
+    reducing branch-protection write, so a repo with a required-check drift silently stopped
+    converging its publish gate too -- at exactly the moment it was already misconfigured. Caught
+    in review of PR #273.
+    """
+    # A live context the spec does not cover triggers the "would DROP" guard and its `return 1`.
+    fake = _FakeGh([*EXPECTED_CONTEXTS, "Some check the spec forgot"], environments_absent=True)
+    monkeypatch.setattr(harden_github, "_gh", fake)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 1  # still refuses the protection write
+    assert not fake.wrote_protection()
+    # ...but every environment still converged.
+    for environment in harden_github.REQUIRED_ENVIRONMENTS:
+        assert fake.wrote_environment_policy(environment), environment
