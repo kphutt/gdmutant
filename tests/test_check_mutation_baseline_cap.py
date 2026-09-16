@@ -240,3 +240,36 @@ def test_a_file_named_by_two_sources_is_mutated_once(
 
     with mock.patch.object(check_mutation_baseline, "_git_lines", return_value=[str(same)]):
         assert check_mutation_baseline.changed_gdmutant_files() == [str(same)]
+
+
+def test_the_poodle_run_forces_utf8_so_the_report_can_be_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without UTF-8, poodle finishes every mutant and then dies writing its own report.
+
+    `poodle/reporters/basic.py` echoes each surviving mutant's unified diff. A diff carrying any
+    non-ASCII character raises `UnicodeEncodeError` out of `cp1252.py` on a default Windows console,
+    after all the work is done, so the run looks like it hangs or fails at the end rather than like
+    an encoding bug. Measured 2026-09-15: a 278-mutant sweep crashed there every time, and completed
+    in 73 seconds once these two variables were set.
+    """
+    captured: dict[str, dict[str, str]] = {}
+
+    def fake_run(cmd: list[str], **kwargs: object) -> mock.Mock:
+        captured["env"] = kwargs.get("env")  # type: ignore[assignment]
+        return mock.Mock(returncode=0, stdout="")
+
+    src = tmp_path / "one.py"
+    src.write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setattr(check_mutation_baseline, "changed_gdmutant_files", lambda: [str(src)])
+    monkeypatch.setattr(
+        check_mutation_baseline, "count_mutants_per_file", lambda files, **kw: {str(src): 1}
+    )
+    monkeypatch.setattr(check_mutation_baseline.subprocess, "run", fake_run)
+
+    check_mutation_baseline.main([])
+
+    env = captured.get("env")
+    assert env is not None, "the poodle run must pass an explicit env, not inherit the console's"
+    assert env.get("PYTHONUTF8") == "1"
+    assert env.get("PYTHONIOENCODING") == "utf-8"
