@@ -38,7 +38,7 @@ one is a web-login step only the account owner can do. Values (full table in the
   lives in repository configuration rather than in `publish.yml`, so nothing in the workflow file
   can show you whether it is set. Without one, an environment accepts a deployment from *any* ref,
   which means any ref can reach a public index under this project's trusted-publishing identity.
-  `pypi` allows only version tags; `testpypi` also allows `main`, because a rehearsal builds an
+  `pypi` allows only version tags. `testpypi` also allows `main`, because a rehearsal builds an
   untagged commit on purpose:
 
   ```sh
@@ -105,6 +105,29 @@ a release gate.
 
 1. Set the version in `pyproject.toml`. The tag must match it exactly.
    `scripts/check_release_tag.py` fails the release if it doesn't.
+
+   Three things move together with that number, in the same commit. Miss any one and the release
+   PR goes red, or worse, goes green while shipping something stale.
+
+   *`uv.lock` records gdmutant's own version too.* Run `uv lock` after editing `pyproject.toml` and
+   commit the result. Every CI job installs with `uv sync --frozen`, which refuses a lockfile that
+   disagrees with the manifest, so a bump without a re-lock fails before a single test runs. A
+   local `uv run` quietly re-locks for you, which is why this is easy to miss until CI says no.
+
+   *The `# vX.Y.Z` comment beside each pinned SHA.* Bump those to the version being cut, in this
+   same commit: `README.md`, `action.yml` and `docs/gdmutant-guide.md`. Do not touch the SHAs yet.
+   They cannot be right until the tag exists, and step 3 of the post-release checklist below is
+   where they get corrected.
+
+   *The pinned SHAs stay stale on purpose until after the tag.*
+   `tests/test_action_pin.py` knows about this window: while no tag exists for the packaged
+   version, it checks the version comments instead of the SHAs and warns `NOTCHECKED` for each
+   file, saying out loud which half did not run. Once the tag is pushed, the SHA half resumes and
+   will fail until the pins are bumped, which is the reminder working rather than a regression.
+   That test used to `assert` on the missing tag instead, which deadlocked the release it was meant
+   to protect: bumping the version turned a required check red, so the PR could not merge, so the
+   tag could never be pushed to turn it green. 0.1.2 was cut before that assertion existed, so
+   nothing caught it until 0.1.3.
 2. Date the changelog. Change `CHANGELOG.md`'s bare `## [Unreleased]` heading (Keep a Changelog's
    own convention: no version number yet, since nothing under it has shipped) to
    `## [X.Y.Z] - YYYY-MM-DD`, using the date you expect to publish: one rename adds both the
