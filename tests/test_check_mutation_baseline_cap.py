@@ -273,3 +273,9 @@ def test_the_poodle_run_forces_utf8_so_the_report_can_be_written(
     assert env is not None, "the poodle run must pass an explicit env, not inherit the console's"
     assert env.get("PYTHONUTF8") == "1"
     assert env.get("PYTHONIOENCODING") == "utf-8"
+    # And the machine's global git hooks are neutralised for the sweep: tests that commit to a
+    # throwaway repo would otherwise run the operator's secret-scan gate once per mutant, which
+    # cannot change a verdict and cost 54s vs 34.8s on the plain suite when measured.
+    assert env.get("GIT_CONFIG_COUNT") == "1"
+    assert env.get("GIT_CONFIG_KEY_0") == "core.hooksPath"
+    assert env.get("GIT_CONFIG_VALUE_0") == ""

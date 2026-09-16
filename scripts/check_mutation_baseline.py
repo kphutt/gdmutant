@@ -263,7 +263,21 @@ def main(argv: list[str] | None = None) -> int:
     # than as an encoding bug. AGENTS.md already names cp1252 as a Windows trap for gdmutant's own
     # output; this is the same trap, one tool over. Measured 2026-09-15: a 278-mutant sweep crashed
     # here every time until these two variables were set, and completed in 73 seconds with them.
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    # Also neutralise the machine's global `core.hooksPath` for every git this sweep spawns.
+    # Several tests build a throwaway repo in a temp directory and commit to it, and a globally set
+    # hooks path makes each of those commits run the operator's own secret-scan gate against a
+    # one-file scratch repo. Measured 2026-09-15 on the plain suite: 54s with those hooks firing,
+    # 34.8s without. A sweep pays that once per mutant, for a backstop that exists to guard real
+    # commits and that cannot change any mutant's verdict. poodle's runner copies `os.environ` into
+    # each trial (`run_env = os.environ.copy()`), so setting it here reaches every one of them.
+    env = {
+        **os.environ,
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "core.hooksPath",
+        "GIT_CONFIG_VALUE_0": "",
+    }
     result = subprocess.run(
         ["uv", "run", "poodle", "-c", "poodle.toml", *only_args],
         stdout=subprocess.PIPE,
