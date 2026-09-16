@@ -139,10 +139,18 @@ def check_pins_are_current(text: str, label: str, version: str, latest_tag_sha: 
             "Re-run once the tag is pushed.",
             stacklevel=2,
         )
+        # Count the SHA pins first, and require a comment on every one of them. Collecting only the
+        # commented pins and asserting that set is non-empty would let a file carrying one commented
+        # pin and one bare pin through untouched: the bare one is the very thing this branch cannot
+        # otherwise verify, so skipping it is the shape this repo calls recurring bug one, here in
+        # the gate built to close another instance of it. Caught in review of this PR.
+        sha_pins = [ref for ref in _USES.findall(text) if _SHA.match(ref)]
         commented = _USES_VERSION_COMMENT.findall(text)
-        assert commented, (
-            f"{label} pins a ref with no `# vX.Y.Z` comment beside it, so neither "
-            "half of this check can tell whether it is current. Add the comment."
+        assert sha_pins, f"{label} shows no SHA-pinned `uses:` line to check"
+        assert len(commented) == len(sha_pins), (
+            f"{label} has {len(sha_pins)} SHA-pinned `uses:` line(s) but only {len(commented)} "
+            "carry a `# vX.Y.Z` comment. With no tag pushed yet, a pin without that comment cannot "
+            "be checked by either half, so add the comment rather than leaving it unverifiable."
         )
         for tagged in commented:
             assert tagged == version, (
@@ -203,6 +211,11 @@ def test_the_ref_inputs_own_default_is_not_a_floating_tag() -> None:
 _FAKE_SHA = "a" * 40
 
 
+def _bare_pin(sha: str = _FAKE_SHA) -> str:
+    """A pin with no `# vX.Y.Z` comment: the shape neither half of the check can verify."""
+    return f"      - uses: kphutt/gdmutant@{sha}\n"
+
+
 def _pin(version: str, sha: str = _FAKE_SHA) -> str:
     return f"      - uses: kphutt/gdmutant@{sha} # v{version}\n"
 
@@ -228,13 +241,25 @@ def test_the_release_window_still_catches_a_stale_pin_comment() -> None:
         check_pins_are_current(_pin("0.1.0"), "fake.md", "0.1.3", None)
 
 
+def test_the_release_window_rejects_a_mix_of_commented_and_bare_pins() -> None:
+    # The hole a reviewer found in the first version of this fallback: it gathered the pins that DID
+    # carry a comment and asserted that set was non-empty, so a file with one commented pin beside
+    # one bare pin passed, leaving the bare pin -- the only one it could not verify -- unchecked.
+    mixed = _pin("0.1.3") + _bare_pin("b" * 40)
+    with (
+        pytest.warns(UserWarning, match="NOTCHECKED"),
+        pytest.raises(AssertionError, match="carry a `# vX.Y.Z` comment"),
+    ):
+        check_pins_are_current(mixed, "fake.md", "0.1.3", None)
+
+
 def test_the_release_window_rejects_a_pin_with_no_version_comment() -> None:
     # With no tag AND no comment, neither half can tell whether the pin is current. Refuse rather
     # than pass, or the window becomes a hole a stale pin can walk through.
-    bare = f"      - uses: kphutt/gdmutant@{_FAKE_SHA}\n"
+    bare = _bare_pin()
     with (
         pytest.warns(UserWarning, match="NOTCHECKED"),
-        pytest.raises(AssertionError, match="no `# vX.Y.Z` comment"),
+        pytest.raises(AssertionError, match="carry a `# vX.Y.Z` comment"),
     ):
         check_pins_are_current(bare, "fake.md", "0.1.3", None)
 
