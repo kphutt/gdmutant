@@ -261,8 +261,8 @@ def main(argv: list[str] | None = None) -> int:
     # a default Windows console. The mutants all ran, the summary line printed, and the exit was
     # still a traceback with no survivor list, which reads as "the sweep hangs at the end" rather
     # than as an encoding bug. AGENTS.md already names cp1252 as a Windows trap for gdmutant's own
-    # output; this is the same trap, one tool over. Measured 2026-09-15: a 278-mutant sweep crashed
-    # here every time until these two variables were set, and completed in 73 seconds with them.
+    # output; this is the same trap, one tool over. Observed 2026-09-15 on a 278-mutant sweep: it
+    # crashed at this point without these two variables, and wrote its full report with them.
     # Also neutralise the machine's global `core.hooksPath` for every git this sweep spawns.
     # Several tests build a throwaway repo in a temp directory and commit to it, and a globally set
     # hooks path makes each of those commits run the operator's own secret-scan gate against a

@@ -250,8 +250,8 @@ def test_the_poodle_run_forces_utf8_so_the_report_can_be_written(
     `poodle/reporters/basic.py` echoes each surviving mutant's unified diff. A diff carrying any
     non-ASCII character raises `UnicodeEncodeError` out of `cp1252.py` on a default Windows console,
     after all the work is done, so the run looks like it hangs or fails at the end rather than like
-    an encoding bug. Measured 2026-09-15: a 278-mutant sweep crashed there every time, and completed
-    in 73 seconds once these two variables were set.
+    an encoding bug. Observed 2026-09-15 on a 278-mutant sweep: it crashed there without these two
+    variables, and wrote its full report with them.
     """
     captured: dict[str, dict[str, str]] = {}
 
