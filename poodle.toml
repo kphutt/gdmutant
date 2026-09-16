@@ -23,6 +23,14 @@ source_folders = ["."]
 # test_check_release_tag.py) fails from a missing file, not from the mutation itself.
 file_copy_flags = 16704  # GLOBSTAR (256) | DOTGLOB (64) | NODIR (16384)
 file_copy_filters = [
+    # `corpus/addons/` is the gdUnit4 addon `scripts/install_gdunit4.py` downloads, 758 files and
+    # about 5MB, and poodle copies the whole tree once per mutant. Measured 2026-09-15: it was 68%
+    # of every copy, 210,724 pointless file copies across a 278-mutant sweep, which is what made a
+    # sweep disk-bound with the processors mostly idle. Nothing in a sweep reads it. The two suites
+    # that need a real addon (`test_selftest_live.py`, `test_dogfood_gdunit4.py`) are already
+    # `--ignore`d in `runner_opts` below, and the runner tests that mention `res://addons/...` only
+    # assert the string a command line carries, never the directory on disk.
+    "corpus/addons/**",
     "__pycache__/**",
     ".venv/**",
     ".venv-license-check/**",
