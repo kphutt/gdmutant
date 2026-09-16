@@ -255,11 +255,21 @@ def main(argv: list[str] | None = None) -> int:
     for f in files:
         only_args += ["--only", f]
 
+    # Force UTF-8 on the poodle run. Without it, poodle evaluates every mutant correctly and then
+    # dies writing its own report: `reporters/basic.py` echoes each surviving mutant's unified diff,
+    # and a diff carrying any non-ASCII character raises `UnicodeEncodeError` out of `cp1252.py` on
+    # a default Windows console. The mutants all ran, the summary line printed, and the exit was
+    # still a traceback with no survivor list, which reads as "the sweep hangs at the end" rather
+    # than as an encoding bug. AGENTS.md already names cp1252 as a Windows trap for gdmutant's own
+    # output; this is the same trap, one tool over. Measured 2026-09-15: a 278-mutant sweep crashed
+    # here every time until these two variables were set, and completed in 73 seconds with them.
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     result = subprocess.run(
         ["uv", "run", "poodle", "-c", "poodle.toml", *only_args],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        env=env,
     )
     print(result.stdout)
     if result.returncode != 0:
