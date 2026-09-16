@@ -19,21 +19,23 @@ All notable changes to gdmutant are recorded here. The format follows
   supply the test command was through the generic `args` passthrough (`args: --command "..."`),
   undocumented until recently.
 - `gdmutant init`, a new subcommand that writes a starter `.gdmutant.toml` so nobody has to
-  hand-write the first one. It detects the runner from whichever test addon (the plugin folder a
-  Godot project installs, gdUnit4 or GUT) is already present, and writes every other config key as
-  a commented example. It refuses to overwrite an existing `.gdmutant.toml` unless you pass
+  hand-write the first one. It sets `tests` to the usual default and, when a test addon (the plugin
+  folder a Godot project installs, gdUnit4 or GUT) is already present, sets `runner` to match. Every
+  other config key is written as a commented example. It refuses to overwrite an existing
+  `.gdmutant.toml` unless you pass
   `--force`, because silently replacing a hand-tuned config is the one genuinely destructive thing
   this command could do.
 - `--jobs auto`, which picks a worker count instead of making you choose one. The ceiling is the
   machine's processor count, and it is only a ceiling: before starting each additional worker,
   `auto` checks the system load average (a rolling measure of how busy the machine is) and holds
-  off while that number is high, so a mutation run shares a machine rather than taking it over.
+  off while that number is high, for up to 30 seconds before starting the worker anyway, so a
+  mutation run shares a machine rather than taking it over.
   Windows has no load average, so there `auto` sets the ceiling and starts workers freely. An
   explicit `--jobs N` never throttles, which is unchanged.
-- The HTML report's masthead and footer now say what produced the report and link to the project
-  README. A report often reaches someone who has never heard of gdmutant, and previously the page
-  gave them nothing to follow. Frank, the project mascot, appears in the masthead, and hovering him
-  makes him wink.
+- The HTML report's masthead and footer now say what produced the report and link to the project's
+  GitHub page. A report often reaches someone who has never heard of gdmutant, and previously the
+  page gave them nothing to follow. Frank, the project mascot, appears in the masthead, and hovering
+  over him or giving him keyboard focus makes him wink.
 
 ### Changed
 
