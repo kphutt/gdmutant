@@ -448,7 +448,7 @@ mutant is killable, it usually is. Write the test.
   `--project`/`--runner`/`--tests` and everything else resolved to, which is usually enough to spot
   a wrong input on its own.
 - `addon-version: <anything other than installed>` fails the step immediately with
-  `::error::addon-version='<value>' is not supported yet — only 'installed'`. Cloning the addon at a
+  `::error::addon-version='<value>' is not supported yet. Only 'installed'`. Cloning the addon at a
   ref instead of vendoring it is a planned fast-follow, not built yet.
 - `since` set but the base commit isn't in your clone fails with `error: git diff for --since <ref>
   failed: <detail>`, or `error: could not run git for --since <ref>: <detail>` if git itself can't

@@ -18,6 +18,22 @@ All notable changes to gdmutant are recorded here. The format follows
   first-class inputs `gdunit4` and `gut` already get (`tests`, etc.). Previously the only way to
   supply the test command was through the generic `args` passthrough (`args: --command "..."`),
   undocumented until recently.
+- `gdmutant init`, a new subcommand that writes a starter `.gdmutant.toml` so nobody has to
+  hand-write the first one. It detects the runner from whichever test addon (the plugin folder a
+  Godot project installs, gdUnit4 or GUT) is already present, and writes every other config key as
+  a commented example. It refuses to overwrite an existing `.gdmutant.toml` unless you pass
+  `--force`, because silently replacing a hand-tuned config is the one genuinely destructive thing
+  this command could do.
+- `--jobs auto`, which picks a worker count instead of making you choose one. The ceiling is the
+  machine's processor count, and it is only a ceiling: before starting each additional worker,
+  `auto` checks the system load average (a rolling measure of how busy the machine is) and holds
+  off while that number is high, so a mutation run shares a machine rather than taking it over.
+  Windows has no load average, so there `auto` sets the ceiling and starts workers freely. An
+  explicit `--jobs N` never throttles, which is unchanged.
+- The HTML report's masthead and footer now say what produced the report and link to the project
+  README. A report often reaches someone who has never heard of gdmutant, and previously the page
+  gave them nothing to follow. Frank, the project mascot, appears in the masthead, and hovering him
+  makes him wink.
 
 ### Changed
 
@@ -25,19 +41,19 @@ All notable changes to gdmutant are recorded here. The format follows
   relative string typed on the command line, so the report is findable regardless of the process's
   working directory. A write-error message still echoes the literal path as typed, so a mistyped
   path's typo stays visible.
-- User-facing paths — the console `--dry-run` mutant listing, the survivor blocks, the per-file
-  score lines, the GitHub Actions job-summary Markdown, and the JSON/HTML report's `files` map
-  keys — are now normalized to forward slashes
-  on every OS, instead of the host separator. A Windows run previously showed
-  `corpus\turn_order.gd` in some of these places and `corpus/turn_order.gd` in others, so one
-  report disagreed with itself; reports generated on Windows and Linux for the same source tree now
-  read identically and share the same keys. Diagnostics that echo a path the caller typed (a config
-  error, a write failure) still print it literally, so a mistyped path's typo stays visible.
+- User-facing paths are now normalized to forward slashes on every operating system, instead of
+  following the host's own separator. That covers the console `--dry-run` mutant listing, the
+  survivor blocks, the per-file score lines, the GitHub Actions job-summary Markdown, and the
+  JSON/HTML report's `files` map keys. A Windows run previously showed `corpus\turn_order.gd` in
+  some of those places and `corpus/turn_order.gd` in others, so a single report disagreed with
+  itself. Reports generated on Windows and on Linux for the same source tree now read identically
+  and share the same keys. Diagnostics that echo a path the caller typed (a config error, a write
+  failure) still print it literally, so a mistyped path's typo stays visible.
 
 ### Removed
 
 - The `--report-path` CLI flag and `.gdmutant.toml`'s `report-path` key. GdUnit4 always forces
-  `-rc 1`, so it only ever writes its report to one fixed location; a user-set read path could only
+  `-rc 1`, so it only ever writes its report to one fixed location. A user-set read path could only
   diverge from that hardcoded write path and break the run. gdmutant now locates the report
   internally on both the GdUnit4 and GUT paths, with no override.
 
@@ -65,8 +81,9 @@ All notable changes to gdmutant are recorded here. The format follows
   where no bug can exist. `0.0174532925199432957` (degrees-to-radians, a constant real Godot code
   carries) produced two such false survivors. Only the unrepresentable side is dropped, so a
   literal with one representable bump still yields that one. Integer literals are unaffected.
-- An absurdly long decimal literal (over 4300 digits, past Python's `int()`-from-string limit) no
-  longer aborts the whole run with an unhandled error; the site simply yields no mutant.
+- A very long decimal literal (over 4300 digits, past Python's limit on converting a string to an
+  integer) no longer aborts the whole run with an unhandled error. That site simply yields no
+  mutant instead.
 
 ## [0.1.2] - 2026-08-07
 

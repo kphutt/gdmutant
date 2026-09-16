@@ -117,7 +117,7 @@ runs:
         ADDON_VERSION: ${{ inputs.addon-version }}
       run: |
         if [ "$ADDON_VERSION" != "installed" ]; then
-          echo "::error::addon-version='$ADDON_VERSION' is not supported yet — only 'installed'" \
+          echo "::error::addon-version='$ADDON_VERSION' is not supported yet. Only 'installed'" \
                "(assume the addon is already in your project) ships today. Cloning the addon at a" \
                "ref is a planned fast-follow." >&2
           exit 1

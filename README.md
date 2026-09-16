@@ -141,6 +141,21 @@ gdmutant run ../my-project/src/module.gd --project ../my-project --runner gut --
 gdmutant run ../my-project/src/module.gd --project ../my-project --runner gdunit4 --json
 ```
 
+Typing those flags every run gets old. `gdmutant init` writes a starter `.gdmutant.toml` in the
+current directory so you don't have to, filling in the runner it finds already installed and listing
+every other setting as a commented example. It won't overwrite a config you already have unless you
+pass `--force`.
+
+```sh
+gdmutant init                   # writes .gdmutant.toml, then edit it and drop the flags
+```
+
+On a project big enough for the run to take a while, `--jobs auto` picks a worker count for you
+instead of making you choose. It uses the machine's processor count as a ceiling, and on Linux and
+macOS it also watches the load average (a rolling measure of how busy the machine is) and waits
+before starting more workers while that is high, so a long run shares the machine rather than taking
+it over. Windows has no load average, so there it just uses the ceiling.
+
 `--json` follows the
 [`mutation-testing-elements`](https://github.com/stryker-mutator/mutation-testing-elements) schema
 
