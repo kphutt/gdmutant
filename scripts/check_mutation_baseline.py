@@ -266,10 +266,11 @@ def main(argv: list[str] | None = None) -> int:
     # Also neutralise the machine's global `core.hooksPath` for every git this sweep spawns.
     # Several tests build a throwaway repo in a temp directory and commit to it, and a globally set
     # hooks path makes each of those commits run the operator's own secret-scan gate against a
-    # one-file scratch repo. Measured 2026-09-15 on the plain suite: 54s with those hooks firing,
-    # 34.8s without. A sweep pays that once per mutant, for a backstop that exists to guard real
-    # commits and that cannot change any mutant's verdict. poodle's runner copies `os.environ` into
-    # each trial (`run_env = os.environ.copy()`), so setting it here reaches every one of them.
+    # one-file scratch repo. Measured 2026-09-16 on the plain suite, same commit, alternating two
+    # runs each: 66s and 63s with those hooks firing, 25s and 28s without. A sweep pays that once
+    # per mutant, for a backstop that exists to guard real commits and that cannot change any
+    # mutant's verdict. poodle's runner copies `os.environ` into each trial
+    # (`run_env = os.environ.copy()`), so setting it here reaches every one of them.
     env = {
         **os.environ,
         "PYTHONUTF8": "1",
