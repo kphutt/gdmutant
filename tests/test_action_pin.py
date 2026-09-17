@@ -174,12 +174,14 @@ def check_pins_are_current(
     """Assert `text`'s shipped pins name `version`, raising `AssertionError` with `label` if not.
 
     Split out from the test below so every branch is reachable from a unit test with synthetic
-    inputs. The release window (`latest_tag_sha is None`) otherwise only occurs on a real machine
-    between a version bump and its tag being pushed, which is exactly the state that used to
-    deadlock and which no automated test covered.
+    inputs. `latest_tag_sha is None` means the SHA half cannot run, in either of the two release
+    windows `comparable_tag_commit` describes: before the tag is pushed, and on the tagged commit
+    itself. Both only occur on a real release and both used to deadlock it, which is why they are
+    unit-tested here. `unchecked_because` is the reason the warning gives, and defaults to the
+    first window's.
     """
     if latest_tag_sha is None:
-        # No tag for the packaged version yet, so the SHA half of this check cannot run. Say so out
+        # The SHA half of this check cannot run (see the docstring for when). Say so out
         # loud rather than skipping quietly, and still check the half that needs no tag: the `#
         # vX.Y.Z` comment beside each pin. That comment is what actually went stale the time this
         # mattered, when it read `# v0.1.0` through two later releases, so the protection this test
