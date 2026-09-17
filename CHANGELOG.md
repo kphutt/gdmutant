@@ -70,10 +70,12 @@ All notable changes to gdmutant are recorded here. The format follows
   is one bump of the literal's last written digit, so an integer moves by 1 and `0.016` moves to
   `0.017` rather than to a `1.016` that any test reaching the line would kill. A mutant keeps the
   shape it was written in: zero padding, digit separators, hex digit case, a bare or trailing
-  decimal point, and an exponent suffix all survive the bump. A float bump the double cannot
-  represent is skipped: past roughly 17 significant digits, ±1 in the last written place lands on
-  the same value, which would be an identical program no test could ever kill. Only that side is
-  dropped, so a literal with one representable bump still yields it.
+  decimal point, and an exponent suffix all survive the bump. A float bump the IEEE-754 double
+  cannot represent is skipped: past roughly 17 significant digits, ±1 in the last written place
+  lands on the same value, which would be an identical program no test could ever kill.
+  `0.0174532925199432957`, a degrees-to-radians constant real Godot code carries, would otherwise
+  yield two of those. Only the unrepresentable side is dropped, so a literal with one representable
+  bump still yields it.
 - gdmutant no longer treats the `/` in a Godot node path (`$Sprite2D/Label`) as a division, or the
   `%` of a unique node name (`%HealthBar`) as modulo. Sites were selected by token text alone, so
   every path separator became an arithmetic mutation site. The mutant is not a changed program: it
