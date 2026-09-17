@@ -1817,8 +1817,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"mutating the other {len(files)}:",
                 file=sys.stderr,
             )
+            # These came from expanding a directory, not from what was typed, so they follow the
+            # reported-path rule (POSIX-normalized) rather than the echo-what-you-typed one.
             for path in unparseable:
-                print(f"  {path}", file=sys.stderr)
+                print(f"  {Path(path).as_posix()}", file=sys.stderr)
         if not files:
             print("error: no parseable .gd files in the given path(s)", file=sys.stderr)
             return 2

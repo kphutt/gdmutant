@@ -46,11 +46,13 @@ All notable changes to gdmutant are recorded here. The format follows
   path's typo stays visible.
 - User-facing paths are now normalized to forward slashes on every operating system, instead of
   following the host's own separator. That covers the console `--dry-run` mutant listing, the
-  survivor blocks, the per-file score lines, the GitHub Actions job-summary Markdown, and the
-  JSON/HTML report's `files` map keys. A Windows run previously showed `corpus\turn_order.gd` in
-  some of those places and `corpus/turn_order.gd` in others, so a single report disagreed with
-  itself. Reports generated on Windows and on Linux for the same source tree now read identically
-  and share the same keys. Diagnostics that echo a path the caller typed (a config error, a write
+  survivor blocks, the per-file score lines, the per-file "mutating ..." progress line, the list of
+  directory files skipped because they did not parse, the warning printed when every mutant
+  survives, the GitHub Actions job-summary Markdown, and the JSON/HTML report's `files` map keys.
+  A Windows run previously showed `corpus\turn_order.gd` in some of those places and
+  `corpus/turn_order.gd` in others, so a single report disagreed with itself. Reports generated on
+  Windows and on Linux for the same source tree now read identically and share the same keys.
+  Diagnostics that echo a path the caller typed (a config error, a write
   failure) still print it literally, so a mistyped path's typo stays visible.
 
 ### Removed
@@ -86,6 +88,11 @@ All notable changes to gdmutant are recorded here. The format follows
 - A very long decimal literal (over 4300 digits, past Python's limit on converting a string to an
   integer) no longer aborts the whole run with an unhandled error. That site simply yields no
   mutant instead.
+- The line printed before a parallel run no longer announces more workers than the file has
+  mutants. A 3-mutant file under `--jobs 16`, or under `--jobs auto` on a 16-core machine, said
+  "Running 16 at a time" while only 3 workers ever started. It now says "Running up to 3 at a
+  time". It stays "up to" because a mutant that fails the re-parse check is only discovered after
+  that line prints, and needs no worker.
 
 ## [0.1.2] - 2026-08-07
 

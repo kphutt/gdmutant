@@ -500,7 +500,15 @@ def test_progress_plan_counts_ignored_separately() -> None:
 
 def test_progress_plan_names_the_worker_count() -> None:
     line = _progress_plan(runnable=18, total=18, jobs=4)
-    assert line.endswith(" Running 4 at a time.")
+    assert line.endswith(" Running up to 4 at a time.")
+
+
+def test_progress_plan_never_announces_more_workers_than_mutants() -> None:
+    # The parallel path starts `min(jobs, mutants)` workers, so a small file under a large --jobs
+    # (--jobs auto picks the CPU count) used to announce "Running 16 at a time" for 3 mutants.
+    assert _progress_plan(runnable=3, total=3, jobs=16).endswith(" Running up to 3 at a time.")
+    # One mutant runs one at a time, which the serial wording already says by saying nothing.
+    assert "at a time" not in _progress_plan(runnable=1, total=4, jobs=16)
 
 
 def test_progress_plan_is_singular_for_one_mutant() -> None:
@@ -749,7 +757,12 @@ def test_run_paths_runs_baseline_once_then_mutates_each_file(tmp_path: Path) -> 
     assert (
         lines.count("running the unmutated (baseline) suite ...") == 1
     )  # baseline once, not per file
-    assert f"mutating {a} ..." in lines and f"mutating {b} ..." in lines
+    # POSIX-normalized, like the score lines and survivors printed with it. On Windows `a` is the
+    # backslash form, so this also proves the host separator is gone. On POSIX the two are equal.
+    posix_a, posix_b = Path(a).as_posix(), Path(b).as_posix()
+    assert f"mutating {posix_a} ..." in lines and f"mutating {posix_b} ..." in lines
+    if a != posix_a:
+        assert f"mutating {a} ..." not in lines
     assert set(runs) == {a, b}  # one MutationRun per file, keyed by path
     assert runs[a].outcomes and all(
         o.verdict is Verdict.SURVIVED for o in runs[a].outcomes
