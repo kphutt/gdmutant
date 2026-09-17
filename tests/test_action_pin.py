@@ -133,7 +133,44 @@ def _latest_tag_commit(version: str) -> str | None:
     return shas.get(f"refs/tags/{tag}^{{}}", shas[f"refs/tags/{tag}"])
 
 
-def check_pins_are_current(text: str, label: str, version: str, latest_tag_sha: str | None) -> None:
+def _head_commit() -> str | None:
+    """The commit this checkout is on, or None when git cannot say."""
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def comparable_tag_commit(
+    version: str, tag_sha: str | None, head_sha: str | None
+) -> tuple[str | None, str | None]:
+    """The commit the documented pins must name, or None and the reason that cannot be checked.
+
+    Two windows make the SHA half impossible, and both are part of every release. Before the tag is
+    pushed there is no commit to compare against (`tag_sha` is None). And on the tagged commit
+    itself, the one `publish.yml`'s gate checks out and tests, the pins cannot name that commit,
+    because a commit cannot contain its own hash. Treating the second window as stale made the
+    release gate fail on every release, since the tagged commit can only ever pin the previous one:
+    reproduced by running this test on the v0.1.2 tagged commit. Everywhere else, including `main`
+    after the release, the pins must name the tag, and the follow-up PR that bumps them is what
+    turns that back green. When git cannot report HEAD (`head_sha` is None) the strict comparison
+    still runs, so a missing answer never loosens the check."""
+    if tag_sha is None:
+        return None, None
+    if tag_sha == head_sha:
+        return None, f"this checkout is v{version}'s own tagged commit, which cannot pin itself"
+    return tag_sha, None
+
+
+def check_pins_are_current(
+    text: str,
+    label: str,
+    version: str,
+    latest_tag_sha: str | None,
+    unchecked_because: str | None = None,
+) -> None:
     """Assert `text`'s shipped pins name `version`, raising `AssertionError` with `label` if not.
 
     Split out from the test below so every branch is reachable from a unit test with synthetic
@@ -147,10 +184,10 @@ def check_pins_are_current(text: str, label: str, version: str, latest_tag_sha: 
         # vX.Y.Z` comment beside each pin. That comment is what actually went stale the time this
         # mattered, when it read `# v0.1.0` through two later releases, so the protection this test
         # exists for stays live during the release window instead of lapsing exactly then.
+        because = unchecked_because or f"v{version} is not on origin yet"
         warnings.warn(
-            f"NOTCHECKED: v{version} is not on origin yet, so the pinned SHA could not be compared "
-            f"against its tag in {label}. Checked the version comment instead. "
-            "Re-run once the tag is pushed.",
+            f"NOTCHECKED: {because}, so the pinned SHA could not be compared against its tag "
+            f"in {label}. Checked the version comment instead.",
             stacklevel=2,
         )
         # Count the SHA pins first, and require a comment on every one of them. Collecting only the
@@ -197,11 +234,13 @@ def test_every_shipped_uses_line_pins_the_latest_released_version(path: Path) ->
     # `command` input, one shipped later. `test_no_shipped_uses_line_pins_a_floating_tag` above
     # only checks the ref isn't unsatisfiable, not that it's current -- this closes that gap.
     version = check_release_tag.packaged_version()
+    tag_sha, because = comparable_tag_commit(version, _latest_tag_commit(version), _head_commit())
     check_pins_are_current(
         path.read_text(encoding="utf-8"),
         str(path.relative_to(REPO)),
         version,
-        _latest_tag_commit(version),
+        tag_sha,
+        because,
     )
 
 
@@ -296,3 +335,40 @@ def test_an_unreleased_version_resolves_to_none_rather_than_raising() -> None:
     assert _latest_tag_commit("99.99.99") is None
     # A version that really is tagged still resolves, so the None path cannot swallow everything.
     assert _latest_tag_commit("0.1.2") == "284f185f1495f2d79150781cf2e6de618ed11327"
+
+
+# --- the tagged-commit window -------------------------------------------------------------------
+
+
+def test_no_tag_yet_skips_the_sha_half_with_the_default_reason() -> None:
+    assert comparable_tag_commit("0.1.3", None, "a" * 40) == (None, None)
+
+
+def test_the_tagged_commit_itself_skips_the_sha_half_and_says_why() -> None:
+    sha, because = comparable_tag_commit("0.1.3", _FAKE_SHA, _FAKE_SHA)
+    assert sha is None
+    assert because is not None and "own tagged commit" in because
+
+
+def test_any_other_commit_after_the_tag_still_compares_the_sha() -> None:
+    assert comparable_tag_commit("0.1.3", _FAKE_SHA, "c" * 40) == (_FAKE_SHA, None)
+
+
+def test_an_unknown_head_still_compares_the_sha_rather_than_loosening_the_check() -> None:
+    assert comparable_tag_commit("0.1.3", _FAKE_SHA, None) == (_FAKE_SHA, None)
+
+
+def test_the_release_gate_on_the_tagged_commit_passes_with_the_previous_releases_pins() -> None:
+    """The deadlock this window exists for, end to end through both functions.
+
+    On the tagged commit the docs still pin the previous release's SHA, and must, while their
+    comments already name the release being cut. That has to pass, or `publish.yml` can never
+    publish. The same pins on a later commit must fail, so the stale-pin protection is intact."""
+    previous = "b" * 40
+    docs = _pin("0.1.3", sha=previous)
+    sha, because = comparable_tag_commit("0.1.3", _FAKE_SHA, _FAKE_SHA)
+    with pytest.warns(UserWarning, match="own tagged commit"):
+        check_pins_are_current(docs, "fake.md", "0.1.3", sha, because)
+    sha, because = comparable_tag_commit("0.1.3", _FAKE_SHA, "c" * 40)
+    with pytest.raises(AssertionError, match="gone stale"):
+        check_pins_are_current(docs, "fake.md", "0.1.3", sha, because)

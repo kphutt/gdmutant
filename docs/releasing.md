@@ -116,18 +116,21 @@ a release gate.
 
    *The `# vX.Y.Z` comment beside each pinned SHA.* Bump those to the version being cut, in this
    same commit: `README.md`, `action.yml` and `docs/gdmutant-guide.md`. Do not touch the SHAs yet.
-   They cannot be right until the tag exists, and step 3 of the post-release checklist below is
-   where they get corrected.
+   They cannot be right until the tag exists, and step 10 below is where they get corrected.
 
    *The pinned SHAs stay stale on purpose until after the tag.*
-   `tests/test_action_pin.py` knows about this window: while no tag exists for the packaged
-   version, it checks the version comments instead of the SHAs and warns `NOTCHECKED` for each
-   file, saying out loud which half did not run. Once the tag is pushed, the SHA half resumes and
-   will fail until the pins are bumped, which is the reminder working rather than a regression.
-   That test used to `assert` on the missing tag instead, which deadlocked the release it was meant
-   to protect: bumping the version turned a required check red, so the PR could not merge, so the
-   tag could never be pushed to turn it green. 0.1.2 was cut before that assertion existed, so
-   nothing caught it until 0.1.3.
+   `tests/test_action_pin.py` knows about two windows where the SHAs cannot be right, and in both
+   it checks the version comments instead and warns `NOTCHECKED` for each file, saying out loud
+   which half did not run. The first is before the tag exists: there is no commit to compare
+   against. The second is the tagged commit itself, which `publish.yml`'s gate checks out and
+   tests: a commit cannot contain its own hash, so it can only ever pin the previous release. On
+   any other commit once the tag exists, `main` included, the SHA half runs and fails until step 10
+   bumps the pins, which is the reminder working rather than a regression.
+   Both windows used to be failures, and each deadlocked the release it was meant to protect. The
+   first turned the version-bump PR red, so the tag could never be pushed. The second, found
+   before 0.1.3 was cut by running the test on the v0.1.2 tagged commit, would have failed the
+   release gate on every release, so nothing could ever reach PyPI. 0.1.2 was cut before the
+   test existed, so neither had been exercised.
 2. Date the changelog. Change `CHANGELOG.md`'s bare `## [Unreleased]` heading (Keep a Changelog's
    own convention: no version number yet, since nothing under it has shipped) to
    `## [X.Y.Z] - YYYY-MM-DD`, using the date you expect to publish: one rename adds both the
@@ -157,17 +160,23 @@ a release gate.
    skipped, so a red guard stops the upload before the OIDC token is minted and no guard can be
    waved through ([ADR-0012](decisions/0012-merge-time-local-ship-time-cloud.md)). The workflow's
    header comment names each guard and says what it is for, and
-   `gh run view --workflow publish.yml` shows the live set with the result of each. Real Godot runs
-   in there, so this is a slow run, not a quick one. A guard that fails stops the upload while
-   leaving the Release published. Fix the cause and re-run the failed jobs from the Actions tab
-   (a re-run replays the same `release: published` event), or cut a new version if the fix needs a
-   code change.
+   `gh run list --workflow publish.yml` finds the run, and `gh run view <run-id>` shows the live
+   set with the result of each. Real Godot runs in there, so this is a slow run, not a quick one. A
+   guard that fails stops the upload while leaving the Release published. Fix the cause and re-run
+   the failed jobs from the Actions tab (a re-run replays the same `release: published` event), or
+   cut a new version if the fix needs a code change.
 8. *Automatic, and after the upload.* `verify-published` installs the released version from the
    index and runs it. It sits outside the gate on purpose, so a red result there reports on a
    version that is already public rather than stopping a release. Details are under
    [Recurring](#recurring-every-release), item 1.
 9. Verify what shipped. The project page is at https://pypi.org/p/gdmutant, and the checklist
    below covers what a green upload does not prove.
+10. Bump the pinned SHAs, promptly, in a follow-up PR. Replace the previous release's SHA with
+    the commit the new tag points at (`git rev-parse vX.Y.Z^{commit}`), everywhere step 1 bumped
+    a `# vX.Y.Z` comment: `README.md`, `action.yml` and `docs/gdmutant-guide.md`. Until this
+    merges, `tests/test_action_pin.py` fails on `main` and on every pull request, and a consumer
+    copying a `uses:` line gets the previous release. It could not happen earlier, because the
+    SHA does not exist until the tag does.
 
 ## After the release
 Almost everything that can be wrong with a release is invisible from the inside. The maintainer's
@@ -189,7 +198,7 @@ manual version becomes the way to reproduce a failure by hand.
 1. Install from the index on a machine that has never held the source.
 
    ```sh
-   uv tool install gdmutant     # or, in a fresh virtualenv: pip install gdmutant
+   pip install gdmutant         # in a fresh virtualenv
    gdmutant --version
    ```
 
@@ -244,8 +253,8 @@ manual version becomes the way to reproduce a failure by hand.
    documented `uses:` pin names *this* release's commit, not just some real commit. A pin that
    resolves and runs can still be stale: `v0.1.0` stayed pinned through two later releases before
    anyone noticed, and every one of those runs would have passed the resolves-and-completes check
-   above while installing an old version. Bump the pins to the tag this release just cut, in the
-   same PR as the version bump (step 1), so this check is already green by the time you tag.
+   above while installing an old version. The pins can only name the new tag once it exists, so
+   they are bumped in step 10's follow-up PR, and this check fails on `main` until that merges.
 
 4. Look at the repository the way a stranger does. Front page, private window.
 
