@@ -1,11 +1,49 @@
 """Shared test fakes + session-wide test isolation."""
 
+import atexit
+import os
+import shutil
+import stat
+import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from gdmutant.engine.runner import SuiteResult
+
+_TEMPLATES: dict[str, tuple[Path, Any]] = {}
+
+
+def _remove_read_only(func: Callable[[str], object], path: str, _exc: BaseException) -> None:
+    """`shutil.rmtree`'s retry for a read-only file. Git writes its object files read-only, and on
+    Windows removing one fails until it is made writable, so without this the cleanup fails
+    silently and leaves every template behind in the temp directory."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def copy_of_template(dest: Path, key: str, build: Callable[[Path], Any]) -> Any:
+    """Fill `dest` with a copy of a directory built once per test run, and return what `build`
+    returned when it built it.
+
+    For fixtures that are slow to build and identical every time, like a git repository with a
+    commit in it: each git launch costs tens of milliseconds on Windows, and a mutation sweep runs
+    the whole suite once per surviving mutant. Every test still gets its own copy, so no test can
+    see another test's changes. Nothing writes to the template after `build` returns.
+
+    `build` gets an empty directory and must not return a path inside it, because the caller only
+    ever sees the copy. Anything that must point between the copied files, like a git remote, has to
+    be relative for the same reason."""
+    if key not in _TEMPLATES:
+        template = Path(tempfile.mkdtemp(prefix="gdmutant-test-template-"))
+        atexit.register(shutil.rmtree, template, onexc=_remove_read_only)
+        _TEMPLATES[key] = (template, build(template))
+    template, value = _TEMPLATES[key]
+    shutil.copytree(template, dest, dirs_exist_ok=True)
+    return value
 
 
 def pytest_report_header() -> str:

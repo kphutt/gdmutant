@@ -1,20 +1,16 @@
 """Tests for the CLI (`gdmutant run`), driven without Godot via an injected fake runner."""
 
-import atexit
-import functools
 import json
 import os
-import shutil
-import stat
 import subprocess
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 import pytest
-from conftest import MarkerRunner
+from conftest import MarkerRunner, copy_of_template
 
 import gdmutant.cli as cli
 from gdmutant.adapters.gdscript.runner import GutRunner
@@ -93,34 +89,20 @@ def _init_decoy_repo(decoy_repo: Path) -> None:
     _git(decoy_repo, "commit", "-m", "decoy init")
 
 
-def _remove_read_only(func: Callable[[str], object], path: str, _exc: BaseException) -> None:
-    """`shutil.rmtree`'s retry for a read-only file: git writes its object files read-only, and on
-    Windows removing one fails until it is made writable. Without this the cleanup below failed
-    silently and left every template repo behind in the temp directory."""
-    os.chmod(path, stat.S_IWRITE)
-    func(path)
-
-
-@functools.cache
-def _template_repo(name: str, text: str) -> Path:
-    """A real git repo with `name` holding `text` committed at HEAD, built once per test run.
-
-    Building one costs three git launches, about 70ms on Windows, and this file needs 40-odd of
-    them. Every test still gets its own repo: `_copy_of_committed_repo` copies this one into the
-    test's `tmp_path`, which costs about 16ms, and git reads the copy as a clean, committed tree.
-    Nothing ever writes to the template itself, so no test can see another test's changes."""
-    template = Path(tempfile.mkdtemp(prefix="gdmutant-test-repo-"))
-    atexit.register(shutil.rmtree, template, onexc=_remove_read_only)
-    _git(template, "init")
-    (template / name).write_text(text, encoding="utf-8")
-    _git(template, "add", name)
-    _git(template, "commit", "-m", f"add {name}")
-    return template
-
-
 def _copy_of_committed_repo(dest: Path, name: str, text: str) -> Path:
-    """`dest` turned into a git repo with `name` holding `text` committed and clean."""
-    shutil.copytree(_template_repo(name, text), dest, dirs_exist_ok=True)
+    """`dest` turned into a git repo with `name` holding `text` committed and clean.
+
+    Built once per test run and copied per test (`copy_of_template` in conftest.py): building one
+    costs three git launches, about 70ms on Windows, copying about 16ms, and this file needs 40-odd
+    of them. git reads the copy as a clean, committed tree."""
+
+    def build(template: Path) -> None:
+        _git(template, "init")
+        (template / name).write_text(text, encoding="utf-8")
+        _git(template, "add", name)
+        _git(template, "commit", "-m", f"add {name}")
+
+    copy_of_template(dest, f"test_cli committed repo {name!r} {text!r}", build)
     return dest / name
 
 
