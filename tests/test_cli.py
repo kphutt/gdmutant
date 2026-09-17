@@ -1,10 +1,14 @@
 """Tests for the CLI (`gdmutant run`), driven without Godot via an injected fake runner."""
 
+import atexit
+import functools
 import json
 import os
+import shutil
+import stat
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -89,18 +93,49 @@ def _init_decoy_repo(decoy_repo: Path) -> None:
     _git(decoy_repo, "commit", "-m", "decoy init")
 
 
+def _remove_read_only(func: Callable[[str], object], path: str, _exc: BaseException) -> None:
+    """`shutil.rmtree`'s retry for a read-only file: git writes its object files read-only, and on
+    Windows removing one fails until it is made writable. Without this the cleanup below failed
+    silently and left every template repo behind in the temp directory."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+@functools.cache
+def _template_repo(name: str, text: str) -> Path:
+    """A real git repo with `name` holding `text` committed at HEAD, built once per test run.
+
+    Building one costs three git launches, about 70ms on Windows, and this file needs 40-odd of
+    them. Every test still gets its own repo: `_copy_of_committed_repo` copies this one into the
+    test's `tmp_path`, which costs about 16ms, and git reads the copy as a clean, committed tree.
+    Nothing ever writes to the template itself, so no test can see another test's changes."""
+    template = Path(tempfile.mkdtemp(prefix="gdmutant-test-repo-"))
+    atexit.register(shutil.rmtree, template, onexc=_remove_read_only)
+    _git(template, "init")
+    (template / name).write_text(text, encoding="utf-8")
+    _git(template, "add", name)
+    _git(template, "commit", "-m", f"add {name}")
+    return template
+
+
+def _copy_of_committed_repo(dest: Path, name: str, text: str) -> Path:
+    """`dest` turned into a git repo with `name` holding `text` committed and clean."""
+    shutil.copytree(_template_repo(name, text), dest, dirs_exist_ok=True)
+    return dest / name
+
+
+_GD_SRC = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"
+
+
 def _committed_repo(tmp_path: Path) -> Path:
     """A git repo containing a committed, clean f.gd — the base for the dirty-tree tests."""
-    _git(tmp_path, "init")
-    _gd(tmp_path)  # writes f.gd
-    _git(tmp_path, "add", "f.gd")
-    _git(tmp_path, "commit", "-m", "add f.gd")
+    _copy_of_committed_repo(tmp_path, "f.gd", _GD_SRC)
     return tmp_path
 
 
 def _gd(tmp_path: Path) -> Path:
     path = tmp_path / "f.gd"
-    path.write_text("func f(a, b) -> bool:\n\treturn a > b and a < b\n", encoding="utf-8")
+    path.write_text(_GD_SRC, encoding="utf-8")
     return path
 
 
@@ -2561,12 +2596,7 @@ _TWO_LINE_SRC = "func f(x) -> bool:\n\treturn x > 0\nfunc g(x) -> bool:\n\tretur
 
 def _repo_with_committed(tmp_path: Path, name: str, text: str) -> str:
     """A git repo with `name` committed at HEAD; returns the file path."""
-    _git(tmp_path, "init")
-    path = tmp_path / name
-    path.write_text(text, encoding="utf-8")
-    _git(tmp_path, "add", name)
-    _git(tmp_path, "commit", "-m", "base")
-    return str(path)
+    return str(_copy_of_committed_repo(tmp_path, name, text))
 
 
 def test_changed_lines_maps_the_modified_line(tmp_path: Path) -> None:
