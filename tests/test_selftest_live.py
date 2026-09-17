@@ -494,3 +494,23 @@ def test_command_harness_fails_fast_on_an_uncompilable_target(tmp_path: Path) ->
         "the harness exited 0 on an uncompilable target — a false PASS:\n"
         f"{(broken.stdout + broken.stderr)[-600:]}"
     )
+
+
+def test_the_benchmarks_real_godot_scenario_does_the_documented_work() -> None:
+    """`scripts/benchmark.py`'s opt-in `godot-corpus` scenario is the realistic end-to-end number.
+
+    It lives here rather than in `tests/test_benchmark.py` because it launches Godot once per
+    mutant, and this file is the one the mutation sweep leaves out. Only the work is asserted, the
+    same pinned total and kill count as the runner tests above, never the time."""
+    import importlib.util
+
+    script = REPO_ROOT / "scripts" / "benchmark.py"
+    spec = importlib.util.spec_from_file_location("benchmark", script)
+    assert spec and spec.loader
+    benchmark = importlib.util.module_from_spec(spec)
+    sys.modules["benchmark"] = benchmark
+    spec.loader.exec_module(benchmark)
+
+    result = benchmark.measure_godot_corpus(str(_GODOT), repeat=1)
+    assert (result.mutants, result.killed) == (EXPECTED_TOTAL, EXPECTED_KILLED)
+    assert len(result.times) == 1

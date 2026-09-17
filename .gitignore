@@ -25,6 +25,8 @@ mutmut-run.log
 # trailing * also catches ad-hoc manual-testing dirs like .poodle-temp-manual/
 poodle-run.log
 .poodle-temp*/
+# scripts/benchmark.py's run history: timings belong to one machine, so they stay local
+.benchmarks/
 # Godot (test fixtures may include a small Godot project)
 .godot/
 # Godot self-test fixture (tests/test_selftest_live.py): the GdUnit4 addon is downloaded
