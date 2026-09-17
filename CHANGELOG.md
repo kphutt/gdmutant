@@ -70,7 +70,10 @@ All notable changes to gdmutant are recorded here. The format follows
   is one bump of the literal's last written digit, so an integer moves by 1 and `0.016` moves to
   `0.017` rather than to a `1.016` that any test reaching the line would kill. A mutant keeps the
   shape it was written in: zero padding, digit separators, hex digit case, a bare or trailing
-  decimal point, and an exponent suffix all survive the bump.
+  decimal point, and an exponent suffix all survive the bump. A float bump the double cannot
+  represent is skipped: past roughly 17 significant digits, ±1 in the last written place lands on
+  the same value, which would be an identical program no test could ever kill. Only that side is
+  dropped, so a literal with one representable bump still yields it.
 - gdmutant no longer treats the `/` in a Godot node path (`$Sprite2D/Label`) as a division, or the
   `%` of a unique node name (`%HealthBar`) as modulo. Sites were selected by token text alone, so
   every path separator became an arithmetic mutation site. The mutant is not a changed program: it
@@ -78,12 +81,6 @@ All notable changes to gdmutant are recorded here. The format follows
   `$Sprite2D*Label` is valid GDScript. Measured over three real projects, these were 20% of all
   arithmetic mutants generated, each one either a fake kill inflating the score or a survivor
   pointing at a `/` that was never arithmetic.
-- A float bump the IEEE-754 double cannot represent is no longer emitted. Past roughly 17
-  significant digits, ±1 in the last written place lands on the same double, so the "mutant" was a
-  byte-identical program: unkillable, and therefore reported as a survivor forever against a line
-  where no bug can exist. `0.0174532925199432957` (degrees-to-radians, a constant real Godot code
-  carries) produced two such false survivors. Only the unrepresentable side is dropped, so a
-  literal with one representable bump still yields that one. Integer literals are unaffected.
 - A very long decimal literal (over 4300 digits, past Python's limit on converting a string to an
   integer) no longer aborts the whole run with an unhandled error. That site simply yields no
   mutant instead.
