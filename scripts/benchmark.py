@@ -157,8 +157,8 @@ class InstantRunner:
 
     It reads the named files inside the `project_dir` it is given, which under `--jobs` is a
     worker's own copy, not the original project. When every file matches its original, the suite
-    passes. When one differs, the suite fails if the CRC32 of that file's text is even, which splits
-    mutants roughly in half between killed and survived, identically everywhere."""
+    passes. When one differs, the suite fails if the crc32 checksum of that file's text is even,
+    which splits mutants roughly in half between killed and survived, identically everywhere."""
 
     def __init__(self, originals: dict[str, str]) -> None:
         self.originals = originals
