@@ -1193,8 +1193,13 @@ def test_a_source_outside_the_project_is_refused_rather_than_written_outside_the
     project, outside = _project_and_outside_source(tmp_path)
     src = outside.read_text(encoding="utf-8")
 
-    with pytest.raises(SourceOutsideProject, match="is not inside the project directory"):
+    with pytest.raises(SourceOutsideProject, match="is not inside the project directory") as exc:
         run(str(project), str(outside), src, ProjectDirRecordingRunner(), jobs=4)
+    # Named the way the "mutating ..." line printed just before it names the file. On POSIX the
+    # two forms are equal, so the second check only bites on Windows.
+    assert str(exc.value).startswith(f"{outside.as_posix()} is not inside")
+    if str(outside) != outside.as_posix():
+        assert str(outside) not in str(exc.value)
 
 
 def test_the_refusal_says_how_to_proceed(tmp_path: Path) -> None:

@@ -2035,7 +2035,7 @@ def test_run_mutation_warns_on_dirty_tree_but_proceeds(
     path.write_text("func f(a, b) -> bool:\n\treturn a >= b and a < b\n", encoding="utf-8")  # dirty
     rc = run_mutation(str(path), str(repo), MarkerRunner(str(path), "ZZZ"))
     assert rc == 0  # warned, then ran
-    assert _dirty_warning(str(path)) in capsys.readouterr().err
+    assert _dirty_warning(Path(path).as_posix()) in capsys.readouterr().err
 
 
 def test_run_mutation_no_warning_on_clean_tree(
@@ -2058,7 +2058,7 @@ def test_run_mutation_require_clean_refuses_dirty_tree(
     path.write_text("func f(a, b) -> bool:\n\treturn a >= b\n", encoding="utf-8")  # dirty
     rc = run_mutation(str(path), str(repo), RunBoomRunner(), require_clean=True)
     assert rc == 2
-    assert capsys.readouterr().err == _require_clean_error(str(path)) + "\n"
+    assert capsys.readouterr().err == _require_clean_error(Path(path).as_posix()) + "\n"
 
 
 def test_run_mutation_require_clean_allows_clean_tree(
@@ -3728,7 +3728,7 @@ def test_a_git_failure_on_a_symlink_names_the_file_git_was_asked_about(tmp_path:
 
     assert backup.backed_up is None
     assert "not a git repository" in backup.reason
-    assert os.path.realpath(str(target)) in backup.reason
+    assert Path(os.path.realpath(str(target))).as_posix() in backup.reason
 
 
 def test_an_ignored_symlink_target_is_named_in_the_message(tmp_path: Path) -> None:
@@ -3754,7 +3754,7 @@ def test_an_ignored_symlink_target_is_named_in_the_message(tmp_path: Path) -> No
 
     assert backup.backed_up is False
     assert "is ignored by git" in backup.reason
-    assert os.path.realpath(str(other / "generated.gd")) in backup.reason
+    assert Path(os.path.realpath(str(other / "generated.gd"))).as_posix() in backup.reason
 
 
 def test_a_dirty_symlink_target_is_named_in_the_message(tmp_path: Path) -> None:
@@ -3776,7 +3776,7 @@ def test_a_dirty_symlink_target_is_named_in_the_message(tmp_path: Path) -> None:
 
     assert backup.backed_up is False
     assert "has uncommitted changes" in backup.reason
-    assert os.path.realpath(str(other / "f.gd")) in backup.reason
+    assert Path(os.path.realpath(str(other / "f.gd"))).as_posix() in backup.reason
 
 
 def test_an_ordinary_file_is_named_once_and_only_once() -> None:
@@ -3801,8 +3801,11 @@ def test_an_ordinary_file_is_named_once_and_only_once() -> None:
     with tempfile.TemporaryDirectory(dir=".") as scratch:
         path = _gd(Path(scratch))
 
-        assert cli._judged_path(str(path)) == str(path)
-        assert cli._judged_path(os.path.relpath(str(path))) == os.path.relpath(str(path))
+        # Named as given, relative stays relative, only the separators POSIX-normalized.
+        assert cli._judged_path(str(path)) == Path(path).as_posix()
+        relative = os.path.relpath(str(path))
+        assert cli._judged_path(relative) == Path(relative).as_posix()
+        assert not Path(cli._judged_path(relative)).is_absolute()
 
 
 def test_a_path_typed_in_a_different_case_is_not_read_as_a_different_file(tmp_path: Path) -> None:
@@ -3813,7 +3816,8 @@ def test_a_path_typed_in_a_different_case_is_not_read_as_a_different_file(tmp_pa
     path = _gd(tmp_path)
     retyped = str(path).swapcase() if os.path.normcase("A") == os.path.normcase("a") else str(path)
 
-    assert cli._judged_path(retyped) == retyped
+    # Case stays exactly as typed. Only the separators are normalized.
+    assert cli._judged_path(retyped) == Path(retyped).as_posix()
 
 
 # --- The advice has to be something the user can actually do ----------------------------------

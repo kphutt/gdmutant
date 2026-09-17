@@ -48,12 +48,15 @@ All notable changes to gdmutant are recorded here. The format follows
   following the host's own separator. That covers the console `--dry-run` mutant listing, the
   survivor blocks, the per-file score lines, the per-file "mutating ..." progress line, the list of
   directory files skipped because they did not parse, the warning printed when every mutant
-  survives, the GitHub Actions job-summary Markdown, and the JSON/HTML report's `files` map keys.
-  A Windows run previously showed `corpus\turn_order.gd` in some of those places and
-  `corpus/turn_order.gd` in others, so a single report disagreed with itself. Reports generated on
-  Windows and on Linux for the same source tree now read identically and share the same keys.
-  Diagnostics that echo a path the caller typed (a config error, a write
-  failure) still print it literally, so a mistyped path's typo stays visible.
+  survives, the warnings and errors that name a file about to be mutated (uncommitted changes,
+  `--require-clean`, a source outside `--project` under `--jobs`), the GitHub Actions job-summary
+  Markdown, and the JSON/HTML report's `files` map keys. A Windows run previously showed
+  `corpus\turn_order.gd` in some of those places and `corpus/turn_order.gd` in others, so a single
+  report disagreed with itself. Reports generated on Windows and on Linux for the same source tree
+  now read identically and share the same keys. Only the separators change: a path keeps the case
+  and the relative or absolute form it was given in. Diagnostics that echo a path the caller typed
+  for something gdmutant could not find or write (a config error, a write failure) still print it
+  literally, so a mistyped path's typo stays visible.
 
 ### Removed
 
