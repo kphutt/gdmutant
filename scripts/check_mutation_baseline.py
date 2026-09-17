@@ -24,6 +24,7 @@ would read as full coverage, which is the failure mode this exists to avoid.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
@@ -42,12 +43,12 @@ DEFAULT_MAX_MUTANTS = 50
 #: Overrides DEFAULT_MAX_MUTANTS. `--max-mutants` on the command line overrides this in turn.
 MAX_MUTANTS_ENV_VAR = "GDMUTANT_MUTATION_BASELINE_MAX_MUTANTS"
 
-# This runs inside `uv run python -c ...`, not in this process. check_mutation_baseline.py itself
-# may run under pre-commit's own minimal hook environment (see the gdmutant-mutation hook in
-# .pre-commit-config.yaml), which does not have poodle installed. The real poodle invocation below
-# already shells out through `uv run` for the same reason. This does the same for the much cheaper
-# counting pass, reusing poodle's own mutant-generation code so the count can't drift from what a
-# real run would produce.
+# This runs in a separate Python (see `_python_with_poodle`), not in this process.
+# check_mutation_baseline.py itself may run under pre-commit's own minimal hook environment (see the
+# gdmutant-mutation hook in .pre-commit-config.yaml), which does not have poodle installed. The real
+# poodle invocation below shells out through `uv run` for the same reason. This counting pass uses
+# this interpreter when it already has poodle and `uv run` when it does not, and either way reuses
+# poodle's own mutant-generation code, so the count can't drift from what a real run would produce.
 _COUNT_MUTANTS_SCRIPT = """
 import json
 import sys
@@ -130,12 +131,25 @@ def resolve_max_mutants(cmd_line_value: int | None) -> int:
         return DEFAULT_MAX_MUTANTS
 
 
+def _python_with_poodle() -> list[str]:
+    """The command that starts a Python able to import poodle.
+
+    This interpreter when it already can, which is true in the project's own environment and
+    inside every poodle trial. `uv run python` otherwise, for pre-commit's minimal hook
+    environment. Always going through `uv run` cost about 2 seconds per call inside a poodle
+    trial: each trial is a fresh copy of the project with no `.venv`, so uv built a whole new
+    environment every time, and the suite calls this once per surviving mutant."""
+    if importlib.util.find_spec("poodle") is not None:
+        return [sys.executable]
+    return ["uv", "run", "python"]
+
+
 def count_mutants_per_file(files: list[str], config_path: str = "poodle.toml") -> dict[str, int]:
     """Ask poodle how many mutants it would generate for each file, without running a single
     test. Returns a mapping from posix-style repo-relative path (matching what
     changed_gdmutant_files returns, since git always uses "/") to mutant count."""
     result = subprocess.run(
-        ["uv", "run", "python", "-c", _COUNT_MUTANTS_SCRIPT],
+        [*_python_with_poodle(), "-c", _COUNT_MUTANTS_SCRIPT],
         input=json.dumps([config_path, files]),
         capture_output=True,
         text=True,

@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import copy_of_template
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "check_release_tag.py"
 _spec = importlib.util.spec_from_file_location("check_release_tag", _SCRIPT)
@@ -211,36 +212,45 @@ def _scratch_repo(tmp_path: Path) -> tuple[Path, str, str]:
     """A clone whose `origin` has one commit on main, plus a second commit that never reached it.
 
     Returns the working clone and the two commit SHAs (on-main, off-main).
+
+    Built once per test run and copied into each test's own `tmp_path` (`copy_of_template` in
+    conftest.py). Building it takes about a dozen git launches, and a mutation sweep runs this file
+    once per surviving mutant. `origin` is added by a relative path, so each copied clone fetches
+    from its own copied origin, never from the template's.
     """
-    origin = tmp_path / "origin.git"
-    subprocess.run(
-        ["git", "init", "--bare", "-b", "main", str(origin)], check=True, capture_output=True
-    )
 
-    work = tmp_path / "work"
-    subprocess.run(["git", "init", "-b", "main", str(work)], check=True, capture_output=True)
-    _git("config", "user.email", "t@example.invalid", cwd=work)
-    _git("config", "user.name", "test", cwd=work)
-    _git("remote", "add", "origin", str(origin), cwd=work)
+    def build(root: Path) -> tuple[str, str]:
+        origin = root / "origin.git"
+        subprocess.run(
+            ["git", "init", "--bare", "-b", "main", str(origin)], check=True, capture_output=True
+        )
 
-    (work / "f.txt").write_text("on main\n", encoding="utf-8")
-    _git("add", "f.txt", cwd=work)
-    _git("commit", "-m", "on main", cwd=work)
-    _git("push", "origin", "main", cwd=work)
-    on_main = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True
-    ).stdout.strip()
+        work = root / "work"
+        subprocess.run(["git", "init", "-b", "main", str(work)], check=True, capture_output=True)
+        _git("config", "user.email", "t@example.invalid", cwd=work)
+        _git("config", "user.name", "test", cwd=work)
+        _git("remote", "add", "origin", "../origin.git", cwd=work)
 
-    # A commit that exists only on a side branch — exactly the shape of a tag pushed at an
-    # unreviewed commit, which is what the guard has to refuse.
-    _git("checkout", "-b", "side", cwd=work)
-    (work / "f.txt").write_text("off main\n", encoding="utf-8")
-    _git("commit", "-am", "off main", cwd=work)
-    off_main = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True
-    ).stdout.strip()
+        (work / "f.txt").write_text("on main\n", encoding="utf-8")
+        _git("add", "f.txt", cwd=work)
+        _git("commit", "-m", "on main", cwd=work)
+        _git("push", "origin", "main", cwd=work)
+        on_main = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True
+        ).stdout.strip()
 
-    return work, on_main, off_main
+        # A commit that exists only on a side branch — exactly the shape of a tag pushed at an
+        # unreviewed commit, which is what the guard has to refuse.
+        _git("checkout", "-b", "side", cwd=work)
+        (work / "f.txt").write_text("off main\n", encoding="utf-8")
+        _git("commit", "-am", "off main", cwd=work)
+        off_main = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        return on_main, off_main
+
+    on_main, off_main = copy_of_template(tmp_path, "test_check_release_tag scratch repo", build)
+    return tmp_path / "work", on_main, off_main
 
 
 def _usable_bash() -> str | None:

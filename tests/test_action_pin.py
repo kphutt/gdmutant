@@ -24,6 +24,7 @@ version that once existed.
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import re
 import subprocess
@@ -88,6 +89,24 @@ def test_the_guide_says_there_is_no_floating_tag() -> None:
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
+@functools.cache
+def _remote_tag_refs() -> dict[str, str]:
+    """Every tag ref on `origin`, mapped to its SHA, asked for once per test run.
+
+    `_latest_tag_commit` is called five times a run, and each call used to be its own
+    `git ls-remote` over the network. One listing of all tags answers every call, and the tags
+    on `origin` do not change during one run. That matters most in a mutation sweep, which runs
+    this whole suite once per surviving mutant."""
+    output = subprocess.run(
+        ["git", "ls-remote", "--tags", "origin"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return {ref: sha for sha, ref in (line.split("\t") for line in output.splitlines() if line)}
+
+
 def _latest_tag_commit(version: str) -> str | None:
     """The commit `vVERSION` points at, read straight from `origin` rather than local refs.
 
@@ -99,14 +118,9 @@ def _latest_tag_commit(version: str) -> str | None:
     resolves to. A lightweight tag (this repo's kind, as of writing) has no such line, and the
     plain ref is already the commit."""
     tag = f"v{version}"
-    output = subprocess.run(
-        ["git", "ls-remote", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    shas = {ref: sha for sha, ref in (line.split("\t") for line in output.splitlines() if line)}
+    remote = _remote_tag_refs()
+    wanted = (f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}")
+    shas = {ref: remote[ref] for ref in wanted if ref in remote}
     if not shas:
         # The release window: `pyproject.toml` already names the version being cut, but its tag is
         # not pushed yet, because the tag has to point at a commit that is already on `main`. This
