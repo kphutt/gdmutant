@@ -120,7 +120,7 @@ def test_all_survived_warning_reaches_stderr_when_no_mutant_is_killed(
     assert rc == 0  # a warning, not an error
     captured = capsys.readouterr()
     assert "evaluated mutants survived" in captured.err  # warning is on stderr
-    assert str(path) in captured.err  # names the mutated file
+    assert Path(path).as_posix() in captured.err  # names the mutated file, as the survivors do
     assert "Mutation score:" in captured.out  # score still printed (unchanged)
 
 

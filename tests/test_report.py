@@ -337,6 +337,28 @@ def test_all_survived_warning_fires_when_baseline_passed_and_every_mutant_surviv
     assert "--tests" in warning  # points at the fix
 
 
+def test_all_survived_warning_names_the_file_with_the_same_posix_path_as_the_survivors(
+    tmp_path: Path,
+) -> None:
+    """The warning prints beside the survivor blocks, so it must render the path the same way.
+
+    The survivor blocks, per-file scores and job summary were POSIX-normalized, and this warning was
+    missed: a Windows run named one file with backslashes in the warning and with forward slashes
+    in the survivor list directly under it. Built with `Path`, like the three-surfaces test below,
+    because a literal backslash is an ordinary filename character on POSIX and would prove nothing
+    there.
+    """
+    path = tmp_path / "sub" / "a.gd"
+    run = MutationRun((_survivor(str(path), 9), _survivor(str(path), 15)))
+    warning = all_survived_warning(run)
+    assert warning is not None
+    expected = path.as_posix()
+    assert expected in warning
+    assert expected in "\n".join(render_survivor(run.survivors[0], None))
+    if str(path) != expected:
+        assert str(path) not in warning
+
+
 def test_all_survived_warning_silent_when_a_mutant_was_detected() -> None:
     # One kill means a test does reach this file — not the vacuous case, so no warning (option A
     # only catches a *total* miss; a partial miss is a weak suite reported honestly).

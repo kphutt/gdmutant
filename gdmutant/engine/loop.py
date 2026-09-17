@@ -262,7 +262,11 @@ def _progress_plan(runnable: int, total: int, jobs: int) -> str:
     unit = "mutant" if runnable == 1 else "mutants"
     ignored = total - runnable
     ignored_note = f" ({ignored} ignored)" if ignored else ""
-    jobs_note = f" Running {jobs} at a time." if jobs > 1 else ""
+    # Never more workers than mutants: `_run_mutants_parallel` starts `min(jobs, valid mutants)`, so
+    # a 3-mutant file under a 16-worker `--jobs` must not announce 16. It is still "up to": a mutant
+    # that fails the re-parse check is only found after this line prints, and needs no worker.
+    workers = min(jobs, runnable)
+    jobs_note = f" Running up to {workers} at a time." if workers > 1 else ""
     return f"{runnable} {unit} to run{ignored_note}.{jobs_note}"
 
 

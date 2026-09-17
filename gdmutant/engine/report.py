@@ -163,7 +163,9 @@ def all_survived_warning(run: MutationRun) -> str | None:
     """
     if run.detected != 0 or run.survived < _MIN_SURVIVORS_FOR_ALL_SURVIVED_WARNING:
         return None
-    files = sorted({m.path for m in run.survivors})
+    # POSIX-normalized like the survivor blocks this warning sits beside: rendered raw, a Windows
+    # run named the same file `sub\a.gd` here and `sub/a.gd` in the survivor list printed with it.
+    files = sorted({Path(m.path).as_posix() for m in run.survivors})
     where = files[0] if len(files) == 1 else ", ".join(files)
     return (
         f"warning: all {run.survived} evaluated mutants survived. This usually means the test "

@@ -500,7 +500,15 @@ def test_progress_plan_counts_ignored_separately() -> None:
 
 def test_progress_plan_names_the_worker_count() -> None:
     line = _progress_plan(runnable=18, total=18, jobs=4)
-    assert line.endswith(" Running 4 at a time.")
+    assert line.endswith(" Running up to 4 at a time.")
+
+
+def test_progress_plan_never_announces_more_workers_than_mutants() -> None:
+    # The parallel path starts `min(jobs, mutants)` workers, so a small file under a large --jobs
+    # (--jobs auto picks the CPU count) used to announce "Running 16 at a time" for 3 mutants.
+    assert _progress_plan(runnable=3, total=3, jobs=16).endswith(" Running up to 3 at a time.")
+    # One mutant runs one at a time, which the serial wording already says by saying nothing.
+    assert "at a time" not in _progress_plan(runnable=1, total=4, jobs=16)
 
 
 def test_progress_plan_is_singular_for_one_mutant() -> None:
