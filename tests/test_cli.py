@@ -2484,6 +2484,12 @@ def test_main_dry_run_skips_an_unparseable_file_in_a_directory(
     assert "ok.gd:" in out.out  # the good file is still listed
     assert "skipped 1 directory file(s) gdtoolkit couldn't parse" in out.err
     assert "bad.gd" in out.err
+    # Found by expanding the directory, not typed, so it is POSIX-normalized like every other
+    # reported path. On POSIX the two forms are equal and the second check is skipped.
+    bad = tmp_path / "bad.gd"
+    assert f"  {bad.as_posix()}" in out.err
+    if str(bad) != bad.as_posix():
+        assert str(bad) not in out.err
 
 
 def test_main_real_run_skips_unparseable_and_mutates_the_rest(

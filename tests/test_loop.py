@@ -757,7 +757,12 @@ def test_run_paths_runs_baseline_once_then_mutates_each_file(tmp_path: Path) -> 
     assert (
         lines.count("running the unmutated (baseline) suite ...") == 1
     )  # baseline once, not per file
-    assert f"mutating {a} ..." in lines and f"mutating {b} ..." in lines
+    # POSIX-normalized, like the score lines and survivors printed with it. On Windows `a` is the
+    # backslash form, so this also proves the host separator is gone. On POSIX the two are equal.
+    posix_a, posix_b = Path(a).as_posix(), Path(b).as_posix()
+    assert f"mutating {posix_a} ..." in lines and f"mutating {posix_b} ..." in lines
+    if a != posix_a:
+        assert f"mutating {a} ..." not in lines
     assert set(runs) == {a, b}  # one MutationRun per file, keyed by path
     assert runs[a].outcomes and all(
         o.verdict is Verdict.SURVIVED for o in runs[a].outcomes

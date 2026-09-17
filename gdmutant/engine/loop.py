@@ -822,7 +822,8 @@ def run_paths(
     last_path = next(reversed(sources), None)
     for path, source in sources.items():
         if progress is not None:
-            progress(f"mutating {path} ...")
+            # POSIX-normalized like the per-file score lines and survivor blocks of the same run.
+            progress(f"mutating {Path(path).as_posix()} ...")
         runs[path] = _mutate_file(
             project_dir,
             path,
