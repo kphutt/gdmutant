@@ -45,6 +45,13 @@ from gdmutant.engine.runner import CommandRunner, SuiteResult
 # intended tmp dir — corrupting every fixture that builds a throwaway repo.
 _GIT_ENV_LEAKS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 
+_GIT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "Test",
+    "GIT_AUTHOR_EMAIL": "t@example.com",
+    "GIT_COMMITTER_NAME": "Test",
+    "GIT_COMMITTER_EMAIL": "t@example.com",
+}
+
 
 def _git(repo: Path, *args: str) -> None:
     """Run a git command in `repo`, failing the test loudly on error.
@@ -53,6 +60,11 @@ def _git(repo: Path, *args: str) -> None:
     regardless of any hook environment that spawned pytest.
     """
     env = {k: v for k, v in os.environ.items() if k not in _GIT_ENV_LEAKS}
+    # A commit identity, given here rather than by two `git config` calls per fixture repo: every
+    # extra git launch costs tens of milliseconds on Windows, the suite builds a few hundred of
+    # these repos, and a mutation sweep runs the whole suite once per surviving mutant. It also
+    # means a machine with no global git identity can still build the fixtures.
+    env.update(_GIT_IDENTITY)
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True, env=env)
 
 
@@ -72,8 +84,6 @@ def _init_decoy_repo(decoy_repo: Path) -> None:
     'hook's own repo' a leaked GIT_DIR/etc. would incorrectly redirect git calls to."""
     decoy_repo.mkdir()
     _git(decoy_repo, "init")
-    _git(decoy_repo, "config", "user.email", "hook@example.com")
-    _git(decoy_repo, "config", "user.name", "Hook")
     (decoy_repo / "unrelated.txt").write_text("x", encoding="utf-8")
     _git(decoy_repo, "add", "unrelated.txt")
     _git(decoy_repo, "commit", "-m", "decoy init")
@@ -82,8 +92,6 @@ def _init_decoy_repo(decoy_repo: Path) -> None:
 def _committed_repo(tmp_path: Path) -> Path:
     """A git repo containing a committed, clean f.gd — the base for the dirty-tree tests."""
     _git(tmp_path, "init")
-    _git(tmp_path, "config", "user.email", "t@example.com")
-    _git(tmp_path, "config", "user.name", "Test")
     _gd(tmp_path)  # writes f.gd
     _git(tmp_path, "add", "f.gd")
     _git(tmp_path, "commit", "-m", "add f.gd")
@@ -2554,8 +2562,6 @@ _TWO_LINE_SRC = "func f(x) -> bool:\n\treturn x > 0\nfunc g(x) -> bool:\n\tretur
 def _repo_with_committed(tmp_path: Path, name: str, text: str) -> str:
     """A git repo with `name` committed at HEAD; returns the file path."""
     _git(tmp_path, "init")
-    _git(tmp_path, "config", "user.email", "t@example.com")
-    _git(tmp_path, "config", "user.name", "Test")
     path = tmp_path / name
     path.write_text(text, encoding="utf-8")
     _git(tmp_path, "add", name)
@@ -2657,8 +2663,6 @@ def test_changed_lines_treats_an_untracked_new_file_as_fully_changed(tmp_path: P
     # git diff is silent on a never-`git add`-ed file, so a brand-new .gd must be treated as fully
     # changed (every line new), not silently skipped as "no changes". Flagged in review of #61.
     _git(tmp_path, "init")
-    _git(tmp_path, "config", "user.email", "t@example.com")
-    _git(tmp_path, "config", "user.name", "Test")
     (tmp_path / "committed.gd").write_text("func a():\n\tpass\n", encoding="utf-8")
     _git(tmp_path, "add", "committed.gd")
     _git(tmp_path, "commit", "-m", "base")
@@ -2780,8 +2784,6 @@ def test_main_since_no_changes_relativizes_the_html_report_to_the_project(
     # page are relative to the project root, not absolute ones carrying the author's directory
     # layout. This is also what pins that the no-change path resolves the project dir at all.
     _git(tmp_path, "init")
-    _git(tmp_path, "config", "user.email", "t@example.com")
-    _git(tmp_path, "config", "user.name", "Test")
     source = tmp_path / "src" / "f.gd"
     source.parent.mkdir()
     source.write_text(_TWO_LINE_SRC, encoding="utf-8")
