@@ -210,9 +210,13 @@ def _judged_path(source_path: str) -> str:
     difference in file. It is a no-op on every other platform.
     """
     resolved = os.path.realpath(source_path)
+    # Separators are POSIX-normalized, and nothing else is: case and relative-or-absolute stay as
+    # given. A directory run passes paths gdmutant found, not paths anyone typed, and printed raw a
+    # Windows run named one file `sub\\a.gd` in this warning and `sub/a.gd` on every other line.
+    shown = Path(source_path).as_posix()
     if os.path.normcase(resolved) == os.path.normcase(os.path.abspath(source_path)):
-        return source_path
-    return f"{source_path} (resolved to {resolved})"
+        return shown
+    return f"{shown} (resolved to {Path(resolved).as_posix()})"
 
 
 def _git_failure_reason(judged_path: str, stderr: str) -> str:

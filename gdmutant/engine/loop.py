@@ -655,10 +655,13 @@ def _project_relative(path: str, project_dir: str) -> str:
     except ValueError:
         # relative_to covers both "outside the project" and Windows' separate-drive case, which
         # os.path.relpath used to raise on unhandled, taking the whole run down with a traceback.
+        # The source path is POSIX-normalized like the "mutating ..." line printed just before this,
+        # since a directory run found it rather than anyone typing it. `project_dir` was typed, so
+        # it is echoed as given.
         raise SourceOutsideProject(
-            f"{path} is not inside the project directory {project_dir}, so --jobs cannot give it "
-            "an isolated copy to mutate. Point --project at a directory containing it, or drop "
-            "--jobs to run serially."
+            f"{Path(path).as_posix()} is not inside the project directory {project_dir}, so --jobs "
+            "cannot give it an isolated copy to mutate. Point --project at a directory containing "
+            "it, or drop --jobs to run serially."
         ) from None
 
 
