@@ -111,8 +111,9 @@ a release gate.
 
    *`uv.lock` records gdmutant's own version too.* Run `uv lock` after editing `pyproject.toml` and
    commit the result. Every CI job that installs dependencies uses `uv sync --frozen`, which refuses
-   a lockfile that disagrees with the manifest, so a bump without a re-lock fails before a single test runs. A
-   local `uv run` quietly re-locks for you, which is why this is easy to miss until CI says no.
+   a lockfile that disagrees with the manifest, so a bump without a re-lock fails before a single
+   test runs. A local `uv run` quietly re-locks for you, which is why this is easy to miss until CI
+   says no.
 
    *The `# vX.Y.Z` comment beside each pinned SHA.* Bump those to the version being cut, in this
    same commit: `README.md`, `action.yml` and `docs/gdmutant-guide.md`. Do not touch the SHAs yet.
