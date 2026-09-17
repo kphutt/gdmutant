@@ -14,6 +14,7 @@ elsewhere.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 from unittest import mock
 
@@ -104,6 +105,29 @@ def test_count_mutants_per_file_matches_a_real_poodle_generation_pass() -> None:
     counts = check_mutation_baseline.count_mutants_per_file(["gdmutant/engine/spans.py"])
     assert counts.keys() == {"gdmutant/engine/spans.py"}
     assert counts["gdmutant/engine/spans.py"] > 0
+
+
+def test_the_count_uses_this_interpreter_when_it_already_has_poodle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The fast path: no `uv run`, which inside a poodle trial rebuilt a whole venv per call.
+    monkeypatch.setattr(check_mutation_baseline.importlib.util, "find_spec", lambda name: object())
+    assert check_mutation_baseline._python_with_poodle() == [sys.executable]
+
+
+def test_the_count_falls_back_to_uv_run_where_poodle_is_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # pre-commit's minimal hook environment has no poodle, which is why `uv run` exists at all.
+    # A fallback that silently used this interpreter there would crash on the poodle import.
+    asked: list[str] = []
+
+    def no_poodle(name: str) -> None:
+        asked.append(name)
+
+    monkeypatch.setattr(check_mutation_baseline.importlib.util, "find_spec", no_poodle)
+    assert check_mutation_baseline._python_with_poodle() == ["uv", "run", "python"]
+    assert asked == ["poodle"]
 
 
 # --- main: the zero-mutant case ------------------------------------------------------------------
