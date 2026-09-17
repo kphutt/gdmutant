@@ -149,6 +149,7 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
 - [`docs/design/DESIGN.md`](docs/design/DESIGN.md): authoritative design (goals, FG/NF requirements, architecture).
 - [`CHANGELOG.md`](CHANGELOG.md): what's landed and in progress (scope / non-goals live in `DESIGN.md`).
 - `docs/mutation-testing.md`: the suite is mutation-tested against itself.
+- [`docs/benchmarking.md`](docs/benchmarking.md): timing gdmutant's own engine, and watching the trend.
 - `docs/decisions/NNNN-*.md`: append-only ADRs (`ls` is the index).
 - [`docs/releasing.md`](docs/releasing.md): the maintainer runbook for cutting a release to PyPI.
 - [`docs/credits.md`](docs/credits.md): third-party licenses.
