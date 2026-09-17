@@ -34,8 +34,9 @@ All notable changes to gdmutant are recorded here. The format follows
   explicit `--jobs N` never throttles, which is unchanged.
 - The HTML report's masthead and footer now say what produced the report and link to the project's
   GitHub page. A report often reaches someone who has never heard of gdmutant, and previously the
-  page gave them nothing to follow. Frank, the project mascot, appears in the masthead, and hovering
-  over him or giving him keyboard focus makes him wink.
+  page gave them nothing to follow. Frank, the project mascot, appears in the masthead. Hovering
+  over him or giving him keyboard focus makes him wink, and he also winks on his own every 9 to 23
+  seconds while the page is open.
 
 ### Changed
 
