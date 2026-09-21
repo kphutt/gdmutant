@@ -29,6 +29,8 @@ from gdmutant.engine.spans import Span, text_at
 def _parse(source: str) -> Tree[Token]:
     # gather_metadata attaches spans to Tree *nodes*; the token line/column positions this adapter
     # reads come from lark's lexer regardless. Kept on for any future tree-level use (harmless).
+    # is_valid_gdscript below skips it: that call only needs a yes/no on whether the source
+    # parses, and never looks at the tree it gets back.
     tree: Tree[Token] = _gdparser.parse(source, gather_metadata=True)
     return tree
 
@@ -535,7 +537,9 @@ def generate_mutants(
 def is_valid_gdscript(source: str) -> bool:
     """True if `source` parses as GDScript — the NF-5 gate."""
     try:
-        _parse(source)
+        # Skip metadata gathering here: this only needs to know whether the source parses,
+        # not the resulting tree, and metadata gathering is most of the parse cost.
+        _gdparser.parse(source, gather_metadata=False)
     except LarkError:
         return False
     return True

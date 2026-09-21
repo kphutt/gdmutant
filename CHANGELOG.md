@@ -10,6 +10,18 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The per-mutant validity check (the NF-5 gate that decides whether a mutant even runs) now
+  parses the mutated source without gathering position metadata, since it only needs a yes or no
+  answer on whether the file parses, never the resulting tree. Checked against 54,677 real mutants
+  from three separate GDScript projects, this changes zero valid/invalid answers. On the
+  `benchmark.py` synthetic-16 workload, the apply and run scenarios ran roughly 17-22% faster in a
+  same-session before/after comparison (apply: 19.26s to 15.93s median; run: 22.23s to 17.40s
+  median). Earlier measurement on a wider sweep put the raw parse-time saving at about 30%.
+
 ## [0.1.3] - 2026-09-20
 
 ### Added
