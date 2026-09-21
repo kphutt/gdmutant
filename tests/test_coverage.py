@@ -259,6 +259,8 @@ class Lab:
 
     def run_markers(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         self.marker_timeouts.append(timeout)
+        # The suite must run in the marked copy, never anywhere else.
+        assert Path(project_dir) == self.copies[-1], project_dir
         assert self.hits_path is not None
         assert not self.hits_path.exists(), "the stale hits file was not removed"
         if self.raise_on_markers is not None:
@@ -766,6 +768,9 @@ def test_the_heartbeat_counts_only_the_mutants_that_run(tmp_path: Path) -> None:
         self_check=1,
         progress=lines.append,
     )
+    # The many-file run announces the marker run exactly as the one-file run does.
+    assert "running the suite once with coverage markers ..." in lines
+    assert any(line.startswith("coverage: 6 of 12 mutants") for line in lines)
     # The first file ends on a forced heartbeat, whose count must reach its own total.
     beat = next(line for line in lines if " done in " in line)
     done, total = beat.split(" ")[1].split("/")
@@ -821,3 +826,126 @@ def test_the_self_check_key_is_path_line_column_operator_replacement() -> None:
     mutant = _mutant(7)
     expected = hashlib.sha256(b"a.gd:7:1:numeric:x").hexdigest()
     assert _sample_key("a.gd", mutant) == expected
+
+
+# Exact words and exact wiring for the coverage decisions, pinned after a mutation run showed the
+# looser assertions above let a reworded or rewired message through.
+
+_TURN_OFF = "Turn coverage analysis off (--coverage-analysis off) to run without it."
+
+
+def test_the_copy_is_a_project_directory_in_a_named_temporary_directory(tmp_path: Path) -> None:
+    lab = Lab()
+    _run(lab, tmp_path)
+    (copy,) = lab.copies
+    assert copy.name == "project"
+    assert copy.parent.name.startswith("gdmutant-markers-")
+
+
+def test_the_refusals_before_marking_say_exactly_what_is_missing(tmp_path: Path) -> None:
+    project, target = _project(tmp_path)
+    with pytest.raises(CoverageRunFailed) as per_file:
+        run(
+            str(project),
+            str(target),
+            _SOURCE,
+            Lab(),
+            ADAPTER,
+            coverage=CoverageAnalysis.PER_FILE,
+            marker=Lab(),
+        )
+    assert str(per_file.value) == (
+        "--coverage-analysis per-file is not built yet. Use 'all' for the no coverage verdict, "
+        "or 'off'."
+    )
+    with pytest.raises(CoverageRunFailed) as neither:
+        run(
+            str(project),
+            str(target),
+            _SOURCE,
+            PlainRunner(),
+            ADAPTER,
+            coverage=CoverageAnalysis.ALL,
+        )
+    assert str(neither.value) == (
+        "coverage analysis needs a language adapter that can place markers and a runner that "
+        "can run them, and this run has neither. Turn coverage analysis off "
+        "(--coverage-analysis off)."
+    )
+
+
+def test_the_marker_run_gets_the_same_catalog_as_the_mutant_run(tmp_path: Path) -> None:
+    from gdmutant.engine.operators import CATALOG
+
+    lab = Lab()
+    project, target = _project(tmp_path)
+    lab.target = target
+    only_comparison = tuple(op for op in CATALOG if op.id == "comparison")
+    result = run(
+        str(project),
+        str(target),
+        _SOURCE,
+        lab,
+        ADAPTER,
+        only_comparison,
+        coverage=CoverageAnalysis.ALL,
+        marker=lab,
+    )
+    (marked,) = lab.marked
+    assert [m.operator_id for m in marked["t.gd"][1]] == ["comparison", "comparison"]
+    assert len(result.outcomes) == 2
+
+
+def test_the_not_clean_message_in_full(tmp_path: Path) -> None:
+    with pytest.raises(CoverageRunFailed) as caught:
+        _run(Lab(hits=[]), tmp_path)
+    assert str(caught.value) == (
+        "the coverage marker run was not clean, so gdmutant cannot tell which code no test "
+        "reaches:\n  - no marker recorded a single hit, so the recorder never ran. A suite that "
+        f"passed must reach some of the code it tests\n{_TURN_OFF}"
+    )
+
+
+def test_the_could_not_run_and_could_not_mark_messages_in_full(tmp_path: Path) -> None:
+    with pytest.raises(CoverageRunFailed) as ran:
+        _run(Lab(raise_on_markers=RuntimeError("boom")), tmp_path / "a")
+    assert str(ran.value) == f"the coverage marker run could not run the suite: boom\n{_TURN_OFF}"
+    with pytest.raises(CoverageRunFailed) as marked:
+        _run(Lab(raise_on_mark=RuntimeError("taken")), tmp_path / "b")
+    assert str(marked.value) == (
+        f"could not prepare the marked copy for coverage analysis: taken\n{_TURN_OFF}"
+    )
+
+
+def test_the_outside_project_message_in_full(tmp_path: Path) -> None:
+    lab = Lab()
+    project, _ = _project(tmp_path)
+    outside = tmp_path / "elsewhere.gd"
+    outside.write_text(_SOURCE, encoding="utf-8")
+    lab.target = outside
+    with pytest.raises(SourceOutsideProject) as caught:
+        run(
+            str(project),
+            str(outside),
+            _SOURCE,
+            lab,
+            ADAPTER,
+            coverage=CoverageAnalysis.ALL,
+            marker=lab,
+        )
+    assert str(caught.value) == (
+        f"{outside.as_posix()} is not inside the project directory {project}, so coverage "
+        "analysis cannot mark it in a copy of the project. Point --project at a directory "
+        "containing it, or turn coverage analysis off (--coverage-analysis off)."
+    )
+
+
+def test_the_self_check_message_in_full() -> None:
+    with pytest.raises(CoverageSelfCheckFailed) as caught:
+        _self_check([_outcome(Verdict.KILLED, 7)], frozenset({0}))
+    assert str(caught.value) == (
+        "the coverage self-check failed: the marker run found no test reaching a.gd:7:1 "
+        "(numeric: 0 -> x), so its verdict should be 'no coverage', but running it against the "
+        "whole suite gave 'killed'. The coverage map is wrong, so no 'no coverage' verdict in "
+        f"this run can be trusted. {_TURN_OFF}"
+    )

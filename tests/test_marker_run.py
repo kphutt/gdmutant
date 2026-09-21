@@ -44,7 +44,7 @@ _SETTINGS = 'config_version=5\n\n[application]\n\nconfig/name="p"\n'
 
 def _copy(tmp_path: Path, settings: str | None = _SETTINGS) -> Path:
     copy = tmp_path / "copy"
-    copy.mkdir()
+    copy.mkdir(parents=True)
     if settings is not None:
         (copy / "project.godot").write_text(settings, encoding="utf-8")
     (copy / "a.gd").write_text(_SOURCE, encoding="utf-8")
@@ -361,3 +361,64 @@ def test_a_junit_marker_run_gets_the_runners_own_budget_and_scans_stderr(
     monkeypatch.setattr(runner_mod.subprocess, "run", recording)
     assert runner.run_markers(str(tmp_path)).runtime_error == "SCRIPT ERROR: late\n  at: x.gd:2"
     assert seen == [66.0]
+
+
+# Exact words, and the edges of the name checks, pinned after a mutation run.
+
+
+def test_the_taken_name_messages_in_full(tmp_path: Path) -> None:
+    copy = _copy(tmp_path)
+    (copy / RECORDER_DIR).mkdir()
+    with pytest.raises(RuntimeError) as directory:
+        GDScriptMarker().mark(str(copy), _files(copy))
+    assert str(directory.value) == (
+        f"the project already has a {RECORDER_DIR}/ directory, which coverage analysis needs for "
+        "its recorder. Rename it to use coverage analysis"
+    )
+    other = _copy(tmp_path / "o", _SETTINGS + f"\n[autoload]\n\n{WRITER_AUTOLOAD}=1\n")
+    with pytest.raises(RuntimeError) as autoload:
+        GDScriptMarker().mark(str(other), _files(other))
+    assert str(autoload.value) == (
+        f"project.godot already registers an autoload named {WRITER_AUTOLOAD}, a name coverage "
+        "analysis needs for its recorder. Rename it to use coverage analysis"
+    )
+    third = _copy(tmp_path / "t")
+    # A walk meets z.gd before it descends into a/, so only sorting names a/b.gd first.
+    (third / "a").mkdir()
+    (third / "a" / "b.gd").write_text(f"class_name {MARKER_AUTOLOAD}\n", encoding="utf-8")
+    (third / "z.gd").write_text(f"class_name {MARKER_AUTOLOAD}\n", encoding="utf-8")
+    with pytest.raises(RuntimeError) as script:
+        GDScriptMarker().mark(str(third), _files(third))
+    # Sorted, so the same project always names the same file.
+    assert str(script.value) == (
+        f"a/b.gd already declares class_name {MARKER_AUTOLOAD}, the name coverage analysis needs "
+        "for its recorder. Rename it to use coverage analysis"
+    )
+
+
+def test_an_indented_autoload_with_spaces_around_the_equals_is_still_caught(
+    tmp_path: Path,
+) -> None:
+    copy = _copy(tmp_path, _SETTINGS + f"\n[autoload]\n\n  {MARKER_AUTOLOAD} = 1\n")
+    with pytest.raises(RuntimeError, match=f"autoload named {MARKER_AUTOLOAD}"):
+        GDScriptMarker().mark(str(copy), _files(copy))
+
+
+def test_a_name_only_mentioned_in_a_value_is_not_an_autoload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copy = _copy(tmp_path, _SETTINGS + f'\nconfig/description="uses {MARKER_AUTOLOAD}=x"\n')
+    monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
+    GDScriptMarker().mark(str(copy), _files(copy))
+
+
+def test_a_class_name_only_in_a_comment_prefix_is_still_a_declaration(tmp_path: Path) -> None:
+    copy = _copy(tmp_path)
+    (copy / "x.gd").write_text(f"extends Node\nclass_name  {MARKER_AUTOLOAD}\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="already declares class_name"):
+        GDScriptMarker().mark(str(copy), _files(copy))
+
+
+def test_trailing_blank_lines_are_trimmed_but_nothing_else() -> None:
+    assert _with_writer_autoload("k=VX\n\n\n").startswith("k=VX\n\n[autoload]")
+    assert _with_writer_autoload("k=V  \n").startswith("k=V  \n\n[autoload]")
