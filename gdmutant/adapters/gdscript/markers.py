@@ -142,10 +142,6 @@ def _before(parent: Tree[Token], node: Tree[Token]) -> list[Tree[Token] | Token]
     return parent.children[:position]
 
 
-#: A statement to mark, with the node whose children list holds it.
-_Target = tuple[Tree[Token], Tree[Token]]
-
-
 class _Placer:
     """Placement for one source file: its lines, and where each node and token starts."""
 
@@ -188,8 +184,9 @@ class _Placer:
         body = [c for c in scope.children[1:] if isinstance(c, Tree)]
         return scope.data == "lambda" and (not body or not self.starts_its_line(body[0]))
 
-    def place(self, mutant: Mutant) -> _Target | RunEverything:
-        """The statement whose marker covers `mutant`, or why none can."""
+    def place(self, mutant: Mutant) -> tuple[Tree[Token], Tree[Token]] | RunEverything:
+        """The statement whose marker covers `mutant` with the node whose children hold it, or why
+        no marker can."""
         path = self.index.get((mutant.span.line, mutant.span.column))
         if path is None:
             raise ValueError(f"no token or statement starts at {mutant.span!r}")
