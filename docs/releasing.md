@@ -172,12 +172,15 @@ a release gate.
    [Recurring](#recurring-every-release), item 1.
 9. Verify what shipped. The project page is at https://pypi.org/p/gdmutant, and the checklist
    below covers what a green upload does not prove.
-10. Bump the pinned SHAs, promptly, in a follow-up PR. Replace the previous release's SHA with
-    the commit the new tag points at (`git rev-parse vX.Y.Z^{commit}`), everywhere step 1 bumped
-    a `# vX.Y.Z` comment: `README.md`, `action.yml` and `docs/gdmutant-guide.md`. Until this
-    merges, `tests/test_action_pin.py` fails on `main` and on every pull request, and a consumer
-    copying a `uses:` line gets the previous release. It could not happen earlier, because the
-    SHA does not exist until the tag does.
+10. Bump the pinned SHAs, promptly, in a follow-up PR: on a branch off `main`, run
+    `uv run python scripts/bump_action_pins.py`, commit what it changed, and merge. It reads the
+    tag's commit from origin and rewrites every pin whose comment step 1 bumped, in every file its
+    `PIN_FILES` lists. It writes nothing and says why if the tag is not pushed yet, if a pin's
+    comment names another version, or if a listed file has no pin. Until this merges,
+    `tests/test_action_pin.py` fails on `main` and on every pull request, and a consumer copying a
+    `uses:` line gets the previous release. It could not happen earlier, because the SHA does not
+    exist until the tag does. A doc that gains a pin must be added to `PIN_FILES`:
+    `tests/test_action_pin.py` fails until it is, so no pin can be left out of the bump.
 
 ## After the release
 Almost everything that can be wrong with a release is invisible from the inside. The maintainer's
