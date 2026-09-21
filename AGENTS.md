@@ -169,6 +169,7 @@ request's body). `tests/test_docs_frontmatter.py` pins both halves of that rule.
 
 ## Non-goals (v0.1)
 
-Coverage-gated mutant selection, the optional LLM-semantic mutant mode, and any second-language
-adapter (TypeScript is out of scope for v0.1).
+The optional LLM-semantic mutant mode, and any second-language adapter (TypeScript is out of scope
+for v0.1). Coverage-gated mutant selection was one too. It is now being built in steps, as
+[`docs/decisions/0017`](docs/decisions/0017-markers-for-no-coverage-and-test-selection.md) lays out.
 Finishing the GDScript path on a real fixture beats breadth.
