@@ -110,7 +110,8 @@ def _rows() -> list[tuple[str, Mutant, str]]:
             rows.append((f"{name}: broken at {m.span.line}:{m.span.column}", broken, source))
     for label, source, (line, col, end_line, end_col), replacement in _CROSS_DECLARATION:
         span = Span(line, col, end_line, end_col)
-        original = source.splitlines()[line - 1][col - 1 : end_col - 1]
+        # Split on "\n" only, the way the engine's spans do (engine/spans.py), never splitlines().
+        original = source.split("\n")[line - 1][col - 1 : end_col - 1]
         rows.append((label, Mutant("fixture.gd", span, "fixture", original, replacement), source))
     return rows
 
@@ -141,9 +142,9 @@ def test_every_fixture_is_rejected_by_the_reference() -> None:
     # The fixtures exist to be rejections. If the grammar ever came to accept one, the test above
     # would quietly lose that row's worth of reject-side coverage, so say so here instead.
     for label, source, (line, col, end_line, end_col), replacement in _CROSS_DECLARATION:
-        lines = source.splitlines(keepends=True)
-        start = sum(len(x) for x in lines[: line - 1]) + col - 1
-        end = sum(len(x) for x in lines[: end_line - 1]) + end_col - 1
+        lines = source.split("\n")  # +1 below puts back the "\n" each line lost
+        start = sum(len(x) + 1 for x in lines[: line - 1]) + col - 1
+        end = sum(len(x) + 1 for x in lines[: end_line - 1]) + end_col - 1
         mutated = source[:start] + replacement + source[end:]
         assert reference_accepts(source), f"{label}: the original must parse"
         assert not reference_accepts(mutated), f"{label}: the fixture no longer breaks the file"
