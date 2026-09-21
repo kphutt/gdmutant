@@ -14,8 +14,10 @@ requirements), and the *shape* of the code that delivers it. Product rationale i
 Scope note: this document covers v0.1, the deterministic operator core + the GDScript adapter, run
 against a bundled fixture. Some work the plan first deferred has since shipped (the HTML report,
 the `--since` incremental/diff-scoped mode, and `--jobs` parallel evaluation). §5 marks what landed.
-Work still deferred (coverage-gated mutant selection, the LLM-semantic mode, further language
-adapters) is named in §5, not designed here.
+Coverage-gated mutant selection is designed in
+[ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md) and is being built in
+steps. Work still deferred (the LLM-semantic mode, further language adapters) is named in §5, not
+designed here.
 
 ---
 
@@ -113,6 +115,8 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   Ignored, invalid and error mutants are excluded from the score. There is no separate no-coverage
   verdict: v0.1 gathers no coverage data, so a mutant on a line no test exercises is classified
   *survived*, which is where no-coverage folds until coverage-gated selection exists.
+  [ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md) adds a *no coverage*
+  verdict in its step 2. Until that lands, this list is complete.
 - FG-4.2: The system shall compute the mutation score = (killed + timeout) /
   (killed + timeout + survived), and totals. Timeouts count as detected (Stryker convention).
 
@@ -190,9 +194,11 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
 - NF-6: Performance headroom. v0.1 runs the full suite per mutant (simple, correct). Booting Godot
   per mutant is slow, so the design leaves clean seams for two speedups. Both have since shipped:
   `--jobs N` evaluates mutants in parallel, each on its own copy of the project, and `--since
-  <ref>` mutates only the lines a diff changed. The remaining, still-deferred lever is
-  coverage-gated selection (only run tests that cover the mutated line), which the seam preserves
-  without reshaping the engine.
+  <ref>` mutates only the lines a diff changed. The remaining lever is coverage-gated selection
+  (only run tests that cover the mutated line), which the seam preserves without reshaping the
+  engine. [ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md) designs it,
+  in steps. Step 1, marker placement in the GDScript adapter, has landed. Nothing runs the markers
+  yet, so every run still uses the whole suite per mutant.
 - NF-7: Safe source writes. Every write to a source file either lands whole or does not happen at
   all. gdmutant rewrites the user's own file twice per mutant (§4), and a plain in-place write empties
   the file before putting anything back, so a crash inside that window would destroy the file instead
@@ -310,6 +316,8 @@ All five shipped.
 ### Tier B: designed for but not built in v0.1
 
 Since shipped: the HTML report (`--html`), the
-incremental/diff-scoped mode (`--since`), and parallel evaluation (`--jobs`). Still deferred:
-coverage-gated mutant selection (the NF-6 seam), the optional LLM-semantic mutant mode, and additional
+incremental/diff-scoped mode (`--since`), and parallel evaluation (`--jobs`). In progress:
+coverage-gated mutant selection (the NF-6 seam), built in the steps of
+[ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md), of which step 1 (marker
+placement) has landed. Still deferred: the optional LLM-semantic mutant mode, and additional
 language adapters.
