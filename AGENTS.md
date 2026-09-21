@@ -125,6 +125,13 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   writing to stdout at once. Coverage and mutation testing cannot catch these. Both ask "is this
   path correct?", and the bug is "do these two paths match?". So when you change one of a pair, say
   what every member of the pair does now, including the ones already right.
+- **Recurring bug three: a check that only works from a real checkout.** A test suite also runs
+  from a copy of the tree that isn't one: mutmut's `mutants/`, poodle's `.poodle-temp/run-N/` runs,
+  an unpacked sdist. Seen four times (`pyproject.toml`'s `[tool.mutmut]` comment names three; a
+  fourth read `git ls-files` answering empty inside `mutants/` as a failure and aborted the
+  mutation baseline instead of skipping it). A test that reads the repository through git or a
+  path has to expect that copy, and treat an empty answer there as the copy talking, not a bug to
+  chase.
 - Sensitive paths (CI, scripts, toolchain, the mutation-operator catalog, and the GDScript
   adapter) are listed in `CODEOWNERS` for documentation only. It enforces no review (a sole
   maintainer can't approve their own PR). `main` requires a pull request and, alongside
