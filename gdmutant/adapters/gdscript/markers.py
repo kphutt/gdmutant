@@ -134,10 +134,12 @@ def _index_positions(tree: Tree[Token]) -> dict[tuple[int, int], tuple[Tree[Toke
     return index
 
 
-def _position(children: list[Tree[Token] | Token], node: Tree[Token]) -> int:
-    """Where `node` itself sits in `children`. Not ``list.index``, which compares lark trees by
-    value, so two identical statements (``a += 1; a += 1``) would both be found at the first."""
-    return next(i for i, child in enumerate(children) if child is node)
+def _before(parent: Tree[Token], node: Tree[Token]) -> list[Tree[Token] | Token]:
+    """`parent`'s children that come before `node` itself. Found by identity, not ``list.index``,
+    which compares lark trees by value, so two identical statements (``a += 1; a += 1``) would
+    both be found at the first."""
+    position = next(i for i, child in enumerate(parent.children) if child is node)
+    return parent.children[:position]
 
 
 #: A statement to mark, with the node whose children list holds it.
@@ -153,25 +155,22 @@ class _Placer:
 
     def starts_its_line(self, node: Tree[Token]) -> bool:
         """True if nothing but indentation comes before `node` on its line."""
-        return self.lines[node.meta.line - 1][: node.meta.column - 1].strip() == ""
+        text = self.lines[node.meta.line - 1]
+        return len(text) - len(text.lstrip()) == node.meta.column - 1
 
     def insertion_node(self, statement: Tree[Token], parent: Tree[Token]) -> Tree[Token]:
         """The node `statement`'s marker goes in front of: the statement itself, or the first of
         any annotations right in front of it on the same line, so that in
         ``@warning_ignore("x") var y`` the annotation stays attached to its statement."""
-        siblings = parent.children
-        first = _position(siblings, statement)
-        while first > 0:
-            before = siblings[first - 1]
+        node = statement
+        for before in reversed(_before(parent, statement)):
             if not (
                 isinstance(before, Tree)
                 and before.data == "annotation"
                 and before.meta.line == statement.meta.line
             ):
                 break
-            first -= 1
-        node = siblings[first]
-        assert isinstance(node, Tree)  # pragma: no cover  (a statement or an annotation)
+            node = before
         return node
 
     def takes_own_marker(self, statement: Tree[Token], parent: Tree[Token]) -> bool:
@@ -181,16 +180,13 @@ class _Placer:
         start = self.insertion_node(statement, parent)
         if self.starts_its_line(start):
             return True
-        position = _position(parent.children, start)
-        before = parent.children[position - 1] if position > 0 else None
-        return isinstance(before, Tree) and before.data in _STATEMENTS
+        earlier = _before(parent, start)
+        return bool(earlier) and isinstance(earlier[-1], Tree) and earlier[-1].data in _STATEMENTS
 
     def is_single_line_lambda(self, scope: Tree[Token]) -> bool:
         """True if `scope` is a lambda whose body is written on its header's own line."""
-        if scope.data != "lambda":
-            return False
         body = [c for c in scope.children[1:] if isinstance(c, Tree)]
-        return not body or not self.starts_its_line(body[0])
+        return scope.data == "lambda" and (not body or not self.starts_its_line(body[0]))
 
     def place(self, mutant: Mutant) -> _Target | RunEverything:
         """The statement whose marker covers `mutant`, or why none can."""
@@ -245,18 +241,18 @@ class _Placer:
         """
         whole = any(n.data == "while_stmt" for n in climbed)
 
+        def counted(child: Tree[Token], parent: Tree[Token]) -> bool:
+            """True if an ``await`` inside `child`, a node under `parent`, would count."""
+            own = child.data in _STATEMENTS and self.takes_own_marker(child, parent)
+            return child.data != "lambda" and (whole or not own)
+
         def walk(node: Tree[Token]) -> bool:
             """True if `node` holds a counted ``await``."""
-            if node.data == "await_expr":
-                return True
-            for child in node.children:
-                if not isinstance(child, Tree) or child.data == "lambda":
-                    continue
-                if not whole and child.data in _STATEMENTS and self.takes_own_marker(child, node):
-                    continue
-                if walk(child):
-                    return True
-            return False
+            return node.data == "await_expr" or any(
+                walk(child)
+                for child in node.children
+                if isinstance(child, Tree) and counted(child, node)
+            )
 
         return walk(target)
 

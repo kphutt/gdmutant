@@ -5,6 +5,7 @@ markers fire) is in tests/test_selftest_live.py."""
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import importlib.util
 import os
@@ -96,6 +97,89 @@ def _placements(source: str) -> dict[tuple[int, str], set[Placement]]:
 def test_marker_call_is_one_prefixable_statement() -> None:
     assert MARKER_AUTOLOAD == "_GdmMarks"
     assert marker_call(7) == "_GdmMarks.hit(7); "
+
+
+def test_the_run_everything_reasons_read_as_short_phrases() -> None:
+    # Step 2 counts and prints these, so each one is pinned as the text a user will see.
+    assert {reason.name: reason.value for reason in RunEverything} == {
+        "CLASS_LEVEL": "class-level code",
+        "ANNOTATION": "annotation argument",
+        "CONST": "const",
+        "SINGLE_LINE_LAMBDA": "single-line lambda",
+        "AWAIT": "await",
+        "NO_BODY_STATEMENT": "no statement in the function body",
+    }
+
+
+def test_results_cannot_be_changed_after_the_fact() -> None:
+    result = place_markers("func f(a):\n\treturn a > 1\n", [])
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.source = ""  # type: ignore[misc]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        Spot(0, 1, 1).id = 2  # type: ignore[misc]
+
+
+def test_spot_ids_start_at_zero_by_default() -> None:
+    source = "func f(a):\n\treturn a > 1\n"
+    result = place_markers(source, generate_mutants("t.gd", source))
+    assert result.spots == (Spot(0, 2, 2),)
+    assert set(result.placements) == {0}
+
+
+@pytest.mark.parametrize("keyword", ["pass", "break", "continue", "breakpoint"])
+def test_a_statement_after_a_keyword_statement_on_its_line_gets_its_own_marker(
+    keyword: str,
+) -> None:
+    source = f"func f(xs):\n\tfor x in xs:\n\t\t{keyword}; x += 1\n"
+    _, result = _mark(source)
+    assert result.source.split("\n")[2] == f"\t\t{keyword}; _GdmMarks.hit(0); x += 1"
+
+
+def test_a_keyword_statement_can_be_the_first_statement_a_default_value_is_marked_by() -> None:
+    _, result = _mark("func f(a = 1):\n\tpass\n")
+    assert result.source == "func f(a = 1):\n\t_GdmMarks.hit(0); pass\n"
+    assert set(result.placements) == {0}
+
+
+def test_a_typed_for_loop_is_a_statement_like_any_other() -> None:
+    source = "func f(a, b):\n\tfor i: int in range(a + 1):\n\t\tpass\n\tfor j: int in b: a -= 2\n"
+    _, result = _mark(source)
+    assert result.source.split("\n")[1:4] == [
+        "\t_GdmMarks.hit(0); for i: int in range(a + 1):",
+        "\t\tpass",
+        "\t_GdmMarks.hit(1); for j: int in b: a -= 2",
+    ]
+
+
+def test_a_header_line_body_inside_another_climbs_to_the_first_header_that_starts_a_line() -> None:
+    source = "func f(a, b):\n\twhile a:\n\t\tif a: for i in b: a += 1\n"
+    _, result = _mark(source)
+    assert result.source.split("\n")[1:3] == [
+        "\twhile a:",
+        "\t\t_GdmMarks.hit(0); if a: for i in b: a += 1",
+    ]
+
+
+def test_a_const_inside_another_statement_still_runs_everything() -> None:
+    source = "func f(a):\n\tif a:\n\t\tconst K = 1 + 2\n\t\tprint(K)\n"
+    assert _placements(source)[(3, "+")] == {RunEverything.CONST}
+
+
+def test_a_multi_line_lambda_ending_in_two_statements_on_one_line_is_still_multi_line() -> None:
+    source = "func f():\n\treturn func(q):\n\t\tprint(q)\n\t\tprint(q); return q * 3\n"
+    assert _placements(source)[(4, "*")] == {2}
+
+
+def test_a_statement_after_a_semicolon_keeps_its_own_annotation_but_not_an_earlier_one() -> None:
+    source = (
+        "func f(a: int):\n"
+        '\t@warning_ignore("x") var p = 1; @warning_ignore("integer_division") var q = a / 2\n'
+    )
+    _, result = _mark(source)
+    assert result.source.split("\n")[1] == (
+        '\t_GdmMarks.hit(0); @warning_ignore("x") var p = 1; _GdmMarks.hit(1); '
+        '@warning_ignore("integer_division") var q = a / 2'
+    )
 
 
 def test_statements_in_a_function_body_each_get_their_own_marker_on_their_first_line() -> None:
@@ -425,7 +509,7 @@ def test_no_mutants_means_no_markers_and_the_source_unchanged() -> None:
 def test_a_mutant_from_another_source_is_refused() -> None:
     source = "func f(a):\n\treturn a > 1\n"
     (mutant, *_) = generate_mutants("t.gd", source)
-    with pytest.raises(ValueError, match="does not match the source"):
+    with pytest.raises(ValueError, match=r"^mutant does not match the source at Span\("):
         place_markers("func f(a):\n\treturn a + 1\n", [mutant])
 
 
@@ -434,7 +518,7 @@ def test_a_mutant_that_starts_inside_a_token_is_refused() -> None:
     # no telling which statement it belongs to. Refusing beats guessing.
     source = "func f(abc):\n\treturn abc\n"
     mutant = Mutant("t.gd", Span(2, 10, 2, 11), "made-up", "b", "x")
-    with pytest.raises(ValueError, match="no token or statement starts at"):
+    with pytest.raises(ValueError, match=r"^no token or statement starts at Span\("):
         place_markers(source, [mutant])
 
 
