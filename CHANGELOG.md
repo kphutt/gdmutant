@@ -10,6 +10,16 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- gdmutant's own work per mutant is faster. Every mutant is re-parsed to check it is still valid
+  GDScript, and that check now skips gathering position data it never used. Over 54,677 mutants
+  from three real GDScript projects, it gave the same valid or invalid answer every time. On the
+  largest benchmark workload, the engine loop went from 22.2 to 17.4 seconds (median), about 22%
+  faster. Time spent inside Godot running your tests is unchanged.
+
 ## [0.1.3] - 2026-09-20
 
 ### Added
