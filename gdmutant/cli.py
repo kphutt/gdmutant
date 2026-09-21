@@ -29,12 +29,14 @@ from gdmutant.adapters.gdscript import (
     is_valid_gdscript,
     unknown_ignore_operators,
 )
+from gdmutant.adapters.gdscript.marker_run import GDScriptMarker
 from gdmutant.adapters.gdscript.runner import (
     DEFAULT_TIMEOUT,
     GdUnit4Runner,
     GutRunner,
 )
 from gdmutant.engine.adapter import Adapter
+from gdmutant.engine.coverage import CoverageAnalysis, Marker
 from gdmutant.engine.loop import (
     BaselineFailed,
     MutationRun,
@@ -982,8 +984,12 @@ def run_mutation(
     jobs_auto: bool = False,
     step_summary: bool = False,
     progress_style: ProgressStyle = ProgressStyle.RICH,
+    coverage: CoverageAnalysis = CoverageAnalysis.OFF,
+    marker: Marker | None = None,
 ) -> int:
     """Mutate `source_path`, run via `runner`, print the summary, optionally write a report file.
+
+    `coverage` and `marker` turn on coverage analysis (docs/decisions/0017): see `loop.run`.
 
     Returns 0 on a completed pass — **survivors are report output, not a failure** (FG-6.2) — 1 if
     the unmutated baseline suite fails, and 2 if the source can't be read, isn't valid GDScript, the
@@ -1025,6 +1031,8 @@ def run_mutation(
             jobs=jobs,
             jobs_auto=jobs_auto,
             progress_style=progress_style,
+            coverage=coverage,
+            marker=marker,
         )
     except (SourceOutsideProject, SourceWriteFailed) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -1214,6 +1222,8 @@ def run_mutation_paths(
     jobs_auto: bool = False,
     step_summary: bool = False,
     progress_style: ProgressStyle = ProgressStyle.RICH,
+    coverage: CoverageAnalysis = CoverageAnalysis.OFF,
+    marker: Marker | None = None,
 ) -> int:
     """Mutate several `.gd` files against one project in a single pass — the baseline runs **once**
     and the score is aggregated across every file, with one merged report. Same return
@@ -1248,6 +1258,8 @@ def run_mutation_paths(
             jobs=jobs,
             jobs_auto=jobs_auto,
             progress_style=progress_style,
+            coverage=coverage,
+            marker=marker,
         )
     except (SourceOutsideProject, SourceWriteFailed) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -1260,7 +1272,8 @@ def run_mutation_paths(
     for path, file_run in runs.items():
         score = file_run.mutation_score
         score_str = "n/a" if score is None else f"{score * 100:.1f}%"
-        scored = file_run.detected + file_run.survived
+        # No coverage is undetected, like survived: the same denominator the score uses.
+        scored = file_run.detected + file_run.survived + file_run.no_coverage
         # POSIX-normalized for the same reason the survivor blocks below it are: this line and those
         # sit in one report, so a host separator here would disagree with them on Windows.
         print(
@@ -1270,7 +1283,10 @@ def run_mutation_paths(
     print("", file=out)
     # Survivors carry their own path, so one aggregate summary lists them per file with the overall
     # score across every file's mutants.
-    aggregate = MutationRun(tuple(o for r in runs.values() for o in r.outcomes))
+    aggregate = MutationRun(
+        tuple(o for r in runs.values() for o in r.outcomes),
+        coverage_analysis=coverage is not CoverageAnalysis.OFF,
+    )
     print(console_summary(aggregate), file=out)
     # Across every file: baseline passed but nothing was detected — usually the test command never
     # exercised the mutated files, not a suite that catches nothing (stderr, score/exit unchanged).
@@ -1651,6 +1667,16 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "other.",
     )
     run_parser.add_argument(
+        "--coverage-analysis",
+        choices=tuple(mode.value for mode in CoverageAnalysis),
+        default=CoverageAnalysis.OFF.value,
+        help="find the mutants no test reaches before running any: off (default: every mutant "
+        "runs the whole suite), or all (run the suite once on a marked copy of the project, and "
+        "report a mutant whose line no test reached as 'no coverage' without running it. It is "
+        "scored like a survivor, so the score does not move). per-file (run only the tests that "
+        "reach a mutant) is not built yet. Needs --godot, whatever the runner",
+    )
+    run_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="list the mutants without running any tests (no Godot needed)",
@@ -1870,6 +1896,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--html", args.html_path, None),
                     ("--report", args.report, None),
                     ("--progress", args.progress_style, "auto"),
+                    ("--coverage-analysis", args.coverage_analysis, "off"),
                 )
                 if value != default
             ]
@@ -1887,6 +1914,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if rc != 0:
                     return rc
             return 0
+        if args.coverage_analysis == CoverageAnalysis.PER_FILE.value:
+            print(
+                "error: --coverage-analysis per-file is not built yet. Use 'all' to get the no "
+                "coverage verdict, or 'off'",
+                file=sys.stderr,
+            )
+            return 2
         if args.runner is None:
             print(
                 "error: --runner is required (gdunit4, gut, or command). Pass it on the command "
@@ -1950,6 +1984,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "jobs_auto": args.jobs_auto,
             "step_summary": _wants_step_summary(args.report),
             "progress_style": _resolve_progress_style(args.progress_style),
+            "coverage": CoverageAnalysis(args.coverage_analysis),
+            # Coverage analysis runs Godot once to register its recorder in the marked copy, with
+            # every runner, so it takes the executable from --godot even under --runner command.
+            "marker": GDScriptMarker(godot=args.godot),
         }
         if len(files) == 1:
             return run_mutation(files[0], project_dir, runner, **common)

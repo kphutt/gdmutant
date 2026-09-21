@@ -30,14 +30,20 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from gdmutant.adapters.gdscript import generate_mutants
+from gdmutant.adapters.gdscript import ADAPTER, generate_mutants
+from gdmutant.adapters.gdscript.marker_run import RECORDER_DIR, WRITER_AUTOLOAD, GDScriptMarker
 from gdmutant.adapters.gdscript.markers import MarkedSource, RunEverything, place_markers
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner, GutRunner
+from gdmutant.engine.coverage import CoverageAnalysis, MarkedCopy
+from gdmutant.engine.loop import CoverageRunFailed, CoverageSelfCheckFailed, MutationRun
+from gdmutant.engine.loop import run as engine_run
 from gdmutant.engine.runner import CommandRunner, Runner, SuiteResult
 
 _GODOT = os.environ.get("GDMUTANT_GODOT")
@@ -857,3 +863,362 @@ def test_marked_code_reports_errors_on_the_same_lines(tmp_path: Path) -> None:
     for name, text, line in (("boom.gd", _RUNTIME_ERROR, 7), ("bad.gd", _COMPILE_ERROR, 4)):
         spots = place_markers(text, generate_mutants(name, text)).spots
         assert line in {spot.line for spot in spots}
+
+
+# Coverage analysis (docs/decisions/0017, Plan step 2): the marker run and the "no coverage"
+# verdict, through the shipped CLI and the engine, against real Godot. The bar is the ADR's
+# two-sided evidence. With markers on, every mutant must get the verdict it gets with markers off,
+# except that "no coverage" may stand in for "survived" and nothing else. And a broken map, or a
+# recorder that never ran, must be caught rather than reported.
+
+_GODOT_EXE = _GODOT or ""
+
+
+def _coverage_project(
+    tmp_path: Path, name: str, extra: dict[str, str], autoloads: str = ""
+) -> Path:
+    """A corpus copy with `extra` files and any `autoloads` lines added, then imported."""
+    project = tmp_path / name
+    shutil.copytree(CORPUS, project, ignore=shutil.ignore_patterns(".godot", "reports"))
+    for relative, text in extra.items():
+        path = project / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8", newline="\n")
+    if autoloads:
+        settings = project / "project.godot"
+        settings.write_text(
+            settings.read_text(encoding="utf-8") + f"\n[autoload]\n\n{autoloads}\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    subprocess.run(
+        [_GODOT_EXE, "--headless", "--path", str(project), "--import"],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert (project / ".godot").is_dir(), "Godot --import did not create the .godot cache"
+    return project
+
+
+def _runner_args(runner: str, tests: str | None = None) -> list[str]:
+    if runner == "command":
+        return [
+            "--runner",
+            "command",
+            "--command",
+            f"{_GODOT_EXE} --headless --path . --script res://harness/run_tests.gd",
+            "--godot",
+            _GODOT_EXE,
+        ]
+    if runner == "gut":
+        return ["--runner", "gut", "--tests", tests or "res://gut_test", "--godot", _GODOT_EXE]
+    return ["--runner", "gdunit4", "--tests", tests or "res://test", "--godot", _GODOT_EXE]
+
+
+def _gdmutant(
+    project: Path, target: str, extra: list[str], out: Path
+) -> tuple[subprocess.CompletedProcess[str], dict | None]:
+    """Run the shipped CLI and return the process and the JSON report (None if none was written)."""
+    cmd = [sys.executable, "-m", "gdmutant.cli", "run", str(project / target)]
+    cmd += ["--project", str(project), "--json", str(out), *extra]
+    done = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=False)
+    report = json.loads(out.read_text(encoding="utf-8")) if out.is_file() else None
+    return done, report
+
+
+def _statuses(report: dict) -> dict[tuple[int, int, str, str], str]:
+    ((_, entry),) = report["files"].items()
+    return {
+        (
+            m["location"]["start"]["line"],
+            m["location"]["start"]["column"],
+            m["mutatorName"],
+            m["replacement"],
+        ): m["status"]
+        for m in entry["mutants"]
+    }
+
+
+def _assert_two_sided(off: dict, on: dict) -> set[tuple[int, int, str, str]]:
+    """Every mutant's verdict with markers on equals its verdict with markers off, except that a
+    mutant reported NoCoverage must have SURVIVED with markers off. Returns the NoCoverage keys."""
+    before, after = _statuses(off), _statuses(on)
+    assert before.keys() == after.keys(), "markers changed which mutants exist"
+    uncovered = {key for key, status in after.items() if status == "NoCoverage"}
+    for key, status in after.items():
+        if key in uncovered:
+            assert before[key] == "Survived", (
+                f"{key} is NoCoverage with markers on but {before[key]} with markers off: a "
+                "mutant a real run treats differently was hidden"
+            )
+        else:
+            assert status == before[key], f"{key}: {before[key]} off, {status} on"
+    return uncovered
+
+
+def _both_ways(
+    tmp_path: Path, project: Path, target: str, args: list[str]
+) -> tuple[dict, dict, str, dict[str, float]]:
+    """Run gdmutant on `target` with markers off, then on. Returns both reports, the markers-on
+    stdout, and the wall-clock of each run."""
+    times: dict[str, float] = {}
+    reports: dict[str, dict] = {}
+    stdout = ""
+    for mode in ("off", "all"):
+        started = time.monotonic()
+        done, report = _gdmutant(
+            project, target, [*args, "--coverage-analysis", mode], tmp_path / f"{mode}.json"
+        )
+        times[mode] = time.monotonic() - started
+        assert done.returncode == 0, f"{mode}: exit {done.returncode}\n{done.stdout}\n{done.stderr}"
+        assert report is not None
+        reports[mode] = report
+        stdout = done.stdout
+    return reports["off"], reports["all"], stdout, times
+
+
+@pytest.mark.parametrize("runner", ["command", "gdunit4", "gut"])
+def test_coverage_analysis_gives_every_mutant_the_verdict_it_gets_without_it(
+    tmp_path: Path, runner: str
+) -> None:
+    if runner == "gdunit4" and not ADDON.is_dir():
+        pytest.skip("GdUnit4 addon not installed")
+    if runner == "gut" and not GUT_ADDON.is_dir():
+        pytest.skip("GUT addon not installed")
+    project = _corpus_copy(tmp_path)
+    off, on, stdout, times = _both_ways(tmp_path, project, TARGET, _runner_args(runner))
+    uncovered = _assert_two_sided(off, on)
+    # Not vacuous: can_act and ties_favor_earlier are untested on purpose, so their three mutants
+    # are exactly the ones no test reaches, and every one of them is self-checked.
+    assert {(line, col) for line, col, _, _ in uncovered} == {(27, 15), (27, 19), (32, 9)}
+    assert (
+        "Coverage self-check: re-ran 3 of the 3 no-coverage mutants against the whole suite"
+        in stdout
+    )
+    print(f"\n{runner}: markers off {times['off']:.1f}s, markers on {times['all']:.1f}s")
+
+
+class _Sabotaged:
+    """Wraps the real marker, then breaks the copy after marking: the ADR's "a hook that never
+    fires, a dropped credit". `drop_spot` makes the recorder ignore one spot, `no_writer` removes
+    the autoload that writes the hits file."""
+
+    def __init__(self, drop_spot: int | None = None, no_writer: bool = False) -> None:
+        self.inner = GDScriptMarker(godot=_GODOT_EXE)
+        self.drop_spot = drop_spot
+        self.no_writer = no_writer
+
+    def mark(self, copy_dir: str, files: Any) -> MarkedCopy:
+        marked = self.inner.mark(copy_dir, files)
+        copy = Path(copy_dir)
+        if self.drop_spot is not None:
+            marks = copy / RECORDER_DIR / "marks.gd"
+            text = marks.read_text(encoding="utf-8")
+            broken = text.replace(
+                "\thits[spot] = true", f"\tif spot != {self.drop_spot}:\n\t\thits[spot] = true"
+            )
+            assert broken != text
+            marks.write_text(broken, encoding="utf-8", newline="\n")
+        if self.no_writer:
+            settings = copy / "project.godot"
+            kept = [
+                line
+                for line in settings.read_text(encoding="utf-8").split("\n")
+                if not line.startswith(WRITER_AUTOLOAD)
+            ]
+            settings.write_text("\n".join(kept), encoding="utf-8", newline="\n")
+        return marked
+
+
+def _engine_run(project: Path, marker: _Sabotaged, self_check: int | None) -> MutationRun:
+    harness = [_GODOT_EXE, "--headless", "--path", ".", "--script", "res://harness/run_tests.gd"]
+    target = project / TARGET
+    return engine_run(
+        str(project),
+        str(target),
+        target.read_text(encoding="utf-8"),
+        CommandRunner(command=harness),
+        ADAPTER,
+        coverage=CoverageAnalysis.ALL,
+        marker=marker,
+        self_check=self_check,
+    )
+
+
+def test_a_map_missing_one_hit_is_caught_by_the_self_check(tmp_path: Path) -> None:
+    project = _corpus_copy(tmp_path)
+    # The first spot is acts_before's `return`, whose `>` -> `>=` mutant the suite kills. Dropping
+    # its hit makes the map call a killable mutant "no coverage".
+    spots = _marked_corpus_file(TARGET).spots
+    assert spots[0].line == 8
+    with pytest.raises(CoverageSelfCheckFailed, match=r"turn_order\.gd:8:.*gave 'killed'"):
+        _engine_run(project, _Sabotaged(drop_spot=spots[0].id), self_check=None)
+    # And the project was left exactly as it was.
+    assert (project / TARGET).read_text(encoding="utf-8") == (CORPUS / TARGET).read_text(
+        encoding="utf-8"
+    )
+
+
+def test_a_recorder_that_never_writes_its_hits_fails_the_marker_run(tmp_path: Path) -> None:
+    project = _corpus_copy(tmp_path)
+    with pytest.raises(CoverageRunFailed, match="wrote no hits file"):
+        _engine_run(project, _Sabotaged(no_writer=True), self_check=None)
+
+
+# Code that runs at load time, from an autoload's `_init`, is reached before any test, so its
+# mutants are never "no coverage". A class-level `var` cannot take a marker at all, so it always
+# runs. Only `_unused`, which nothing calls, is unreached. No test checks any of it, so with markers
+# off every mutant here survives, and the two-sided check pins what markers on may change.
+_BOOT = """extends Node
+
+var booted := 10
+
+
+func _init() -> void:
+\tbooted = _compute(4)
+
+
+func _compute(n: int) -> int:
+\treturn n * 3
+
+
+func _unused() -> int:
+\treturn 5
+"""
+
+
+def test_load_time_code_is_reached_and_class_level_code_always_runs(tmp_path: Path) -> None:
+    project = _coverage_project(
+        tmp_path, "boot", {"boot.gd": _BOOT}, autoloads='Boot="*res://boot.gd"'
+    )
+    off, on, _, _ = _both_ways(tmp_path, project, "boot.gd", _runner_args("command"))
+    uncovered = _assert_two_sided(off, on)
+    assert uncovered, "nothing was uncovered, so the markers never ran"
+    assert {line for line, _, _, _ in uncovered} == {15}  # `_unused` alone
+    class_level = {key: s for key, s in _statuses(on).items() if key[0] == 3}
+    assert class_level and set(class_level.values()) == {"Survived"}  # it ran the whole suite
+
+
+# Deferred code: a `call_deferred` a test awaits, and a timer one test file starts without waiting
+# that a later file observes. Both are killable only if the map credits them, so neither may be
+# "no coverage". A hit anywhere in the marker run counts as reached in step 2 (per-file windows,
+# where crossing files matters, are step 3).
+_DEFERRED = """class_name Deferred
+extends RefCounted
+
+static var value := 0
+static var ticks := 0
+
+
+static func start() -> void:
+\t_fire.call_deferred()
+
+
+static func _fire() -> void:
+\tvalue = 7
+
+
+static func start_timer() -> void:
+\tvar tree := Engine.get_main_loop() as SceneTree
+\ttree.create_timer(0.05).timeout.connect(_tick)
+
+
+static func _tick() -> void:
+\tticks = 3
+"""
+_DEFERRED_GDUNIT = {
+    "deferred_test/test_a_deferred.gd": """extends GdUnitTestSuite
+
+
+func test_a_deferred_call_lands() -> void:
+\tDeferred.start()
+\tawait get_tree().process_frame
+\tassert_int(Deferred.value).is_equal(7)
+
+
+func test_b_starts_a_timer_it_does_not_wait_for() -> void:
+\tDeferred.start_timer()
+""",
+    "deferred_test/test_b_observer.gd": """extends GdUnitTestSuite
+
+
+func test_the_timer_started_in_another_file_fired() -> void:
+\tawait get_tree().create_timer(0.5).timeout
+\tassert_int(Deferred.ticks).is_equal(3)
+""",
+}
+_DEFERRED_GUT = {
+    "deferred_gut/test_a_deferred.gd": """extends GutTest
+
+
+func test_a_deferred_call_lands() -> void:
+\tDeferred.start()
+\tawait wait_frames(1)
+\tassert_eq(Deferred.value, 7)
+
+
+func test_b_starts_a_timer_it_does_not_wait_for() -> void:
+\tDeferred.start_timer()
+\tpass_test("the timer is observed by another file")
+""",
+    "deferred_gut/test_b_observer.gd": """extends GutTest
+
+
+func test_the_timer_started_in_another_file_fired() -> void:
+\tawait wait_seconds(0.5)
+\tassert_eq(Deferred.ticks, 3)
+""",
+}
+
+
+@pytest.mark.parametrize("runner", ["gdunit4", "gut"])
+def test_deferred_code_a_test_observes_is_never_no_coverage(tmp_path: Path, runner: str) -> None:
+    if not (ADDON if runner == "gdunit4" else GUT_ADDON).is_dir():
+        pytest.skip(f"{runner} addon not installed")
+    tests = _DEFERRED_GDUNIT if runner == "gdunit4" else _DEFERRED_GUT
+    test_dir = "res://" + next(iter(tests)).split("/")[0]
+    project = _coverage_project(tmp_path, "deferred", {"deferred.gd": _DEFERRED, **tests})
+    off, on, _, _ = _both_ways(tmp_path, project, "deferred.gd", _runner_args(runner, test_dir))
+    _assert_two_sided(off, on)
+    statuses = _statuses(on)
+    # value = 7 in _fire, and ticks = 3 in _tick: killed both ways, never hidden.
+    for line in (13, 22):
+        verdicts = {s for (ln, _, _, _), s in statuses.items() if ln == line}
+        assert verdicts == {"Killed"}, (line, verdicts)
+
+
+# A SCRIPT ERROR outside every test: an autoload's `_ready` reads a null. Both JUnit frameworks run
+# the suite green anyway, so the baseline passes, but the marker run must stop, because an error
+# like this can cut short code a test would have reached.
+_NOISY = """extends Node
+
+
+func _ready() -> void:
+\tvar missing: Variant = null
+\tmissing.size()
+"""
+
+
+@pytest.mark.parametrize("runner", ["gdunit4", "gut"])
+def test_a_script_error_outside_every_test_stops_the_marker_run(
+    tmp_path: Path, runner: str
+) -> None:
+    if not (ADDON if runner == "gdunit4" else GUT_ADDON).is_dir():
+        pytest.skip(f"{runner} addon not installed")
+    project = _coverage_project(
+        tmp_path, "noisy", {"noisy.gd": _NOISY}, autoloads='Noisy="*res://noisy.gd"'
+    )
+    args = [*_runner_args(runner), "--coverage-analysis", "all"]
+    done, report = _gdmutant(project, TARGET, args, tmp_path / "noisy.json")
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert report is None
+    assert "the coverage marker run was not clean" in done.stderr
+    assert "runtime error" in done.stderr
+    assert "SCRIPT ERROR" in done.stderr
+    assert "--coverage-analysis off" in done.stderr
+    # The same project without markers runs to completion: only the marker run scans for it.
+    plain, plain_report = _gdmutant(project, TARGET, _runner_args(runner), tmp_path / "plain.json")
+    assert plain.returncode == 0, plain.stderr
+    assert plain_report is not None

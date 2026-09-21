@@ -432,3 +432,64 @@ Each step is its own PR, off `main`, in this order.
 - Command-runner users get "no coverage" for free and selection only by changing their harness.
 - The mutation score is unchanged by switching markers on, except where a mutant that used to be
   "survived" becomes "no coverage", which scores the same.
+
+## Update, 2026-09-21: what building steps 1 and 2 changed
+
+Four findings from building steps 1 and 2 change parts of the design above. The text above is left
+as it was accepted. Where it and this section disagree, this section is what was built.
+
+### The recorder is a global class, with an autoload only to write the file
+The design above makes `_GdmMarks` an autoload. That fails for a harness that loads the code under
+test in a `--script` `_init`, as this repository's own command harness does: Godot registers
+autoloads after that `_init` runs, so every marked file fails to compile there with "Identifier not
+found: _GdmMarks". What was built instead:
+
+- `_GdmMarks` is a script with `class_name _GdmMarks` and a static `hit`. A global class resolves
+  at any moment, so the marker text is unchanged: `_GdmMarks.hit(N); `.
+- A separate autoload, `_GdmHitsWriter`, writes the recorded spots as JSON when Godot frees it at
+  exit. It is registered first. Godot frees autoloads last-registered first, so the first one
+  registered is freed last. Checked on Godot 4.7: a hit made by another autoload while it was being
+  freed was recorded with the writer first and lost with it last.
+- A global class exists only after Godot's import scan lists it, so coverage analysis runs
+  `godot --import` once on the marked copy and then reads Godot's class list back to confirm the
+  class is there. That is why coverage analysis needs `--godot` with every runner, `--runner
+  command` included.
+- "If the project already uses that name" now covers three names: the `_gdmutant/` directory, the
+  class `_GdmMarks`, and the autoload `_GdmHitsWriter`.
+
+### Marked files are never checked with gdtoolkit
+gdtoolkit does not parse a compound statement after `;` (`_GdmMarks.hit(3); if x:`), which Godot
+accepts, so the marked copy cannot go through the NF-5 re-parse. Godot is the check instead. A
+marked file Godot cannot load shows up in the clean-run rules as a script error, a failing or
+missing test, or a lost hits file, and stops the run.
+
+### Step 2 is one forward pass, with no file windows
+Running the files in reverse order needs the per-runner file lists (`-a` per file, `-gtest=`) that
+step 3 builds, and "no coverage" needs only the forward pass to be sound, as the section on a clean
+marker run already says. So step 2 runs the whole suite once, forward, and any hit anywhere in that
+run, load time included, means "reached". The reverse pass, the file windows, the window rules
+("at least one window opened", "every test file in the JUnit report opened a window") and the
+refusal of selection for an order-dependent suite all move to step 3, which is the first step that
+reads a window. Every other clean-run rule is in step 2.
+
+### The self-check's "no coverage" half ships in step 2
+The design above runs the self-check only with selection on. Step 2 runs the half that applies to
+it on every run with coverage analysis on: a few "no coverage" mutants (three, chosen by a stable
+hash) also run against the whole suite, and any verdict but survived stops the run with both
+verdicts. The count is printed on every run, zero included. The reason to ship it now is a gap in
+the soundness argument above. "Until that spot runs, the mutated program does exactly what the
+original did" holds for what a mutant does at run time, but Godot compiles a whole script when it
+loads it. A mutant that Godot's compiler rejects, but gdtoolkit accepts, breaks the script at load
+even if its statement never runs, so with coverage analysis off it would be killed or an error, and
+with it on it would be "no coverage". The corpus has no such mutant (the two-sided check found none),
+and NF-5 plus the statement-deletion guard remove most, but nothing rules them out. The sample is a
+tripwire for them and for a broken map, not proof. The sampled check of selected mutants and the
+flag that checks every mutant stay in step 3.
+
+### Measured while building step 2
+- On the corpus, every mutant's verdict with coverage analysis on matched its verdict with it off,
+  under all three runners, and the three "no coverage" mutants are exactly the three that survived
+  on untested functions.
+- The marker call costs about 100 ns on Godot 4.7: a loop of one million trivial additions took
+  about 12 ms plain and 115 ms marked. A hot loop of cheap statements can run several times slower
+  in the marker run, which is why the marker run gets the baseline's time budget, not a mutant's.

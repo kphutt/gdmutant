@@ -12,9 +12,12 @@ suite via a `Runner`, and classifies the outcome:
 * **invalid** — the mutant didn't parse (NF-5); never counted as killed, never run,
 * **error** — the runner failed to execute the mutant (e.g. a Godot crash); tallied so one bad run
   doesn't discard the whole pass, and excluded from the score.
+* **no coverage**: only with coverage analysis on (``--coverage-analysis all``): the marker run
+  showed that no test reaches the mutant's spot, so it is decided without running the suite and
+  scored like a survivor (Stryker's ``NoCoverage``). See `engine.coverage` and docs/decisions/0017.
 
-no-coverage is folded into *survived* for v0.1 (DESIGN.md FG-4.1) until coverage-gating lands. Each
-mutant is applied in isolation and the original restored in a ``finally`` — see docs/decisions/0003.
+With coverage analysis off, a mutant on a line no test runs is simply *survived*. Each mutant is
+applied in isolation and the original restored in a ``finally`` — see docs/decisions/0003.
 """
 
 from __future__ import annotations
@@ -32,9 +35,19 @@ from enum import Enum
 from pathlib import Path
 
 from gdmutant.engine.adapter import Adapter
+from gdmutant.engine.coverage import (
+    SELF_CHECK_SAMPLE,
+    CoverageAnalysis,
+    HitsUnreadable,
+    Marker,
+    clean_run_problems,
+    read_hits,
+    self_check_sample,
+    uncovered,
+)
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import CATALOG, Operator
-from gdmutant.engine.runner import Preparable, Runner, SuiteTimeout
+from gdmutant.engine.runner import MarkerRunnable, Preparable, Runner, SuiteTimeout
 
 # Per-mutant timeout derived from the baseline's wall-clock, so a hanging mutant is cut off in
 # seconds rather than blocking for a flat default (the #1 first-run "looks frozen" complaint).
@@ -50,6 +63,17 @@ def _derive_timeout(baseline_secs: float) -> float:
 
 class BaselineFailed(Exception):
     """The unmutated suite failed — mutation testing a red suite is meaningless (FG-3.3)."""
+
+
+class CoverageRunFailed(BaselineFailed):
+    """Coverage analysis could not be trusted, so the run stopped (docs/decisions/0017).
+
+    The copy could not be marked, the marker run was not clean (see
+    `engine.coverage.clean_run_problems`), or the self-check found a "no coverage" mutant that a
+    real run treats differently. A subclass of `BaselineFailed` on purpose: every caller that
+    already stops on a suite it cannot trust stops on this too, with no second handler to forget.
+    Every message ends by naming the way out, turning coverage analysis off, which is always sound.
+    """
 
 
 class SourceOutsideProject(Exception):
@@ -77,21 +101,33 @@ class Verdict(Enum):
     IGNORED = "ignored"
     INVALID = "invalid"
     ERROR = "error"
+    #: No test reaches the mutant's spot (coverage analysis only). Decided without running the
+    #: suite, and scored as undetected, the same as `SURVIVED`.
+    NO_COVERAGE = "no coverage"
 
 
 @dataclass(frozen=True)
 class MutantOutcome:
-    """One mutant paired with the `Verdict` its evaluation reached."""
+    """One mutant paired with the `Verdict` its evaluation reached.
+
+    `self_checked` is true for a `Verdict.NO_COVERAGE` mutant that the coverage self-check also ran
+    against the whole suite, where it survived, agreeing with the map."""
 
     mutant: Mutant
     verdict: Verdict
+    self_checked: bool = False
 
 
 @dataclass(frozen=True)
 class MutationRun:
-    """The tally of a mutation run — outcomes in the order mutants were generated (NF-1)."""
+    """The tally of a mutation run — outcomes in the order mutants were generated (NF-1).
+
+    `coverage_analysis` records whether the run used coverage analysis, so the summary can say how
+    many mutants the self-check compared even when that is zero: an empty check must be visible,
+    never a silent pass."""
 
     outcomes: tuple[MutantOutcome, ...]
+    coverage_analysis: bool = False
 
     def _count(self, verdict: Verdict) -> int:
         return sum(1 for o in self.outcomes if o.verdict is verdict)
@@ -129,9 +165,26 @@ class MutationRun:
         return self._count(Verdict.ERROR)
 
     @property
+    def no_coverage(self) -> int:
+        """Count of mutants no test reaches (coverage analysis only). Scored like survivors."""
+        return self._count(Verdict.NO_COVERAGE)
+
+    @property
+    def self_checked(self) -> int:
+        """Count of no-coverage mutants the self-check also ran against the whole suite."""
+        return sum(1 for o in self.outcomes if o.self_checked)
+
+    @property
     def survivors(self) -> tuple[Mutant, ...]:
         """The mutants no test caught — the product's core output."""
         return tuple(o.mutant for o in self.outcomes if o.verdict is Verdict.SURVIVED)
+
+    @property
+    def uncovered(self) -> tuple[Mutant, ...]:
+        """The mutants no test even reaches. Listed beside the survivors under their own label,
+        because "nothing runs this line" and "something runs it but checks nothing" call for
+        different fixes."""
+        return tuple(o.mutant for o in self.outcomes if o.verdict is Verdict.NO_COVERAGE)
 
     @property
     def detected(self) -> int:
@@ -140,10 +193,13 @@ class MutationRun:
 
     @property
     def mutation_score(self) -> float | None:
-        """``detected / (detected + survived)`` where detected = killed + timeouts; ``None`` when
-        there are no killable mutants. Timeouts count as detected (Stryker convention): a mutation
-        that hangs the suite was observably caught. invalid/error are excluded entirely."""
-        scored = self.detected + self.survived
+        """``detected / (detected + survived + no coverage)``, where detected is killed plus
+        timeouts, or ``None`` when there are no killable mutants. Timeouts count as detected
+        (Stryker convention): a mutation that hangs the suite was observably caught. No coverage
+        counts as undetected, also Stryker's rule, so turning coverage analysis on moves a mutant
+        from one undetected bucket to the other and never moves the score. invalid/error are
+        excluded."""
+        scored = self.detected + self.survived + self.no_coverage
         return self.detected / scored if scored else None
 
 
@@ -241,7 +297,7 @@ def _wait_for_load_capacity(threshold: float) -> None:
         time.sleep(_LOAD_THROTTLE_POLL_SECS)
 
 
-def _progress_plan(runnable: int, total: int, jobs: int) -> str:
+def _progress_plan(runnable: int, total: int, jobs: int, uncovered: int = 0) -> str:
     """The pre-run line: **what the run is**, with no prediction of how long it will take.
 
     gdmutant used to print ``estimated ≈ 24s`` here, from mutant count × baseline time. No other
@@ -258,16 +314,24 @@ def _progress_plan(runnable: int, total: int, jobs: int) -> str:
     carries that job: the heartbeat (`_HEARTBEAT_SECS`) now fires every few seconds instead of every
     30, so a still terminal gets live, repeated proof of life instead of one number to do the math
     on. The cap is still enforced exactly as before (`_contention_budget`), just not announced here.
+
+    `uncovered` is how many non-ignored mutants coverage analysis already decided as "no coverage"
+    without a run. They are left out of the count and named in the note instead, so the number
+    announced is the number of suites that will actually run.
     """
-    unit = "mutant" if runnable == 1 else "mutants"
+    to_run = runnable - uncovered
+    unit = "mutant" if to_run == 1 else "mutants"
     ignored = total - runnable
-    ignored_note = f" ({ignored} ignored)" if ignored else ""
+    notes = [f"{ignored} ignored"] if ignored else []
+    if uncovered:
+        notes.append(f"{uncovered} with no coverage")
+    ignored_note = f" ({', '.join(notes)})" if notes else ""
     # Never more workers than mutants: `_run_mutants_parallel` starts `min(jobs, valid mutants)`, so
     # a 3-mutant file under a 16-worker `--jobs` must not announce 16. It is still "up to": a mutant
     # that fails the re-parse check is only found after this line prints, and needs no worker.
-    workers = min(jobs, runnable)
+    workers = min(jobs, to_run)
     jobs_note = f" Running up to {workers} at a time." if workers > 1 else ""
-    return f"{runnable} {unit} to run{ignored_note}.{jobs_note}"
+    return f"{to_run} {unit} to run{ignored_note}.{jobs_note}"
 
 
 @dataclass
@@ -402,6 +466,9 @@ def run(
     jobs: int = 1,
     jobs_auto: bool = False,
     progress_style: ProgressStyle = ProgressStyle.RICH,
+    coverage: CoverageAnalysis = CoverageAnalysis.OFF,
+    marker: Marker | None = None,
+    self_check: int | None = SELF_CHECK_SAMPLE,
 ) -> MutationRun:
     """Run the full mutation pass over `source` (the contents of `path`) using `runner`.
 
@@ -436,8 +503,26 @@ def run(
     run shows steady output instead of looking frozen; `None` runs silently. `jobs > 1` needs no
     special case here — the heartbeat only ever reports aggregate counts, which climb the same way
     whether one worker or several produced them.
+
+    `coverage` turns on coverage analysis (docs/decisions/0017): after the baseline, `marker` marks
+    a throwaway copy of the project, the suite runs once there, and a mutant whose spot no test
+    reached gets `Verdict.NO_COVERAGE` without a run. `self_check` is how many of those are also
+    run against the whole suite as a standing check (``None`` runs them all). Raises
+    `CoverageRunFailed` when that cannot be trusted. See `_coverage_pass`.
     """
-    per_mutant_timeout, _baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
+    per_mutant_timeout, baseline_tests = _run_baseline(project_dir, runner, timeout, progress)
+    mutants, plans = _coverage_plans(
+        project_dir,
+        {path: source},
+        runner,
+        adapter,
+        catalog,
+        coverage,
+        marker,
+        self_check,
+        baseline_tests,
+        progress,
+    )
     clock = _Progress(emit=progress, style=progress_style)
     result = _mutate_file(
         project_dir,
@@ -451,6 +536,8 @@ def run(
         jobs,
         jobs_auto,
         clock,
+        mutants=None if mutants is None else mutants[path],
+        coverage=None if plans is None else plans[path],
     )
     clock.finish()
     return result
@@ -461,9 +548,10 @@ def _run_baseline(
     runner: Runner,
     timeout: float | None,
     progress: Callable[[str], None] | None,
-) -> tuple[float, float]:
-    """Run the unmutated suite once. Returns ``(per_mutant_timeout, baseline_secs)`` — the
-    per-mutant budget (derived from the baseline's wall-clock unless `timeout` overrides) and it.
+) -> tuple[float, int]:
+    """Run the unmutated suite once. Returns ``(per_mutant_timeout, baseline_tests)``: the
+    per-mutant budget (derived from the baseline's wall-clock unless `timeout` overrides) and the
+    number of tests the baseline ran, which the coverage marker run must match.
     Raises `BaselineFailed` if the suite can't run or is red (FG-3.3)."""
     # One-time setup (e.g. a Godot import scan) runs BEFORE the clock starts, so its cost never
     # inflates the baseline wall-clock that derives per-mutant timeouts and the ETA. A
@@ -521,7 +609,158 @@ def _run_baseline(
             "custom harness) and that the suite runs on its own."
         )
     per_mutant_timeout = timeout if timeout is not None else _derive_timeout(baseline_secs)
-    return per_mutant_timeout, baseline_secs
+    return per_mutant_timeout, baseline.tests
+
+
+@dataclass(frozen=True)
+class _FileCoverage:
+    """Coverage analysis's decisions for one file's mutants, by index into its mutant list.
+
+    `uncovered` holds every mutant whose spot no test reached. `check` is the subset the self-check
+    runs against the whole suite anyway, to confirm the map before trusting it."""
+
+    uncovered: frozenset[int]
+    check: frozenset[int]
+
+
+def _coverage_plans(
+    project_dir: str,
+    sources: dict[str, str],
+    runner: Runner,
+    adapter: Adapter,
+    catalog: tuple[Operator, ...],
+    coverage: CoverageAnalysis,
+    marker: Marker | None,
+    self_check: int | None,
+    baseline_tests: int,
+    progress: Callable[[str], None] | None,
+) -> tuple[dict[str, list[Mutant]] | None, dict[str, _FileCoverage] | None]:
+    """With coverage analysis on, every file's mutants and its `_FileCoverage`. With it off,
+    ``(None, None)``, and the run is exactly what it always was.
+
+    Shared by `run` and `run_paths`, so the one-file and many-file runs cannot differ in what they
+    check. The mutants are generated here, once, before any runs, because the marker run needs all
+    of them up front, and they are handed on so no file's mutants are generated twice.
+    """
+    if coverage is CoverageAnalysis.OFF:
+        return None, None
+    if coverage is not CoverageAnalysis.ALL:
+        raise CoverageRunFailed(
+            f"--coverage-analysis {coverage.value} is not built yet. Use 'all' for the no "
+            "coverage verdict, or 'off'."
+        )
+    if marker is None or not isinstance(runner, MarkerRunnable):
+        # Both are wiring, not user input, so this is not expected to happen. It is still loud:
+        # quietly running without markers would report no "no coverage" mutants and look fine.
+        raise CoverageRunFailed(
+            "coverage analysis needs a language adapter that can place markers and a runner that "
+            "can run them, and this run has "
+            + ("neither" if marker is None and not isinstance(runner, MarkerRunnable) else "one")
+            + ". Turn coverage analysis off (--coverage-analysis off)."
+        )
+    mutants = {
+        path: adapter.generate_mutants(path, source, catalog) for path, source in sources.items()
+    }
+    return mutants, _coverage_pass(
+        project_dir,
+        {path: (sources[path], mutants[path]) for path in sources},
+        runner,
+        marker,
+        self_check,
+        baseline_tests,
+        progress,
+    )
+
+
+def _coverage_pass(
+    project_dir: str,
+    files: dict[str, tuple[str, list[Mutant]]],
+    runner: MarkerRunnable,
+    marker: Marker,
+    self_check: int | None,
+    baseline_tests: int,
+    progress: Callable[[str], None] | None,
+) -> dict[str, _FileCoverage]:
+    """The marker run: mark a throwaway copy, run the suite there once, and decide which mutants
+    no test reaches (docs/decisions/0017, step 2).
+
+    Stops the run with `CoverageRunFailed` unless every clean-run rule holds
+    (`engine.coverage.clean_run_problems`), listing each one that failed. The copy is deleted
+    before this returns, and the project itself is never touched.
+    """
+    rel = {
+        path: _project_relative(
+            path,
+            project_dir,
+            why="coverage analysis cannot mark it in a copy of the project",
+            fix="turn coverage analysis off (--coverage-analysis off)",
+        )
+        for path in files
+    }
+    if progress is not None:
+        progress("running the suite once with coverage markers ...")
+    with tempfile.TemporaryDirectory(prefix="gdmutant-markers-") as tmp:
+        copy = Path(tmp) / "project"
+        # `.git` is left behind: nothing in a test run reads it, and on a real project it can be
+        # the largest thing in the tree.
+        shutil.copytree(project_dir, copy, ignore=shutil.ignore_patterns(".git"))
+        try:
+            marked = marker.mark(str(copy), {rel[p]: files[p] for p in files})
+        except Exception as error:
+            raise CoverageRunFailed(
+                f"could not prepare the marked copy for coverage analysis: {error}\n"
+                "Turn coverage analysis off (--coverage-analysis off) to run without it."
+            ) from error
+        hits_path = Path(marked.hits_path)
+        # The freshness rule every report reader here follows: whatever this run reads, it wrote.
+        hits_path.unlink(missing_ok=True)
+        try:
+            # The baseline's budget, not a mutant's: this is the same whole suite, and markers in a
+            # hot loop can make it several times slower than the baseline that derived that budget.
+            result = runner.run_markers(str(copy))
+        except Exception as error:  # a timeout included: a clean suite does not hang
+            raise CoverageRunFailed(
+                f"the coverage marker run could not run the suite: {error}\n"
+                "Turn coverage analysis off (--coverage-analysis off) to run without it."
+            ) from error
+        hits: frozenset[int] | HitsUnreadable
+        try:
+            hits = read_hits(hits_path)
+        except HitsUnreadable as unreadable:
+            hits = unreadable
+    problems = clean_run_problems(result, baseline_tests, hits)
+    if problems:
+        listed = "\n".join(f"  - {problem}" for problem in problems)
+        raise CoverageRunFailed(
+            "the coverage marker run was not clean, so gdmutant cannot tell which code no test "
+            f"reaches:\n{listed}\n"
+            "Turn coverage analysis off (--coverage-analysis off) to run without it."
+        )
+    # Unreadable hits are one of the problems above, so here they are always a real set.
+    reached = frozenset() if isinstance(hits, HitsUnreadable) else hits
+    missed = {path: uncovered(marked.placements[rel[path]], reached) for path in files}
+    candidates = [
+        (rel[path], index, files[path][1][index])
+        for path in files
+        for index in sorted(missed[path])
+        if files[path][1][index].ignore_reason is None
+    ]
+    sample = self_check_sample(candidates, self_check)
+    plans = {
+        path: _FileCoverage(
+            uncovered=missed[path],
+            check=frozenset(index for p, index in sample if p == rel[path]),
+        )
+        for path in files
+    }
+    if progress is not None:
+        total = sum(len(mutants) for _, mutants in files.values())
+        progress(
+            f"coverage: {len(candidates)} of {total} mutants sit where no test reaches, so they "
+            f"need no run. The self-check runs {len(sample)} of them against the whole suite "
+            "anyway."
+        )
+    return plans
 
 
 def _mutate_file(
@@ -538,6 +777,8 @@ def _mutate_file(
     clock: _Progress,
     *,
     is_last_file: bool = True,
+    mutants: list[Mutant] | None = None,
+    coverage: _FileCoverage | None = None,
 ) -> MutationRun:
     """Generate and run every mutant for a single file (the baseline is assumed already green). The
     file at `path` must hold `source`; it is restored before returning. `jobs > 1` evaluates mutants
@@ -556,15 +797,24 @@ def _mutate_file(
     the pre-run line below is even printed, so what's announced and what actually runs never
     disagree. An explicit `--jobs N>1` still raises exactly as before: the user asked for isolation
     by name, so gdmutant tells them it can't deliver it rather than quietly doing less.
+
+    `mutants`, when given, are this file's mutants, already generated (coverage analysis generates
+    them all before the marker run). `coverage` is that analysis's verdict for this file: a mutant
+    in its `uncovered` set gets `Verdict.NO_COVERAGE` without a run, unless it is in `check`, the
+    self-check sample, which runs against the whole suite like any other mutant and must survive
+    there (`_self_check`).
     """
-    mutants = adapter.generate_mutants(path, source, catalog)
+    if mutants is None:
+        mutants = adapter.generate_mutants(path, source, catalog)
     total = len(mutants)
     runnable = sum(1 for m in mutants if m.ignore_reason is None)
-    clock.begin_file(runnable)
+    skip = frozenset() if coverage is None else coverage.uncovered - coverage.check
+    skipped = sum(1 for index in skip if mutants[index].ignore_reason is None)
+    clock.begin_file(runnable - skipped)
     if jobs_auto and jobs > 1 and not _source_is_inside_project(path, project_dir):
         jobs = 1
     if progress is not None:
-        progress(_progress_plan(runnable, total, jobs))
+        progress(_progress_plan(runnable, total, jobs, skipped))
     if jobs > 1 and total > 0:
         outcomes = _run_mutants_parallel(
             project_dir,
@@ -577,14 +827,53 @@ def _mutate_file(
             jobs,
             jobs_auto,
             clock,
+            skip,
         )
     else:
         outcomes = _run_mutants_serial(
-            project_dir, path, source, runner, adapter, mutants, per_mutant_timeout, clock
+            project_dir, path, source, runner, adapter, mutants, per_mutant_timeout, clock, skip
         )
+    if coverage is not None:
+        outcomes = _self_check(outcomes, coverage.check)
     if not is_last_file:
         clock.beat(force=True)  # a non-last file ends on a line that shows it reached n/n
-    return MutationRun(tuple(outcomes))
+    return MutationRun(tuple(outcomes), coverage_analysis=coverage is not None)
+
+
+class CoverageSelfCheckFailed(CoverageRunFailed):
+    """The self-check ran a "no coverage" mutant against the whole suite, and it did not survive.
+
+    The map said no test reaches that mutant's spot, so the mutated program should have behaved
+    exactly like the original for every test. It did not, so the map is wrong, and every other "no
+    coverage" verdict in the run is suspect with it. This is the tripwire Infection's silent
+    per-test map breakage never had (docs/decisions/0017)."""
+
+
+def _self_check(outcomes: list[MutantOutcome], check: frozenset[int]) -> list[MutantOutcome]:
+    """Compare each self-checked mutant's real verdict with the map's "no coverage".
+
+    Only `SURVIVED` agrees, since that is what an unreached mutant must do. It becomes
+    `NO_COVERAGE`, marked `self_checked`. A mutant that turned out invalid or ignored never ran, so
+    it was not compared and is left as it is. Anything else, killed, timed out or errored, is a
+    disagreement: with markers off that mutant would have scored differently, so the run stops with
+    both verdicts shown rather than report a map it has just proved wrong."""
+    checked = list(outcomes)
+    for index in sorted(check):
+        outcome = outcomes[index]
+        if outcome.verdict is Verdict.SURVIVED:
+            checked[index] = MutantOutcome(outcome.mutant, Verdict.NO_COVERAGE, self_checked=True)
+        elif outcome.verdict not in (Verdict.INVALID, Verdict.IGNORED):
+            m = outcome.mutant
+            raise CoverageSelfCheckFailed(
+                "the coverage self-check failed: the marker run found no test reaching "
+                f"{Path(m.path).as_posix()}:{m.span.line}:{m.span.column} "
+                f"({m.operator_id}: {m.describe_change()}), so its verdict should be 'no "
+                "coverage', but running it against the whole suite gave "
+                f"'{outcome.verdict.value}'. "
+                "The coverage map is wrong, so no 'no coverage' verdict in this run can be "
+                "trusted. Turn coverage analysis off (--coverage-analysis off) to run without it."
+            )
+    return checked
 
 
 def _run_mutants_serial(
@@ -596,8 +885,14 @@ def _run_mutants_serial(
     mutants: Sequence[Mutant],
     per_mutant_timeout: float,
     clock: _Progress,
+    skip: frozenset[int] = frozenset(),
 ) -> list[MutantOutcome]:
     """Evaluate every mutant one at a time against the real project file (the trusted default).
+
+    A valid mutant whose index is in `skip` gets `Verdict.NO_COVERAGE` without a run: coverage
+    analysis showed no test reaches it. The validity check comes first on purpose, so a mutant that
+    does not parse stays `INVALID` (outside the score) exactly as it is with coverage off, and
+    turning coverage analysis on can move a mutant only from survived to no coverage.
 
     No per-mutant line here on purpose — only `clock.record`'s own rate-limited heartbeat
     (`_Progress.beat`, via `clock.emit`) reports progress. A line for every mutant repeated the
@@ -606,7 +901,7 @@ def _run_mutants_serial(
     going" without repeating a number nobody needs restated per mutant.
     """
     outcomes: list[MutantOutcome] = []
-    for mutant in mutants:
+    for index, mutant in enumerate(mutants):
         ran: float | None = None
         if mutant.ignore_reason is not None:
             # A `# gdmutant: ignore` annotation suppresses this mutant — generated for the report
@@ -614,7 +909,9 @@ def _run_mutants_serial(
             verdict = Verdict.IGNORED
         else:
             mutated, valid = adapter.apply_mutant(mutant, source)
-            if valid:
+            if valid and index in skip:
+                verdict = Verdict.NO_COVERAGE
+            elif valid:
                 started = time.monotonic()
                 verdict = _run_one(project_dir, path, source, mutated, runner, per_mutant_timeout)
                 ran = time.monotonic() - started
@@ -629,7 +926,13 @@ def _run_mutants_serial(
     return outcomes
 
 
-def _project_relative(path: str, project_dir: str) -> str:
+def _project_relative(
+    path: str,
+    project_dir: str,
+    *,
+    why: str = "--jobs cannot give it an isolated copy to mutate",
+    fix: str = "drop --jobs to run serially",
+) -> str:
     """Where `path` sits inside `project_dir`, as a relative path. Raises if it sits outside.
 
     Each parallel worker mutates ``<its copy of the project>/<this>``. That address is only inside
@@ -647,6 +950,9 @@ def _project_relative(path: str, project_dir: str) -> str:
     Refusing is the honest answer rather than a silent repair. There is no copy of this file for a
     worker to mutate, so there is no isolated run to be had — only a serial one, against the real
     file, which is what `jobs=1` already does.
+
+    Coverage analysis marks its own copy of the project for the same reason, and refuses the same
+    way. `why` and `fix` let the message name the feature that needed the copy, and the way out.
     """
     source = Path(path).resolve()
     project = Path(project_dir).resolve()
@@ -659,9 +965,8 @@ def _project_relative(path: str, project_dir: str) -> str:
         # since a directory run found it rather than anyone typing it. `project_dir` was typed, so
         # it is echoed as given.
         raise SourceOutsideProject(
-            f"{Path(path).as_posix()} is not inside the project directory {project_dir}, so --jobs "
-            "cannot give it an isolated copy to mutate. Point --project at a directory containing "
-            "it, or drop --jobs to run serially."
+            f"{Path(path).as_posix()} is not inside the project directory {project_dir}, so {why}. "
+            f"Point --project at a directory containing it, or {fix}."
         ) from None
 
 
@@ -689,6 +994,7 @@ def _run_mutants_parallel(
     jobs: int,
     jobs_auto: bool,
     clock: _Progress,
+    skip: frozenset[int] = frozenset(),
 ) -> list[MutantOutcome]:
     """Evaluate mutants concurrently, each worker on its OWN copy of the project so the in-place
     file mutation (`_run_one`) can never collide. The pass/fail/timeout verdict of each mutant is
@@ -726,6 +1032,9 @@ def _run_mutants_parallel(
     never do *less* than a serial one would. `worker_count` and the contention-scaled timeout are
     still computed from the full `jobs` ceiling up front, so a worker delayed by load still runs
     against the same budget every other worker got, not a recomputed one.
+
+    `skip` is decided in the serial pre-pass exactly as `_run_mutants_serial` decides it: a valid
+    mutant in it is `NO_COVERAGE` and never reaches a worker.
     """
     total = len(mutants)
     rel = _project_relative(path, project_dir)
@@ -739,12 +1048,12 @@ def _run_mutants_parallel(
             outcome = MutantOutcome(mutant, Verdict.IGNORED)
         else:
             mutated, valid = adapter.apply_mutant(mutant, source)
-            if valid:
+            if valid and index not in skip:
                 runnable.append((index, mutant, mutated))
                 continue
-            outcome = MutantOutcome(mutant, Verdict.INVALID)
+            outcome = MutantOutcome(mutant, Verdict.NO_COVERAGE if valid else Verdict.INVALID)
         outcomes[index] = outcome
-    if not runnable:  # every mutant was ignored/invalid — no Godot run needed
+    if not runnable:  # every mutant was ignored/invalid/uncovered: no Godot run needed
         return [outcomes[index] for index in range(total)]
 
     worker_count = min(jobs, len(runnable))
@@ -811,15 +1120,31 @@ def run_paths(
     jobs: int = 1,
     jobs_auto: bool = False,
     progress_style: ProgressStyle = ProgressStyle.RICH,
+    coverage: CoverageAnalysis = CoverageAnalysis.OFF,
+    marker: Marker | None = None,
+    self_check: int | None = SELF_CHECK_SAMPLE,
 ) -> dict[str, MutationRun]:
     """Mutate several files against one project — the baseline runs **once**, then each file's
     mutants run in turn. `sources` maps each file path to its contents (each held on entry,
     restored after its own mutants). `adapter` is the injected language adapter (NF-3, like `run`).
-    `jobs` (and `jobs_auto`) parallelize each file's mutants exactly as `run` does. Returns
-    ``{path: MutationRun}`` in `sources` order. Raises `BaselineFailed` (like `run`) if the baseline
-    can't run or is red.
+    `jobs` (and `jobs_auto`) parallelize each file's mutants exactly as `run` does, and
+    `coverage`, `marker` and `self_check` turn on coverage analysis exactly as they do for `run`,
+    with one marker run covering every file. Returns ``{path: MutationRun}`` in `sources` order.
+    Raises `BaselineFailed` (like `run`) if the baseline can't run or is red.
     """
-    per_mutant_timeout, _baseline_secs = _run_baseline(project_dir, runner, timeout, progress)
+    per_mutant_timeout, baseline_tests = _run_baseline(project_dir, runner, timeout, progress)
+    mutants, plans = _coverage_plans(
+        project_dir,
+        sources,
+        runner,
+        adapter,
+        catalog,
+        coverage,
+        marker,
+        self_check,
+        baseline_tests,
+        progress,
+    )
     clock = _Progress(emit=progress, style=progress_style)
     runs: dict[str, MutationRun] = {}
     last_path = next(reversed(sources), None)
@@ -840,6 +1165,8 @@ def run_paths(
             jobs_auto,
             clock,
             is_last_file=path == last_path,
+            mutants=None if mutants is None else mutants[path],
+            coverage=None if plans is None else plans[path],
         )
     # One closing line for the whole run, not one per file: the wall-clock a user takes away is
     # "how long did that take", and every file's mutants are part of the same wait.

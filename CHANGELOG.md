@@ -12,6 +12,22 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `--coverage-analysis all`, a new verdict for mutants no test reaches. Before any mutant runs,
+  gdmutant runs your whole suite once on a throwaway copy of the project with a small marker in
+  front of each mutated statement, and records which markers fired. A mutant whose statement no
+  test reached is reported as `no coverage` (`NoCoverage` in the JSON report) without running it.
+  Every other mutant runs exactly as before. It is scored like a survivor, so the mutation score
+  does not change. It is listed apart from the survivors in the console, the JSON and HTML reports
+  and the job summary, because "no test runs this line" and "a test runs it but checks nothing"
+  need different fixes. The marker run must be clean or the run stops and says why: every test
+  passes, no `SCRIPT ERROR` anywhere, the markers' record exists and holds at least one hit, and
+  the test count matches the unmarked run. A few `no coverage` mutants are also run for real as a
+  check on every run, and a disagreement stops the run. It is off by default. It works with all
+  three runners, and needs `--godot` even with `--runner command`. `per-file`, which will run only
+  the tests that reach each mutant, is not built yet and is refused if asked for.
+
 ### Changed
 
 - gdmutant's own work per mutant is faster. Every mutant is re-parsed to check it is still valid

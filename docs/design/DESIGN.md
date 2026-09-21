@@ -82,14 +82,17 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   measured live at n>1 rather than assumed. ADR-0011 has the per-adapter mechanism, the live
   measurements, and the correction history.
 
-  The seam is three protocols: `Runner` (required: run the suite once, report the aggregate
+  The seam is four protocols: `Runner` (required: run the suite once, report the aggregate
   result), `Preparable` (optional: a slow one-time setup the engine times outside the baseline, so
   it never inflates the per-mutant timeout, since both Godot runners need it for their
-  cold-checkout import scan), and `RunWarning` (optional: one run-level warning that never changes
-  the score or exit code). The engine tests for `Preparable` by type, but `RunWarning` is tested for
-  by the CLI instead, since printing a warning is a CLI job, not an engine one. Neither test names
-  what the setup or the warning actually is, so both stay language-neutral (NF-3). Per-adapter
-  mechanism and live measurements: ADR-0011 (`RunWarning` itself is not documented there).
+  cold-checkout import scan), `RunWarning` (optional: one run-level warning that never changes
+  the score or exit code), and `MarkerRunnable` (optional: the coverage marker run of
+  ADR-0017, which all three shipped runners implement, and without which the engine refuses
+  `--coverage-analysis` rather than run without markers). The engine tests for `Preparable` and
+  `MarkerRunnable` by type, but `RunWarning` is tested for by the CLI instead, since printing a
+  warning is a CLI job, not an engine one. None of the tests names what the setup, the warning or
+  the markers actually are, so all stay language-neutral (NF-3). Per-adapter mechanism and live
+  measurements: ADR-0011 (`RunWarning` itself is not documented there).
 - FG-3.3: The original (unmutated) suite must pass first, and must actually have run tests. If it
   fails, or if it reports zero tests, the run aborts with a clear error: a suite nobody ran reads as a
   pass, and every mutant then comes back survived with no error anywhere in the run. This check lives
@@ -111,14 +114,18 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
     [ADR-0006](../decisions/0006-operator-scoped-ignore-and-ignored-status.md))
   - invalid (the mutant didn't parse, per NF-5)
   - error (the runner failed to execute it, e.g. a crash)
+  - no coverage (only with `--coverage-analysis all`: a marker run showed no test reaches the
+    mutant's statement, so it is decided without running the suite, Stryker's `NoCoverage` status,
+    see [ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md))
 
-  Ignored, invalid and error mutants are excluded from the score. There is no separate no-coverage
-  verdict: v0.1 gathers no coverage data, so a mutant on a line no test exercises is classified
-  *survived*, which is where no-coverage folds until coverage-gated selection exists.
-  [ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md) adds a *no coverage*
-  verdict in its step 2. Until that lands, this list is complete.
+  Ignored, invalid and error mutants are excluded from the score. With coverage analysis off (the
+  default), gdmutant gathers no coverage data, so a mutant on a line no test exercises is
+  classified *survived*. The marker run behind *no coverage* must be clean or the run stops, and a
+  few *no coverage* mutants are run against the whole suite on every run as a self-check.
 - FG-4.2: The system shall compute the mutation score = (killed + timeout) /
-  (killed + timeout + survived), and totals. Timeouts count as detected (Stryker convention).
+  (killed + timeout + survived + no coverage), and totals. Timeouts count as detected, and no
+  coverage counts as undetected (both Stryker conventions), so turning coverage analysis on never
+  moves the score.
 
 ### FG-5: Reporting
 - FG-5.1: The system shall emit a report in the
@@ -197,8 +204,9 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   <ref>` mutates only the lines a diff changed. The remaining lever is coverage-gated selection
   (only run tests that cover the mutated line), which the seam preserves without reshaping the
   engine. [ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md) designs it,
-  in steps. Step 1, marker placement in the GDScript adapter, has landed. Nothing runs the markers
-  yet, so every run still uses the whole suite per mutant.
+  in steps. Step 1, marker placement in the GDScript adapter, and step 2, the marker run and the
+  *no coverage* verdict (`--coverage-analysis all`, off by default), have landed. A mutant some test
+  reaches still runs the whole suite. Running only the tests that reach it is step 3.
 - NF-7: Safe source writes. Every write to a source file either lands whole or does not happen at
   all. gdmutant rewrites the user's own file twice per mutant (§4), and a plain in-place write empties
   the file before putting anything back, so a crash inside that window would destroy the file instead
@@ -319,5 +327,5 @@ Since shipped: the HTML report (`--html`), the
 incremental/diff-scoped mode (`--since`), and parallel evaluation (`--jobs`). In progress:
 coverage-gated mutant selection (the NF-6 seam), built in the steps of
 [ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md), of which step 1 (marker
-placement) has landed. Still deferred: the optional LLM-semantic mutant mode, and additional
+placement) and step 2 (the marker run and the *no coverage* verdict) have landed. Still deferred: the optional LLM-semantic mutant mode, and additional
 language adapters.

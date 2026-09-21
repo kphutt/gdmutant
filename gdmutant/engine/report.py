@@ -4,7 +4,7 @@ The JSON follows the mutation-testing-elements report schema (v2), so it renders
 ecosystem's HTML viewer. Verdicts map to the schema's ``MutantStatus``:
 
     killed -> Killed, survived -> Survived, timeout -> Timeout, ignored -> Ignored,
-    invalid -> CompileError, error -> RuntimeError.
+    invalid -> CompileError, error -> RuntimeError, no coverage -> NoCoverage.
 
 A suppressed (ignored) mutant carries its ``# gdmutant: ignore`` reason as the schema's optional
 ``statusReason`` field, so the viewer shows *why* it was ignored. A **survivor** carries the same
@@ -48,7 +48,19 @@ _STATUS: dict[Verdict, str] = {
     Verdict.IGNORED: "Ignored",
     Verdict.INVALID: "CompileError",
     Verdict.ERROR: "RuntimeError",
+    Verdict.NO_COVERAGE: "NoCoverage",
 }
+
+#: What a no-coverage mutant says in the report, in the same two fields a survivor uses:
+#: `description` for the gap, and `statusReason` for the risk and where to start, blank-line
+#: separated, so the HTML page reads it back exactly the way it reads a survivor's narrative.
+NO_COVERAGE_GAP = "No test reaches this line, so no test could have caught the change."
+NO_COVERAGE_REASON = (
+    "Nothing runs this code during the test suite, so a bug here is invisible to it. Coverage "
+    "analysis recorded every spot the suite reached, and this was not one of them.\n\n"
+    "Start with a test that calls the code on this line. Once one does, gdmutant can tell you "
+    "whether that test also checks what the line does."
+)
 
 
 def _mutant_json(index: int, outcome: MutantOutcome, source_lines: list[str]) -> dict[str, Any]:
@@ -76,6 +88,10 @@ def _mutant_json(index: int, outcome: MutantOutcome, source_lines: list[str]) ->
         # free — which is what lets an assert survivor explain itself in the JSON and the HTML
         # report, not only on the console.
         mutant["description"], mutant["statusReason"] = survivor_report_fields(m, source_lines)
+    elif outcome.verdict is Verdict.NO_COVERAGE:
+        # Its own narrative, not the survivor's: "a test runs this and checks nothing" is the
+        # wrong advice for a line no test runs at all.
+        mutant["description"], mutant["statusReason"] = NO_COVERAGE_GAP, NO_COVERAGE_REASON
     return mutant
 
 
@@ -157,18 +173,21 @@ def all_survived_warning(run: MutationRun) -> str | None:
     warning (never an error: the score and exit code are unchanged) that names the mutated file and
     points at the likely fix.
 
-    This is the cheap heuristic, not a coverage probe (DESIGN.md FG-4.1 folds no-coverage into
-    survived for v0.1); it reads only the finalized tally. Stays quiet below
-    `_MIN_SURVIVORS_FOR_ALL_SURVIVED_WARNING` survivors so a lone surviving mutant doesn't trip it.
+    This is the cheap heuristic, not a coverage probe. It reads only the finalized tally. A "no
+    coverage" mutant (coverage analysis on) is undetected just like a survivor, so it counts here
+    too: otherwise turning coverage analysis on could silence this warning on the very run it most
+    applies to. Stays quiet below `_MIN_SURVIVORS_FOR_ALL_SURVIVED_WARNING` undetected mutants so a
+    lone one doesn't trip it.
     """
-    if run.detected != 0 or run.survived < _MIN_SURVIVORS_FOR_ALL_SURVIVED_WARNING:
+    undetected = run.survived + run.no_coverage
+    if run.detected != 0 or undetected < _MIN_SURVIVORS_FOR_ALL_SURVIVED_WARNING:
         return None
     # POSIX-normalized like the survivor blocks this warning sits beside: rendered raw, a Windows
     # run named the same file `sub\a.gd` here and `sub/a.gd` in the survivor list printed with it.
-    files = sorted({Path(m.path).as_posix() for m in run.survivors})
+    files = sorted({Path(m.path).as_posix() for m in (*run.survivors, *run.uncovered)})
     where = files[0] if len(files) == 1 else ", ".join(files)
     return (
-        f"warning: all {run.survived} evaluated mutants survived. This usually means the test "
+        f"warning: all {undetected} evaluated mutants survived. This usually means the test "
         f"suite ran but never exercised {where}. Check that --tests (or --command) targets it. "
         "The mutation score and exit code are unchanged."
     )
@@ -194,6 +213,14 @@ def console_summary(run: MutationRun) -> str:
         note = _assert_survivor_note(on_asserts, len(run.survivors))
         if note is not None:
             lines += [note, ""]
+    if run.uncovered:
+        lines += [
+            f"No coverage ({len(run.uncovered)}): no test reaches these lines, so start with a "
+            "test that runs them.",
+            "",
+            *(f"  {_location(m)}  {m.operator_id}  {m.describe_change()}" for m in run.uncovered),
+            "",
+        ]
     score = run.mutation_score
     score_str = "n/a" if score is None else f"{score * 100:.1f}%"
     lines += [
@@ -207,7 +234,28 @@ def console_summary(run: MutationRun) -> str:
         f"  invalid:  {run.invalid}",
         f"  error:    {run.errors}",
     ]
+    if run.coverage_analysis or run.no_coverage:
+        lines.append(f"  no coverage: {run.no_coverage}  (no test reaches it, scored as survived)")
+    if run.coverage_analysis:
+        lines.append(_self_check_line(run))
     return "\n".join(lines)
+
+
+def _location(mutant: Mutant) -> str:
+    """``path:line:column``, POSIX-normalized like every other path this report prints."""
+    return f"{Path(mutant.path).as_posix()}:{mutant.span.line}:{mutant.span.column}"
+
+
+def _self_check_line(run: MutationRun) -> str:
+    """How many "no coverage" mutants the self-check re-ran against the whole suite. Always
+    printed when coverage analysis was on, zero included, so an empty check is visible rather than
+    silent. A disagreement never reaches this line: it stops the run instead."""
+    if not run.no_coverage:
+        return "Coverage self-check: compared 0 mutants, because no mutant had no coverage."
+    return (
+        f"Coverage self-check: re-ran {run.self_checked} of the {run.no_coverage} no-coverage "
+        "mutants against the whole suite, and every one survived there, as the map said."
+    )
 
 
 def _assert_survivor_note(on_asserts: int, survivors: int) -> str | None:
@@ -295,9 +343,26 @@ def job_summary_markdown(run: MutationRun) -> str:
         f"**Mutation score: {score_str}**",
         "",
         f"{run.killed} killed · {run.timeouts} timeout · **{run.survived} survived** · "
-        f"{run.ignored} ignored · {run.invalid} invalid · {run.errors} error",
+        f"{run.ignored} ignored · {run.invalid} invalid · {run.errors} error"
+        + (
+            f" · **{run.no_coverage} no coverage**"
+            if run.coverage_analysis or run.no_coverage
+            else ""
+        ),
         "",
     ]
+    if run.uncovered:
+        out += [
+            f"### No coverage ({len(run.uncovered)})",
+            "",
+            "No test reaches these lines, so start with a test that runs them:",
+            "",
+            *(
+                f"- `{_location(m)}` · {m.operator_id} · `{m.describe_change()}`"
+                for m in run.uncovered
+            ),
+            "",
+        ]
     if not run.survivors:
         out.append("No surviving mutants. Every mutant your tests could catch, they caught.")
         return "\n".join(out) + "\n"

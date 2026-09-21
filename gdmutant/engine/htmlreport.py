@@ -58,6 +58,9 @@ from gdmutant.engine.survivor_reference import SURVIVOR_REFERENCE
 #: Statuses that count as *caught* — the same set `MutationRun.detected` counts (a mutation that
 #: hung the suite was observably caught, so a timeout is a kill).
 _DETECTED = frozenset({"Killed", "Timeout"})
+#: The status a mutant no test reaches gets (coverage analysis only). Undetected, like `Survived`,
+#: so it is in the score's denominator exactly as `MutationRun.mutation_score` puts it there.
+_NO_COVERAGE = "NoCoverage"
 
 #: Schema status -> (tag word, colour class, the outcome phrase shown beside the change).
 #: Every claim the page makes about a mutant is a finished string built **here**, from the run's
@@ -69,10 +72,14 @@ _OUTCOME: dict[str, tuple[str, str, str]] = {
     "Ignored": ("ignored", "ot", "suppressed by an ignore annotation, so it never ran"),
     "CompileError": ("invalid", "ot", "it did not parse, so it never ran"),
     "RuntimeError": ("error", "ot", "the run errored"),
+    # Actionable like a survivor, so the same colour and the same default filter, but its own tag
+    # word: "no test reaches this line" calls for a different fix than "no test checks it".
+    _NO_COVERAGE: ("no coverage", "sv", "no test reaches this line, so none could fail"),
 }
 
-#: The rare statuses, surfaced in the header only when non-zero. ``NoCoverage`` (never emitted) and
-#: ``Undetected`` (identical to ``Survived`` here) are omitted entirely.
+#: The rare statuses, surfaced in the header only when non-zero. ``Undetected`` (identical to
+#: ``Survived`` here) is omitted entirely. ``NoCoverage`` only appears with coverage analysis on,
+#: and gets its own count, so a reader can reach the lines no test runs in one click.
 #:
 #: Each header count is also a filter: the reader can click "204 runtime errors" and land on the
 #: mutants behind it. Those three numbers are not one thing, and the page must not let them read as
@@ -81,6 +88,7 @@ _OUTCOME: dict[str, tuple[str, str, str]] = {
 #: run, and whose harness then fell over. That last one measured nothing, so a big count there is a
 #: blind spot in the score, and it is the one a reader most needs to be able to reach.
 _RARE: tuple[tuple[str, str], ...] = (
+    ("no coverage", _NO_COVERAGE),
     ("timeout", "Timeout"),
     ("ignored", "Ignored"),
     ("compile errors", "CompileError"),
@@ -224,6 +232,8 @@ class FileView:
     survived: int
     total: int
     score: float | None
+    #: Mutants no test reaches. Counted apart from `survived`, and scored like it.
+    no_coverage: int = 0
 
 
 @dataclass
@@ -241,6 +251,8 @@ class ReportView:
     #: ``(label, count, status)`` per non-zero rare status. The status rides along because the
     #: header renders each count as a filter button that has to name what it filters on.
     rare: list[tuple[str, int, str]]
+    #: Mutants no test reaches, across the report. Scored like `survived` (see `_score`).
+    no_coverage: int = 0
 
 
 def change_note(operator_id: str, original: str, replacement: str) -> str:
@@ -381,10 +393,10 @@ def _findings(
     return findings
 
 
-def _score(detected: int, survived: int) -> float | None:
-    """``detected / (detected + survived)`` as a percentage, or ``None`` with nothing killable —
-    the same formula (and the same ``None``) as `MutationRun.mutation_score`."""
-    scored = detected + survived
+def _score(detected: int, survived: int, no_coverage: int = 0) -> float | None:
+    """``detected / (detected + survived + no_coverage)`` as a percentage, or ``None`` with nothing
+    killable: the same formula (and the same ``None``) as `MutationRun.mutation_score`."""
+    scored = detected + survived + no_coverage
     return round(100 * detected / scored, 1) if scored else None
 
 
@@ -440,6 +452,7 @@ def report_view(report: dict[str, Any], project_dir: str | None = None) -> Repor
             counts[status] = counts.get(status, 0) + 1
         detected = sum(v for k, v in per_file.items() if k in _DETECTED)
         survived = per_file.get("Survived", 0)
+        no_coverage = per_file.get(_NO_COVERAGE, 0)
         ops: dict[str, int] = {}
         for finding in findings:
             ops[finding.op] = ops.get(finding.op, 0) + 1
@@ -453,13 +466,15 @@ def report_view(report: dict[str, Any], project_dir: str | None = None) -> Repor
                 detected=detected,
                 survived=survived,
                 total=len(mutants),
-                score=_score(detected, survived),
+                score=_score(detected, survived, no_coverage),
+                no_coverage=no_coverage,
             )
         )
     # Most actionable first: the file with the most survivors is where the reader should start.
     files.sort(key=lambda f: (-f.survived, f.path))
     detected = sum(v for k, v in counts.items() if k in _DETECTED)
     survived = counts.get("Survived", 0)
+    no_coverage = counts.get(_NO_COVERAGE, 0)
     present = {f.ref for file in files for f in file.findings}
     return ReportView(
         files=files,
@@ -472,8 +487,9 @@ def report_view(report: dict[str, Any], project_dir: str | None = None) -> Repor
         detected=detected,
         survived=survived,
         total=sum(file.total for file in files),
-        score=_score(detected, survived),
+        score=_score(detected, survived, no_coverage),
         rare=[(label, counts[status], status) for label, status in _RARE if counts.get(status)],
+        no_coverage=no_coverage,
     )
 
 
@@ -1505,7 +1521,10 @@ def render_html(report: dict[str, Any], project_dir: str | None = None) -> str:
     caption = (
         "no mutants could be scored"
         if view.score is None
-        else f"mutation score &middot; {view.detected} of {view.detected + view.survived} caught"
+        else (
+            f"mutation score &middot; {view.detected} of "
+            f"{view.detected + view.survived + view.no_coverage} caught"
+        )
     )
     script = _JS.replace("DATA_JSON", _escape_for_script(json.dumps(asdict(view))))
     # indent=2 (not the view model above): this is the block the download button hands back
