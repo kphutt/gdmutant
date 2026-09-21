@@ -99,6 +99,8 @@ def test_each_engine_scenario_measures_the_corpus(scenario: str) -> None:
         assert result.killed is not None and 0 < result.killed < result.mutants
     else:
         assert result.killed is None
+    # Every corpus mutant is valid GDScript. `generate` does not apply mutants, so it has no count.
+    assert result.invalid == (None if scenario == "generate" else 0)
 
 
 def test_the_parallel_run_does_the_same_work_as_the_serial_run() -> None:
@@ -121,17 +123,44 @@ def test_an_unknown_engine_scenario_is_refused() -> None:
         benchmark.measure("nope", CORPUS, repeat=1, warmup=False)
 
 
+def test_the_synthetic_workload_carries_exactly_one_rejected_mutant_per_function() -> None:
+    """Without a mutant the re-parse gate must reject, every benchmark workload would be all valid,
+    and a gate that accepted anything would produce the same numbers. `-float(a)` to `+float(a)` is
+    the one rejection real code was found to produce, so each synthetic function carries it, and
+    both the apply path and the full loop must count it."""
+    small = benchmark.Workload("synthetic-1", benchmark.synthetic_source(1))
+    applied = benchmark.measure("apply", small, repeat=1, warmup=False)
+    ran = benchmark.measure("run", small, repeat=1, warmup=False)
+    assert applied.invalid == ran.invalid == 1
+    two = benchmark.Workload("synthetic-2", benchmark.synthetic_source(2))
+    assert benchmark.measure("apply", two, repeat=1, warmup=False).invalid == 2
+
+
+def test_compare_refuses_a_baseline_recorded_before_invalid_counts_existed() -> None:
+    # An old baseline has no invalid count, so it cannot vouch for the gate: not comparable, not ok.
+    old = _r()
+    del old["invalid"]
+    code, lines = benchmark.compare([_r()], [old], 0.25, 0.005)
+    assert code == benchmark.EXIT_NOT_COMPARABLE
+    assert lines[0].startswith("NOT COMPARABLE")
+
+
 # --- compare ------------------------------------------------------------------------------------
 
 
 def _r(
-    scenario: str = "run", median: float = 1.0, mutants: int = 10, killed: int | None = 5
+    scenario: str = "run",
+    median: float = 1.0,
+    mutants: int = 10,
+    killed: int | None = 5,
+    invalid: int | None = 1,
 ) -> Any:
     return {
         "scenario": scenario,
         "workload": "corpus",
         "mutants": mutants,
         "killed": killed,
+        "invalid": invalid,
         "median": median,
     }
 
@@ -159,6 +188,7 @@ def test_compare_ignores_a_large_ratio_on_a_tiny_absolute_change() -> None:
     [
         (_r(mutants=11), "a different mutant count"),
         (_r(killed=6), "a different killed count"),
+        (_r(invalid=0), "a different invalid count: the re-parse gate answered differently"),
         (_r(scenario="apply"), "a scenario the baseline never measured"),
     ],
 )
@@ -242,8 +272,8 @@ def test_the_recorded_commit_says_when_the_tree_was_not_clean(
 
 
 def test_the_table_fits_a_long_workload_name() -> None:
-    long = benchmark.Result("run-files", "corpus+synthetic-2+synthetic-8", 10, 5, 1, [1.0])
-    short = benchmark.Result("run", "corpus", 10, 5, 1, [1.0])
+    long = benchmark.Result("run-files", "corpus+synthetic-2+synthetic-8", 10, 5, 0, 1, [1.0])
+    short = benchmark.Result("run", "corpus", 10, 5, 0, 1, [1.0])
     rows = benchmark._table([long, short]).splitlines()
     assert len({row.index(" 10 ") for row in rows[1:]}) == 1  # the mutant column lines up
 

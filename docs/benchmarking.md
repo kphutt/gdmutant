@@ -42,8 +42,12 @@ The workloads are `corpus/turn_order.gd`, the real fixture the live self-tests u
 files of N functions (`synthetic-N`) that use every operator. The generator is deterministic, so
 the same N is the same file everywhere.
 
-Every result also records how many mutants it worked on and how many were killed. Those counts are
-what make two runs comparable: if they differ, the two runs did different work.
+Every result also records how many mutants it worked on, how many were killed, and how many the
+re-parse check rejected as invalid GDScript. Those counts are what make two runs comparable: if
+they differ, the two runs did different work. The invalid count matters most when the re-parse
+check itself is what changed, so each synthetic function carries `-float(a)`, whose `-` to `+`
+mutant does not parse. Without it every mutant in the workloads would be valid, and a check that
+accepted anything would produce the same numbers.
 
 ## Running it
 
@@ -70,10 +74,11 @@ uv run python scripts/benchmark.py --json after.json --compare before.json
 ```
 
 `--compare` exits 0 when nothing got slower past the tolerance, 1 when something did, and 2 when
-the two runs did not do the same work. A scenario missing from either side, or a different mutant
-or killed count, is exit 2, never a pass. A slowdown counts only when the median grew by more than
-`--tolerance` (25% by default) and by more than `--min-delta` seconds (0.005 by default), so timer
-noise on a tiny number is not reported as a regression.
+the two runs did not do the same work. A scenario missing from either side, or a different mutant,
+killed or invalid count, is exit 2, never a pass. So is a baseline recorded before invalid counts
+existed, since it cannot vouch for the re-parse check. A slowdown counts only when the median grew
+by more than `--tolerance` (25% by default) and by more than `--min-delta` seconds (0.005 by
+default), so timer noise on a tiny number is not reported as a regression.
 
 ## Getting numbers worth comparing
 
@@ -91,5 +96,12 @@ noise on a tiny number is not reported as a regression.
 `tests/test_benchmark.py` checks the work, never the time, because a test that fails on a slow
 machine teaches people to ignore it. It pins the mutant and killed counts of each scenario, that
 the four-worker run does exactly the serial run's work, that the fake runner reads a worker's copy
-rather than the original project, and every exit code of `--compare`. The real Godot scenario is
-checked in `tests/test_selftest_live.py`, which runs only with `GDMUTANT_GODOT` set.
+rather than the original project, that the synthetic workload carries one rejected mutant per
+function, and every exit code of `--compare`. The real Godot scenario is checked in
+`tests/test_selftest_live.py`, which runs only with `GDMUTANT_GODOT` set.
+
+Speeding up the re-parse check needs a second net the benchmark cannot give:
+`tests/test_validity_gate.py` checks that the check still gives the same valid or invalid answer,
+on both sides. Its rows include deliberately broken files at every mutation site, the one real
+rejection found in real code, and files broken across two functions, and it fails if it saw no
+rejections. A check that said "valid" to everything, or "invalid" to everything, fails it.
