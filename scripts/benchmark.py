@@ -53,7 +53,10 @@ one machine. `--trend` only shows runs recorded on a machine and Python matching
 `--compare` exits 1 when a scenario's median got slower than the baseline's by more than
 `--tolerance` (default 25%) and by more than `--min-delta` seconds (default 0.005). It exits 2 when
 the two runs did not do the same work: a scenario or workload missing from either side, or a
-different mutant or killed count. A comparison that could not check something never passes.
+different mutant, killed or invalid count. The invalid count is the re-parse gate's own
+output, so a change to that gate that accepts or rejects anything differently shows up here as
+different work rather than as a speedup. A comparison that could not check something never
+passes.
 See docs/benchmarking.md for how to get numbers worth comparing.
 """
 
@@ -110,7 +113,10 @@ def synthetic_source(functions: int) -> str:
     comparisons, `and`/`or`/`not`, arithmetic, `%`, compound assignment, `true`/`false`, integer,
     float and hex literals, and deletable statements. Each function also holds a node path and a
     unique node name, which must produce no arithmetic mutants, so a regression that starts
-    mutating them again changes the mutant count and makes `--compare` refuse.
+    mutating them again changes the mutant count and makes `--compare` refuse. And each holds
+    `-float(a)`, whose `-` to `+` mutant GDScript cannot parse: the one kind of mutant real code
+    was found to produce that the re-parse gate must reject. Without it every mutant here would
+    be valid, and a gate that accepted anything would look identical.
 
     Deterministic: the same `functions` gives the same text, byte for byte."""
     lines = ["extends Node", ""]
@@ -127,7 +133,8 @@ def synthetic_source(functions: int) -> str:
             f"\tvar node := $Board/Cell{i}",
             "\tvar bar := %HealthBar",
             "\tvar done := false",
-            "\tprint(node, bar, mask, done)",
+            "\tvar neg := -float(a)",
+            "\tprint(node, bar, mask, done, neg)",
             "\treturn total * ratio if a != b else 0.0",
             "",
         ]
@@ -181,6 +188,7 @@ class Result:
     workload: str
     mutants: int
     killed: int | None
+    invalid: int | None
     repeats: int
     times: list[float]
 
@@ -224,17 +232,20 @@ def _check_restored(project: Path, files: list[Workload], scenario: str) -> None
 
 
 def measure(scenario: str, workload: Workload, repeat: int, warmup: bool = True) -> Result:
-    """Time one of `ENGINE_SCENARIOS` on `workload`. Every result carries the mutant count, and the
-    loop scenarios the killed count, so two runs can be checked for doing the same work before
-    their times are compared."""
+    """Time one of `ENGINE_SCENARIOS` on `workload`. Every result carries the mutant count, and all
+    but `generate` the invalid count (mutants the re-parse gate rejected), and the loop scenarios
+    the killed count, so two runs can be checked for doing the same work before their times are
+    compared. The invalid count is what makes a validity-gate change visible here: a gate that
+    wrongly accepts a broken mutant lowers it, and one wrongly rejecting a valid one raises it."""
     source = workload.source
     mutants = generate_mutants(workload.filename, source)
     if scenario == "generate":
         times, _ = _timed(lambda: generate_mutants(workload.filename, source), repeat, warmup)
-        return Result(scenario, workload.name, len(mutants), None, repeat, times)
+        return Result(scenario, workload.name, len(mutants), None, None, repeat, times)
     if scenario == "apply":
-        times, _ = _timed(lambda: [apply_mutant(m, source) for m in mutants], repeat, warmup)
-        return Result(scenario, workload.name, len(mutants), None, repeat, times)
+        times, applied = _timed(lambda: [apply_mutant(m, source) for m in mutants], repeat, warmup)
+        invalid = sum(1 for _, valid in applied if not valid)
+        return Result(scenario, workload.name, len(mutants), None, invalid, repeat, times)
     if scenario not in ("run", "run-jobs4", "report"):
         raise ValueError(f"unknown engine scenario {scenario!r}")
     with tempfile.TemporaryDirectory(prefix="gdmutant-bench-") as tmp:
@@ -257,7 +268,9 @@ def measure(scenario: str, workload: Workload, repeat: int, warmup: bool = True)
         else:
             times, finished = _timed(engine, repeat, warmup)
             _check_restored(project, [workload], scenario)
-        return Result(scenario, workload.name, len(mutants), finished.killed, repeat, times)
+        return Result(
+            scenario, workload.name, len(mutants), finished.killed, finished.invalid, repeat, times
+        )
 
 
 def measure_run_files(files: list[Workload], repeat: int, warmup: bool = True) -> Result:
@@ -273,8 +286,9 @@ def measure_run_files(files: list[Workload], repeat: int, warmup: bool = True) -
         _check_restored(project, files, "run-files")
     mutants = sum(len(generate_mutants(w.filename, w.source)) for w in files)
     killed = sum(r.killed for r in finished.values())
+    invalid = sum(r.invalid for r in finished.values())
     name = "+".join(w.name for w in files)
-    return Result("run-files", name, mutants, killed, repeat, times)
+    return Result("run-files", name, mutants, killed, invalid, repeat, times)
 
 
 def measure_godot_corpus(godot: str, repeat: int) -> Result:
@@ -292,7 +306,9 @@ def measure_godot_corpus(godot: str, repeat: int) -> Result:
         )
         times, finished = _timed(lambda: run(str(project), target, source, runner, ADAPTER), repeat)
     mutants = len(generate_mutants(CORPUS_FILE.name, source))
-    return Result("godot-corpus", "corpus", mutants, finished.killed, repeat, times)
+    return Result(
+        "godot-corpus", "corpus", mutants, finished.killed, finished.invalid, repeat, times
+    )
 
 
 def _git(*args: str) -> str | None:
@@ -346,10 +362,12 @@ def compare(
             lines.append(f"NOT COMPARABLE  {label}: not in the baseline")
             code = EXIT_NOT_COMPARABLE
             continue
-        if (old["mutants"], old["killed"]) != (r["mutants"], r["killed"]):
+        before = (old["mutants"], old["killed"], old.get("invalid"))
+        now = (r["mutants"], r["killed"], r.get("invalid"))
+        if before != now:
             lines.append(
-                f"NOT COMPARABLE  {label}: {r['mutants']} mutants and {r['killed']} killed now, "
-                f"{old['mutants']} and {old['killed']} in the baseline, so this is different work"
+                f"NOT COMPARABLE  {label}: mutants, killed, invalid are {now} now and {before} "
+                "in the baseline, so this is different work"
             )
             code = EXIT_NOT_COMPARABLE
             continue
@@ -388,19 +406,26 @@ def trend(history: Path, current_environment: dict[str, Any]) -> list[str]:
     series = {k: current_environment.get(k) for k in _SERIES_KEYS}
     matching = [r for r in runs if {k: r["environment"].get(k) for k in _SERIES_KEYS} == series]
     lines = [f"{len(matching)} of {len(runs)} recorded run(s) match this machine and Python"]
-    rows: dict[tuple[str, str], list[tuple[str, float, int, int | None]]] = {}
+    rows: dict[tuple[str, str], list[tuple[str, float, int, tuple[int | None, int | None]]]] = {}
     for r in matching:
         for res in r["results"]:
             key = (res["scenario"], res["workload"])
             rows.setdefault(key, []).append(
-                (r["environment"]["commit"], res["median"], res["mutants"], res["killed"])
+                (
+                    r["environment"]["commit"],
+                    res["median"],
+                    res["mutants"],
+                    (res["killed"], res.get("invalid")),
+                )
             )
     for (scenario, workload), points in sorted(rows.items()):
         shown = "  ".join(f"{commit}:{median:.4f}s" for commit, median, _, _ in points)
         first, last = points[0][1], points[-1][1]
         change = f"{(last / first - 1) * 100:+.0f}%" if first > 0 else "n/a"
         work = {(m, k) for _, _, m, k in points}
-        note = "" if len(work) == 1 else "  (mutant or killed counts changed along the way)"
+        note = (
+            "" if len(work) == 1 else "  (mutant, killed or invalid counts changed along the way)"
+        )
         lines.append(f"{scenario:12} {workload:22} {change:>6}  {shown}{note}")
     return lines
 
@@ -408,15 +433,16 @@ def trend(history: Path, current_environment: dict[str, Any]) -> list[str]:
 def _table(results: list[Result]) -> str:
     width = max([len("workload"), *(len(r.workload) for r in results)])
     rows = [
-        f"{'scenario':12} {'workload':{width}} {'mutants':>7} {'killed':>6} {'min':>9} "
-        f"{'median':>9} {'per mutant':>11}"
+        f"{'scenario':12} {'workload':{width}} {'mutants':>7} {'killed':>6} {'invalid':>7} "
+        f"{'min':>9} {'median':>9} {'per mutant':>11}"
     ]
     for r in results:
         per = r.median / r.mutants if r.mutants else 0.0
         killed = "-" if r.killed is None else str(r.killed)
+        invalid = "-" if r.invalid is None else str(r.invalid)
         rows.append(
-            f"{r.scenario:12} {r.workload:{width}} {r.mutants:>7} {killed:>6} {r.minimum:>8.4f}s "
-            f"{r.median:>8.4f}s {per * 1000:>9.3f}ms"
+            f"{r.scenario:12} {r.workload:{width}} {r.mutants:>7} {killed:>6} {invalid:>7} "
+            f"{r.minimum:>8.4f}s {r.median:>8.4f}s {per * 1000:>9.3f}ms"
         )
     return "\n".join(rows)
 
