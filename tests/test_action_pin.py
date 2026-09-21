@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import functools
 import importlib.util
+import os
 import re
 import subprocess
 import warnings
@@ -53,11 +54,33 @@ _FLOATING = re.compile(r"^v\d+(\.\d+)?$")
 #: still run while a release's tag is being cut.
 _USES_VERSION_COMMENT = re.compile(r"kphutt/gdmutant@[0-9a-f]{40}\s*#\s*v(?P<tagged>\d+\.\d+\.\d+)")
 
-DOCS_SHOWING_A_USES_LINE = [
-    REPO / "action.yml",
-    REPO / "docs" / "gdmutant-guide.md",
-    REPO / "README.md",
-]
+_BUMP = REPO / "scripts" / "bump_action_pins.py"
+_bump_spec = importlib.util.spec_from_file_location("bump_action_pins_for_pin", _BUMP)
+assert _bump_spec and _bump_spec.loader
+bump_action_pins = importlib.util.module_from_spec(_bump_spec)
+_bump_spec.loader.exec_module(bump_action_pins)
+
+#: The one list of files carrying a pin, owned by the script that bumps them after a release. This
+#: test used to keep its own copy, and two lists of the same files drift: a doc added to one would
+#: be checked but never bumped, or bumped but never checked.
+DOCS_SHOWING_A_USES_LINE = [REPO / name for name in bump_action_pins.PIN_FILES]
+
+#: Directories that are not the repository's own content: environments, caches, build output, the
+#: downloaded Godot addons, and the copies mutation tools make of the tree.
+_NOT_THE_REPO = {
+    ".git",
+    ".venv",
+    "node_modules",
+    "__pycache__",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".pytest_cache",
+    "htmlcov",
+    "dist",
+    "build",
+    "mutants",
+    ".benchmarks",
+}
 
 
 @pytest.mark.parametrize("path", DOCS_SHOWING_A_USES_LINE, ids=lambda p: p.name)
@@ -104,7 +127,7 @@ def _remote_tag_refs() -> dict[str, str]:
         text=True,
         check=True,
     ).stdout
-    return {ref: sha for sha, ref in (line.split("\t") for line in output.splitlines() if line)}
+    return dict(bump_action_pins.parse_ls_remote(output))
 
 
 def _latest_tag_commit(version: str) -> str | None:
@@ -117,11 +140,8 @@ def _latest_tag_commit(version: str) -> str | None:
     any depth. Prefer the `^{}`-dereferenced line, which is what an *annotated* tag's own commit
     resolves to. A lightweight tag (this repo's kind, as of writing) has no such line, and the
     plain ref is already the commit."""
-    tag = f"v{version}"
-    remote = _remote_tag_refs()
-    wanted = (f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}")
-    shas = {ref: remote[ref] for ref in wanted if ref in remote}
-    if not shas:
+    sha = bump_action_pins.commit_of_tag(version, _remote_tag_refs())
+    if sha is None:
         # The release window: `pyproject.toml` already names the version being cut, but its tag is
         # not pushed yet, because the tag has to point at a commit that is already on `main`. This
         # used to be an assert, which deadlocked the release it was meant to protect: bumping the
@@ -130,7 +150,7 @@ def _latest_tag_commit(version: str) -> str | None:
         # existed, so nothing caught it. Returning None instead lets the caller fall back to a
         # check that needs no tag, rather than blocking or passing silently.
         return None
-    return shas.get(f"refs/tags/{tag}^{{}}", shas[f"refs/tags/{tag}"])
+    return sha
 
 
 def _head_commit() -> str | None:
@@ -374,3 +394,32 @@ def test_the_release_gate_on_the_tagged_commit_passes_with_the_previous_releases
     sha, because = comparable_tag_commit("0.1.3", _FAKE_SHA, "c" * 40)
     with pytest.raises(AssertionError, match="gone stale"):
         check_pins_are_current(docs, "fake.md", "0.1.3", sha, because)
+
+
+def test_every_file_that_pins_the_action_is_on_the_one_list() -> None:
+    """A new doc showing a pinned `uses:` line must join `PIN_FILES`, or nothing would keep it
+    current: the staleness check above would never read it, and the release's pin bump would never
+    rewrite it. So walk the repository for SHA pins and compare the files found with the list."""
+    pin = re.compile(rb"kphutt/gdmutant@[0-9a-f]{40}")
+    found = set()
+    for dirpath, dirnames, filenames in os.walk(REPO):
+        here = Path(dirpath)
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d not in _NOT_THE_REPO
+            and not d.startswith((".venv-", ".poodle-temp"))
+            and here / d != REPO / "corpus" / "addons"
+        ]
+        for filename in filenames:
+            path = here / filename
+            if pin.search(path.read_bytes()):
+                found.add(path.relative_to(REPO).as_posix())
+    listed = set(bump_action_pins.PIN_FILES)
+    assert found, "found no pinned `uses:` line anywhere, so this scan read nothing useful"
+    assert found <= listed, (
+        f"these files pin the action but are not in scripts/bump_action_pins.py's PIN_FILES: "
+        f"{sorted(found - listed)}. Add them there, so the release bumps them and this test "
+        "checks them"
+    )
+    assert listed <= found, f"PIN_FILES names files with no pin in them: {sorted(listed - found)}"
