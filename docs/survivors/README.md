@@ -21,9 +21,11 @@ toward the score. Only its explanation differs.
 
 ### The score
 
-Mutation score = detected ÷ (detected + survived), where detected = killed + timeouts
-(a mutation that hung the suite was caught, so a timeout counts as a kill). Three more categories
-show in the summary but never enter that formula:
+Mutation score = detected ÷ (detected + survived + no coverage), where detected = killed +
+timeouts (a mutation that hung the suite was caught, so a timeout counts as a kill). No coverage
+appears only with `--coverage-analysis all`: no test even reaches that line, so it never ran, and it
+counts against the score exactly like a survivor. The fix is a test that calls the code, before any
+test that checks it. Three more categories show in the summary but never enter that formula:
 
 - ignored: suppressed by a `# gdmutant: ignore` annotation, generated for the report but never
   run against your tests.

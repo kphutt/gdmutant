@@ -245,7 +245,9 @@ class CommandRunner:
             # naming the actual bad command — the same Windows quirk the GdUnit4/GUT call sites
             # patch around.
             raise with_filename(error, self.command[0]) from error
-        output = (completed.stdout or "") + (completed.stderr or "")
+        # A newline between them, so a last stdout line with no newline of its own cannot run
+        # into the first stderr line and hide where a SCRIPT ERROR starts.
+        output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
         if _SCRIPT_ERROR_MARKER in output:
             # Regardless of exit code: see _SCRIPT_ERROR_MARKER and the class docstring. `errors`,
             # not `failures`: the run itself cannot be trusted, a different fault from a clean red

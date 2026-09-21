@@ -490,6 +490,13 @@ flag that checks every mutant stay in step 3.
 - On the corpus, every mutant's verdict with coverage analysis on matched its verdict with it off,
   under all three runners, and the three "no coverage" mutants are exactly the three that survived
   on untested functions.
+- On a real project, GUT 9.7.1's own source run against GUT's own test file for each module, the
+  same held for three modules (`diff_formatter`, `singleton_parser`, `compare_result`, 102
+  mutants): 18 "no coverage", every one a survivor with coverage analysis off, and no other
+  verdict changed. Wall-clock, off then on: 65.0 s and 67.3 s, 51.9 s and 48.1 s, 22.3 s and
+  26.8 s. Step 2 saves time only when more mutants are unreached than the self-check re-runs,
+  and it pays for one marker run and one import scan up front, so on these small suites it is
+  roughly even. Its value is the honest verdict. The time is step 3's job.
 - The marker call costs about 100 ns on Godot 4.7: a loop of one million trivial additions took
   about 12 ms plain and 115 ms marked. A hot loop of cheap statements can run several times slower
   in the marker run, which is why the marker run gets the baseline's time budget, not a mutant's.

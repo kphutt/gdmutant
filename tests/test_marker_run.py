@@ -57,6 +57,7 @@ def _registers(calls: list[list[str]], *, register: bool = True, output: str = "
 
     def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         calls.append(command)
+        assert (kwargs["capture_output"], kwargs["text"], kwargs["check"]) == (True, True, False)
         cache = Path(kwargs["cwd"]) / ".godot" / "global_script_class_cache.cfg"
         cache.parent.mkdir(exist_ok=True)
         name = MARKER_AUTOLOAD if register else "Other"
@@ -105,10 +106,12 @@ def test_spot_ids_are_unique_across_files(tmp_path: Path, monkeypatch: pytest.Mo
     copy = _copy(tmp_path)
     (copy / "b.gd").write_text(_SOURCE, encoding="utf-8")
     monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
-    files = {**_files(copy), **_files(copy, "b.gd")}
+    (copy / "c.gd").write_text(_SOURCE, encoding="utf-8")
+    files = {**_files(copy), **_files(copy, "b.gd"), **_files(copy, "c.gd")}
     marked = GDScriptMarker().mark(str(copy), files)
     assert {p for p in marked.placements["a.gd"] if p is not None} == {0}
     assert {p for p in marked.placements["b.gd"] if p is not None} == {1}
+    assert {p for p in marked.placements["c.gd"] if p is not None} == {2}
     assert f"{MARKER_AUTOLOAD}.hit(1); return" in (copy / "b.gd").read_text(encoding="utf-8")
 
 
@@ -307,3 +310,54 @@ def test_a_junit_marker_run_passes_its_own_command(
     assert seen[-1][-1] == "-c"
     runner.run(str(tmp_path))
     assert seen[-1][-1] == "--ignoreHeadlessMode"
+
+
+def test_a_script_that_is_not_utf8_does_not_stop_the_name_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copy = _copy(tmp_path)
+    (copy / "latin.gd").write_bytes(b"# caf\xe9\nextends Node\n")
+    monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
+    GDScriptMarker().mark(str(copy), _files(copy))  # no UnicodeDecodeError
+
+
+def test_the_default_godot_is_the_one_on_path() -> None:
+    assert GDScriptMarker().godot == "godot"
+
+
+def test_the_command_runner_marker_run_gets_the_runners_own_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[object] = []
+
+    def fake(*a: Any, **k: Any) -> Any:
+        seen.append(k["timeout"])
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(engine_runner.subprocess, "run", fake)
+    CommandRunner(["h"], timeout=77.0).run_markers(".")
+    assert seen == [77.0]
+
+
+@pytest.mark.parametrize(
+    ("runner", "report"),
+    [
+        (GdUnit4Runner(timeout=66.0), runner_mod.DEFAULT_REPORT_PATH),
+        (GutRunner(timeout=66.0), runner_mod.DEFAULT_GUT_REPORT_PATH),
+    ],
+)
+def test_a_junit_marker_run_gets_the_runners_own_budget_and_scans_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: Any, report: str
+) -> None:
+    seen: list[object] = []
+    fake = _writes_report(tmp_path, report, "")
+
+    def recording(command: list[str], **kwargs: Any) -> Any:
+        if "--import" not in command:
+            seen.append(kwargs["timeout"])
+        fake(command, **kwargs)
+        return subprocess.CompletedProcess(command, 0, "fine", "SCRIPT ERROR: late\n  at: x.gd:2")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", recording)
+    assert runner.run_markers(str(tmp_path)).runtime_error == "SCRIPT ERROR: late\n  at: x.gd:2"
+    assert seen == [66.0]

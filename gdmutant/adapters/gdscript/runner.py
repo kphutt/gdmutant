@@ -276,7 +276,9 @@ class _GodotJUnitRunner:
         result = self._result_from_report(report.read_text(encoding="utf-8"), completed)
         if not markers:
             return result
-        output = (completed.stdout or "") + (completed.stderr or "")
+        # A newline between them, so a last stdout line with no newline of its own cannot run
+        # into the first stderr line and hide where a SCRIPT ERROR starts.
+        output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
         return replace(result, runtime_error=script_error_excerpt(output))
 
 

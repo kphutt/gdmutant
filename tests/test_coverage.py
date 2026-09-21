@@ -747,3 +747,26 @@ def test_the_score_counts_no_coverage_as_undetected() -> None:
 
 def test_a_run_of_only_no_coverage_scores_zero_not_none() -> None:
     assert MutationRun((_outcome(Verdict.NO_COVERAGE),)).mutation_score == 0.0
+
+
+def test_the_heartbeat_counts_only_the_mutants_that_run(tmp_path: Path) -> None:
+    lab = Lab()
+    project, first = _project(tmp_path)
+    second = project / "u.gd"
+    second.write_text(_SOURCE, encoding="utf-8")
+    lab.target = first
+    lines: list[str] = []
+    run_paths(
+        str(project),
+        {str(first): _SOURCE, str(second): _SOURCE},
+        lab,
+        ADAPTER,
+        coverage=CoverageAnalysis.ALL,
+        marker=lab,
+        self_check=1,
+        progress=lines.append,
+    )
+    # The first file ends on a forced heartbeat, whose count must reach its own total.
+    beat = next(line for line in lines if " done in " in line)
+    done, total = beat.split(" ")[1].split("/")
+    assert done == total

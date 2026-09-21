@@ -392,3 +392,44 @@ def test_the_failure_class_is_what_the_cli_catches() -> None:
     from gdmutant.engine.loop import BaselineFailed
 
     assert issubclass(CoverageRunFailed, BaselineFailed)
+
+
+def test_the_console_block_and_the_markdown_block_are_laid_out_exactly() -> None:
+    text = console_summary(_run())
+    assert (
+        "No coverage (1): no test reaches these lines, so start with a test that runs them.\n\n"
+        "  f.gd:3:11  arithmetic  + -> -\n\nResults"
+    ) in text
+    markdown = job_summary_markdown(_run())
+    assert (
+        "\n\n### No coverage (1)\n\nNo test reaches these lines, so start with a test that runs "
+        "them:\n\n- `f.gd:3:11` \u00b7 arithmetic \u00b7 `+ -> -`\n\n### Surviving"
+    ) in markdown
+    assert (
+        "1 killed \u00b7 0 timeout \u00b7 **1 survived** \u00b7 0 ignored \u00b7 0 invalid \u00b7 "
+        "0 error \u00b7 **1 no coverage**\n"
+    ) in markdown
+
+
+def test_the_tally_line_ends_at_error_with_coverage_off() -> None:
+    markdown = job_summary_markdown(MutationRun((MutantOutcome(_KILLED, Verdict.KILLED),)))
+    assert "\u00b7 0 invalid \u00b7 0 error\n" in markdown
+
+
+def test_the_no_coverage_narrative_says_what_it_is() -> None:
+    assert NO_COVERAGE_GAP.startswith("No test reaches this line")
+    assert NO_COVERAGE_REASON.startswith("Nothing runs this code during the test suite")
+    assert NO_COVERAGE_REASON.endswith("whether that test also checks what the line does.")
+
+
+def test_a_file_with_no_no_coverage_mutants_scores_on_its_own_counts() -> None:
+    report = stryker_report(
+        MutationRun(
+            (MutantOutcome(_KILLED, Verdict.KILLED), MutantOutcome(_SURVIVED, Verdict.SURVIVED))
+        ),
+        "f.gd",
+        _SRC,
+        "gdscript",
+    )
+    (file_view,) = report_view(report).files
+    assert (file_view.no_coverage, file_view.score) == (0, 50.0)

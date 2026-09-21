@@ -777,8 +777,8 @@ def _mutate_file(
     clock: _Progress,
     *,
     is_last_file: bool = True,
-    mutants: list[Mutant] | None = None,
-    coverage: _FileCoverage | None = None,
+    mutants: list[Mutant] | None,
+    coverage: _FileCoverage | None,
 ) -> MutationRun:
     """Generate and run every mutant for a single file (the baseline is assumed already green). The
     file at `path` must hold `source`; it is restored before returning. `jobs > 1` evaluates mutants
@@ -885,7 +885,7 @@ def _run_mutants_serial(
     mutants: Sequence[Mutant],
     per_mutant_timeout: float,
     clock: _Progress,
-    skip: frozenset[int] = frozenset(),
+    skip: frozenset[int],
 ) -> list[MutantOutcome]:
     """Evaluate every mutant one at a time against the real project file (the trusted default).
 
@@ -994,7 +994,7 @@ def _run_mutants_parallel(
     jobs: int,
     jobs_auto: bool,
     clock: _Progress,
-    skip: frozenset[int] = frozenset(),
+    skip: frozenset[int],
 ) -> list[MutantOutcome]:
     """Evaluate mutants concurrently, each worker on its OWN copy of the project so the in-place
     file mutation (`_run_one`) can never collide. The pass/fail/timeout verdict of each mutant is

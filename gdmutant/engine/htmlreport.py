@@ -233,7 +233,7 @@ class FileView:
     total: int
     score: float | None
     #: Mutants no test reaches. Counted apart from `survived`, and scored like it.
-    no_coverage: int = 0
+    no_coverage: int
 
 
 @dataclass
@@ -252,7 +252,7 @@ class ReportView:
     #: header renders each count as a filter button that has to name what it filters on.
     rare: list[tuple[str, int, str]]
     #: Mutants no test reaches, across the report. Scored like `survived` (see `_score`).
-    no_coverage: int = 0
+    no_coverage: int
 
 
 def change_note(operator_id: str, original: str, replacement: str) -> str:
@@ -393,7 +393,7 @@ def _findings(
     return findings
 
 
-def _score(detected: int, survived: int, no_coverage: int = 0) -> float | None:
+def _score(detected: int, survived: int, no_coverage: int) -> float | None:
     """``detected / (detected + survived + no_coverage)`` as a percentage, or ``None`` with nothing
     killable: the same formula (and the same ``None``) as `MutationRun.mutation_score`."""
     scored = detected + survived + no_coverage
