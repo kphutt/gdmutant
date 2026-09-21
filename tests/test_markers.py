@@ -1,7 +1,7 @@
 """Tests for marker placement (docs/decisions/0017, Plan step 1): one test per row of the ADR's
 placement table, the cases between its rows, and a sweep over the corpus and the benchmark's
 synthetic files. The real-Godot half (the marked source loads, keeps its line numbers, and its
-markers fire) is in tests/test_markers_live.py."""
+markers fire) is in tests/test_selftest_live.py."""
 
 from __future__ import annotations
 
@@ -39,9 +39,10 @@ def _godot_grammar_parser() -> Lark:
 
     gdtoolkit only allows a compound statement (``if``, ``while``, ``for``, ``match``) at the
     start of a line, so it rejects ``_GdmMarks.hit(1); if x:``. Godot accepts it (checked against
-    Godot 4.7, and the live test loads a marked file full of them). This adds exactly that rule,
-    so everything else a marked source contains is still held to gdtoolkit's grammar. If gdtoolkit
-    changes the rule this edits, the assert fails here instead of the check going quiet.
+    Godot 4.7, and tests/test_selftest_live.py runs a marked corpus full of them). This adds
+    exactly that rule, so everything else a marked source contains is still held to gdtoolkit's
+    grammar. If gdtoolkit changes the rule this edits, the assert fails here instead of the check
+    going quiet.
     """
     import gdtoolkit.parser as package
     from gdtoolkit.parser.gdscript_indenter import GDScriptIndenter
@@ -462,7 +463,10 @@ def _corpus_and_synthetic_sources() -> list[tuple[str, str]]:
     return sources + [("synthetic-3.gd", _benchmark_synthetic_source(3))]
 
 
-@pytest.mark.parametrize(("name", "source"), _corpus_and_synthetic_sources())
+_SWEEP = _corpus_and_synthetic_sources()
+
+
+@pytest.mark.parametrize(("name", "source"), _SWEEP, ids=[name for name, _ in _SWEEP])
 def test_every_catalog_mutant_gets_exactly_one_placement(name: str, source: str) -> None:
     mutants, result = _mark(source)
     assert mutants, f"{name} has no mutants, so this test would check nothing"
