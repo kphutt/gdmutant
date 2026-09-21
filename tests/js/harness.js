@@ -260,6 +260,7 @@ function openTab(file, hash) {
 const PAGE = process.argv[2];      // the report
 const MULTI = process.argv[3];     // a two-file report, for the index rows and the back button
 const UNSCORED = process.argv[4];  // a report holding an ignored, an invalid and an errored mutant
+const NOCOV = process.argv[5];     // a report holding only killed and no-coverage mutants
 const KEYS = JSON.parse(process.env.HARNESS_KEYS || '[]');
 
 const out = { load: null, forward: [], backward: [], filters: {} };
@@ -435,6 +436,13 @@ out.legend.multiBadge = badge ? badge[1] : null;
 const us = openTab(UNSCORED, '');
 us.clickChip('[data-filter]', 'all');
 out.legend.unscored = us.legend();
+
+// No coverage shares the survivor's red, so the legend has to name it apart: under the default
+// filter (the red marks alone) and with everything shown.
+const nc = openTab(NOCOV, '');
+out.legend.noCoverage = { survived: nc.legend() };
+nc.clickChip('[data-filter]', 'all');
+out.legend.noCoverage.all = nc.legend();
 
 // ---- the header's rare-status counts ---------------------------------------------------------
 //

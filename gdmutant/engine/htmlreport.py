@@ -1122,7 +1122,7 @@ let seen = {};
 function paintSource(){
   const f = file();
   const vis = new Set(shown().map(x => x.fid));
-  seen = { unscored: {} };
+  seen = { unscored: {}, undetected: {} };
   let out = '';
   f.lines.forEach((text, i) => {
     const n = i + 1;
@@ -1156,6 +1156,14 @@ function paintSource(){
       // really holds: collected here, from the angles, rather than assumed from the palette.
       if (cls === 'ot') {
         g.fs.forEach(x => x.angles.forEach(a => { if (a.cls === 'ot') seen.unscored[a.tag] = 1; }));
+      }
+      // The red swatch holds two states the same way: a survivor and a mutant no test reaches share
+      // the colour (both are undetected, both need a test) but not the caption, since "no test
+      // caught it" is false of a line no test even ran. Collected from the angles, like the grey.
+      if (cls === 'sv') {
+        g.fs.forEach(x => x.angles.forEach(a => {
+          if (a.cls === 'sv') seen.undetected[a.tag] = 1;
+        }));
       }
       // A real <button>, so every finding is reachable by Tab and actionable by Enter/Space.
       body += `<button type="button" class="mark ${cls}${g.fs.length > 1 ? ' multi' : ''}"`
@@ -1193,6 +1201,12 @@ const UNSCORED = {
   error: 'errored: the runner failed while running it',
 };
 const UNSCORED_ORDER = ['ignored', 'invalid', 'error'];
+// The two red states, keyed by their tag word exactly as `_OUTCOME` in htmlreport.py sets it.
+const UNDETECTED = {
+  survived: 'survived: no test caught it',
+  'no coverage': 'no coverage: no test runs this line',
+};
+const UNDETECTED_ORDER = ['survived', 'no coverage'];
 
 // Built from the marks just drawn, never from the full palette. An entry for a colour this report
 // does not contain teaches a reader a shade they will never see and cannot recognise, and on the
@@ -1202,7 +1216,8 @@ const UNSCORED_ORDER = ['ignored', 'invalid', 'error'];
 function paintLegend(){
   const bits = [];
   const row = (cls, text) => `<span><span class="sw ${cls}">&nbsp;&nbsp;</span>${text}</span>`;
-  if (seen.sv) bits.push(row('sv', 'survived: no test caught it'));
+  const red = UNDETECTED_ORDER.filter(k => seen.undetected[k]);
+  if (red.length) bits.push(row('sv', red.map(k => UNDETECTED[k]).join(' &middot; ')));
   if (seen.kd) bits.push(row('kd', 'caught by a test'));
   const un = UNSCORED_ORDER.filter(k => seen.unscored[k]);
   if (un.length) bits.push(row('ot', un.map(k => UNSCORED[k]).join(' &middot; ')));

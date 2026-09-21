@@ -128,6 +128,18 @@ def _unscored_report() -> dict[str, Any]:
     )
 
 
+#: Killed and no-coverage mutants only, no survivor. No coverage shares the survivor's red, and
+#: the legend once captioned it "survived: no test caught it", which is false of a line no test ran.
+def _no_coverage_report() -> dict[str, Any]:
+    return _report(
+        [
+            _mutant(2, 5, 6, "comparison", ">=", "NoCoverage"),
+            _mutant(3, 10, 11, "numeric", "1", "NoCoverage"),
+            _mutant(4, 11, 12, "arithmetic", "-", "Killed"),
+        ]
+    )
+
+
 #: The findings' real addresses, taken from the view rather than written out here. The columns in
 #: `_MUTANTS` are *source* columns and the page's are tab-expanded, so any hand-written key would
 #: be quietly wrong — and a test that hard-codes what the code computes stops testing it.
@@ -142,11 +154,13 @@ def observed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     out = tmp_path_factory.mktemp("page")
     page = out / "report.html"
     multi, unscored = out / "multi.html", out / "unscored.html"
+    nocov = out / "nocov.html"
     page.write_text(render_html(_report(_MUTANTS)), encoding="utf-8")
     multi.write_text(render_html(_multi_report()), encoding="utf-8")
     unscored.write_text(render_html(_unscored_report()), encoding="utf-8")
+    nocov.write_text(render_html(_no_coverage_report()), encoding="utf-8")
     result = subprocess.run(
-        ["node", str(HARNESS), str(page), str(multi), str(unscored)],
+        ["node", str(HARNESS), str(page), str(multi), str(unscored), str(nocov)],
         capture_output=True,
         text=True,
         # Explicit, because the harness prints UTF-8 and Windows would otherwise decode its output
@@ -385,6 +399,18 @@ def test_the_legend_explains_only_the_marks_the_pane_actually_drew(
     # None of the three unscored states occurs in this report, so none of them is explained.
     for absent in ("never ran", "errored", "did not parse"):
         assert absent not in legend["all"], absent
+
+
+def test_the_legend_never_calls_a_no_coverage_mark_survived(observed: dict[str, Any]) -> None:
+    legend = observed["legend"]["noCoverage"]
+    for view in ("survived", "all"):
+        assert "survived" not in legend[view], legend[view]
+        assert "no test caught it" not in legend[view], legend[view]
+        assert "no coverage: no test runs this line" in legend[view], legend[view]
+    assert "caught by a test" in legend["all"]
+    # And a pane of survivors alone still says survived, and says nothing about coverage.
+    assert "survived: no test caught it" in observed["legend"]["survived"]
+    assert "no coverage" not in observed["legend"]["all"]
 
 
 def test_the_legend_names_each_unscored_state_and_never_calls_an_errored_mutant_never_run(
