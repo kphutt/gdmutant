@@ -323,6 +323,106 @@ def test_gdunit4_crash_safety_never_reports_a_false_survivor_at_n_gt_1(tmp_path:
     )
 
 
+# GDScript has no exceptions (engine.runner._SCRIPT_ERROR_MARKER's docstring): an out-of-bounds
+# array access aborts only the CURRENT FUNCTION CALL at that statement and the call returns the
+# declared return type's default -- bool's default is `false`. silently_wrong() never reaches
+# `return true`. A test that happens to assert `is_false()`/`assert_false()` on the result would
+# see a normal, passing assertion despite the function never completing -- a per-test-method
+# sibling of stryker-js#6150 (a mutant that broke test collection was scored Survived because the
+# runner only read recorded assertion results, never "did the code under test actually run").
+# Referenced via `preload`, not `class_name`, so this probe needs no Godot import-cache warm-up:
+# the file is added to the project copy AFTER `_corpus_copy`'s one-time `--import` scan runs.
+_SILENTLY_WRONG_LIB = """extends RefCounted
+
+static func silently_wrong() -> bool:
+	var empty: Array = []
+	var _boom = empty[0]  # out-of-bounds -> runtime SCRIPT ERROR; the call aborts HERE
+	return true  # never reached if the abort above is real
+"""
+
+_GDUNIT_SCRIPT_ERROR_PROBE_SUITE = """extends GdUnitTestSuite
+
+func test_masked_by_default_return() -> void:
+	var lib = preload("res://silently_wrong_lib.gd")
+	assert_bool(lib.silently_wrong()).is_false()
+"""
+
+_GUT_SCRIPT_ERROR_PROBE_SUITE = """extends GutTest
+
+func test_masked_by_default_return():
+	var lib = preload("res://silently_wrong_lib.gd")
+	assert_false(lib.silently_wrong())
+"""
+
+
+def test_gdunit4_runtime_script_error_is_never_a_silent_pass(tmp_path: Path) -> None:
+    """Pins the crash-safety property one level BELOW "zero tests collected" (the two probes
+    above, and `GdUnit4Runner`'s class docstring): a test whose suite loads fine and whose own
+    assertion nominally passes, but only because the assertion happens to match the default
+    value a runtime-aborted function call returns. See the fixtures' comment for why that
+    coincidence is possible at all.
+
+    The only thing standing between this and a false SURVIVED is GdUnit4's OWN runtime-error
+    interception (`GodotGdErrorMonitor`, gated by the `gdunit4/settings/report/godot/script_error`
+    project setting, which `GdUnitSettings.is_report_script_errors()` defaults to `true`) turning
+    the SCRIPT ERROR into a failure report before gdmutant ever reads the JUnit XML. gdmutant
+    passes no flag that touches this setting, so a future GdUnit4 release shipping that default
+    off would silently flip this from a kill to a false survivor with no change to gdmutant's own
+    code -- this test is what would go red first.
+    """
+    if not ADDON.is_dir():
+        pytest.skip("GdUnit4 addon not installed — run python scripts/install_gdunit4.py")
+    from gdmutant.adapters.gdscript.runner import GdUnit4Runner
+
+    project = _corpus_copy(tmp_path)
+    (project / "silently_wrong_lib.gd").write_text(_SILENTLY_WRONG_LIB, encoding="utf-8")
+    suite_dir = project / "test_script_error_probe"
+    suite_dir.mkdir()
+    (suite_dir / "test_silent_script_error.gd").write_text(
+        _GDUNIT_SCRIPT_ERROR_PROBE_SUITE, encoding="utf-8"
+    )
+
+    runner = GdUnit4Runner(test_path="res://test_script_error_probe", godot=str(_GODOT))
+    result = runner.run(str(project))
+    assert result.failed, (
+        "GdUnit4 reported a PASS for a runtime SCRIPT ERROR whose aborted-call default happened "
+        f"to satisfy the test's own assertion — a false survivor: {result}"
+    )
+    assert result.tests == 1, f"expected exactly the probe's one test, got {result}"
+
+
+def test_gut_runtime_script_error_is_never_a_silent_pass(tmp_path: Path) -> None:
+    """The GUT peer of the GdUnit4 probe above — same question, same fixtures.
+
+    GUT's own runtime-error interception (`GutErrorTracker`, installed via `OS.add_logger` —
+    `corpus/addons/gut/error_tracker.gd`) fails a test that produced an unhandled engine/script
+    error even when the test's own assertion passed, gated by `-gfailure_error_types` defaulting
+    to include `engine` (`gut_config.gd`'s `failure_error_types` default). gdmutant passes no
+    `-gfailure_error_types` override, so it relies entirely on that shipped default; if a future
+    GUT release drops `engine` from it, this is what would go red first — before a real mutation
+    run started scoring runtime-broken mutants as caught.
+    """
+    if not GUT_ADDON.is_dir():
+        pytest.skip("GUT addon not installed — run python scripts/install_gut.py")
+    from gdmutant.adapters.gdscript.runner import GutRunner
+
+    project = _corpus_copy(tmp_path)
+    (project / "silently_wrong_lib.gd").write_text(_SILENTLY_WRONG_LIB, encoding="utf-8")
+    suite_dir = project / "gut_test_script_error_probe"
+    suite_dir.mkdir()
+    (suite_dir / "test_silent_script_error_gut.gd").write_text(
+        _GUT_SCRIPT_ERROR_PROBE_SUITE, encoding="utf-8"
+    )
+
+    runner = GutRunner(test_dir="res://gut_test_script_error_probe", godot=str(_GODOT))
+    result = runner.run(str(project))
+    assert result.failed, (
+        "GUT reported a PASS for a runtime SCRIPT ERROR whose aborted-call default happened to "
+        f"satisfy the test's own assertion — a false survivor: {result}"
+    )
+    assert result.tests == 1, f"expected exactly the probe's one test, got {result}"
+
+
 def test_gdunit4_report_cleanup_never_touches_an_unrelated_directory(tmp_path: Path) -> None:
     """GdUnit4's own end-of-session cleanup (``cleanup_report_history``) deletes any directory under
     the report base path whose name starts with ``report_``, reading whatever follows the prefix
