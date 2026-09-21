@@ -472,7 +472,7 @@ save as-is (see GitHub's [Quickstart for GitHub
 Actions](https://docs.github.com/en/actions/quickstart) too, if you haven't written one before):
 
 ```yaml
-- uses: kphutt/gdmutant@284f185f1495f2d79150781cf2e6de618ed11327 # v0.1.3
+- uses: kphutt/gdmutant@955fbe89733cf5ca3b5458fefcbfdab7316f046f # v0.1.3
   with:
     godot-version: "4.7.0"   # the only required input
     project-path: ./
@@ -483,7 +483,7 @@ already matches gdmutant's own default, `res://test`. For GUT, whose stock layou
 `test/unit/` instead, set both `runner` and `tests` explicitly:
 
 ```yaml
-- uses: kphutt/gdmutant@284f185f1495f2d79150781cf2e6de618ed11327 # v0.1.3
+- uses: kphutt/gdmutant@955fbe89733cf5ca3b5458fefcbfdab7316f046f # v0.1.3
   with:
     godot-version: "4.7.0"
     project-path: ./
@@ -577,7 +577,7 @@ one or the other.
 takes:
 
 ```yaml
-- uses: kphutt/gdmutant@284f185f1495f2d79150781cf2e6de618ed11327 # v0.1.3
+- uses: kphutt/gdmutant@955fbe89733cf5ca3b5458fefcbfdab7316f046f # v0.1.3
   with:
     godot-version: "4.7.0"
     project-path: ./
@@ -613,7 +613,7 @@ config](#project-config-gdmutanttoml) above.
 Give the gdmutant step an `id` to reach its output from a later step:
 
 ```yaml
-- uses: kphutt/gdmutant@284f185f1495f2d79150781cf2e6de618ed11327 # v0.1.3
+- uses: kphutt/gdmutant@955fbe89733cf5ca3b5458fefcbfdab7316f046f # v0.1.3
   id: gdmutant
   with:
     godot-version: "4.7.0"
