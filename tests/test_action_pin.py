@@ -26,16 +26,21 @@ from __future__ import annotations
 
 import functools
 import importlib.util
-import os
 import re
 import subprocess
+import sys
 import warnings
 from pathlib import Path
 
 import pytest
+import test_public_readiness
 import yaml
 
 REPO = Path(__file__).resolve().parent.parent
+
+#: This module, referenced by name so a test can point `REPO` at a throwaway directory without
+#: disturbing the real one -- `monkeypatch.setattr` needs the module object, not the bare name.
+_MODULE = sys.modules[__name__]
 
 _SCRIPT = REPO / "scripts" / "check_release_tag.py"
 _spec = importlib.util.spec_from_file_location("check_release_tag_for_pin", _SCRIPT)
@@ -64,23 +69,6 @@ _bump_spec.loader.exec_module(bump_action_pins)
 #: test used to keep its own copy, and two lists of the same files drift: a doc added to one would
 #: be checked but never bumped, or bumped but never checked.
 DOCS_SHOWING_A_USES_LINE = [REPO / name for name in bump_action_pins.PIN_FILES]
-
-#: Directories that are not the repository's own content: environments, caches, build output, the
-#: downloaded Godot addons, and the copies mutation tools make of the tree.
-_NOT_THE_REPO = {
-    ".git",
-    ".venv",
-    "node_modules",
-    "__pycache__",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".pytest_cache",
-    "htmlcov",
-    "dist",
-    "build",
-    "mutants",
-    ".benchmarks",
-}
 
 
 @pytest.mark.parametrize("path", DOCS_SHOWING_A_USES_LINE, ids=lambda p: p.name)
@@ -396,25 +384,88 @@ def test_the_release_gate_on_the_tagged_commit_passes_with_the_previous_releases
         check_pins_are_current(docs, "fake.md", "0.1.3", sha, because)
 
 
+def _tracked_files() -> list[Path]:
+    """Every file git tracks in this checkout, as absolute paths.
+
+    `git ls-files`, not a directory walk. A walk descends into anything sitting under the working
+    tree whether git knows about it or not -- including a git worktree, or any other untracked
+    copy of the repo, parked under a gitignored directory such as `.claude/worktrees/`. That copy
+    carries its own README.md and action.yml, each pinning the action again, so the walk found the
+    same pin a second time at a path nothing lists, and failed. `git ls-files` only ever names what
+    git actually tracks, so a nested copy it does not track -- ignored or merely untracked alike --
+    is invisible to it, on any machine that happens to have one sitting under the tree.
+
+    Raises `test_public_readiness._GitCannotAnswer` rather than returning nothing when git itself
+    could not be asked: "no answer" and "no files" are different facts, and only `_scan_targets`
+    below knows which of them is safe to treat as expected.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise test_public_readiness._GitCannotAnswer(str(exc)) from exc
+    return [REPO / name for name in out.split("\0") if name]
+
+
+def _scan_targets() -> list[Path]:
+    """The tracked files to read, a skip where nothing is tracked for a named reason, or a
+    failure everywhere else.
+
+    Mirrors `test_public_readiness._scan_targets` exactly, because this scan and that one answer
+    the same question of a different root: is this a real checkout, or one of the copies a test
+    suite also legitimately runs from (mutmut's `mutants/`, a poodle run, an unpacked sdist)? That
+    question -- and the empty answer being expected there, not a failure -- is shared with
+    `test_public_readiness._why_this_tree_tracks_nothing`, so it is asked once, not answered twice.
+    An empty or unreadable answer everywhere else must not let the assertions below pass over zero
+    files and call the tree clean, which is the "gate that passes without checking anything" shape
+    AGENTS.md warns about.
+    """
+    reason = test_public_readiness._why_this_tree_tracks_nothing(REPO)
+    try:
+        files = _tracked_files()
+    except test_public_readiness._GitCannotAnswer as exc:
+        if reason is not None:
+            pytest.skip(f"{reason}, and git cannot answer here either ({exc})")
+        pytest.fail(
+            f"git could not list this tree's tracked files ({exc}), so this scan read nothing "
+            "at all. It fails rather than passing: a scan that reports clean because it never ran "
+            "is the one outcome this module must never produce. Run the suite from a git checkout."
+        )
+    if not files:
+        if reason is not None:
+            pytest.skip(f"{reason}, so git tracks nothing here and there is nothing to scan")
+        pytest.fail(
+            "git tracks no files in this tree, so this scan read nothing at all and would have "
+            "passed without seeing a byte. It fails rather than passing. Run the suite from a git "
+            "checkout."
+        )
+    return files
+
+
+#: Any SHA-pinned `uses:` line, wherever it appears -- the shape the scan below looks for.
+_PIN = re.compile(rb"kphutt/gdmutant@[0-9a-f]{40}")
+
+
+def _files_pinning_the_action() -> set[str]:
+    """Every tracked file's path (relative to `REPO`, forward-slashed) that carries a pin."""
+    return {
+        path.relative_to(REPO).as_posix()
+        for path in _scan_targets()
+        if _PIN.search(path.read_bytes())
+    }
+
+
 def test_every_file_that_pins_the_action_is_on_the_one_list() -> None:
     """A new doc showing a pinned `uses:` line must join `PIN_FILES`, or nothing would keep it
     current: the staleness check above would never read it, and the release's pin bump would never
-    rewrite it. So walk the repository for SHA pins and compare the files found with the list."""
-    pin = re.compile(rb"kphutt/gdmutant@[0-9a-f]{40}")
-    found = set()
-    for dirpath, dirnames, filenames in os.walk(REPO):
-        here = Path(dirpath)
-        dirnames[:] = [
-            d
-            for d in dirnames
-            if d not in _NOT_THE_REPO
-            and not d.startswith((".venv-", ".poodle-temp"))
-            and here / d != REPO / "corpus" / "addons"
-        ]
-        for filename in filenames:
-            path = here / filename
-            if pin.search(path.read_bytes()):
-                found.add(path.relative_to(REPO).as_posix())
+    rewrite it. So scan every tracked file for SHA pins and compare the files found with the list.
+    """
+    found = _files_pinning_the_action()
     listed = set(bump_action_pins.PIN_FILES)
     assert found, "found no pinned `uses:` line anywhere, so this scan read nothing useful"
     assert found <= listed, (
@@ -423,3 +474,110 @@ def test_every_file_that_pins_the_action_is_on_the_one_list() -> None:
         "checks them"
     )
     assert listed <= found, f"PIN_FILES names files with no pin in them: {sorted(listed - found)}"
+
+
+def _pin_line(sha: str) -> str:
+    return f"      - uses: kphutt/gdmutant@{sha} # v0.1.0\n"
+
+
+def _init_git_repo(root: Path) -> None:
+    """A fresh, throwaway git repo at `root`, with an identity so a commit can be made."""
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+
+
+def _commit_all(root: Path) -> None:
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=root, check=True)
+
+
+def test_an_ignored_copy_of_a_pinning_file_does_not_trip_the_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact shape that used to fail: an untracked copy of the repo -- a git worktree, or any
+    other gitignored tree -- parked under the working tree, holding its own copy of a pinning
+    file. `git ls-files` must never see it, so it must never show up in the scan."""
+    _init_git_repo(tmp_path)
+    (tmp_path / ".gitignore").write_text("ignored/\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text(_pin_line("a" * 40), encoding="utf-8")
+    _commit_all(tmp_path)
+
+    copy = tmp_path / "ignored" / "README.md"
+    copy.parent.mkdir()
+    copy.write_text(_pin_line("b" * 40), encoding="utf-8")
+    # Sanity: prove the fixture is actually ignored, not merely untracked -- the distinction this
+    # test exists to pin, since `git ls-files` (unlike a walk that skips `.gitignore` entries by
+    # name) leaves out both alike.
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", str(copy)], cwd=tmp_path, check=False
+    ).returncode
+    assert ignored == 0, "the planted copy was not actually gitignored, so this test proves nothing"
+
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path)
+    assert _files_pinning_the_action() == {"README.md"}
+
+
+def test_a_tracked_pinning_file_not_on_the_list_still_trips_the_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half: a file git genuinely tracks, holding a pin, is not something the fix should
+    ever make invisible -- only the untracked/ignored copies from the bug above."""
+    _init_git_repo(tmp_path)
+    (tmp_path / "README.md").write_text(_pin_line("a" * 40), encoding="utf-8")
+    extra = tmp_path / "docs" / "extra.md"
+    extra.parent.mkdir()
+    extra.write_text(_pin_line("c" * 40), encoding="utf-8")
+    _commit_all(tmp_path)
+
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path)
+    found = _files_pinning_the_action()
+    assert found == {"README.md", "docs/extra.md"}
+    # This is exactly what makes the real test fail loudly for a file that shows a pin but was
+    # never added to PIN_FILES, rather than silently missing it: `docs/extra.md` is found, and a
+    # `PIN_FILES` list that does not name it would not be a superset of `found`.
+    assert not found <= {"README.md"}
+
+
+def _outcome_of_scanning() -> tuple[str, str]:
+    """What `_scan_targets` does here, as a word, plus what it said about it.
+
+    Mirrors `test_public_readiness._outcome_of_scanning`, and for the same reason: a skip raised
+    inside a test is reported as a skip rather than a failure, so asserting on a raised exception
+    directly would make this go quiet in exactly the case it exists to make noisy.
+    """
+    try:
+        _scan_targets()
+    except pytest.fail.Exception as failure:
+        return "fail", str(failure)
+    except pytest.skip.Exception as skipped:
+        return "skip", str(skipped)
+    return "scan", ""
+
+
+def test_a_mutation_tools_copy_of_the_tree_still_skips_the_pin_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact shape Litmus caught: mutmut's `mutants/` copy has no `.git` of its own, so a `git
+    ls-files` run there walks up to the enclosing real checkout and succeeds -- but answers empty,
+    because nothing under a directory the real repo itself ignores is tracked. An unconditional
+    `assert files` read that as "found nothing useful" and aborted mutmut's baseline entirely
+    (deleting the dogfood score, not lowering it) on every run, since this scan never got the
+    chance to say why. This must skip, and name the reason, instead."""
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path / "mutants")
+    monkeypatch.setattr(_MODULE, "_tracked_files", list)
+    outcome, said = _outcome_of_scanning()
+    assert (outcome, "mutmut" in said) == ("skip", True), said
+
+
+def test_a_tree_that_tracks_nothing_and_is_not_a_known_copy_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the same fix: an empty answer is only ever excused for a *named* reason.
+    An ordinary directory that merely happens to track nothing is still a broken scan -- "git said
+    nothing" is not itself a reason -- and must fail rather than quietly pass."""
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path)
+    monkeypatch.setattr(_MODULE, "_tracked_files", list)
+    outcome, said = _outcome_of_scanning()
+    assert outcome == "fail", f"an unexplained empty tree came back as {outcome!r}: {said}"
+    assert "tracks no files" in said

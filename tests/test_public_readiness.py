@@ -726,7 +726,7 @@ _POODLE_RUN = "run-"
 _SDIST_MARKER = "PKG-INFO"
 
 
-def _why_this_tree_tracks_nothing() -> str | None:
+def _why_this_tree_tracks_nothing(root: Path | None = None) -> str | None:
     """The named reason this directory legitimately has no tracked files, or None.
 
     "Git said nothing" is deliberately not one of the reasons. It used to be the only one, and it
@@ -734,12 +734,19 @@ def _why_this_tree_tracks_nothing() -> str | None:
     container with no git on PATH, a directory whose `.git` was left behind by a copy. A guard
     that reports clean because it never ran is worse than no guard, because somebody trusts it.
     So the skip has to be able to say which known copy of the tree this is.
+
+    `root` defaults to this module's own `REPO_ROOT`. A sibling scan (this repo's other check that
+    reads the tree through `git ls-files` -- see tests/test_action_pin.py) takes the same question
+    about its own root, so the "which known copy is this" logic lives here once rather than twice:
+    this shape (a test running from mutmut's `mutants/`, a poodle run, or an unpacked sdist) has
+    already broken a test four separate times (see pyproject.toml's `[tool.mutmut]` comment).
     """
-    if REPO_ROOT.name == _MUTMUT_COPY:
+    root = REPO_ROOT if root is None else root
+    if root.name == _MUTMUT_COPY:
         return f"this tree is mutmut's copy of the repository, a {_MUTMUT_COPY!r} directory"
-    if REPO_ROOT.name.startswith(_POODLE_RUN) and REPO_ROOT.parent.name.startswith(_POODLE_COPY):
-        return f"this tree is a poodle run inside {REPO_ROOT.parent.name!r}"
-    if (REPO_ROOT / _SDIST_MARKER).is_file():
+    if root.name.startswith(_POODLE_RUN) and root.parent.name.startswith(_POODLE_COPY):
+        return f"this tree is a poodle run inside {root.parent.name!r}"
+    if (root / _SDIST_MARKER).is_file():
         return f"this tree is an unpacked source distribution (it has a {_SDIST_MARKER})"
     return None
 
