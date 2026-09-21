@@ -352,7 +352,7 @@ select simply does not implement them.
 - ADR-0016 names this very change as its revisit trigger: selection shrinks Godot's share of each
   mutant. The implementation PR must re-measure the engine's share. At 2x to 3x less Godot time,
   0.4% to 3% becomes roughly 1% to 9%, under 0016's 10% threshold. At the 6x seen on GdUnit4's own
-  suite it could reach about 18% on the files with the most engine time, which would cross it.
+  suite, 3% becomes about 16% by the same arithmetic, which would cross it.
 
 ## Alternatives considered
 - Godot's debugger or profiler instead of source markers. Rejected by the spike above: nothing
