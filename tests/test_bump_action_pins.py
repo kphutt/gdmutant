@@ -147,3 +147,27 @@ def test_an_explicit_version_overrides_pyproject(
     monkeypatch.setattr(bump_action_pins, "tag_commit", tag)
     assert bump_action_pins.main(["--version", "0.2.0"], root=root) == 0
     assert asked == ["0.2.0"]
+
+
+# --- the shared tag rule -------------------------------------------------------------------------
+
+
+def test_commit_of_tag_prefers_an_annotated_tags_commit_over_the_tag_object() -> None:
+    refs = {"refs/tags/v0.1.3": "c" * 40, "refs/tags/v0.1.3^{}": "d" * 40}
+    assert bump_action_pins.commit_of_tag("0.1.3", refs) == "d" * 40
+
+
+def test_commit_of_tag_reads_a_lightweight_tag_directly() -> None:
+    assert bump_action_pins.commit_of_tag("0.1.3", {"refs/tags/v0.1.3": "c" * 40}) == "c" * 40
+
+
+def test_commit_of_tag_is_none_for_a_missing_tag_and_ignores_other_versions() -> None:
+    assert bump_action_pins.commit_of_tag("0.1.3", {"refs/tags/v0.1.2": "c" * 40}) is None
+
+
+def test_parse_ls_remote_maps_each_ref_to_its_sha() -> None:
+    output = f"{'c' * 40}\trefs/tags/v0.1.3\n{'d' * 40}\trefs/tags/v0.1.3^{{}}\n"
+    assert bump_action_pins.parse_ls_remote(output) == {
+        "refs/tags/v0.1.3": "c" * 40,
+        "refs/tags/v0.1.3^{}": "d" * 40,
+    }

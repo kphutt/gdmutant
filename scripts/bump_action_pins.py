@@ -49,12 +49,24 @@ def packaged_version(root: Path) -> str:
         return str(tomllib.load(handle)["project"]["version"])
 
 
-def tag_commit(version: str, root: Path) -> str | None:
-    """The commit `vVERSION` points at on origin, or None when the tag is not there yet.
+def parse_ls_remote(output: str) -> dict[str, str]:
+    """`git ls-remote` output as a mapping from ref name to SHA."""
+    return {ref: sha for sha, ref in (line.split("\t") for line in output.splitlines() if line)}
 
-    Read from origin rather than local refs, like tests/test_action_pin.py, so a clone that has
-    not fetched the tag still gets the right answer. An annotated tag's `^{}` line is its commit;
-    a lightweight tag (this repo's kind) has only the plain line, which already is the commit."""
+
+def commit_of_tag(version: str, refs: dict[str, str]) -> str | None:
+    """The commit `vVERSION` points at, given origin's tag refs, or None when it is not there.
+
+    The one rule for this, shared with tests/test_action_pin.py so the two cannot drift. An
+    annotated tag's `^{}` line is its commit. A lightweight tag (this repo's kind) has only the
+    plain line, which already is the commit."""
+    tag = f"refs/tags/v{version}"
+    return refs.get(f"{tag}^{{}}") or refs.get(tag)
+
+
+def tag_commit(version: str, root: Path) -> str | None:
+    """The commit `vVERSION` points at on origin, or None when the tag is not there yet. Read from
+    origin rather than local refs, so a clone that has not fetched the tag still gets it right."""
     tag = f"refs/tags/v{version}"
     output = subprocess.run(
         ["git", "ls-remote", "origin", tag, f"{tag}^{{}}"],
@@ -63,8 +75,7 @@ def tag_commit(version: str, root: Path) -> str | None:
         text=True,
         check=True,
     ).stdout
-    shas = {ref: sha for sha, ref in (line.split("\t") for line in output.splitlines() if line)}
-    return shas.get(f"{tag}^{{}}") or shas.get(tag)
+    return commit_of_tag(version, parse_ls_remote(output))
 
 
 def bump(text: str, sha: str, version: str) -> tuple[str, int, int, list[str]]:

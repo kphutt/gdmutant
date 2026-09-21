@@ -127,7 +127,7 @@ def _remote_tag_refs() -> dict[str, str]:
         text=True,
         check=True,
     ).stdout
-    return {ref: sha for sha, ref in (line.split("\t") for line in output.splitlines() if line)}
+    return dict(bump_action_pins.parse_ls_remote(output))
 
 
 def _latest_tag_commit(version: str) -> str | None:
@@ -140,11 +140,8 @@ def _latest_tag_commit(version: str) -> str | None:
     any depth. Prefer the `^{}`-dereferenced line, which is what an *annotated* tag's own commit
     resolves to. A lightweight tag (this repo's kind, as of writing) has no such line, and the
     plain ref is already the commit."""
-    tag = f"v{version}"
-    remote = _remote_tag_refs()
-    wanted = (f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}")
-    shas = {ref: remote[ref] for ref in wanted if ref in remote}
-    if not shas:
+    sha = bump_action_pins.commit_of_tag(version, _remote_tag_refs())
+    if sha is None:
         # The release window: `pyproject.toml` already names the version being cut, but its tag is
         # not pushed yet, because the tag has to point at a commit that is already on `main`. This
         # used to be an assert, which deadlocked the release it was meant to protect: bumping the
@@ -153,7 +150,7 @@ def _latest_tag_commit(version: str) -> str | None:
         # existed, so nothing caught it. Returning None instead lets the caller fall back to a
         # check that needs no tag, rather than blocking or passing silently.
         return None
-    return shas.get(f"refs/tags/{tag}^{{}}", shas[f"refs/tags/{tag}"])
+    return sha
 
 
 def _head_commit() -> str | None:
