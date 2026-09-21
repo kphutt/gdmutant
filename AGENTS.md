@@ -110,6 +110,10 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   `CommandRunner` (docs/decisions/0005) also checks its output for a GDScript-specific marker
   string (docs/decisions/0015). That check costs nothing for a non-GDScript command (the string
   never appears), so it was kept there rather than behind a new adapter-level runner and CLI flag.
+  The coverage marker run (docs/decisions/0017) reuses the same string, through
+  `engine.runner.script_error_excerpt`, for every runner, and only there. The engine's coverage
+  code itself (`engine/coverage.py`) sees spot numbers and paths, never GDScript. Marking a copy
+  and the recorder live in `adapters/gdscript/marker_run.py`.
 - The mutation-operator core is deterministic, the reproducible mode a CI check can trust. Any
   future LLM-semantic mode stays out of it.
 - **Recurring bug one: a gate that passes without checking anything.** Seen five times. A test that

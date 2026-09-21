@@ -74,6 +74,7 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | `--exclude <glob>` | *(none)* | Skip matching files when expanding a directory (repeatable). |
 | `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. `auto` picks a worker count from your CPU count and throttles under load instead of a fixed N. |
 | `--timeout <seconds>` | 10x the baseline run | Per-mutant test timeout. |
+| `--coverage-analysis {off,all,per-file}` | `off` | `all` finds the mutants no test reaches before any mutant runs, and reports them as `no coverage` without running them. `per-file` is not built yet. See [Coverage analysis](#coverage-analysis). |
 | `--require-clean` / `--no-require-clean` | warn only | Refuse to run on an uncommitted source file. |
 | `--trust-config` | off | Act on `.gdmutant.toml`'s `command`/`godot`/`project` keys. |
 | `--progress {auto,plain,none}` | `auto` | How much the run narrates itself while it works. |
@@ -129,6 +130,40 @@ The default stays `1` (serial) even though `auto` is available: the load-average
 watches CPU/IO contention, never disk, and disk (a full project copy per worker) is this tool's
 real binding constraint. Opt in with `--jobs auto` deliberately, especially on a machine with
 plenty of cores but a small or shared disk.
+
+#### Coverage analysis
+
+`--coverage-analysis all` runs the whole suite once, before any mutant, on a throwaway copy of the
+project with a small marker call in front of each mutated statement. Each marker records that the
+suite reached it. A mutant whose statement no test reached gets the verdict `no coverage`
+(`NoCoverage` in the JSON) and never runs: until that statement runs, the mutant changes nothing,
+so no test could fail because of it. Every other mutant runs the whole suite exactly as with the
+option off. The default, `off`, is what gdmutant has always done.
+
+- The score does not move. A `no coverage` mutant counts as undetected, like a survivor (Stryker's
+  rule), so the option only splits the undetected mutants into "nothing runs this line" and
+  "something runs it but checks nothing", which call for different fixes.
+- Some mutants can never be `no coverage`: code that runs when a script loads (a class-level `var`,
+  a `const`), a statement holding `await`, and a one-line lambda. No marker can say whether a test
+  reaches those, so they always run the whole suite.
+- The marker run must be clean, or the whole run stops (exit 1) and says which rule failed: every
+  test passes, no `SCRIPT ERROR` appears anywhere in the output, the hits file exists and parses,
+  at least one marker fired, and the test count matches the baseline's. Turn the option off to run
+  without it.
+- A few `no coverage` mutants (three by default, picked the same way every run) also run against
+  the whole suite as a self-check. Each must survive there. If one does not, the map is wrong and
+  the run stops (exit 1), naming the mutant and both verdicts. The console summary always says how
+  many it compared, zero included.
+- It needs `--godot` with every runner, `--runner command` included: gdmutant runs Godot once to
+  register its recorder in the marked copy. The recorder adds a `_gdmutant/` directory, a global
+  class `_GdmMarks` and an autoload `_GdmHitsWriter` to the copy. A project that already uses one
+  of those names is refused rather than overwritten.
+- With `--runner command`, the command must run the project in the directory it starts in (for
+  example `--path .`), since the marked copy is where it starts. A command that names your project
+  by an absolute path runs the unmarked original, writes no hits, and the run stops saying so.
+
+The design, and the per-file test selection still to come, is
+[`docs/decisions/0017`](decisions/0017-markers-for-no-coverage-and-test-selection.md).
 
 #### Refusing a dirty tree
 
@@ -224,7 +259,8 @@ none of them ever need trust.
   lines: that one is an empty report, not an empty stdout. `--dry-run` writes no `--json`/`--html`
   report at all, says so on stderr, and prints its mutant list to stdout instead.
 - `1`: the unmutated *baseline* suite failed. Fix your tests first. Mutation-testing a red
-  suite is meaningless.
+  suite is meaningless. With `--coverage-analysis all`, also: the marker run was not clean, or the
+  self-check found a `no coverage` mutant that a real run does not agree with.
 - `2`: a setup or input error. The stderr message says which one. The causes:
   - the source is unreadable or not valid GDScript, or no given path holds a parseable `.gd` file
   - `--project` does not name an existing directory
@@ -235,8 +271,10 @@ none of them ever need trust.
   - the test-runner executable was not found: `godot`, or the program named by `--command`
   - `--runner command` with no `--command`, or a `--command` string that cannot be split into words
   - `--since` names a ref git cannot diff against
-  - `--jobs` above 1 with a source file that does not sit inside `--project`
+  - `--jobs` above 1, or `--coverage-analysis all`, with a source file that does not sit inside
+    `--project`
   - `--jobs` below 1
+  - `--coverage-analysis per-file`, which is not built yet
   - `--json -` and `--report step-summary` together with `$GITHUB_STEP_SUMMARY` unset: two
     documents, one stdout
   - a report file could not be written, or the source file could not be rewritten or put back
@@ -300,7 +338,9 @@ two comes back entirely CRLF.
 - `status` is one of `Killed`, `Survived`, `Timeout` (the mutation hung the suite: a detection, so
   it counts as killed), `Ignored` (a `# gdmutant: ignore` annotation suppressed it, excluded
   from the score), `CompileError` (the mutant didn't parse, never counted as killed), or
-  `RuntimeError` (the runner failed to execute it, e.g. a Godot crash). The console summary and
+  `RuntimeError` (the runner failed to execute it, e.g. a Godot crash), or, only with
+  `--coverage-analysis all`, `NoCoverage` (no test reaches it, so it never ran, and it is scored
+  like `Survived`). The console summary and
   the job summary use different names for these last two: `invalid` is `CompileError`, `error` is
   `RuntimeError`. Same counts, same meaning, just spelled differently between the human-facing
   summary and the JSON `status` enum.
@@ -308,11 +348,13 @@ two comes back entirely CRLF.
   rather than only its locations: `description` states the gap, what no test pins, and
   `statusReason` states why that matters and where to start a test. Relay both to whoever writes
   the test. Read them, do not pattern-match on them: the wording is prose, not an interface.
+- A `NoCoverage` mutant carries both fields too, saying that no test reaches the line and that a
+  test calling it is where to start.
 - An `Ignored` mutant reuses `statusReason` for the reason its annotation gave, if it gave one, and
   carries no `description`. No other status carries either field.
 - Locations are 1-based. The `end` `column` is exclusive.
-- Actionable survivors are the mutants with `"status": "Survived"`. Those are the gaps a test
-  should close.
+- Actionable survivors are the mutants with `"status": "Survived"`, and with coverage analysis
+  on, `"status": "NoCoverage"` too. Those are the gaps a test should close.
 - Mutant order is deterministic (fixed generation order), so `id`s and the survivor list are
   stable across runs and safe to diff between attempts.
 - `--html` is also machine-readable: the page embeds this same report in a

@@ -25,12 +25,18 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import ClassVar
 
 from gdmutant.engine.loop import SourceOutsideProject
-from gdmutant.engine.runner import SuiteResult, SuiteTimeout, parse_junit_xml, with_filename
+from gdmutant.engine.runner import (
+    SuiteResult,
+    SuiteTimeout,
+    parse_junit_xml,
+    script_error_excerpt,
+    with_filename,
+)
 
 _GDUNIT_CMD_TOOL = "res://addons/gdUnit4/bin/GdUnitCmdTool.gd"
 _GUT_CMD_TOOL = "res://addons/gut/gut_cmdln.gd"
@@ -142,8 +148,11 @@ class _GodotJUnitRunner:
         # poison retry.
         self._imported = True
 
-    def command(self, project_dir: str) -> list[str]:  # pragma: no cover - overridden per adapter
-        """The ``godot --headless`` command that runs this framework's suite for `project_dir`."""
+    def command(  # pragma: no cover - overridden per adapter
+        self, project_dir: str, *, markers: bool = False
+    ) -> list[str]:
+        """The ``godot --headless`` command that runs this framework's suite for `project_dir`.
+        `markers` asks for the marker run's variant (`run_markers`)."""
         raise NotImplementedError
 
     def _result_from_report(  # pragma: no cover - overridden per adapter
@@ -180,6 +189,25 @@ class _GodotJUnitRunner:
         )
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        """Run this framework's suite once against `project_dir` and return the parsed result.
+        See `_execute`, which does the work."""
+        return self._execute(project_dir, timeout, markers=False)
+
+    def run_markers(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        """The coverage marker run (`engine.runner.MarkerRunnable`, docs/decisions/0017): the whole
+        suite once in the marked copy `project_dir`, with the framework told to keep going after a
+        failure where it has such a switch, and any ``SCRIPT ERROR`` in the output reported in
+        `SuiteResult.runtime_error`.
+
+        That scan is the marker run's alone. Both frameworks already fail a test on a script error
+        inside it, but not one outside every test (load time, between suites, after the summary),
+        and such an error can cut short code that a test would otherwise have reached, which would
+        make covered code look unreached. A mutant run does not need it: there, a script error
+        outside a test cannot turn a kill into a survivor the way a missing marker hit can turn one
+        into "no coverage"."""
+        return self._execute(project_dir, timeout, markers=True)
+
+    def _execute(self, project_dir: str, timeout: float | None, *, markers: bool) -> SuiteResult:
         """Run this framework's suite once against `project_dir` and return the parsed result.
 
         Deletes any stale report at `report_path` first and requires this run to write a fresh
@@ -228,7 +256,7 @@ class _GodotJUnitRunner:
         # failed run can be diagnosed instead of vanishing.
         try:
             completed = subprocess.run(
-                self.command(project_dir),
+                self.command(project_dir, markers=markers),
                 cwd=project_dir,
                 timeout=budget,
                 check=False,
@@ -245,7 +273,13 @@ class _GodotJUnitRunner:
             raise self._missing_report_error(report, completed)
         # Parse under the adapter's crash-safety contract — both adapters reject a zero-test report
         # rather than returning a pass; GUT additionally rejects a drop below its baseline count.
-        return self._result_from_report(report.read_text(encoding="utf-8"), completed)
+        result = self._result_from_report(report.read_text(encoding="utf-8"), completed)
+        if not markers:
+            return result
+        # A newline between them, so a last stdout line with no newline of its own cannot run
+        # into the first stderr line and hide where a SCRIPT ERROR starts.
+        output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
+        return replace(result, runtime_error=script_error_excerpt(output))
 
 
 @dataclass
@@ -292,8 +326,12 @@ class GdUnit4Runner(_GodotJUnitRunner):
     _imported: bool = field(default=False, init=False, repr=False)
     _framework: ClassVar[str] = "GdUnit4"
 
-    def command(self, project_dir: str) -> list[str]:
+    def command(self, project_dir: str, *, markers: bool = False) -> list[str]:
         """The ``godot --headless`` command that runs the GdUnit4 suite for `project_dir`.
+
+        `markers` adds ``-c`` (``--continue``) for the marker run. GdUnit4 stops at the first
+        failing test by default, which would hide how much of the suite actually ran. A mutant run
+        leaves it out: there, stopping at the first failure is the fast way to a kill.
 
         ``-rc 1`` (report-count = 1) is essential: GdUnit4's CI runner otherwise keeps a report
         history, writing each invocation to an incrementing ``reports/report_N/`` dir. Since the
@@ -324,6 +362,7 @@ class GdUnit4Runner(_GodotJUnitRunner):
             "-rc",
             "1",
             "--ignoreHeadlessMode",
+            *(["-c"] if markers else []),
         ]
 
     def _result_from_report(
@@ -445,8 +484,11 @@ class GutRunner(_GodotJUnitRunner):
     _nondeterminism_canary: bool = field(default=False, init=False, repr=False)
     _framework: ClassVar[str] = "GUT"
 
-    def command(self, project_dir: str) -> list[str]:
+    def command(self, project_dir: str, *, markers: bool = False) -> list[str]:
         """The ``godot --headless`` command that runs the GUT suite for `project_dir`.
+
+        `markers` changes nothing: GUT already runs every test after a failure, so the marker run
+        needs no extra switch.
 
         GUT's command-line flags are ``=``-joined (``-gdir=…``), not space-separated. ``-gexit``
         makes GUT quit when the run finishes (headless CI mode); ``-gjunit_xml_file`` writes the

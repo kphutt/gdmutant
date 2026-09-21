@@ -67,6 +67,11 @@ class SuiteResult:
     #: the *baseline*-failure message so a first run that can't even go green is debuggable; ignored
     #: for per-mutant results, so it adds no noise during the run.
     detail: str = ""
+    #: Non-empty when the runner saw, in the run's own output, that some code aborted part way
+    #: while the run went on (for Godot, a ``SCRIPT ERROR``). It says what was seen. Read only by
+    #: the coverage marker run (docs/decisions/0017), where a function cut short can make code it
+    #: would have reached look unreached. A per-mutant run ignores it, exactly as before.
+    runtime_error: str = ""
 
     @property
     def failed(self) -> bool:
@@ -138,6 +143,24 @@ class Preparable(Protocol):
     def prepare(self, project_dir: str) -> None:
         """Run this runner's one-time, potentially slow setup for `project_dir`, before the engine
         starts timing the baseline. Must be idempotent."""
+        ...
+
+
+@runtime_checkable
+class MarkerRunnable(Protocol):
+    """A runner that can do the coverage marker run (docs/decisions/0017, step 2).
+
+    Optional (checked via ``isinstance``, like `Preparable`). A runner without it cannot be used
+    with coverage analysis, and the engine refuses the run up front rather than guessing.
+    `run_markers` runs the whole suite once in `project_dir` (the marked copy) and returns its
+    result, with two differences from `Runner.run`. It asks the framework to keep going after a
+    failing test, so the result shows how much of the suite really ran. And it fills
+    `SuiteResult.runtime_error` when the output shows code aborting part way, anywhere in the run,
+    including outside every test.
+    """
+
+    def run_markers(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        """Run the whole suite once in the marked copy `project_dir`, for the marker run."""
         ...
 
 
@@ -222,7 +245,9 @@ class CommandRunner:
             # naming the actual bad command — the same Windows quirk the GdUnit4/GUT call sites
             # patch around.
             raise with_filename(error, self.command[0]) from error
-        output = (completed.stdout or "") + (completed.stderr or "")
+        # A newline between them, so a last stdout line with no newline of its own cannot run
+        # into the first stderr line and hide where a SCRIPT ERROR starts.
+        output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
         if _SCRIPT_ERROR_MARKER in output:
             # Regardless of exit code: see _SCRIPT_ERROR_MARKER and the class docstring. `errors`,
             # not `failures`: the run itself cannot be trusted, a different fault from a clean red
@@ -238,6 +263,7 @@ class CommandRunner:
                     "test harness that only checks its own recorded assertion failures can read "
                     f"a half-executed test as a pass. Output:\n{output.strip()[-2000:]}"
                 ),
+                runtime_error=script_error_excerpt(output),
             )
         if completed.returncode == 0:
             return SuiteResult(tests=1, failures=0, errors=0)
@@ -246,6 +272,26 @@ class CommandRunner:
         # common case) can be diagnosed instead of vanishing; tail it to stay bounded.
         detail = (completed.stderr or completed.stdout or "").strip()
         return SuiteResult(tests=1, failures=1, errors=0, detail=detail[-2000:])
+
+    def run_markers(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        """The marker run (`MarkerRunnable`): the same command as `run`. An exit code has no
+        "keep going" switch to pass, and `run` already fills `SuiteResult.runtime_error` whenever
+        the output holds a `_SCRIPT_ERROR_MARKER`."""
+        return self.run(project_dir, timeout)
+
+
+def script_error_excerpt(output: str) -> str:
+    """The first `_SCRIPT_ERROR_MARKER` line in `output` and the three after it, or ``""`` if
+    there is none.
+
+    Shared by every runner's marker run, so all three describe the same fault the same way. Godot
+    prints the message first, then the script and line it happened on, so those few lines are what
+    locates it."""
+    lines = output.splitlines()
+    for index, line in enumerate(lines):
+        if _SCRIPT_ERROR_MARKER in line:
+            return "\n".join(lines[index : index + 4]).strip()
+    return ""
 
 
 def parse_junit_xml(xml: str) -> SuiteResult:
