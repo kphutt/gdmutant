@@ -459,3 +459,13 @@ def test_a_commented_out_autoload_entry_is_not_a_taken_name(
 def test_trailing_blank_lines_are_trimmed_but_nothing_else() -> None:
     assert _with_writer_autoload("k=VX\n\n\n").startswith("k=VX\n\n[autoload]")
     assert _with_writer_autoload("k=V  \n").startswith("k=V  \n\n[autoload]")
+
+
+def test_a_project_file_with_non_ascii_text_is_read_as_utf8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "Á" is the bytes C3 81 in UTF-8, and 0x81 is undefined in Windows' cp1252, so reading this
+    # project.godot with the platform's default encoding fails there. Godot writes UTF-8.
+    copy = _copy(tmp_path, 'config_version=5\n\n[application]\n\nconfig/name="Árbol"\n')
+    monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
+    GDScriptMarker().mark(str(copy), _files(copy))
