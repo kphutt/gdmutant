@@ -538,7 +538,7 @@ def is_valid_gdscript(source: str) -> bool:
     """True if `source` parses as GDScript — the NF-5 gate."""
     try:
         # Skip metadata gathering here: this only needs to know whether the source parses, not
-        # the resulting tree, and metadata is about 30% of the parse cost on real GDScript.
+        # the resulting tree, and gathering metadata costs time on every mutant.
         _gdparser.parse(source, gather_metadata=False)
     except LarkError:
         return False
