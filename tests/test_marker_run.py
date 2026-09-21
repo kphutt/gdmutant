@@ -412,11 +412,48 @@ def test_a_name_only_mentioned_in_a_value_is_not_an_autoload(
     GDScriptMarker().mark(str(copy), _files(copy))
 
 
-def test_a_class_name_only_in_a_comment_prefix_is_still_a_declaration(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "script",
+    [
+        f"extends Node\nclass_name  {MARKER_AUTOLOAD}\n",  # extra spacing
+        f"\tclass_name {MARKER_AUTOLOAD}\n",  # indented
+        f"class_name {MARKER_AUTOLOAD} extends Object\n",  # one-line form, GDScript 4
+        f"@tool class_name {MARKER_AUTOLOAD}\n",  # an annotation on the same line
+        f'@icon("res://i.svg") @tool class_name {MARKER_AUTOLOAD} extends Node\n',
+    ],
+)
+def test_a_real_declaration_of_the_recorder_class_is_refused(tmp_path: Path, script: str) -> None:
     copy = _copy(tmp_path)
-    (copy / "x.gd").write_text(f"extends Node\nclass_name  {MARKER_AUTOLOAD}\n", encoding="utf-8")
+    (copy / "x.gd").write_text(script, encoding="utf-8")
     with pytest.raises(RuntimeError, match="already declares class_name"):
         GDScriptMarker().mark(str(copy), _files(copy))
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        f"extends Node\n# class_name {MARKER_AUTOLOAD}\n",  # a comment on its own line
+        f"extends Node\nvar x := 1  # class_name {MARKER_AUTOLOAD}\n",  # a trailing comment
+        f'extends Node\nvar s := "class_name {MARKER_AUTOLOAD}"\n',  # a string literal
+        f"extends Node\n## Do not write class_name {MARKER_AUTOLOAD} here.\n",  # a doc comment
+    ],
+)
+def test_the_recorder_class_named_in_a_comment_or_a_string_is_not_a_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, script: str
+) -> None:
+    copy = _copy(tmp_path)
+    (copy / "x.gd").write_text(script, encoding="utf-8")
+    monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
+    GDScriptMarker().mark(str(copy), _files(copy))  # no refusal
+
+
+@pytest.mark.parametrize("name", [MARKER_AUTOLOAD, WRITER_AUTOLOAD])
+def test_a_commented_out_autoload_entry_is_not_a_taken_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    copy = _copy(tmp_path, _SETTINGS + f'\n[autoload]\n\n;{name}="*res://x.gd"\n')
+    monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
+    GDScriptMarker().mark(str(copy), _files(copy))  # no refusal
 
 
 def test_trailing_blank_lines_are_trimmed_but_nothing_else() -> None:

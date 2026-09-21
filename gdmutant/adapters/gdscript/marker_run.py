@@ -72,7 +72,13 @@ func _notification(what: int) -> void:
 _IMPORT_TIMEOUT = 300.0
 #: Godot's list of global classes, written by the import scan.
 _CLASS_CACHE = Path(".godot") / "global_script_class_cache.cfg"
-_TAKEN_CLASS = re.compile(rf"\bclass_name\s+{MARKER_AUTOLOAD}\b")
+#: A real ``class_name _GdmMarks`` declaration: at the start of a line, after optional indentation
+#: and any annotations sharing the line (``@tool class_name X``, ``@icon("res://i.svg")``), never
+#: the words inside a comment or a string further along a line. A triple-quoted string with a line
+#: that starts that way would still match. That errs toward refusing, which is loud and safe.
+_TAKEN_CLASS = re.compile(
+    rf"^[ \t]*(?:@\w+(?:\([^)\n]*\))?[ \t]+)*class_name[ \t]+{MARKER_AUTOLOAD}\b", re.MULTILINE
+)
 
 
 @dataclass(frozen=True)
@@ -162,7 +168,8 @@ def _refuse_taken_names(copy: Path, settings: Path) -> None:
         )
     text = settings.read_text(encoding="utf-8")
     for name in (MARKER_AUTOLOAD, WRITER_AUTOLOAD):
-        if re.search(rf"^\s*{name}\s*=", text, re.MULTILINE):
+        # A key at the start of its line. A commented-out entry starts with `;`, so it is not one.
+        if re.search(rf"^[ \t]*{name}[ \t]*=", text, re.MULTILINE):
             raise RuntimeError(
                 f"project.godot already registers an autoload named {name}, a name coverage "
                 "analysis needs for its recorder. Rename it to use coverage analysis"
