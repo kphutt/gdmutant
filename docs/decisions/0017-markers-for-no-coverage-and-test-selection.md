@@ -31,13 +31,48 @@ hand-written test harness with `--runner command`.
 - gdmutant's own engine is about 0.4% to 3% of a real run.
 - Timeouts: zero across 91 mutants in three projects, so tuning them is not being pursued.
 
-So the time goes to running suites that cannot possibly notice the mutant. If loading and
-running scale with the number of suites run, running only the suites that reach a spot would cut
-a mutant's cost to about 14% + 20% x 86%, roughly 31%, about 3x faster. That estimate rests on
-one file of one project and on the scaling assumption, and the implementation PRs must measure
-it. The "no coverage" half gains nothing on that project, because every mutant was reached. It
-is still worth having, because it is free once the map exists and it turns a misleading
-"survived" into an honest "no test runs this".
+So most of the time goes to suites that cannot possibly notice the mutant. But that harness
+lists every suite as a `preload` in one constant array, so all 33 suites are loaded when the
+harness script compiles, whatever it then runs. Its filter could skip running a suite, not
+loading it. On that project the 25% load share stays fixed, and running only a fifth of the
+suites would cut a mutant's cost to about 14% + 25% + 20% x 61%, roughly 51%, about 2x faster.
+For a runner whose loading does shrink with the files it is given, the same arithmetic gives
+14% + 20% x 86%, roughly 31%, about 3x. That 3x is the upper bound, not the expected figure.
+
+The "no coverage" half gains nothing on that project, because every mutant was reached. It is
+still worth having, because it is free once the map exists and it turns a misleading "survived"
+into an honest "no test runs this".
+
+### Step 0: what file subsets actually cost on GdUnit4 and GUT
+Because the gain above depends on the runner, it was measured directly before any marker code,
+with no markers at all: the whole suite against random subsets of about 20% of the test files,
+passed on the command line. Godot 4.7, one machine, on copies of two real checkouts: GdUnit4's
+own repository (132 test files, about 1,600 tests, run with `-a` once per file and `-c`) and
+GUT's own repository at 9.7.1 (70 test files under `test/unit`, about 1,500 tests, run with
+`-gtest=`). Four random subsets per framework, each run twice, and the whole suite two or three
+times. Repeats agreed within a few percent.
+
+| Framework | Whole suite | 20% subsets (four seeds) | Speedup per subset | Mean speedup |
+|---|---|---|---|---|
+| GdUnit4 | 139 s (135 to 143) | 9.4 s, 36.6 s, 10.8 s, 33.2 s | 14.6x, 3.8x, 12.7x, 4.1x | 6.1x |
+| GUT | 126 s (126, 126) | 75.4 s, 27.6 s, 44.6 s, 39.4 s | 1.7x, 4.5x, 2.8x, 3.2x | 2.7x |
+
+How the time splits, using the JUnit report's own per-suite times as "running tests":
+
+- Starting Godot and the framework with a single small test file took 1.3 to 2.1 s.
+- Everything outside the suites' own time (startup, discovery, loading) was about 5 to 7 s for
+  the whole suite and about 2.5 to 3 s for a subset. So loading does shrink with the files given,
+  unlike the preloading harness above, and it is only about 4% of a whole run here.
+- The rest, about 96%, is running tests, and it is spread very unevenly: a few files that wait
+  on timers and frames hold most of it. That is why the speedup swings from 1.7x to 14.6x with
+  which files happen to be picked. A real map picks the files that reach a spot, not random ones,
+  so a project's own numbers will differ, and the implementation PR must measure on one.
+
+Both frameworks ran the files in exactly the order given, checked on every subset against the
+framework's own output and its JUnit report, in forward and reversed order. The reverse marker
+pass relies on this. (One GdUnit4 path in a subset was a base class with no tests, and was
+correctly not run as a suite.) GdUnit4's own suite has a few failing tests on this machine, which
+changes nothing about timing.
 
 ### What a marker is
 A marker is one small call inserted before each mutation spot in a throwaway copy of the project,
@@ -120,7 +155,7 @@ to track.
 | [PIT FAQ](https://pitest.org/faq/) | Its warnings list: code run once at class load, and hidden test-order dependence, both make per-test selection report wrongly. They shape the load-time rule and the order check below. | Java only. |
 | [mutmut 3](https://github.com/boxed/mutmut/blob/main/ARCHITECTURE.rst) | Recording which tests reach which code in the same pass as a normal test run. | Python only, and it records by function. gdmutant knows each mutant's exact statement, so it can record by statement. |
 | [cargo-mutants](https://mutants.rs/vs-coverage.html) | Its caution. It deliberately does not use coverage, preferring always-correct to fast. So selection stays opt-in until the evidence is in, and "off" never goes away. | Rust only. |
-| [Nano Coverage](https://github.com/IgorBayerl/nano-coverage-godot) | Its output shape: accumulate hits in an autoload and write them once at exit. Also confirmation that a GdUnit4 session hook is a workable place to plug in. | Alpha, with no prebuilt binaries. It is a native GDExtension, so each platform and Godot version needs a compiled build, and it integrates with GdUnit4 only. Its README describes line coverage, not which test reached a line. Depending on it would tie every gdmutant user to its release cycle for something a few lines of GDScript in a throwaway copy can do. |
+| [Nano Coverage](https://github.com/IgorBayerl/nano-coverage-godot) | Its output shape: accumulate hits in an autoload and write them once at exit. Also confirmation that a GdUnit4 session hook is a workable place to plug in. | Alpha, with no prebuilt binaries. It is a native GDExtension, so each platform and Godot version needs a compiled build. Besides a framework-agnostic standalone mode, GdUnit4 is its only test-framework integration so far, with GUT on its roadmap. Its README describes line coverage, not which test reached a line. Depending on it would tie every gdmutant user to its release cycle for something a few lines of GDScript in a throwaway copy can do. |
 | [GdUnit4 CLI](https://godot-gdunit-labs.github.io/gdUnit4/latest/advanced_testing/cmd/) `-c` / `--continue` | Pass it on the marker run. By default GdUnit4 stops at the first failure, which would hide how much of the suite actually ran. | Not a new dependency. GdUnit4 is already the user's framework. |
 
 One case where depending on something is clearly better: the frameworks' own event channels for
@@ -315,9 +350,9 @@ select simply does not implement them.
 - ADR-0005's exit-code contract gains the optional selection contract above and is otherwise
   unchanged.
 - ADR-0016 names this very change as its revisit trigger: selection shrinks Godot's share of each
-  mutant. The implementation PR must re-measure the engine's share. At about 3x less Godot time,
-  0.4% to 3% becomes roughly 1% to 9%, still under 0016's 10% threshold, but close enough to
-  check.
+  mutant. The implementation PR must re-measure the engine's share. At 2x to 3x less Godot time,
+  0.4% to 3% becomes roughly 1% to 9%, under 0016's 10% threshold. At the 6x seen on GdUnit4's own
+  suite it could reach about 18% on the files with the most engine time, which would cross it.
 
 ## Alternatives considered
 - Godot's debugger or profiler instead of source markers. Rejected by the spike above: nothing
@@ -338,6 +373,18 @@ select simply does not implement them.
 ## Plan
 Each step is its own PR, off `main`, in this order.
 
+0. A go or no-go gate on steps 3 and 4 only, measured before either is built: is a run on about
+   20% of the test files at least about 2x faster than the whole suite, averaged over several
+   random subsets with repeats? Steps 1 and 2 do not depend on it. An honest "no coverage"
+   verdict is worth having whatever the speed.
+   - GdUnit4 (`-a` per file): met, 6.1x mean, worst subset 3.8x. See
+     [Step 0](#step-0-what-file-subsets-actually-cost-on-gdunit4-and-gut).
+   - GUT (`-gtest=`): met, 2.7x mean. One subset of four came in at 1.7x, because it happened
+     to hold the slowest files. So step 3 goes ahead.
+   - Command runner: not measurable in general, since the gain depends on the harness. The one
+     measured harness preloads every suite, which caps it at about 2x, right at the bar. So step 4
+     waits until a harness that loads only the files it is told to run has been measured against
+     the same bar. Until then, command-runner users get "no coverage" from step 2 and nothing more.
 1. Marker placement, adapter only. Turn a source file into a marked source file and a spot table,
    following the placement table, with no engine change. Tested against real Godot: every marked
    corpus file parses, keeps its error line numbers, and every spot that can take a marker fires.
@@ -347,7 +394,8 @@ Each step is its own PR, off `main`, in this order.
 3. Selection for GdUnit4 and GUT (`--coverage-analysis per-file`). The file-window hooks, the
    file lists per runner, GUT's per-selection drop guard, the confirmation of kills, and the
    self-check.
-4. The command-runner contract: windows, the environment variables and the receipt.
+4. The command-runner contract: windows, the environment variables and the receipt. Only once
+   step 0's bar is met for a command harness.
 5. A decision on the default, in its own PR, only after steps 2 to 4 have run on real projects.
 
 ## Evidence the implementation PRs must bring
@@ -372,8 +420,10 @@ Each step is its own PR, off `main`, in this order.
 
 ## Consequences
 - A run with markers on costs two extra suite runs up front, plus a few whole-suite runs for the
-  self-check and confirmations, in exchange for about a third of the per-mutant time on a project
-  shaped like the one measured.
+  self-check and confirmations. In exchange, per-mutant time drops by a factor that depends on
+  the runner and on how test time is spread across files: about 2x at most for a harness that
+  preloads every suite, and a mean of 2.7x to 6.1x for random fifths of GUT's and GdUnit4's own
+  suites.
 - A second path to every verdict now exists. The self-check, the confirmation of kills and the
   clean-run checks are what keep the two paths agreeing, and they are part of the feature, not
   extras.
