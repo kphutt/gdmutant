@@ -33,6 +33,7 @@ import warnings
 from pathlib import Path
 
 import pytest
+import test_public_readiness
 import yaml
 
 REPO = Path(__file__).resolve().parent.parent
@@ -394,9 +395,9 @@ def _tracked_files() -> list[Path]:
     git actually tracks, so a nested copy it does not track -- ignored or merely untracked alike --
     is invisible to it, on any machine that happens to have one sitting under the tree.
 
-    Fails loudly rather than quietly scanning nothing: an empty or unreadable answer here must not
-    let the assertions below pass over zero files and call the tree clean, which is the "gate that
-    passes without checking anything" shape AGENTS.md warns about.
+    Raises `test_public_readiness._GitCannotAnswer` rather than returning nothing when git itself
+    could not be asked: "no answer" and "no files" are different facts, and only `_scan_targets`
+    below knows which of them is safe to treat as expected.
     """
     try:
         out = subprocess.run(
@@ -407,12 +408,42 @@ def _tracked_files() -> list[Path]:
             check=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as exc:
+        raise test_public_readiness._GitCannotAnswer(str(exc)) from exc
+    return [REPO / name for name in out.split("\0") if name]
+
+
+def _scan_targets() -> list[Path]:
+    """The tracked files to read, a skip where nothing is tracked for a named reason, or a
+    failure everywhere else.
+
+    Mirrors `test_public_readiness._scan_targets` exactly, because this scan and that one answer
+    the same question of a different root: is this a real checkout, or one of the copies a test
+    suite also legitimately runs from (mutmut's `mutants/`, a poodle run, an unpacked sdist)? That
+    question -- and the empty answer being expected there, not a failure -- is shared with
+    `test_public_readiness._why_this_tree_tracks_nothing`, so it is asked once, not answered twice.
+    An empty or unreadable answer everywhere else must not let the assertions below pass over zero
+    files and call the tree clean, which is the "gate that passes without checking anything" shape
+    AGENTS.md warns about.
+    """
+    reason = test_public_readiness._why_this_tree_tracks_nothing(REPO)
+    try:
+        files = _tracked_files()
+    except test_public_readiness._GitCannotAnswer as exc:
+        if reason is not None:
+            pytest.skip(f"{reason}, and git cannot answer here either ({exc})")
         pytest.fail(
             f"git could not list this tree's tracked files ({exc}), so this scan read nothing "
-            "at all. Run the suite from a git checkout."
+            "at all. It fails rather than passing: a scan that reports clean because it never ran "
+            "is the one outcome this module must never produce. Run the suite from a git checkout."
         )
-    files = [REPO / name for name in out.split("\0") if name]
-    assert files, "git tracks no files in this tree, so this scan read nothing at all"
+    if not files:
+        if reason is not None:
+            pytest.skip(f"{reason}, so git tracks nothing here and there is nothing to scan")
+        pytest.fail(
+            "git tracks no files in this tree, so this scan read nothing at all and would have "
+            "passed without seeing a byte. It fails rather than passing. Run the suite from a git "
+            "checkout."
+        )
     return files
 
 
@@ -424,7 +455,7 @@ def _files_pinning_the_action() -> set[str]:
     """Every tracked file's path (relative to `REPO`, forward-slashed) that carries a pin."""
     return {
         path.relative_to(REPO).as_posix()
-        for path in _tracked_files()
+        for path in _scan_targets()
         if _PIN.search(path.read_bytes())
     }
 
@@ -506,3 +537,47 @@ def test_a_tracked_pinning_file_not_on_the_list_still_trips_the_scan(
     # never added to PIN_FILES, rather than silently missing it: `docs/extra.md` is found, and a
     # `PIN_FILES` list that does not name it would not be a superset of `found`.
     assert not found <= {"README.md"}
+
+
+def _outcome_of_scanning() -> tuple[str, str]:
+    """What `_scan_targets` does here, as a word, plus what it said about it.
+
+    Mirrors `test_public_readiness._outcome_of_scanning`, and for the same reason: a skip raised
+    inside a test is reported as a skip rather than a failure, so asserting on a raised exception
+    directly would make this go quiet in exactly the case it exists to make noisy.
+    """
+    try:
+        _scan_targets()
+    except pytest.fail.Exception as failure:
+        return "fail", str(failure)
+    except pytest.skip.Exception as skipped:
+        return "skip", str(skipped)
+    return "scan", ""
+
+
+def test_a_mutation_tools_copy_of_the_tree_still_skips_the_pin_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact shape Litmus caught: mutmut's `mutants/` copy has no `.git` of its own, so a `git
+    ls-files` run there walks up to the enclosing real checkout and succeeds -- but answers empty,
+    because nothing under a directory the real repo itself ignores is tracked. An unconditional
+    `assert files` read that as "found nothing useful" and aborted mutmut's baseline entirely
+    (deleting the dogfood score, not lowering it) on every run, since this scan never got the
+    chance to say why. This must skip, and name the reason, instead."""
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path / "mutants")
+    monkeypatch.setattr(_MODULE, "_tracked_files", list)
+    outcome, said = _outcome_of_scanning()
+    assert (outcome, "mutmut" in said) == ("skip", True), said
+
+
+def test_a_tree_that_tracks_nothing_and_is_not_a_known_copy_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the same fix: an empty answer is only ever excused for a *named* reason.
+    An ordinary directory that merely happens to track nothing is still a broken scan -- "git said
+    nothing" is not itself a reason -- and must fail rather than quietly pass."""
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path)
+    monkeypatch.setattr(_MODULE, "_tracked_files", list)
+    outcome, said = _outcome_of_scanning()
+    assert outcome == "fail", f"an unexplained empty tree came back as {outcome!r}: {said}"
+    assert "tracks no files" in said
