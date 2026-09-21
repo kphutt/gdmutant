@@ -770,3 +770,54 @@ def test_the_heartbeat_counts_only_the_mutants_that_run(tmp_path: Path) -> None:
     beat = next(line for line in lines if " done in " in line)
     done, total = beat.split(" ")[1].split("/")
     assert done == total
+
+
+# The exact words, since a user reads them to decide what to fix.
+
+
+def test_the_missing_hits_message_in_full(tmp_path: Path) -> None:
+    path = tmp_path / "hits.json"
+    with pytest.raises(HitsUnreadable) as caught:
+        read_hits(path)
+    assert str(caught.value) == (
+        f"the recorder wrote no hits file at {path}. It writes one when the suite's Godot process "
+        "exits normally, so the run crashed, was killed, or ran a different project directory "
+        "than the marked copy it was started in (a --command that names the project by an "
+        "absolute path instead of --path . does that)"
+    )
+
+
+def test_the_unreadable_hits_message_in_full(tmp_path: Path) -> None:
+    with pytest.raises(HitsUnreadable) as caught:
+        read_hits(tmp_path)
+    assert str(caught.value).startswith(f"the hits file at {tmp_path} could not be read: ")
+
+
+def test_the_malformed_hits_message_quotes_at_most_200_characters(tmp_path: Path) -> None:
+    path = tmp_path / "hits.json"
+    path.write_text(json.dumps({"spots": "x" * 400}), encoding="utf-8")
+    with pytest.raises(HitsUnreadable) as caught:
+        read_hits(path)
+    quoted = str({"spots": "x" * 400})[:200]
+    assert str(caught.value) == (f"the hits file at {path} is not a list of spot numbers: {quoted}")
+
+
+def test_the_clean_run_messages_in_full() -> None:
+    result = SuiteResult(tests=2, failures=1, errors=0, runtime_error="SCRIPT ERROR: x")
+    assert clean_run_problems(result, 4, frozenset()) == [
+        "not every test passed in the marker run (1 failed, 0 errored), though the same suite "
+        "passed without markers",
+        "the marker run's output holds a runtime error, which aborts the function it happens in "
+        "and can make code a test reaches look unreached:\nSCRIPT ERROR: x",
+        "the marker run ran 2 tests, but the baseline ran 4",
+        "no marker recorded a single hit, so the recorder never ran. A suite that passed must "
+        "reach some of the code it tests",
+    ]
+
+
+def test_the_self_check_key_is_path_line_column_operator_replacement() -> None:
+    import hashlib
+
+    mutant = _mutant(7)
+    expected = hashlib.sha256(b"a.gd:7:1:numeric:x").hexdigest()
+    assert _sample_key("a.gd", mutant) == expected
