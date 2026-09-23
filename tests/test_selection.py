@@ -796,6 +796,28 @@ def test_the_map_carries_the_suites_own_file_list() -> None:
 # happens to be the cheapest way to hold a whole sentence against a mutation run.
 
 
+def test_the_line_that_says_the_second_pass_is_starting(tmp_path: Path) -> None:
+    """The only thing said between two passes that each take as long as the whole suite. A run
+    that goes quiet there is the shape people read as hung."""
+    lines: list[str] = []
+    _run(Lab(), tmp_path, self_check=0, progress=lines.append)
+    assert "running the suite once more, files in reverse order ..." in lines
+
+
+def test_the_refusal_names_no_files_when_the_report_named_none(tmp_path: Path) -> None:
+    """A framework can report a failure without saying which file it was in. The sentence has to
+    read as a sentence then, rather than trailing an empty bracket."""
+    lines: list[str] = []
+    _run(Lab(reverse_failures=2), tmp_path, self_check=0, progress=lines.append)
+    (said,) = [line for line in lines if "opposite order" in line]
+    assert said == (
+        "coverage: 2 tests failed when the same files ran in the opposite order, so this suite "
+        "depends on the order its files run in. Running only some of them could change a verdict, "
+        "so gdmutant will not select tests for this run. It still reports the mutants no test "
+        "reaches."
+    )
+
+
 def test_the_refusal_for_an_order_dependent_suite_in_full(tmp_path: Path) -> None:
     lines: list[str] = []
     # One failure and one error, so a message that added them and one that subtracted them
@@ -1016,6 +1038,50 @@ def test_a_set_confirmed_for_one_file_is_not_confirmed_again_for_the_next(
     assert lab.selections.count((A,)) == 6 + 1
 
 
+def test_every_files_run_carries_the_marker_runs_own_facts(tmp_path: Path) -> None:
+    """One marker run covers every file, so each file's run reports the same suite size and the
+    same count of lines the two passes disagreed about."""
+    lab = Lab(forward={A: {0}, B: {0, 1}}, reverse={B: {0, 1}, A: set()})
+    runs = _run_many(lab, tmp_path, self_check=0)
+    assert [run_.test_files for run_ in runs.values()] == [2, 2]
+    assert [run_.order_dependent for run_ in runs.values()] == [1, 1]
+
+
+def test_a_single_file_run_without_coverage_analysis_claims_no_suite_size(
+    tmp_path: Path,
+) -> None:
+    """The same rule as the many-file run below, on the entry point that has its own copy of it:
+    nothing measured the suite, so nothing may report a size for it."""
+    project = tmp_path / "project"
+    project.mkdir(parents=True)
+    target = project / "t.gd"
+    target.write_text(_SOURCE, encoding="utf-8")
+    lab = Lab()
+    lab.target = target
+    result = run(str(project), str(target), _SOURCE, lab, ADAPTER)
+    assert (result.test_files, result.order_dependent) == (0, 0)
+    assert result.coverage_analysis is False
+    assert result.order_coupled_sets == ()
+
+
+def test_a_many_file_run_without_coverage_analysis_claims_no_suite_size(tmp_path: Path) -> None:
+    """Nothing measured the suite, so nothing may report a size for it. A number here would make
+    the summary state a saving on a run that never selected anything."""
+    project = tmp_path / "project"
+    project.mkdir(parents=True)
+    sources = {}
+    for name in ("t.gd", "u.gd"):
+        target = project / name
+        target.write_text(_SOURCE, encoding="utf-8")
+        sources[str(target)] = _SOURCE
+    lab = Lab()
+    lab.target = project / "t.gd"
+    runs = run_paths(str(project), sources, lab, ADAPTER)
+    assert [run_.test_files for run_ in runs.values()] == [0, 0]
+    assert [run_.order_dependent for run_ in runs.values()] == [0, 0]
+    assert [run_.coverage_analysis for run_ in runs.values()] == [False, False]
+
+
 def test_every_files_run_carries_the_sets_that_failed_unmutated(tmp_path: Path) -> None:
     runs = _run_many(Lab(dirty={(A,)}), tmp_path, self_check=0)
     assert [run_.order_coupled for run_ in runs.values()] == [3, 3]
@@ -1046,4 +1112,5 @@ def test_the_aggregate_merges_the_coupled_sets_and_keeps_the_run_level_facts() -
 def test_the_aggregate_of_nothing_is_empty_rather_than_an_error() -> None:
     merged = aggregate_runs({}, CoverageAnalysis.OFF)
     assert (merged.outcomes, merged.test_files, merged.order_coupled_sets) == ((), 0, ())
+    assert merged.order_dependent == 0
     assert merged.coverage_analysis is False

@@ -1282,16 +1282,18 @@ def _evaluate(ctx: _Evaluation, mutant: Mutant, mutated: str, plan: MutantPlan) 
     """
     files = plan.files
     verdict = ctx.once(mutated, files)
-    coupled = False
     if (
         files is not None
         and verdict in _DETECTED
         and ctx.trust is not None
         and not ctx.trust.confirms(ctx.project_dir, files, ctx.timeout)
     ):
-        coupled = True
         files = None
         verdict = ctx.once(mutated, None)
+    # Read off what happened rather than tracked while it happened: order-coupled *is* "this
+    # mutant had its own test files and does not have them any more", and a flag set in one branch
+    # is a second place for that fact to live and disagree from.
+    coupled = plan.files is not None and files is None
     if plan.self_check and not plan.no_coverage:
         whole = verdict if files is None else ctx.once(mutated, None)
         if not (whole is verdict or (whole in _DETECTED and verdict in _DETECTED)):
