@@ -196,6 +196,23 @@ which tests ran, so a custom `--command` is refused rather than quietly run in f
 - The summary reports what the selection bought: how many mutants ran a subset, the mean share of
   the suite a mutant ran, and the order-dependent and order-coupled counts.
 
+#### Why coverage analysis is off unless you ask for it
+
+Both settings were measured on three real projects before the default was chosen, and the default
+stayed `off`. Two of the three could not run them at all: on one, a test asserts its own project's
+top-level directory list and gdmutant's recorder adds a directory to it, and on the other, tests
+produce Godot runtime errors on purpose, which the marker run refuses to trust. A third way to be
+stopped needs no unusual project at all: run gdmutant on one file whose mutants all sit on lines no
+test reaches, and no marker fires, which reads the same as a recorder that never ran. Every one of
+those refusals is a rule doing its job, and none of them is something the project did wrong.
+
+Where it does run, the two settings behave differently. `all` buys an honest verdict rather than
+speed, and it costs a marker run plus its self-check runs, so it is a small loss on wall-clock
+unless a large share of your mutants sit on lines no test reaches. `per-file` is the one that saves
+real time, and only once a run has enough mutants to pay off two marker passes and up to six
+whole-suite self-check runs. The numbers, and what would change the default, are in
+[`docs/decisions/0018`](decisions/0018-coverage-analysis-stays-off-by-default.md).
+
 The design is
 [`docs/decisions/0017`](decisions/0017-markers-for-no-coverage-and-test-selection.md).
 
@@ -308,7 +325,7 @@ none of them ever need trust.
   - `--jobs` above 1, or `--coverage-analysis all`, with a source file that does not sit inside
     `--project`
   - `--jobs` below 1
-  - `--coverage-analysis per-file`, which is not built yet
+  - `--coverage-analysis per-file` with `--runner command`
   - `--json -` and `--report step-summary` together with `$GITHUB_STEP_SUMMARY` unset: two
     documents, one stdout
   - a report file could not be written, or the source file could not be rewritten or put back
