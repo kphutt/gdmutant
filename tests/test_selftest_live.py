@@ -1392,6 +1392,46 @@ def test_a_line_reached_only_at_load_time_runs_every_test_file(tmp_path: Path, r
     assert {o.verdict for o in result.outcomes if o.mutant.span.line == 15} == {Verdict.NO_COVERAGE}
 
 
+#: A timer one test file starts and never waits for, whose callback therefore fires while some
+#: *other* file is running. Nothing asserts `ticks`, on purpose: this fixture is about which file
+#: the hit is credited to, and a test that also checked the value would make the suite depend on
+#: the order its files run in, which is a different rule with a different answer.
+_CROSSING = """class_name Crossing
+extends RefCounted
+
+static var ticks := 0
+
+
+static func start_timer() -> void:
+\tvar tree := Engine.get_main_loop() as SceneTree
+\ttree.create_timer(0.3).timeout.connect(_tick)
+
+
+static func started() -> bool:
+\treturn ticks >= 0
+
+
+static func _tick() -> void:
+\tticks = 3
+"""
+
+
+def _crossing_tests(framework: str) -> dict[str, str]:
+    """One file that starts the timer, and one that runs long enough for it to fire."""
+    if framework == "gdunit4":
+        folder = "cross_test"
+        starts = "\tCrossing.start_timer()\n\tassert_bool(Crossing.started()).is_true()"
+        waits = "\tawait get_tree().create_timer(0.5).timeout\n\tassert_bool(true).is_true()"
+    else:
+        folder = "cross_gut"
+        starts = "\tCrossing.start_timer()\n\tassert_true(Crossing.started())"
+        waits = "\tawait wait_seconds(0.5)\n\tassert_true(true)"
+    return {
+        f"{folder}/test_a_starts.gd": _suite(framework, "starts_a_timer", starts),
+        f"{folder}/test_b_waits.gd": _suite(framework, "waits", waits),
+    }
+
+
 @pytest.mark.parametrize("runner", ["gdunit4", "gut"])
 def test_deferred_code_that_crosses_test_files_runs_every_test_file(
     tmp_path: Path, runner: str
@@ -1399,22 +1439,26 @@ def test_deferred_code_that_crosses_test_files_runs_every_test_file(
     """The reverse pass earning its keep.
 
     A timer one file starts and never waits for fires while a *later* file is running, so the
-    forward pass credits it to that later file. Running the files backwards makes "later" a
-    different file, the two passes disagree, and the line runs everything instead of running the
-    one file that happened to be on screen when the timer went off.
+    forward pass credits the line it sets to that later file, which cannot possibly kill a mutant
+    there. Running the files backwards makes "later" a different file, or no file at all, so the
+    two passes cannot agree and the line runs every test instead.
     """
     _skip_without(runner)
-    tests = _DEFERRED_GDUNIT if runner == "gdunit4" else _DEFERRED_GUT
+    tests = _crossing_tests(runner)
     test_dir = "res://" + next(iter(tests)).split("/")[0]
-    project = _coverage_project(tmp_path, f"cross-{runner}", {"deferred.gd": _DEFERRED, **tests})
-    result = _per_file_run(project, runner, test_dir, self_check=0, target="deferred.gd")
-    # `ticks = 3`, set by the timer's callback, is the line the two passes cannot agree on.
-    crossing = [o for o in result.outcomes if o.mutant.span.line == 22]
-    assert crossing, "the fixture no longer has a line set from a timer callback"
-    assert {o.selected for o in crossing} == {None}
-    assert result.order_dependent >= 1
-    # And it is still killed, which is the whole point of not trusting the credit.
-    assert {o.verdict for o in crossing} == {Verdict.KILLED}
+    project = _coverage_project(tmp_path, f"cross-{runner}", {"crossing.gd": _CROSSING, **tests})
+    result = _per_file_run(project, runner, test_dir, self_check=0, target="crossing.gd")
+    by_line: dict[int, set[int | None]] = {}
+    verdicts: dict[int, set[Verdict]] = {}
+    for outcome in result.outcomes:
+        by_line.setdefault(outcome.mutant.span.line, set()).add(outcome.selected)
+        verdicts.setdefault(outcome.mutant.span.line, set()).add(outcome.verdict)
+    # `ticks = 3`, set from the timer's callback, is the line no single file can be credited with.
+    assert by_line[18] == {None}
+    assert Verdict.NO_COVERAGE not in verdicts[18], "a line a timer really reaches is not unreached"
+    # Not vacuous: the timer's own line is reached inside one file's window and is selected, so
+    # this project does select, and the crossing line is specifically the one it will not.
+    assert by_line[9] == {1}
 
 
 #: Shared state two suites can seed and a third can depend on.
@@ -1505,16 +1549,21 @@ def test_a_suite_that_depends_on_file_order_refuses_selection_and_keeps_no_cover
 
 
 class _Blindfolded:
-    """Wraps the real marker, then blinds the recorder to one test file: every hit made while that
-    file is running is dropped instead of credited to it.
+    """Wraps the real marker, then makes the recorder credit one test file's hits to another.
 
     That is the ADR's "a dropped credit", in the one direction that matters. The file still runs,
-    still passes and still opens its window, so nothing about the marker run looks wrong. The only
-    consequence is that the mutants that file alone could kill stop being run against it."""
+    still passes and still opens its window, so nothing about the marker run looks wrong: the suite
+    is green, the windows are all there, the hits file is written. The only consequence is that the
+    mutants that file alone could kill are run against a file that cannot kill them.
 
-    def __init__(self, blind_to: str) -> None:
+    Mis-crediting rather than simply dropping is the point. A dropped hit makes the line look
+    unreached, which the "no coverage" half of the self-check already catches. This is the half
+    that only step 3 needs: a line that really is reached, run against the wrong tests."""
+
+    def __init__(self, blind_to: str, credit_to: str) -> None:
         self.inner = GDScriptMarker(godot=_GODOT_EXE)
         self.blind_to = blind_to
+        self.credit_to = credit_to
 
     def mark(self, copy_dir: str, files: Any) -> MarkedCopy:
         marks = Path(copy_dir) / RECORDER_DIR / "marks.gd"
@@ -1523,11 +1572,20 @@ class _Blindfolded:
         broken = text.replace(
             "static func _record(spot: int) -> void:\n\tlast[spot] = window",
             "static func _record(spot: int) -> void:\n"
-            f'\tif window.ends_with("{self.blind_to}"):\n'
-            "\t\treturn\n"
-            "\tlast[spot] = window",
+            "\tvar credited := window\n"
+            f'\tif credited.ends_with("{self.blind_to}"):\n'
+            f'\t\tcredited = "{self.credit_to}"\n'
+            "\tlast[spot] = credited",
+        ).replace(
+            "\tif not windows.has(window):\n"
+            "\t\twindows[window] = {}\n"
+            "\twindows[window][spot] = true",
+            "\tif not windows.has(credited):\n"
+            "\t\twindows[credited] = {}\n"
+            "\twindows[credited][spot] = true",
         )
-        assert broken != text, "the recorder no longer has the shape this sabotage edits"
+        assert "credited" in broken, "the recorder no longer has the shape this sabotage edits"
+        assert "windows[window][spot]" not in broken
         marks.write_text(broken, encoding="utf-8", newline="\n")
         return marked
 
@@ -1553,7 +1611,7 @@ def test_a_map_that_drops_the_file_that_kills_a_mutant_is_caught_loudly(
             _live_runner(runner, test_dir),
             ADAPTER,
             coverage=CoverageAnalysis.PER_FILE,
-            marker=_Blindfolded("test_earlier.gd"),
+            marker=_Blindfolded("test_earlier.gd", f"{test_dir}/test_under.gd"),
             self_check=None,
         )
     assert "gave 'survived'" in str(caught.value)
