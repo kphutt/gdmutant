@@ -653,6 +653,9 @@ def test_a_suite_the_report_does_not_name_gets_an_empty_name(
         ("test/v1.gd_legacy/test_x.gd", "res://test/v1.gd_legacy/test_x.gd"),
         ("test/v1.gd_legacy/test_x.gd.TestThing", "res://test/v1.gd_legacy/test_x.gd"),
         # And one that really is a directory called `x.gd`, which is legal if unlikely.
+        # This one holds the separator twice, so reading it from the left and from the right
+        # disagree, which is what the first-occurrence bug actually was.
+        ("test/x.gd.old/test_y.gd.TestThing", "res://test/x.gd.old/test_y.gd"),
         ("test/x.gd/test_y.gd.TestThing", "res://test/x.gd/test_y.gd"),
     ],
 )
@@ -661,6 +664,20 @@ def test_which_file_a_report_name_belongs_to(reported: str, file: str) -> None:
     that directory would be filed as one no selection ever asks for, which makes the drop guard
     quietly more forgiving there rather than louder."""
     assert runner_mod._tests_per_file([ReportedSuite(reported, 2)]) == {file: 2}
+
+
+def test_a_files_suites_are_counted_together_not_overwritten() -> None:
+    """A file's tests are the sum of every suite the report files under it. Keeping only the last
+    one would make the drop guard expect fewer tests than the file really has, and read the rest as
+    a suite GUT had skipped."""
+    assert runner_mod._tests_per_file(
+        [
+            ReportedSuite("test/unit/a.gd", 3),
+            ReportedSuite("test/unit/a.gd.One", 2),
+            ReportedSuite("test/unit/a.gd.Two", 4),
+            ReportedSuite("test/unit/b.gd", 1),
+        ]
+    ) == {"res://test/unit/a.gd": 9, "res://test/unit/b.gd": 1}
 
 
 def test_a_report_name_that_is_not_a_gdscript_path_is_left_alone(

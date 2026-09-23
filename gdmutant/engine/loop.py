@@ -1100,9 +1100,9 @@ def _mutate_file(
     is_last_file: bool = True,
     mutants: list[Mutant] | None,
     coverage: _FileCoverage | None,
-    trust: _Trust | None = None,
-    test_files: int = 0,
-    order_dependent: int = 0,
+    trust: _Trust | None,
+    test_files: int,
+    order_dependent: int,
 ) -> MutationRun:
     """Generate and run every mutant for a single file (the baseline is assumed already green). The
     file at `path` must hold `source`; it is restored before returning. `jobs > 1` evaluates mutants

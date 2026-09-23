@@ -42,7 +42,7 @@ from gdmutant.engine.loop import (
 )
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.report import console_summary
-from gdmutant.engine.runner import ReportedSuite, SuiteResult
+from gdmutant.engine.runner import ReportedSuite, SuiteResult, SuiteTimeout
 from gdmutant.engine.spans import Span
 
 A = "res://t/a.gd"
@@ -112,8 +112,12 @@ def test_a_malformed_window_section_is_unreadable(
 
 
 def test_a_hits_file_that_is_not_an_object_is_unreadable(tmp_path: Path) -> None:
-    with pytest.raises(HitsUnreadable, match="is not a JSON object"):
-        read_hits(_write(tmp_path, [1, 2]))
+    path = _write(tmp_path, [1, 2])
+    with pytest.raises(HitsUnreadable) as caught:
+        read_hits(path)
+    # In full, and quoting the file rather than the word "None": what is in there is the only
+    # thing that tells a reader which run wrote it.
+    assert str(caught.value) == f"the hits file at {path} is not a JSON object: [1, 2]"
 
 
 def test_windows_and_opened_default_to_nothing_rather_than_to_no_value(tmp_path: Path) -> None:
@@ -356,19 +360,23 @@ class Lab:
     killers: dict[str, str] = field(default_factory=lambda: {_KILL_5: A, _KILL_9: B})
     dirty: set[tuple[str, ...]] = field(default_factory=set)
     reverse_failures: int = 0
+    reverse_errors: int = 0
     reverse_suites: tuple[ReportedSuite, ...] | None = None
     reverse_missing: set[str] = field(default_factory=set)
     spots: dict[int, int] = field(default_factory=lambda: {5: 0, 9: 1})
     baseline_tests: int = 4
     target: Path | None = None
     hits_path: Path | None = None
+    copy: Path | None = None
     windows_installed: list[str] = field(default_factory=list)
     marker_files: list[tuple[str, ...]] = field(default_factory=list)
     selections: list[tuple[str, ...] | None] = field(default_factory=list)
+    timeouts: list[float | None] = field(default_factory=list)
     started: bool = False
 
     # -- the marker half
     def mark(self, copy_dir: str, files: Mapping[str, tuple[str, Sequence[Mutant]]]) -> MarkedCopy:
+        self.copy = Path(copy_dir)
         recorder = Path(copy_dir) / "_rec"
         recorder.mkdir()
         self.hits_path = recorder / "hits.json"
@@ -382,6 +390,10 @@ class Lab:
         )
 
     def install_windows(self, project_dir: str, recorder_dir: str) -> None:
+        # The hook has to go into the copy that was marked, not somewhere near it. A real runner
+        # writes a file there, so a wrong directory is a hook that never loads and a map with no
+        # windows in it at all.
+        assert Path(project_dir) == self.copy, project_dir
         self.windows_installed.append(recorder_dir)
 
     def _record(self, windows: dict[str, set[int]]) -> None:
@@ -405,12 +417,14 @@ class Lab:
         return tuple(ReportedSuite(name, 2) for name in self.forward)
 
     def run_markers(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        assert Path(project_dir) == self.copy, project_dir
         self._record(self.forward)
         return SuiteResult(self.baseline_tests, 0, 0, suites=self._suites())
 
     def run_markers_files(
         self, project_dir: str, files: Sequence[str], timeout: float | None = None
     ) -> SuiteResult:
+        assert Path(project_dir) == self.copy, project_dir
         self.marker_files.append(tuple(files))
         # A real framework runs the files in the order it is given them, so the windows open in
         # that order too. `reverse_missing` is how a test makes one file's window go missing.
@@ -419,7 +433,9 @@ class Lab:
             {name: windows.get(name, set()) for name in files if name not in self.reverse_missing}
         )
         suites = self.reverse_suites if self.reverse_suites is not None else self._suites()
-        return SuiteResult(self.baseline_tests, self.reverse_failures, 0, suites=suites)
+        return SuiteResult(
+            self.baseline_tests, self.reverse_failures, self.reverse_errors, suites=suites
+        )
 
     # -- the runner half
     def _verdict(self, project_dir: str, ran: Sequence[str]) -> SuiteResult:
@@ -442,6 +458,7 @@ class Lab:
         self, project_dir: str, files: Sequence[str], timeout: float | None = None
     ) -> SuiteResult:
         self.selections.append(tuple(files))
+        self.timeouts.append(timeout)
         return self._verdict(project_dir, files)
 
 
@@ -765,3 +782,186 @@ def test_an_empty_map_is_an_empty_map_and_says_so() -> None:
 def test_the_map_carries_the_suites_own_file_list() -> None:
     built = CoverageMap(files={}, order_dependent=frozenset(), test_files=(A, B))
     assert built.test_files == (A, B)
+
+
+# --- what the run is told, word for word --------------------------------------------------------
+#
+# A message a run stops on, or changes what it does on, is read by a person deciding what to fix,
+# so each one is pinned whole rather than by a phrase out of it. One assertion per message also
+# happens to be the cheapest way to hold a whole sentence against a mutation run.
+
+
+def test_the_refusal_for_an_order_dependent_suite_in_full(tmp_path: Path) -> None:
+    lines: list[str] = []
+    # One failure and one error, so a message that added them and one that subtracted them
+    # cannot both read as 2.
+    lab = Lab(
+        reverse_failures=1,
+        reverse_errors=1,
+        reverse_suites=(ReportedSuite(B, 2, failures=1), ReportedSuite(A, 2, errors=1)),
+    )
+    _run(lab, tmp_path, self_check=0, progress=lines.append)
+    (said,) = [line for line in lines if "opposite order" in line]
+    assert said == (
+        f"coverage: 2 tests failed when the same files ran in the opposite order ({A}, {B}), so "
+        "this suite depends on the order its files run in. Running only some of them could change "
+        "a verdict, so gdmutant will not select tests for this run. It still reports the mutants "
+        "no test reaches."
+    )
+
+
+def test_the_refusal_for_a_runner_that_ignores_the_list_in_full(tmp_path: Path) -> None:
+    lines: list[str] = []
+    _run(_stubborn(), tmp_path, self_check=0, progress=lines.append)
+    (said,) = [line for line in lines if "does not run only" in line]
+    assert said == (
+        "coverage: the runner was asked for 2 test files in a set order and ran 2 in another, so "
+        "it does not run only the test files it is given. Running fewer tests for a mutant would "
+        "change nothing, so gdmutant will not select tests for this run. It still reports the "
+        "mutants no test reaches. A test framework that reads its own configuration file is the "
+        "usual cause: check whether it names test directories of its own there."
+    )
+
+
+def test_what_the_map_bought_in_full(tmp_path: Path) -> None:
+    lines: list[str] = []
+    _run(Lab(forward={A: {0}, B: set()}), tmp_path, self_check=1, progress=lines.append)
+    (said,) = [line for line in lines if line.startswith("coverage: ")]
+    assert said == (
+        "coverage: 3 of 6 mutants sit where no test reaches, so they need no run. 3 run only the "
+        "test files that reach them, out of 2, and 0 run the whole suite (0 marked lines were "
+        "reached differently in the two passes). The self-check runs 2 of them against the whole "
+        "suite anyway."
+    )
+
+
+def test_the_self_checks_disagreement_message_in_full(tmp_path: Path) -> None:
+    lab = Lab(forward={A: {1}, B: {0}})  # both spots credited to the wrong file
+    with pytest.raises(CoverageSelfCheckFailed) as caught:
+        _run(lab, tmp_path, self_check=None)
+    assert str(caught.value).endswith(
+        " against the 1 test files the marker run said reach it gave 'survived', but running it "
+        "against the whole suite gave 'killed'. Some test that can tell the difference is not in "
+        "the map, so no selected verdict in this run can be trusted. Turn coverage analysis off "
+        "(--coverage-analysis off), or use --coverage-analysis all, to run without it."
+    )
+    assert str(caught.value).startswith("the coverage self-check failed: running ")
+
+
+def test_which_pass_a_marker_run_failed_in_is_named(tmp_path: Path) -> None:
+    """Two passes, two chances to fail, and a message that does not say which one is a message
+    that sends a reader to read the wrong half of the run."""
+    forward = Lab(forward={}, load_time={0, 1})
+    with pytest.raises(CoverageRunFailed) as first:
+        _run(forward, tmp_path / "forward", self_check=0)
+    assert "not clean (forward pass)" in str(first.value)
+
+    class Broken(Lab):
+        def run_markers_files(
+            self, project_dir: str, files: Sequence[str], timeout: float | None = None
+        ) -> SuiteResult:
+            raise RuntimeError("Godot fell over")
+
+    with pytest.raises(CoverageRunFailed) as second:
+        _run(Broken(), tmp_path / "reverse", self_check=0)
+    assert str(second.value).startswith(
+        "the coverage marker run could not run the suite (reverse pass): Godot fell over"
+    )
+
+
+# --- what a selected run is handed --------------------------------------------------------------
+
+
+def test_a_selected_run_gets_the_per_mutant_budget(tmp_path: Path) -> None:
+    """The budget is derived from the baseline and scaled for the workers, so a selected run that
+    fell back to the runner's own default would call a hang a pass."""
+    lab = Lab()
+    _run(lab, tmp_path, self_check=0, timeout=12.5)
+    assert lab.timeouts
+    assert set(lab.timeouts) == {12.5}
+
+
+def test_the_marked_copy_is_what_the_hook_and_both_passes_are_pointed_at(tmp_path: Path) -> None:
+    """The fake asserts it on every call; this is the test that says so out loud, and that fails
+    if any of those calls ever stops being made."""
+    lab = Lab()
+    _run(lab, tmp_path, self_check=0)
+    assert lab.copy is not None
+    assert lab.windows_installed == ["_rec"]
+    assert lab.marker_files == [(B, A)]
+
+
+# --- the verdict a selected mutant ends up with -------------------------------------------------
+
+
+def test_a_hang_under_selection_and_a_kill_from_the_whole_suite_are_one_answer(
+    tmp_path: Path,
+) -> None:
+    """Killed and timeout both mean a test caught it, and a smaller set of files can legitimately
+    turn a hang into a plain failure. The self-check must not call that a disagreement."""
+
+    class Hangs(Lab):
+        def run_selected(
+            self, project_dir: str, files: Sequence[str], timeout: float | None = None
+        ) -> SuiteResult:
+            result = super().run_selected(project_dir, files, timeout)
+            if result.failed:
+                raise SuiteTimeout("the selected files hung")
+            return result
+
+    result = _run(Hangs(), tmp_path, self_check=None)
+    assert result.outcomes[0].verdict is Verdict.TIMEOUT
+    assert result.outcomes[0].self_checked
+
+
+def test_a_self_checked_mutant_keeps_its_own_identity_and_its_file_count(tmp_path: Path) -> None:
+    result = _run(Lab(), tmp_path, self_check=None)
+    assert [o.mutant for o in result.outcomes] == [o.mutant for o in result.outcomes if o.mutant]
+    assert result.selected == 6  # every one of them ran one file, self-checked or not
+    assert {o.selected for o in result.outcomes} == {1}
+
+
+def test_an_order_coupled_kill_stays_order_coupled_when_the_self_check_reruns_it(
+    tmp_path: Path,
+) -> None:
+    """The two paths meet here: a mutant can be both, and the self-check's whole-suite run must not
+    quietly drop what the confirmation found."""
+    result = _run(Lab(dirty={(A,)}), tmp_path, self_check=None)
+    assert result.order_coupled == 3
+    assert {o.selected for o in result.outcomes if o.order_coupled} == {None}
+
+
+def test_the_sets_that_failed_unmutated_reach_the_run(tmp_path: Path) -> None:
+    result = _run(Lab(dirty={(A,)}), tmp_path, self_check=0)
+    assert result.order_coupled_sets == ((A,),)
+
+
+def test_a_kill_is_confirmed_on_the_parallel_path_too(tmp_path: Path) -> None:
+    """``--jobs`` workers share one cache of confirmed sets, so the confirmation has to reach them
+    at all. A worker that never got it would believe a kill its own files cannot be trusted for."""
+    result = _run(Lab(dirty={(A,)}), tmp_path, self_check=0, jobs=2)
+    assert result.order_coupled == 3
+    assert result.order_coupled_sets == ((A,),)
+
+
+# --- what the plan says about mutants after the first unreached one -----------------------------
+
+
+def test_an_unreached_mutant_does_not_stop_the_ones_after_it_being_selected(
+    tmp_path: Path,
+) -> None:
+    """The first mutants of the file are the unreached ones here, so a scan that stopped at one
+    would leave everything after it running the whole suite while the summary said otherwise."""
+    lab = Lab(forward={A: set(), B: {1}}, killers={_KILL_9: B})
+    result = _run(lab, tmp_path, self_check=0, progress=None)
+    assert result.no_coverage == 3  # the three line-5 mutants
+    assert result.selected == 3  # and the three line-9 ones still ran only b.gd
+    assert lab.selections.count((B,)) == 3 + 1  # three runs plus the one confirmation
+
+
+def test_a_refused_selection_reports_no_order_dependent_lines(tmp_path: Path) -> None:
+    """There is no map to have disagreed about anything, so the count is zero rather than a
+    leftover from a map that was never built."""
+    result = _run(Lab(reverse_failures=1), tmp_path, self_check=0)
+    assert result.order_dependent == 0
+    assert result.test_files == 0

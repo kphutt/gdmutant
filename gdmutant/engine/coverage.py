@@ -187,14 +187,15 @@ def read_hits(path: Path) -> Hits:
             f"the hits file at {path} does not list the test files that ran: "
             f"{str(opened)[:_QUOTED]}"
         )
+    # Named once and passed twice, as the value to read and the value to quote back if it cannot
+    # be read. Written out twice, the two copies could drift into disagreeing about what went
+    # wrong with what.
+    raw_load_time = raw_windows.get(LOAD_TIME, [])
     return Hits(
         spots=spots,
         windows=windows,
         load_time=_spot_list(
-            raw_windows.get(LOAD_TIME, []),
-            path,
-            "records a bad load-time spot list",
-            raw_windows.get(LOAD_TIME, []),
+            raw_load_time, path, "records a bad load-time spot list", raw_load_time
         ),
         opened=tuple(opened),
     )
