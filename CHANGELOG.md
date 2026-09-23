@@ -24,8 +24,10 @@ All notable changes to gdmutant are recorded here. The format follows
   need different fixes. The marker run must be clean or the run stops and says why: every test
   passes, no `SCRIPT ERROR` anywhere, the markers' record exists and holds at least one hit, and
   the test count matches the unmarked run. A few `no coverage` mutants are also run for real as a
-  check on every run, and a disagreement stops the run. It is off by default. It works with all
-  three runners, and needs `--godot` even with `--runner command`.
+  check on every run, and a disagreement stops the run. It is off by default, and stays off: all
+  three settings were measured on three real projects first, and the guide's "Why coverage analysis
+  is off unless you ask for it" says what that found. It works with all three runners, and needs
+  `--godot` even with `--runner command`.
 - `--coverage-analysis per-file`, which does all of that and then runs each remaining mutant
   against only the test files that reach it. This is the setting that saves time. The marker run
   becomes two passes, the suite forwards and then the same test files in the opposite order, and a
