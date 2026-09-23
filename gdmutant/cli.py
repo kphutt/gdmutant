@@ -1560,6 +1560,20 @@ def _write_init_config(directory: Path | None = None, *, force: bool = False) ->
     return 0
 
 
+#: Every one of these is a `run` flag's default, named once so `build_parser`'s
+#: `add_argument(default=...)` and `main`'s `--dry-run` "ignored flags" note (hundreds of lines
+#: apart) read the same value instead of each spelling out the same literal on its own, which
+#: could silently drift apart. This is a plain value, never derived from a live `ArgumentParser`
+#: (e.g. `parser.get_default(...)`): `main()` can reparse `args` from a second, config-seeded
+#: `build_parser(config)` call without reassigning `parser` (the `--trust-config` path), so a
+#: parser-derived default could read a stale value for a trust-required key. `--godot` is one
+#: (see `_TRUST_REQUIRED_CONFIG_KEYS`); a plain constant, unlike a config value, cannot go stale.
+_COVERAGE_ANALYSIS_DEFAULT = CoverageAnalysis.OFF.value
+_GODOT_DEFAULT = "godot"
+_TESTS_DEFAULT = "res://test"
+_PROGRESS_DEFAULT = "auto"
+
+
 def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentParser:
     """Build the `run`/`example`/`init` subcommand parser, seeding `run`'s flag defaults from
     `config` (an already-validated `.gdmutant.toml`, or `None`) so an explicit CLI flag still
@@ -1599,12 +1613,12 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "'godot --headless --script res://tests/run_tests.gd'",
     )
     run_parser.add_argument(
-        "--godot", default="godot", help="the Godot executable (default: godot)"
+        "--godot", default=_GODOT_DEFAULT, help="the Godot executable (default: godot)"
     )
     run_parser.add_argument(
         "--progress",
         choices=("auto", "plain", "none"),
-        default="auto",
+        default=_PROGRESS_DEFAULT,
         dest="progress_style",
         help="how much the run says about itself while it works: auto (a heartbeat every 3s on a "
         "terminal, rarer in a log or CI), plain (the rarer cadence always), or none (nothing at "
@@ -1614,7 +1628,7 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     )
     run_parser.add_argument(
         "--tests",
-        default="res://test",
+        default=_TESTS_DEFAULT,
         help="the test directory (gdunit4's -a / gut's -gdir) (default: res://test)",
     )
     run_parser.add_argument(
@@ -1703,7 +1717,7 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     run_parser.add_argument(
         "--coverage-analysis",
         choices=tuple(mode.value for mode in CoverageAnalysis),
-        default=CoverageAnalysis.OFF.value,
+        default=_COVERAGE_ANALYSIS_DEFAULT,
         help="find which tests reach each mutant before running any: off (default: every mutant "
         "runs the whole suite), all (run the suite once on a marked copy of the project, and "
         "report a mutant whose line no test reached as 'no coverage' without running it. It is "
@@ -1933,15 +1947,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                     # suite, so it never needs to know which one).
                     ("--runner", args.runner, None),
                     ("--command", args.test_command, None),
-                    ("--godot", args.godot, "godot"),
-                    ("--tests", args.tests, "res://test"),
+                    ("--godot", args.godot, _GODOT_DEFAULT),
+                    ("--tests", args.tests, _TESTS_DEFAULT),
                     ("--timeout", args.timeout, None),
                     ("--require-clean", args.require_clean, False),
                     ("--json", args.json_path, None),
                     ("--html", args.html_path, None),
                     ("--report", args.report, None),
-                    ("--progress", args.progress_style, "auto"),
-                    ("--coverage-analysis", args.coverage_analysis, "off"),
+                    ("--progress", args.progress_style, _PROGRESS_DEFAULT),
+                    ("--coverage-analysis", args.coverage_analysis, _COVERAGE_ANALYSIS_DEFAULT),
                     ("--coverage-self-check", args.coverage_self_check, str(SELF_CHECK_SAMPLE)),
                 )
                 if value != default
