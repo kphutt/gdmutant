@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from gdmutant.adapters.gdscript import ADAPTER
+from gdmutant.cli import aggregate_runs
 from gdmutant.engine.coverage import (
     RUN_EVERYTHING,
     CoverageAnalysis,
@@ -39,6 +40,7 @@ from gdmutant.engine.loop import (
     Verdict,
     _Trust,
     run,
+    run_paths,
 )
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.report import console_summary
@@ -439,9 +441,12 @@ class Lab:
 
     # -- the runner half
     def _verdict(self, project_dir: str, ran: Sequence[str]) -> SuiteResult:
-        # The file inside the directory the runner was pointed at, so a ``--jobs`` worker's own
-        # copy is what decides its own mutants, exactly as a real runner would see it.
-        text = (Path(project_dir) / "t.gd").read_text(encoding="utf-8")
+        # Every source inside the directory the runner was pointed at, so a ``--jobs`` worker's own
+        # copy is what decides its own mutants, exactly as a real runner would see it, and a run
+        # over several files sees whichever one currently holds a mutant.
+        text = "".join(
+            source.read_text(encoding="utf-8") for source in sorted(Path(project_dir).glob("*.gd"))
+        )
         failures = sum(1 for kill, where in self.killers.items() if kill in text and where in ran)
         if tuple(ran) in self.dirty:
             failures += 1
@@ -965,3 +970,80 @@ def test_a_refused_selection_reports_no_order_dependent_lines(tmp_path: Path) ->
     result = _run(Lab(reverse_failures=1), tmp_path, self_check=0)
     assert result.order_dependent == 0
     assert result.test_files == 0
+
+
+# --- the many-file entry point ------------------------------------------------------------------
+
+
+def _run_many(lab: Lab, tmp_path: Path, **kwargs: object) -> dict[str, MutationRun]:
+    """`run_paths` over two files of the same shape, with selection on."""
+    project = tmp_path / "project"
+    project.mkdir(parents=True)
+    sources = {}
+    for name in ("t.gd", "u.gd"):
+        target = project / name
+        target.write_text(_SOURCE, encoding="utf-8")
+        sources[str(target)] = _SOURCE
+    lab.target = project / "t.gd"
+    return run_paths(
+        str(project),
+        sources,
+        lab,
+        ADAPTER,
+        coverage=CoverageAnalysis.PER_FILE,
+        marker=lab,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def test_a_many_file_run_selects_for_every_file(tmp_path: Path) -> None:
+    lab = Lab()
+    runs = _run_many(lab, tmp_path, self_check=0)
+    assert len(runs) == 2
+    for run_ in runs.values():
+        assert run_.test_files == 2
+        assert run_.selected == 6  # every mutant of every file ran one test file
+
+
+def test_a_set_confirmed_for_one_file_is_not_confirmed_again_for_the_next(
+    tmp_path: Path,
+) -> None:
+    """The confirmation is a whole extra suite run, and a set that passed unmutated while the first
+    file's mutants ran has not changed by the time the second file's do."""
+    lab = Lab()
+    _run_many(lab, tmp_path, self_check=0)
+    # Two files, three line-5 mutants each against a.gd, and a.gd confirmed once between them.
+    assert lab.selections.count((A,)) == 6 + 1
+
+
+def test_every_files_run_carries_the_sets_that_failed_unmutated(tmp_path: Path) -> None:
+    runs = _run_many(Lab(dirty={(A,)}), tmp_path, self_check=0)
+    assert [run_.order_coupled for run_ in runs.values()] == [3, 3]
+    assert list(runs.values())[-1].order_coupled_sets == ((A,),)
+
+
+# --- what the aggregate report is built from ----------------------------------------------------
+
+
+def _run_with(**kwargs: object) -> MutationRun:
+    return MutationRun((_outcome(Verdict.KILLED, 1),), coverage_analysis=True, **kwargs)  # type: ignore[arg-type]
+
+
+def test_the_aggregate_merges_the_coupled_sets_and_keeps_the_run_level_facts() -> None:
+    """The marker run covers every file at once, so the file counts are the same on each run and
+    the first one has them. The coupled sets are found as the run goes, so they are not."""
+    runs = {
+        "a.gd": _run_with(test_files=7, order_dependent=2, order_coupled_sets=((A,),)),
+        "b.gd": _run_with(test_files=7, order_dependent=2, order_coupled_sets=((A,), (B,))),
+    }
+    merged = aggregate_runs(runs, CoverageAnalysis.PER_FILE)
+    assert merged.test_files == 7
+    assert merged.order_dependent == 2
+    assert merged.order_coupled_sets == ((A,), (B,))
+    assert len(merged.outcomes) == 2
+
+
+def test_the_aggregate_of_nothing_is_empty_rather_than_an_error() -> None:
+    merged = aggregate_runs({}, CoverageAnalysis.OFF)
+    assert (merged.outcomes, merged.test_files, merged.order_coupled_sets) == ((), 0, ())
+    assert merged.coverage_analysis is False

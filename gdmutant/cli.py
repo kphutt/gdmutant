@@ -1223,6 +1223,26 @@ def _no_changes_report(
     return _write_reports(stryker, json_path, html_path, project_dir)
 
 
+def aggregate_runs(runs: dict[str, MutationRun], coverage: CoverageAnalysis) -> MutationRun:
+    """Every file's outcomes as one run, carrying the run-level facts coverage analysis produced.
+
+    Two rules, and they differ. `test_files` and `order_dependent` come from the marker run, which
+    covers every file at once, so each per-file run already holds the same pair and the first one
+    has it. The order-coupled sets do not: they are found as the mutants run, so an early file's
+    run has seen fewer of them than a late one, and the aggregate is their union in the order they
+    were first found.
+    """
+    first = next(iter(runs.values()), None)
+    coupled = dict.fromkeys(files for run in runs.values() for files in run.order_coupled_sets)
+    return MutationRun(
+        tuple(outcome for run in runs.values() for outcome in run.outcomes),
+        coverage_analysis=coverage is not CoverageAnalysis.OFF,
+        test_files=first.test_files if first is not None else 0,
+        order_dependent=first.order_dependent if first is not None else 0,
+        order_coupled_sets=tuple(coupled),
+    )
+
+
 def run_mutation_paths(
     source_paths: list[str],
     project_dir: str,
@@ -1300,20 +1320,7 @@ def run_mutation_paths(
     print("", file=out)
     # Survivors carry their own path, so one aggregate summary lists them per file with the overall
     # score across every file's mutants.
-    # The marker run covers every file at once, so its run-level facts are the same on every
-    # per-file `MutationRun`. Taking them from the first keeps the aggregate reporting the run's
-    # own numbers rather than zeroes.
-    first = next(iter(runs.values()), None)
-    # The coupled sets are the exception: they are found as the run goes, so an early file's run
-    # has seen fewer of them than a late one. Merge them, keeping the order they were found in.
-    coupled = dict.fromkeys(files for r in runs.values() for files in r.order_coupled_sets)
-    aggregate = MutationRun(
-        tuple(o for r in runs.values() for o in r.outcomes),
-        coverage_analysis=coverage is not CoverageAnalysis.OFF,
-        test_files=first.test_files if first is not None else 0,
-        order_dependent=first.order_dependent if first is not None else 0,
-        order_coupled_sets=tuple(coupled),
-    )
+    aggregate = aggregate_runs(runs, coverage)
     print(console_summary(aggregate), file=out)
     # Across every file: baseline passed but nothing was detected — usually the test command never
     # exercised the mutated files, not a suite that catches nothing (stderr, score/exit unchanged).
