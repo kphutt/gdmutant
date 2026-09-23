@@ -16,7 +16,7 @@ import pytest
 from gdmutant import cli
 from gdmutant.adapters.gdscript.marker_run import GDScriptMarker
 from gdmutant.cli import main
-from gdmutant.engine.coverage import CoverageAnalysis
+from gdmutant.engine.coverage import SELF_CHECK_SAMPLE, CoverageAnalysis
 from gdmutant.engine.htmlreport import render_html, report_view
 from gdmutant.engine.loop import CoverageRunFailed, MutantOutcome, MutationRun, Verdict
 from gdmutant.engine.mutants import Mutant
@@ -250,6 +250,32 @@ def test_per_file_reaches_the_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     argv = ["run", str(_gd(tmp_path)), "--project", str(tmp_path), "--runner", "gut"]
     assert main([*argv, "--coverage-analysis", "per-file"]) == 0
     assert captured["coverage"] is CoverageAnalysis.PER_FILE
+
+
+def test_the_self_check_size_defaults_to_a_few_and_takes_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture(monkeypatch, "run_mutation")
+    argv = ["run", str(_gd(tmp_path)), "--project", str(tmp_path), "--runner", "gut"]
+    assert main([*argv, "--coverage-analysis", "all"]) == 0
+    assert captured["self_check"] == SELF_CHECK_SAMPLE
+    assert main([*argv, "--coverage-analysis", "all", "--coverage-self-check", "7"]) == 0
+    assert captured["self_check"] == 7
+    # `None` is the real answer for "every mutant", which is why it cannot also mean "bad input".
+    assert main([*argv, "--coverage-analysis", "all", "--coverage-self-check", "ALL"]) == 0
+    assert captured["self_check"] is None
+
+
+def test_a_self_check_size_that_is_not_a_number_is_refused_before_anything_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    captured = _capture(monkeypatch, "run_mutation")
+    argv = ["run", str(_gd(tmp_path)), "--project", str(tmp_path), "--runner", "gut"]
+    assert main([*argv, "--coverage-self-check", "some"]) == 2
+    assert captured == {}
+    assert "error: --coverage-self-check takes a whole number of mutants, or 'all'" in (
+        capsys.readouterr().err
+    )
 
 
 def test_per_file_is_refused_for_the_command_runner_before_anything_runs(

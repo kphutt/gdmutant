@@ -211,11 +211,6 @@ class _GodotJUnitRunner:
         See `_execute`, which does the work."""
         return self._execute(project_dir, timeout, markers=False)
 
-    def install_windows(self, project_dir: str, recorder_dir: str) -> None:
-        """Install this framework's file-window hook into the marked copy
-        (`engine.runner.FileSelecting`). The base writes nothing; each adapter overrides it."""
-        raise NotImplementedError
-
     def run_selected(
         self, project_dir: str, files: Sequence[str], timeout: float | None = None
     ) -> SuiteResult:

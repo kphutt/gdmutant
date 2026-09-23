@@ -114,14 +114,17 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
     [ADR-0006](../decisions/0006-operator-scoped-ignore-and-ignored-status.md))
   - invalid (the mutant didn't parse, per NF-5)
   - error (the runner failed to execute it, e.g. a crash)
-  - no coverage (only with `--coverage-analysis all`: a marker run showed no test reaches the
+  - no coverage (only with `--coverage-analysis all` or `per-file`: a marker run showed no test reaches the
     mutant's statement, so it is decided without running the suite, Stryker's `NoCoverage` status,
     see [ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md))
 
   Ignored, invalid and error mutants are excluded from the score. With coverage analysis off (the
   default), gdmutant gathers no coverage data, so a mutant on a line no test exercises is
   classified *survived*. The marker run behind *no coverage* must be clean or the run stops, and a
-  few *no coverage* mutants are run against the whole suite on every run as a self-check.
+  few *no coverage* mutants are run against the whole suite on every run as a self-check. Under
+  `per-file` a mutant some test does reach runs only the test files that reach it, and the
+  self-check covers those too: a sample of them runs against the whole suite as well, and the two
+  verdicts must match.
 - FG-4.2: The system shall compute the mutation score = (killed + timeout) /
   (killed + timeout + survived + no coverage), and totals. Timeouts count as detected, and no
   coverage counts as undetected (both Stryker conventions), so turning coverage analysis on never
@@ -198,15 +201,20 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   reaches the denominator, and the score reads higher than a run that emitted it. That is the honest
   direction, because the excluded shapes are broken or inert mutants rather than gaps a test could
   have closed, but it does mean a score is not comparable across a version that added an exclusion.
-- NF-6: Performance headroom. v0.1 runs the full suite per mutant (simple, correct). Booting Godot
-  per mutant is slow, so the design leaves clean seams for two speedups. Both have since shipped:
-  `--jobs N` evaluates mutants in parallel, each on its own copy of the project, and `--since
-  <ref>` mutates only the lines a diff changed. The remaining lever is coverage-gated selection
-  (only run tests that cover the mutated line), which the seam preserves without reshaping the
-  engine. [ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md) designs it,
-  in steps. Step 1, marker placement in the GDScript adapter, and step 2, the marker run and the
-  *no coverage* verdict (`--coverage-analysis all`, off by default), have landed. A mutant some test
-  reaches still runs the whole suite. Running only the tests that reach it is step 3.
+- NF-6: Performance headroom. v0.1 ran the full suite per mutant (simple, correct). Booting Godot
+  per mutant is slow, so the design leaves clean seams for three speedups, and all three have now
+  shipped: `--jobs N` evaluates mutants in parallel, each on its own copy of the project, `--since
+  <ref>` mutates only the lines a diff changed, and coverage-gated selection
+  ([ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md)) runs only the tests
+  that reach the mutated line. That last one landed in steps: marker placement in the GDScript
+  adapter, then the marker run and the *no coverage* verdict (`--coverage-analysis all`), then
+  per-test-file selection (`--coverage-analysis per-file`) for the two JUnit runners. All of it is
+  off by default. What it saves is test time, not Godot startup time: each mutant still gets its own
+  Godot process (ADR-0011), so a suite whose cost is mostly starting Godot gains little, and one
+  whose cost is spread unevenly across many test files gains a lot. Keeping one Godot alive across
+  mutants, the remaining lever, is out of scope: static variables are not reset on hot reload
+  (Godot issue 105667). The command runner cannot select, because an exit code cannot say which
+  tests ran.
 - NF-7: Safe source writes. Every write to a source file either lands whole or does not happen at
   all. gdmutant rewrites the user's own file twice per mutant (§4), and a plain in-place write empties
   the file before putting anything back, so a crash inside that window would destroy the file instead
@@ -324,8 +332,10 @@ All five shipped.
 ### Tier B: designed for but not built in v0.1
 
 Since shipped: the HTML report (`--html`), the
-incremental/diff-scoped mode (`--since`), and parallel evaluation (`--jobs`). In progress:
-coverage-gated mutant selection (the NF-6 seam), built in the steps of
+incremental/diff-scoped mode (`--since`), parallel evaluation (`--jobs`), and coverage-gated mutant
+selection (the NF-6 seam), built in the steps of
 [ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md), of which step 1 (marker
-placement) and step 2 (the marker run and the *no coverage* verdict) have landed. Still deferred: the optional LLM-semantic mutant mode, and additional
-language adapters.
+placement), step 2 (the marker run and the *no coverage* verdict) and step 3 (per-test-file
+selection for the two JUnit runners) have landed. Still in progress there: the command runner's own
+selection contract, and a decision on the default. Still deferred: the optional LLM-semantic mutant
+mode, and additional language adapters.

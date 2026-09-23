@@ -25,8 +25,29 @@ All notable changes to gdmutant are recorded here. The format follows
   passes, no `SCRIPT ERROR` anywhere, the markers' record exists and holds at least one hit, and
   the test count matches the unmarked run. A few `no coverage` mutants are also run for real as a
   check on every run, and a disagreement stops the run. It is off by default. It works with all
-  three runners, and needs `--godot` even with `--runner command`. `per-file`, which will run only
-  the tests that reach each mutant, is not built yet and is refused if asked for.
+  three runners, and needs `--godot` even with `--runner command`.
+- `--coverage-analysis per-file`, which does all of that and then runs each remaining mutant
+  against only the test files that reach it. This is the setting that saves time. The marker run
+  becomes two passes, the suite forwards and then the same test files in the opposite order, and a
+  line is only run against a chosen few test files when both passes credit it to exactly the same
+  ones. A line reached while no test file was running, and a line the two passes credit
+  differently, both run the whole suite as before. It needs `--runner gdunit4` or `--runner gut`:
+  an exit code cannot say which tests ran, so a custom `--command` is refused rather than quietly
+  run in full.
+
+  Three things keep it honest, because a map that drops the one test file that could kill a mutant
+  would turn a kill into a survivor and nothing else in the run would say so. A kill from a
+  selected run is confirmed by running the same test files once against your unmutated source; if
+  they fail there too, the kill was not the mutant's, so it is re-run against the whole suite and
+  counted as order-coupled. A sample of selected mutants also runs against the whole suite and the
+  two verdicts must match, with the new `--coverage-self-check` flag setting how many (`all`
+  checks every mutant both ways). And if the reverse pass has failing tests while the forward one
+  was clean, the suite depends on the order its files run in, so gdmutant says so, names the files
+  that failed, and runs without selection for the rest of that run. The summary reports what the
+  selection bought: how many mutants ran a subset, the mean share of the suite a mutant ran, and
+  the order-dependent and order-coupled counts.
+- `--coverage-self-check N|all`, how many of coverage analysis's own decisions are re-run against
+  the whole suite to confirm them. Three of each kind by default, as before.
 
 ### Changed
 

@@ -723,11 +723,6 @@ class _FileCoverage:
             index for index, plan in self.plans.items() if plan.no_coverage and not plan.self_check
         )
 
-    @property
-    def uncovered(self) -> frozenset[int]:
-        """Every mutant no test reaches, sampled by the self-check or not."""
-        return frozenset(index for index, plan in self.plans.items() if plan.no_coverage)
-
 
 def _coverage_plans(
     project_dir: str,
@@ -864,12 +859,17 @@ def _reverse_pass(
     is broken, so it returns ``None``: the caller keeps the forward pass's "no coverage" verdicts,
     which need only that pass, and runs every other mutant against the whole suite as before.
     Everything else a marker pass can get wrong is still an error, exactly as in the forward pass.
+
+    One more thing only this pass can check: that the runner ran the files it was given, and only
+    those, in the order it was given them. That is also answered with ``None``, for the same
+    reason.
     """
     if progress is not None:
         progress("running the suite once more, files in reverse order ...")
+    asked = tuple(reversed(forward.opened))
     result, hits = _marker_pass(
         hits_path,
-        lambda: runner.run_markers_files(str(copy), tuple(reversed(forward.opened))),
+        lambda: runner.run_markers_files(str(copy), asked),
         _REVERSE,
     )
     if result.failed and not isinstance(hits, HitsUnreadable):
@@ -894,6 +894,24 @@ def _reverse_pass(
         _REVERSE,
     )
     assert not isinstance(hits, HitsUnreadable)  # _require_clean raises on that
+    if hits.opened != asked:
+        # The reverse pass is the one place gdmutant can tell whether a runner really runs the test
+        # files it is given, and only those, because it is the one pass whose expected answer is
+        # known: the forward pass's files, backwards. A runner that ran something else would run
+        # everything for every mutant too, which costs no verdict but makes every saving this run
+        # reports a fiction. So say so and stop selecting, rather than report a saving that did not
+        # happen. Found on a real project whose test framework reads a config file naming its test
+        # directories, which it adds to whatever it is told on the command line.
+        if progress is not None:
+            progress(
+                f"coverage: the runner was asked for {len(asked)} test files in a set order and "
+                f"ran {len(hits.opened)} in another, so it does not run only the test files it is "
+                "given. Running fewer tests for a mutant would change nothing, so gdmutant will "
+                "not select tests for this run. It still reports the mutants no test reaches. "
+                "A test framework that reads its own configuration file is the usual cause: check "
+                "whether it names test directories of its own there."
+            )
+        return None
     return hits
 
 

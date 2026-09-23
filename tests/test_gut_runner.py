@@ -471,3 +471,120 @@ def test_gut_runner_satisfies_the_run_warning_protocol() -> None:
     # GUT surfaces the non-determinism canary via the optional RunWarning contract, so the CLI can
     # emit it generically (isinstance) without naming the framework.
     assert isinstance(GutRunner(), RunWarning)
+
+
+# --- per-file test selection (docs/decisions/0017, step 3) ---------------------------------------
+
+
+def test_a_file_list_replaces_gdir_one_flag_per_file(tmp_path: Path) -> None:
+    """GUT takes a chosen list as one ``-gtest=`` per file, in the order given. The reverse marker
+    pass depends on that order, so the flags keep it."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cmd = GutRunner(godot="godot4").command(str(proj), files=["res://t/b.gd", "res://t/a.gd"])
+    assert "-gdir=res://test" not in cmd
+    assert cmd[cmd.index("-s") + 2 : cmd.index("-s") + 4] == [
+        "-gtest=res://t/b.gd",
+        "-gtest=res://t/a.gd",
+    ]
+
+
+def test_the_marker_run_names_the_window_hook_only_once_one_is_installed(tmp_path: Path) -> None:
+    """``--coverage-analysis all`` installs no hook, and its marker run must keep the command it
+    always had. Only a run that selects test files adds GUT's pre-run script."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    recorder = proj / "_gdmutant"
+    recorder.mkdir()
+    runner = GutRunner(godot="godot4")
+    assert not any(flag.startswith("-gpre_run_script") for flag in runner.command(str(proj)))
+    assert not any(
+        flag.startswith("-gpre_run_script") for flag in runner.command(str(proj), markers=True)
+    )
+    runner.install_windows(str(proj), "_gdmutant")
+    assert "-gpre_run_script=res://_gdmutant/gut_windows.gd" in runner.command(
+        str(proj), markers=True
+    )
+    # A mutant run is not a marker run, so it never carries the hook.
+    assert not any(flag.startswith("-gpre_run_script") for flag in runner.command(str(proj)))
+
+
+def test_install_windows_writes_a_hook_that_listens_to_guts_own_signals(tmp_path: Path) -> None:
+    recorder = tmp_path / "_gdmutant"
+    recorder.mkdir()
+    GutRunner().install_windows(str(tmp_path), "_gdmutant")
+    source = (recorder / "gut_windows.gd").read_text(encoding="utf-8")
+    assert source.startswith("extends GutHookScript")
+    assert "gut.start_script.connect" in source
+    assert "gut.end_script.connect" in source
+    assert "_GdmMarks.begin_file(str(script_obj.get_full_name()))" in source
+    assert "_GdmMarks.end_file()" in source
+
+
+def _baseline_then(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reports: list[str]
+) -> GutRunner:
+    """A GUT runner whose successive runs read `reports`, one per invocation."""
+    report = _report(tmp_path)
+    pending = iter(reports)
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text(next(pending), encoding="utf-8")
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    return GutRunner()
+
+
+_BASELINE_XML = (
+    "<testsuites>"
+    '<testsuite name="test/unit/a.gd" tests="3" failures="0"/>'
+    '<testsuite name="test/unit/b.gd" tests="2" failures="0"/>'
+    "</testsuites>"
+)
+
+
+def test_the_drop_guard_measures_a_selected_run_against_the_files_it_was_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every selected run has fewer tests than the whole suite, so a guard that compared against
+    the whole suite's count would error on every one of them."""
+    runner = _baseline_then(
+        tmp_path,
+        monkeypatch,
+        [_BASELINE_XML, '<testsuites><testsuite name="test/unit/a.gd" tests="3"/></testsuites>'],
+    )
+    assert runner.run(str(tmp_path)).tests == 5
+    assert runner.run_selected(str(tmp_path), ["res://test/unit/a.gd"]).tests == 3
+
+
+def test_a_skipped_suite_inside_a_selected_run_is_still_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard is rescaled, not removed: GUT skipping one of the two chosen files still shows up
+    as fewer tests than those two files have between them."""
+    runner = _baseline_then(
+        tmp_path,
+        monkeypatch,
+        [_BASELINE_XML, '<testsuites><testsuite name="test/unit/a.gd" tests="3"/></testsuites>'],
+    )
+    runner.run(str(tmp_path))
+    with pytest.raises(RuntimeError, match="fewer than the 5 the 2 test files it was given"):
+        runner.run_selected(str(tmp_path), ["res://test/unit/a.gd", "res://test/unit/b.gd"])
+
+
+def test_a_selected_file_the_baseline_never_reported_only_lowers_the_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown file cannot turn a healthy run into an error. It can only make the guard more
+    forgiving, which fails toward slower rather than toward a lost verdict."""
+    runner = _baseline_then(
+        tmp_path,
+        monkeypatch,
+        [_BASELINE_XML, '<testsuites><testsuite name="test/unit/c.gd" tests="1"/></testsuites>'],
+    )
+    runner.run(str(tmp_path))
+    assert runner.run_selected(str(tmp_path), ["res://test/unit/c.gd"]).tests == 1
