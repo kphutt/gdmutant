@@ -1280,6 +1280,19 @@ def test_dry_run_flags_a_non_default_coverage_analysis_as_ignored(
     assert "--coverage-analysis" in capsys.readouterr().err
 
 
+def test_dry_run_flags_a_non_default_progress_style_as_ignored(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --progress is the one ignored-flags entry with no existing coverage of this direction:
+    # --godot/--tests get it from test_main_dry_run_lists_every_ignored_flag_in_order, and
+    # --coverage-analysis from the pair above. This closes that gap: an explicit, non-default
+    # --progress must show up in the note, pinning it against build_parser's own default
+    # (gdmutant/cli.py's `_PROGRESS_DEFAULT`, read by both call sites).
+    path = _gd(tmp_path)
+    main(["run", str(path), "--dry-run", "--progress", "plain"])
+    assert "--progress" in capsys.readouterr().err
+
+
 def test_parser_run_subcommand() -> None:
     args = build_parser().parse_args(
         ["run", "f.gd", "--godot", "godot4", "--tests", "res://t", "--json", "r.json"]
