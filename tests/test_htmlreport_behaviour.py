@@ -7,7 +7,7 @@ prints what the page displayed; this module drives that and checks it.
 
 The rest of the suite (and the whole CLI) stays Node-free, but this module does not: it fails
 loudly, rather than skipping, when `node` is not on PATH. A silent skip here would let a machine
-missing `node` report a clean `pytest` run without ever exercising these 39 tests — exactly the
+missing `node` report a clean `pytest` run without ever exercising these 42 tests -- exactly the
 "gate that passes without checking anything" shape AGENTS.md calls out. `node` is pinned in
 `mise.toml`; run `mise install` to get it.
 """
@@ -27,10 +27,10 @@ HARNESS = Path(__file__).resolve().parent / "js" / "harness.js"
 
 if shutil.which("node") is None:
     # Not a skip: a skip exits 0, and a machine missing `node` would then report a clean `pytest`
-    # run without ever having exercised these 39 tests. Fail the collection instead, so the run's
+    # run without ever having exercised these 42 tests. Fail the collection instead, so the run's
     # exit code is non-zero and the reason is unmistakable in the output ("NOTCHECKED").
     pytest.fail(
-        "NOTCHECKED: node is not on PATH, so tests/test_htmlreport_behaviour.py's 39 tests never "
+        "NOTCHECKED: node is not on PATH, so tests/test_htmlreport_behaviour.py's 42 tests never "
         "ran. node is pinned in mise.toml -- run `mise install` to get it.",
         pytrace=False,
     )
@@ -140,6 +140,44 @@ def _no_coverage_report() -> dict[str, Any]:
     )
 
 
+#: Two files where a survived-only count and the real undetected count would disagree. ``x.gd`` has
+#: no Survived mutant at all, only NoCoverage ones, and would sort dead last under a key that counts
+#: Survived alone even though three of its four mutants are still unaddressed. ``y.gd`` has fewer
+#: unaddressed mutants overall but they are all Survived.
+#:
+#: ============ ========= ============ ======= ==========
+#: file         survived  no coverage  caught  undetected
+#: ============ ========= ============ ======= ==========
+#: ``x.gd``     0         3            1       3
+#: ``y.gd``     2         0            1       2
+#: ============ ========= ============ ======= ==========
+def _no_coverage_sort_report() -> dict[str, Any]:
+    return {
+        "schemaVersion": "2",
+        "files": {
+            "x.gd": {
+                "language": "gdscript",
+                "source": _SOURCE,
+                "mutants": [
+                    _mutant(2, 5, 6, "comparison", ">=", "NoCoverage"),
+                    _mutant(2, 11, 14, "boolean", "or", "NoCoverage"),
+                    _mutant(3, 10, 11, "numeric", "1", "NoCoverage"),
+                    _mutant(4, 11, 12, "arithmetic", "-", "Killed"),
+                ],
+            },
+            "y.gd": {
+                "language": "gdscript",
+                "source": _SOURCE,
+                "mutants": [
+                    _mutant(2, 5, 6, "comparison", ">=", "Survived"),
+                    _mutant(2, 11, 14, "boolean", "or", "Survived"),
+                    _mutant(4, 11, 12, "arithmetic", "-", "Killed"),
+                ],
+            },
+        },
+    }
+
+
 #: The findings' real addresses, taken from the view rather than written out here. The columns in
 #: `_MUTANTS` are *source* columns and the page's are tab-expanded, so any hand-written key would
 #: be quietly wrong — and a test that hard-codes what the code computes stops testing it.
@@ -155,12 +193,14 @@ def observed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     page = out / "report.html"
     multi, unscored = out / "multi.html", out / "unscored.html"
     nocov = out / "nocov.html"
+    nocov_sort = out / "nocov_sort.html"
     page.write_text(render_html(_report(_MUTANTS)), encoding="utf-8")
     multi.write_text(render_html(_multi_report()), encoding="utf-8")
     unscored.write_text(render_html(_unscored_report()), encoding="utf-8")
     nocov.write_text(render_html(_no_coverage_report()), encoding="utf-8")
+    nocov_sort.write_text(render_html(_no_coverage_sort_report()), encoding="utf-8")
     result = subprocess.run(
-        ["node", str(HARNESS), str(page), str(multi), str(unscored), str(nocov)],
+        ["node", str(HARNESS), str(page), str(multi), str(unscored), str(nocov), str(nocov_sort)],
         capture_output=True,
         text=True,
         # Explicit, because the harness prints UTF-8 and Windows would otherwise decode its output
@@ -403,14 +443,28 @@ def test_the_legend_explains_only_the_marks_the_pane_actually_drew(
 
 def test_the_legend_never_calls_a_no_coverage_mark_survived(observed: dict[str, Any]) -> None:
     legend = observed["legend"]["noCoverage"]
-    for view in ("survived", "all"):
-        assert "survived" not in legend[view], legend[view]
-        assert "no test caught it" not in legend[view], legend[view]
-        assert "no coverage: no test runs this line" in legend[view], legend[view]
+    # This report has no real survivor, so "survived" now shows nothing at all (see
+    # test_the_survived_filter_excludes_a_mutant_no_test_reaches) and the legend has nothing to
+    # explain.
+    assert legend["survived"] == ""
+    assert "survived" not in legend["all"], legend["all"]
+    assert "no test caught it" not in legend["all"], legend["all"]
+    assert "no coverage: no test runs this line" in legend["all"], legend["all"]
     assert "caught by a test" in legend["all"]
-    # And a pane of survivors alone still says survived, and says nothing about coverage.
+    # And a pane of survivors alone (a different report, one that does have a real survivor) still
+    # says survived, and says nothing about coverage.
     assert "survived: no test caught it" in observed["legend"]["survived"]
     assert "no coverage" not in observed["legend"]["all"]
+
+
+def test_the_survived_filter_excludes_a_mutant_no_test_reaches(observed: dict[str, Any]) -> None:
+    # This report has one Killed mutant and two NoCoverage ones, and no real survivor at all. The
+    # default filter is "survived", and NoCoverage shares the survivor's red class -- so a reader
+    # filtering to survivors used to get the two mutants no test ever ran instead of nothing.
+    assert observed["legend"]["noCoverage"]["survivedPos"] == "no findings"
+    # Switching to "all" still shows every mutant (three findings): the fix narrows "survived",
+    # not the report.
+    assert observed["legend"]["noCoverage"]["allPos"].endswith("of 3 findings")
 
 
 def test_the_legend_names_each_unscored_state_and_never_calls_an_errored_mutant_never_run(
@@ -493,10 +547,12 @@ def test_a_rare_count_clicked_from_the_index_opens_a_file_that_actually_has_one(
 # ---- the file index's sortable columns ----------------------------------------------------------
 
 
-def test_the_index_still_opens_on_most_survivors_first(observed: dict[str, Any]) -> None:
+def test_the_index_still_opens_on_most_undetected_mutants_first(observed: dict[str, Any]) -> None:
     # The default is the one order that answers "where do I start", and re-sorting must not become
     # a reason to change it. Score would be a worse default: 1 survivor in 5 mutants and 100 in 500
-    # both read 80%.
+    # both read 80%. None of these three files has a NoCoverage mutant, so this fixture alone cannot
+    # tell "undetected" apart from "survived" -- see test_the_index_sorts_and_shows_undetected_
+    # mutants_not_just_survived for the fixture that can.
     assert observed["sort"]["initial"] == ["a.gd", "b.gd", "c.gd"]
 
 
@@ -504,8 +560,8 @@ def test_clicking_a_column_re_sorts_and_clicking_it_again_reverses(
     observed: dict[str, Any],
 ) -> None:
     sort = observed["sort"]
-    assert sort["survivedAsc"] == ["c.gd", "b.gd", "a.gd"]
-    assert sort["survivedBack"] == sort["initial"]
+    assert sort["undetectedAsc"] == ["c.gd", "b.gd", "a.gd"]
+    assert sort["undetectedBack"] == sort["initial"]
     assert sort["file"] == ["a.gd", "b.gd", "c.gd"]
     assert sort["fileDesc"] == ["c.gd", "b.gd", "a.gd"]
 
@@ -522,6 +578,18 @@ def test_each_column_sorts_on_its_own_number_rather_than_re_drawing_the_same_ord
     # nothing surviving sorts to the top and the file with five survivors sits below it.
     assert sort["score"] == ["c.gd", "a.gd", "b.gd"]
     assert sort["score"] != sort["initial"]
+
+
+def test_the_index_sorts_and_shows_undetected_mutants_not_just_survived(
+    observed: dict[str, Any],
+) -> None:
+    # x.gd has no Survived mutant at all, only three NoCoverage ones and a Killed one. y.gd has two
+    # Survived and a Killed. A count that only tallied Survived would show x.gd as a clean 0 and
+    # sort it below y.gd, even though x.gd has more unaddressed mutants (3) than y.gd (2), and its
+    # score (25.0%) is worse than y.gd's (33.3%).
+    ns = observed["noCoverageSort"]
+    assert ns["initial"] == ["x.gd", "y.gd"]
+    assert ns["initialCounts"] == ["3", "2"]
 
 
 def test_a_re_sorted_row_still_opens_the_file_it_names(observed: dict[str, Any]) -> None:

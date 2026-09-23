@@ -234,6 +234,13 @@ class FileView:
     score: float | None
     #: Mutants no test reaches. Counted apart from `survived`, and scored like it.
     no_coverage: int
+    #: `survived + no_coverage`: everything this file still needs a test for. The file index sorts
+    #: and displays this, not `survived` alone, because a mutant no test reaches is just as
+    #: unfinished as one a test ran and missed, and `score`'s own denominator already treats them
+    #: the same way. A file whose only gaps are no-coverage mutants must not sort, or read, as if it
+    #: had none. Which of the two a given finding is stays visible in the legend and the detail
+    #: card, where the distinction is worth making; the index only has to say where to start.
+    undetected: int
 
 
 @dataclass
@@ -468,10 +475,13 @@ def report_view(report: dict[str, Any], project_dir: str | None = None) -> Repor
                 total=len(mutants),
                 score=_score(detected, survived, no_coverage),
                 no_coverage=no_coverage,
+                undetected=survived + no_coverage,
             )
         )
-    # Most actionable first: the file with the most survivors is where the reader should start.
-    files.sort(key=lambda f: (-f.survived, f.path))
+    # Most actionable first: the file with the most undetected mutants is where the reader should
+    # start. Undetected, not survived alone, for the same reason `FileView.undetected` exists: a
+    # mutant no test reaches is unfinished work too.
+    files.sort(key=lambda f: (-f.undetected, f.path))
     detected = sum(v for k, v in counts.items() if k in _DETECTED)
     survived = counts.get("Survived", 0)
     no_coverage = counts.get(_NO_COVERAGE, 0)
@@ -787,10 +797,12 @@ const SEARCH_FROM = 8;
 
 let cur = 0, sel = null, filter = 'survived', op = 'all', refOpen = null, query = '';
 let view = MULTI ? 'index' : 'file';
-// The file index's order. The default is the generator's own, most survivors first, and it stays
-// the default deliberately: it is the only order that answers "where do I start". Score would be
-// worse, because 1 survivor in 5 mutants and 100 in 500 both read 80%.
-let sortBy = 'survived', sortDesc = true;
+// The file index's order. The default is the generator's own, most undetected mutants first, and
+// it stays the default deliberately: it is the only order that answers "where do I start". A
+// mutant no test reaches is just as unfinished as one a test ran and missed, so the two are summed
+// here rather than picked apart (the legend and the detail card still say which is which). Score
+// would be worse either way, because 1 survivor in 5 mutants and 100 in 500 both read 80%.
+let sortBy = 'undetected', sortDesc = true;
 // What the source pane currently has painted. The pane is rebuilt only when this changes:
 // selection moves repaint nothing but the few nodes that actually differ.
 let painted = null;
@@ -798,6 +810,13 @@ let caretEl = null, hostEl = null;
 
 const file = () => D.files[cur];
 const isSv = f => f.cls === 'sv';
+// The "survived" filter's own question: does this finding hold a mutant a test actually ran and
+// failed to catch? `isSv` alone is not that question. NoCoverage angles share the red `cls` (see
+// the legend, which has to name the two apart for the same reason), so filtering on `cls` handed a
+// reader who asked for survivors mutants no test ever ran. Checked on the ANGLES, not on `f.tag`,
+// because `f.tag` collapses to "mixed" the moment a finding also holds a caught or unscored angle,
+// which must not hide a real survivor sitting alongside one.
+const isTrueSurvivor = f => f.angles.some(a => a.cls === 'sv' && a.tag === 'survived');
 
 // ---- stable finding identity -----------------------------------------------------------------
 //
@@ -816,7 +835,7 @@ const RARE = 'rare:';
 function matches(f){
   const ok = filter === 'all' ? true
     : filter.indexOf(RARE) === 0 ? f.rare.indexOf(filter.slice(RARE.length)) >= 0
-    : filter === 'survived' ? isSv(f)
+    : filter === 'survived' ? isTrueSurvivor(f)
     : f.cls === 'kd';
   return ok && (op === 'all' || f.op === op);
 }
@@ -1034,7 +1053,10 @@ function onClick(e){
 const COLS = [
   ['score', 'score', f => (f.score === null ? -1 : f.score)],
   ['file', 'file', f => f.path],
-  ['survived', 'survived', f => f.survived],
+  // `undetected`, not `survived`: this column and the fn.sv cell it heads both show survivors
+  // AND mutants no test reaches added together, so the sort key has to be the same sum or a file
+  // could visibly disagree with its own row.
+  ['undetected', 'undetected', f => f.undetected],
   ['caught', 'caught', f => f.detected],
   ['mutants', 'mutants', f => f.total],
 ];
@@ -1064,7 +1086,7 @@ function paintFiles(){
       <span class="fsc">${f.score === null ? '&ndash;'
         : f.score + '<span style="font-size:14px">%</span>'}</span>
       <span class="fpath">${esc(f.path)}</span>
-      <span class="fn sv">${f.survived}</span>
+      <span class="fn sv">${f.undetected}</span>
       <span class="fn kd">${f.detected}</span>
       <span class="fn">${f.total}</span>
     </button>`).join('');
@@ -1083,7 +1105,7 @@ function renderIndex(){
   const box = D.files.length >= SEARCH_FROM
     ? `<input id="q" class="qbox" type="search" placeholder="filter files…"
          aria-label="Filter files by path">` : '';
-  $('#body').innerHTML = `<p class="note">Most survivors first: that is where to start.
+  $('#body').innerHTML = `<p class="note">Most undetected mutants first: that is where to start.
       Choose a file to work through its findings, or click a column heading to re-sort.</p>
     ${box}<div class="files" id="filelist"></div>`;
   const input = $('#q');

@@ -59,6 +59,16 @@ All notable changes to gdmutant are recorded here. The format follows
   largest benchmark workload, the engine loop went from 22.2 to 17.4 seconds (median), about 22%
   faster. Time spent inside Godot running your tests is unchanged.
 
+### Fixed
+
+- The HTML report's "survived" filter no longer includes mutants no test reaches. A `no coverage`
+  mutant shares the survivor's red color, but it is a different problem ("no test runs this line"
+  rather than "a test ran and missed it"), and filtering to survivors now shows only the second
+  kind.
+- The HTML report's file index now sorts and displays each file's survived and no-coverage mutants
+  added together, not survived alone. A file whose only undetected mutants are no-coverage ones
+  used to sort, and read, as if it had none, even though its score already counted them.
+
 ## [0.1.3] - 2026-09-20
 
 ### Added

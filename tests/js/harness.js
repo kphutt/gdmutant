@@ -7,7 +7,8 @@
 // looked up by selector and cached, so a value written through `$('#pos')` is still there when the
 // assertion reads it back.
 //
-// Usage: node harness.js <page> <multi-file> <unscored>  ->  one JSON line of observations.
+// Usage: node harness.js <page> <multi-file> <unscored> <nocov> <nocov-sort>  ->  one JSON line
+// of observations.
 
 const fs = require('fs');
 const vm = require('vm');
@@ -211,6 +212,10 @@ function openTab(file, hash) {
     // The index's file paths in the order it drew them, the whole of what a sort changes, read
     // off the markup rather than off the state variable that produced it.
     rows: () => [...byId('#filelist').innerHTML.matchAll(/class="fpath">([^<]*)</g)].map(m => m[1]),
+    // The number the index actually PAINTS in the red column, in row order: read off the markup,
+    // never off `f.undetected` itself, so a generator field that is right and a renderer that reads
+    // the wrong one of its properties cannot pass this by agreeing with each other off-screen.
+    svCounts: () => [...byId('#filelist').innerHTML.matchAll(/class="fn sv">(\d+)</g)].map(m => m[1]),
     // The `data-file` each drawn row carries. A sort reorders the rows; it must NOT renumber them,
     // because that number is the only thing telling a click which file it opened.
     rowIds: () => [...byId('#filelist').innerHTML.matchAll(/data-file="(\d+)"/g)].map(m => m[1]),
@@ -261,6 +266,7 @@ const PAGE = process.argv[2];      // the report
 const MULTI = process.argv[3];     // a two-file report, for the index rows and the back button
 const UNSCORED = process.argv[4];  // a report holding an ignored, an invalid and an errored mutant
 const NOCOV = process.argv[5];     // a report holding only killed and no-coverage mutants
+const NOCOV_SORT = process.argv[6];  // two files where survived-only and undetected order disagree
 const KEYS = JSON.parse(process.env.HARNESS_KEYS || '[]');
 
 const out = { load: null, forward: [], backward: [], filters: {} };
@@ -401,7 +407,7 @@ out.clicks.frankFocusAfter = c.frankWinking();
 // The index: its rows and its back button only exist on a multi-file report.
 // Which VIEW is on screen, read off `#body` itself. `#pos` is a cached stub here and keeps its
 // last text after the index replaces the markup that owned it, so it cannot answer this.
-const isIndex = t => /Most survivors first/.test(t.body());
+const isIndex = t => /Most undetected mutants first/.test(t.body());
 
 const mf = openTab(MULTI, '');
 out.index = { openHash: mf.hash(), openIndex: isIndex(mf) };
@@ -441,8 +447,13 @@ out.legend.unscored = us.legend();
 // filter (the red marks alone) and with everything shown.
 const nc = openTab(NOCOV, '');
 out.legend.noCoverage = { survived: nc.legend() };
+// The default filter IS "survived", and this report has zero real survivors, only NoCoverage and
+// Killed mutants. A "survived" filter that also matches the red NoCoverage class would hand back
+// the two NoCoverage findings here instead of reporting none.
+out.legend.noCoverage.survivedPos = nc.pos();
 nc.clickChip('[data-filter]', 'all');
 out.legend.noCoverage.all = nc.legend();
+out.legend.noCoverage.allPos = nc.pos();
 
 // ---- the header's rare-status counts ---------------------------------------------------------
 //
@@ -487,10 +498,10 @@ out.rareIndex.afterClick = { index: isIndex(rx), pos: rx.pos() };
 
 const sortTab = openTab(MULTI, '');
 out.sort = { initial: sortTab.rows() };
-sortTab.clickSort('survived');            // the same column again flips the direction
-out.sort.survivedAsc = sortTab.rows();
-sortTab.clickSort('survived');
-out.sort.survivedBack = sortTab.rows();
+sortTab.clickSort('undetected');          // the same column again flips the direction
+out.sort.undetectedAsc = sortTab.rows();
+sortTab.clickSort('undetected');
+out.sort.undetectedBack = sortTab.rows();
 sortTab.clickSort('file');
 out.sort.file = sortTab.rows();
 sortTab.clickSort('file');
@@ -509,6 +520,12 @@ sortTab.clickSort('file');
 out.sort.fileDescIds = sortTab.rowIds();
 sortTab.clickRow(sortTab.rowIds()[0]);           // the first row as DRAWN, which is now the last file
 out.sort.openedFirstDrawn = sortTab.hash();
+
+// A file whose only undetected mutants are NoCoverage must sort, and read, as if it had them: the
+// score column already folds a coverage gap into its denominator, and the red count beside it has
+// to agree rather than showing a bare 0 while the score reports something well short of 100%.
+const ncSort = openTab(NOCOV_SORT, '');
+out.noCoverageSort = { initial: ncSort.rows(), initialCounts: ncSort.svCounts() };
 
 // ---- the JSON download -------------------------------------------------------------------------
 

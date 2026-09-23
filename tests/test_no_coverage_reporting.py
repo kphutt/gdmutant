@@ -112,6 +112,8 @@ def test_the_html_labels_it_counts_it_and_scores_it_like_the_console() -> None:
     (file_view,) = view.files
     assert file_view.no_coverage == 1
     assert file_view.score == 33.3
+    # The index shows and sorts on `undetected`, not `survived` alone, so this must be the sum.
+    assert file_view.undetected == 2
     finding = next(f for f in file_view.findings if f.line == 3)
     (angle,) = finding.angles
     assert (angle.tag, angle.cls) == ("no coverage", "sv")
@@ -474,3 +476,4 @@ def test_a_file_with_no_no_coverage_mutants_scores_on_its_own_counts() -> None:
     )
     (file_view,) = report_view(report).files
     assert (file_view.no_coverage, file_view.score) == (0, 50.0)
+    assert file_view.undetected == 1  # no no_coverage here, so it equals survived alone
