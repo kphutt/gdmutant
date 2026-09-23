@@ -1332,7 +1332,7 @@ def test_parser_defaults() -> None:
     assert args.trust_config is False  # a project's own config can't self-grant trust
     # Coverage analysis defaults to off (every mutant runs the whole suite). See
     # `_COVERAGE_ANALYSIS_DEFAULT` in gdmutant/cli.py, which this pins from the outside, and the
-    # two `test_dry_run_*_coverage_analysis_*` tests below, which pin its two call sites (the
+    # two `test_dry_run_*_coverage_analysis_*` tests above, which pin its two call sites (the
     # argparse default and the --dry-run "ignored flags" note) against each other.
     assert args.coverage_analysis == CoverageAnalysis.OFF.value
     assert args.coverage_self_check == str(SELF_CHECK_SAMPLE)
