@@ -1022,9 +1022,13 @@ class _Sabotaged:
             marks = copy / RECORDER_DIR / "marks.gd"
             text = marks.read_text(encoding="utf-8")
             broken = text.replace(
-                "\thits[spot] = true", f"\tif spot != {self.drop_spot}:\n\t\thits[spot] = true"
+                "static func _record(spot: int) -> void:\n\tlast[spot] = window",
+                "static func _record(spot: int) -> void:\n"
+                f"\tif spot == {self.drop_spot}:\n"
+                "\t\treturn\n"
+                "\tlast[spot] = window",
             )
-            assert broken != text
+            assert broken != text, "the recorder no longer has the shape this sabotage edits"
             marks.write_text(broken, encoding="utf-8", newline="\n")
         if self.no_writer:
             settings = copy / "project.godot"
@@ -1414,6 +1418,12 @@ static func started() -> bool:
 static func _tick() -> void:
 \tticks = 3
 """
+#: The two lines of `_CROSSING` the test below is about, found in the fixture rather than counted
+#: by hand, so editing the fixture cannot leave the test asserting about a blank line.
+_TICK_LINE = _CROSSING.split("\n").index("\tticks = 3") + 1
+_TIMER_LINE = next(
+    number for number, line in enumerate(_CROSSING.split("\n"), 1) if "create_timer" in line
+)
 
 
 def _crossing_tests(framework: str) -> dict[str, str]:
@@ -1454,11 +1464,13 @@ def test_deferred_code_that_crosses_test_files_runs_every_test_file(
         by_line.setdefault(outcome.mutant.span.line, set()).add(outcome.selected)
         verdicts.setdefault(outcome.mutant.span.line, set()).add(outcome.verdict)
     # `ticks = 3`, set from the timer's callback, is the line no single file can be credited with.
-    assert by_line[18] == {None}
-    assert Verdict.NO_COVERAGE not in verdicts[18], "a line a timer really reaches is not unreached"
+    assert by_line[_TICK_LINE] == {None}
+    assert Verdict.NO_COVERAGE not in verdicts[_TICK_LINE], (
+        "a line a timer reaches is not unreached"
+    )
     # Not vacuous: the timer's own line is reached inside one file's window and is selected, so
     # this project does select, and the crossing line is specifically the one it will not.
-    assert by_line[9] == {1}
+    assert by_line[_TIMER_LINE] == {1}
 
 
 #: Shared state two suites can seed and a third can depend on.

@@ -629,6 +629,20 @@ def test_an_inner_class_suites_tests_count_toward_its_file(
     assert runner.run_selected(str(tmp_path), ["res://test/unit/a.gd"]).tests == 9
 
 
+def test_a_suite_the_report_does_not_name_gets_an_empty_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A nameless suite must not be read as a file called something else: the drop guard keys on
+    the name, and an invented one would be a file no selection ever asks for."""
+    runner = _baseline_then(
+        tmp_path,
+        monkeypatch,
+        ['<testsuites><testsuite tests="2" failures="0"/></testsuites>'],
+    )
+    (suite,) = runner.run(str(tmp_path)).suites
+    assert suite.name == ""
+
+
 def test_a_report_name_that_is_not_a_gdscript_path_is_left_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -116,6 +116,57 @@ def test_a_hits_file_that_is_not_an_object_is_unreadable(tmp_path: Path) -> None
         read_hits(_write(tmp_path, [1, 2]))
 
 
+def test_windows_and_opened_default_to_nothing_rather_than_to_no_value(tmp_path: Path) -> None:
+    """`Hits` is read straight out of a file, so every field has to be a real value even when the
+    file did not carry one. A default of ``None`` would come back as an attribute error deep inside
+    `build_map` rather than as an empty map here."""
+    bare = Hits(frozenset({1}))
+    assert bare.windows == {}
+    assert bare.load_time == frozenset()
+    assert bare.opened == ()
+    assert bare.files == ()
+
+
+# The exact words, since a user reads them to decide what to fix, and the exact amount of a
+# malformed file they quote back: enough to recognise it, not so much that it buries the sentence.
+
+
+def test_the_malformed_window_messages_in_full(tmp_path: Path) -> None:
+    path = _write(tmp_path, {"hits": [0], "windows": {"a": [1.5]}})
+    with pytest.raises(HitsUnreadable) as caught:
+        read_hits(path)
+    assert str(caught.value) == (f"the hits file at {path} records a bad spot list for 'a': [1.5]")
+    path = _write(tmp_path, {"hits": [0], "windows": {"": ["x"]}})
+    with pytest.raises(HitsUnreadable) as load_time:
+        read_hits(path)
+    assert str(load_time.value) == (
+        f"the hits file at {path} records a bad load-time spot list: ['x']"
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "what", "quoted"),
+    [
+        ({"hits": [0], "windows": "y" * 400}, "does not map test files to spot numbers", "y" * 400),
+        ({"hits": [0], "opened": "z" * 400}, "does not list the test files that ran", "z" * 400),
+    ],
+)
+def test_a_malformed_window_message_quotes_at_most_200_characters(
+    tmp_path: Path, payload: dict[str, object], what: str, quoted: str
+) -> None:
+    path = _write(tmp_path, payload)
+    with pytest.raises(HitsUnreadable) as caught:
+        read_hits(path)
+    assert str(caught.value) == f"the hits file at {path} {what}: {str(quoted)[:200]}"
+
+
+def test_the_window_problem_messages_in_full() -> None:
+    assert window_problems(Hits(frozenset({0})), _TWO_SUITES) == [
+        "no test file opened a coverage window, so the runner's 'a test file started' hook never "
+        "fired. Without it gdmutant cannot tell which test file reaches which line"
+    ]
+
+
 # --- the window rules -------------------------------------------------------------------------
 
 _TWO_SUITES = SuiteResult(
@@ -170,6 +221,14 @@ def test_a_spot_reached_with_no_test_file_running_runs_everything() -> None:
     assert built.files[1] is RUN_EVERYTHING
     # Load-time code is not order dependence: it belongs to no test in either pass.
     assert built.order_dependent == frozenset()
+
+
+def test_a_load_time_spot_does_not_stop_the_map_at_the_spots_after_it() -> None:
+    """Every spot either pass recorded gets an entry. A spot left out of the map reads as one no
+    test reaches, which is the one answer that can turn a kill into a survivor."""
+    built = build_map(_hits({A: {1, 2}}, load_time={0}), _hits({A: {1, 2}}, load_time={0}))
+    assert set(built.files) == {0, 1, 2}
+    assert built.files[1] == frozenset({A})
 
 
 def test_load_time_in_the_reverse_pass_alone_is_enough() -> None:

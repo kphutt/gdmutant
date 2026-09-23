@@ -125,22 +125,21 @@ class Hits:
         return tuple(dict.fromkeys(self.opened))
 
 
-#: A default that is not ``None``, since ``None`` is a value a hits file can really hold.
-_UNSET: object = object()
+#: How much of a malformed hits file a message quotes back. Enough to recognise it, not so much
+#: that a large file buries the sentence that says what is wrong with it.
+_QUOTED = 200
 
 
-def _spot_list(value: object, path: Path, what: str, quote: object = _UNSET) -> frozenset[int]:
+def _spot_list(value: object, path: Path, what: str, shown: object) -> frozenset[int]:
     """`value` as a set of spot ids, or raise `HitsUnreadable` naming `what` went wrong.
 
-    `quote` is what the message shows when it does, which is the whole file for the top-level list
-    (where a missing key would otherwise be reported as the word "None") and the offending value
-    itself for a list nested inside it.
+    `shown` is what the message quotes back, which is not always `value`: a missing top-level key
+    would be quoted as the word "None", so that call quotes the whole file instead.
     """
     if not isinstance(value, list) or not all(
         isinstance(spot, int) and not isinstance(spot, bool) for spot in value
     ):
-        shown = value if quote is _UNSET else quote
-        raise HitsUnreadable(f"the hits file at {path} {what}: {str(shown)[:200]}")
+        raise HitsUnreadable(f"the hits file at {path} {what}: {str(shown)[:_QUOTED]}")
     return frozenset(value)
 
 
@@ -169,29 +168,33 @@ def read_hits(path: Path) -> Hits:
     except (OSError, ValueError) as error:
         raise HitsUnreadable(f"the hits file at {path} could not be read: {error}") from None
     if not isinstance(data, dict):
-        raise HitsUnreadable(f"the hits file at {path} is not a JSON object: {str(data)[:200]}")
-    spots = _spot_list(data.get("hits"), path, "is not a list of spot numbers", quote=data)
+        raise HitsUnreadable(f"the hits file at {path} is not a JSON object: {str(data)[:_QUOTED]}")
+    spots = _spot_list(data.get("hits"), path, "is not a list of spot numbers", data)
     raw_windows = data.get("windows", {})
     if not isinstance(raw_windows, dict) or not all(isinstance(k, str) for k in raw_windows):
         raise HitsUnreadable(
             f"the hits file at {path} does not map test files to spot numbers: "
-            f"{str(raw_windows)[:200]}"
+            f"{str(raw_windows)[:_QUOTED]}"
         )
     windows = {
-        name: _spot_list(value, path, f"records a bad spot list for {name!r}")
+        name: _spot_list(value, path, f"records a bad spot list for {name!r}", value)
         for name, value in raw_windows.items()
         if name != LOAD_TIME
     }
     opened = data.get("opened", [])
     if not isinstance(opened, list) or not all(isinstance(name, str) for name in opened):
         raise HitsUnreadable(
-            f"the hits file at {path} does not list the test files that ran: {str(opened)[:200]}"
+            f"the hits file at {path} does not list the test files that ran: "
+            f"{str(opened)[:_QUOTED]}"
         )
     return Hits(
         spots=spots,
         windows=windows,
         load_time=_spot_list(
-            raw_windows.get(LOAD_TIME, []), path, "records a bad load-time spot list"
+            raw_windows.get(LOAD_TIME, []),
+            path,
+            "records a bad load-time spot list",
+            raw_windows.get(LOAD_TIME, []),
         ),
         opened=tuple(opened),
     )
@@ -295,7 +298,9 @@ class CoverageMap:
     suite as the framework itself ran it.
     """
 
-    files: Mapping[int, SpotFiles]
+    #: Keyed by spot, and read with ``.get``, so `select` can ask about a mutant that has no spot
+    #: at all without a branch of its own. ``None`` is never a key.
+    files: Mapping[int | None, SpotFiles]
     order_dependent: frozenset[int]
     test_files: tuple[str, ...]
 
@@ -308,8 +313,8 @@ class CoverageMap:
         about mutants it is going to run. Answering "everything" for a spot this map has never heard
         of is the safe answer to a question that should not have been asked.
         """
-        if spot is None:
-            return RUN_EVERYTHING
+        # One lookup covers both: a mutant with no spot has ``None``, which is no key of this map,
+        # and neither is a spot no pass recorded. Both fall through to the same safe answer.
         return self.files.get(spot, RUN_EVERYTHING)
 
 
@@ -328,7 +333,7 @@ def build_map(forward: Hits, reverse: Hits) -> CoverageMap:
       flaky test looks like, and it wants the same answer.
     * Only one pass reached it at all, which is the same disagreement with one side empty.
     """
-    files: dict[int, SpotFiles] = {}
+    files: dict[int | None, SpotFiles] = {}
     order_dependent: set[int] = set()
     for spot in forward.spots | reverse.spots:
         if spot in forward.load_time or spot in reverse.load_time:
