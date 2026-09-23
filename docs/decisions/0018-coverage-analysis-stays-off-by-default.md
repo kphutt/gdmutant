@@ -15,7 +15,11 @@ trigger that would reopen it.
 ## Context
 ADR-0017 built `--coverage-analysis` in three steps and deliberately left the default for last,
 "only after steps 2 to 4 have run on real projects". Step 4, the command runner's own selection
-contract, is not built, so `--runner command` can use `all` and not `per-file`.
+contract, is not built, so `--runner command` can use `all` and not `per-file`. Deciding without it
+is still sound, in one direction only: step 4 can add a setting a runner can use, never take one
+away, so it can only make the case for turning something on stronger. This decision turns nothing
+on. A decision to change the default would have to wait for step 4; a decision to leave it alone
+does not, and the missing step is itself one of the reasons below.
 
 The option has three settings.
 
