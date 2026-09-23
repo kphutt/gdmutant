@@ -229,18 +229,23 @@ class MutationRun:
         return sum(1 for o in self.outcomes if o.order_coupled)
 
     @property
+    def ran(self) -> tuple[MutantOutcome, ...]:
+        """The mutants that really ran a suite. Ignored, invalid and no-coverage ones never did, so
+        they are neither a saving nor a cost, and the two places that report the saving read this
+        one list rather than each deciding for themselves what counts."""
+        return tuple(
+            o
+            for o in self.outcomes
+            if o.verdict not in (Verdict.IGNORED, Verdict.INVALID, Verdict.NO_COVERAGE)
+        )
+
+    @property
     def selected_share(self) -> float | None:
         """The mean share of the suite's test files one mutant ran, or ``None`` when nothing ran or
         the suite's file count is unknown. A mutant that ran everything counts as a full share, so
         this is the run's real saving and not the saving on its best mutants."""
-        if not self.test_files:
-            return None
-        ran = [
-            o
-            for o in self.outcomes
-            if o.verdict not in (Verdict.IGNORED, Verdict.INVALID, Verdict.NO_COVERAGE)
-        ]
-        if not ran:
+        ran = self.ran
+        if not self.test_files or not ran:
             return None
         files = [self.test_files if o.selected is None else o.selected for o in ran]
         return sum(files) / (len(ran) * self.test_files)

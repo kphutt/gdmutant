@@ -261,7 +261,7 @@ def _selection_lines(run: MutationRun) -> list[str]:
     share = run.selected_share
     files = "test file" if run.test_files == 1 else "test files"
     lines = [
-        f"  selected: {run.selected} of {run.detected + run.survived} mutants ran only the test "
+        f"  selected: {run.selected} of {len(run.ran)} mutants ran only the test "
         f"files that reach them (the suite has {run.test_files} {files})"
     ]
     if share is not None:
