@@ -59,9 +59,12 @@ _GUT_WINDOW_HOOK_NAME = "gut_windows.gd"
 #: no-report error is raised as before — the run still fails, it is only diagnosed less precisely.
 _GDUNIT_NO_TESTS_MARKER = "No test cases found"
 
-#: What every GDScript file ends in, which is where a report name stops being a path and
-#: starts naming an inner class inside it.
+#: What every GDScript file ends in.
 _GDSCRIPT_SUFFIX = ".gd"
+#: What separates a test file's path from the inner class inside it in a report name. Matched from
+#: the right, and with the trailing dot, so a *directory* whose own name holds those letters
+#: (``v1.gd_legacy/``) cannot be mistaken for the end of the file's path.
+_INNER_CLASS_SEPARATOR = f"{_GDSCRIPT_SUFFIX}."
 
 
 def _tests_per_file(suites: Sequence[ReportedSuite]) -> dict[str, int]:
@@ -73,11 +76,16 @@ def _tests_per_file(suites: Sequence[ReportedSuite]) -> dict[str, int]:
     count toward its file rather than being a file of their own. Without that, the drop guard would
     expect far fewer tests than a selected run really produces, and read every one of them as a
     suite GUT had skipped.
+
+    The cut is made at the **last** ``.gd.`` in the name, not the first ``.gd``. A directory whose
+    own name holds those letters (``v1.gd_legacy/``) would otherwise end the path early, and every
+    file under it would be filed as one that no selection ever names, which makes the drop guard
+    quietly more forgiving there rather than louder. A name that is no path at all keeps itself.
     """
     per_file: dict[str, int] = {}
     for suite in suites:
-        cut = suite.name.find(_GDSCRIPT_SUFFIX)
-        name = suite.name if cut < 0 else suite.name[: cut + len(_GDSCRIPT_SUFFIX)]
+        head, separator, _ = suite.name.rpartition(_INNER_CLASS_SEPARATOR)
+        name = head + _GDSCRIPT_SUFFIX if separator else suite.name
         per_file[f"res://{name}"] = per_file.get(f"res://{name}", 0) + suite.tests
     return per_file
 

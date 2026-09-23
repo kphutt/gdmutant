@@ -15,6 +15,7 @@ from gdmutant.engine.runner import (
     CommandRunner,
     FileSelecting,
     MarkerRunnable,
+    ReportedSuite,
     Runner,
     RunWarning,
     SuiteTimeout,
@@ -641,6 +642,25 @@ def test_a_suite_the_report_does_not_name_gets_an_empty_name(
     )
     (suite,) = runner.run(str(tmp_path)).suites
     assert suite.name == ""
+
+
+@pytest.mark.parametrize(
+    ("reported", "file"),
+    [
+        ("test/unit/test_x.gd", "res://test/unit/test_x.gd"),
+        ("test/unit/test_x.gd.TestThing", "res://test/unit/test_x.gd"),
+        # A directory whose own name holds those two letters must not end the path early.
+        ("test/v1.gd_legacy/test_x.gd", "res://test/v1.gd_legacy/test_x.gd"),
+        ("test/v1.gd_legacy/test_x.gd.TestThing", "res://test/v1.gd_legacy/test_x.gd"),
+        # And one that really is a directory called `x.gd`, which is legal if unlikely.
+        ("test/x.gd/test_y.gd.TestThing", "res://test/x.gd/test_y.gd"),
+    ],
+)
+def test_which_file_a_report_name_belongs_to(reported: str, file: str) -> None:
+    """Cutting at the first `.gd` would end a path inside a directory name, and every file under
+    that directory would be filed as one no selection ever asks for, which makes the drop guard
+    quietly more forgiving there rather than louder."""
+    assert runner_mod._tests_per_file([ReportedSuite(reported, 2)]) == {file: 2}
 
 
 def test_a_report_name_that_is_not_a_gdscript_path_is_left_alone(
