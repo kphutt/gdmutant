@@ -1560,6 +1560,12 @@ def _write_init_config(directory: Path | None = None, *, force: bool = False) ->
     return 0
 
 
+#: `--coverage-analysis`'s default, named once so `build_parser`'s `add_argument(default=...)`
+#: and `main`'s `--dry-run` "ignored flags" note (hundreds of lines apart) read the same value
+#: instead of each spelling out `"off"` on its own, which could silently drift apart.
+_COVERAGE_ANALYSIS_DEFAULT = CoverageAnalysis.OFF.value
+
+
 def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentParser:
     """Build the `run`/`example`/`init` subcommand parser, seeding `run`'s flag defaults from
     `config` (an already-validated `.gdmutant.toml`, or `None`) so an explicit CLI flag still
@@ -1703,7 +1709,7 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     run_parser.add_argument(
         "--coverage-analysis",
         choices=tuple(mode.value for mode in CoverageAnalysis),
-        default=CoverageAnalysis.OFF.value,
+        default=_COVERAGE_ANALYSIS_DEFAULT,
         help="find which tests reach each mutant before running any: off (default: every mutant "
         "runs the whole suite), all (run the suite once on a marked copy of the project, and "
         "report a mutant whose line no test reached as 'no coverage' without running it. It is "
@@ -1941,7 +1947,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--html", args.html_path, None),
                     ("--report", args.report, None),
                     ("--progress", args.progress_style, "auto"),
-                    ("--coverage-analysis", args.coverage_analysis, "off"),
+                    ("--coverage-analysis", args.coverage_analysis, _COVERAGE_ANALYSIS_DEFAULT),
                     ("--coverage-self-check", args.coverage_self_check, str(SELF_CHECK_SAMPLE)),
                 )
                 if value != default

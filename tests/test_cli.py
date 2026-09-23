@@ -37,6 +37,7 @@ from gdmutant.cli import (
     main,
     run_mutation,
 )
+from gdmutant.engine.coverage import SELF_CHECK_SAMPLE, CoverageAnalysis
 from gdmutant.engine.loop import ProgressStyle
 from gdmutant.engine.runner import CommandRunner, SuiteResult
 
@@ -1257,6 +1258,28 @@ def test_main_dry_run_singular_message_for_one_ignored_flag(
     assert capsys.readouterr().err.strip() == "note: --dry-run runs no tests, so --json is ignored"
 
 
+def test_dry_run_at_the_default_coverage_analysis_is_not_flagged_as_ignored(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # main()'s "ignored flags" note compares args.coverage_analysis against a default that has to
+    # match build_parser's own `--coverage-analysis` default (gdmutant/cli.py's
+    # `_COVERAGE_ANALYSIS_DEFAULT`, read by both). Left at the default, --coverage-analysis must
+    # not appear in the note: if the two ever drift apart, this starts failing.
+    path = _gd(tmp_path)
+    main(["run", str(path), "--dry-run"])
+    assert "--coverage-analysis" not in capsys.readouterr().err
+
+
+def test_dry_run_flags_a_non_default_coverage_analysis_as_ignored(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The other side of the same pin: an explicit, non-default --coverage-analysis must show up
+    # in the note, so a default silently changed to "all"/"per-file" would stop being reported.
+    path = _gd(tmp_path)
+    main(["run", str(path), "--dry-run", "--coverage-analysis", "all"])
+    assert "--coverage-analysis" in capsys.readouterr().err
+
+
 def test_parser_run_subcommand() -> None:
     args = build_parser().parse_args(
         ["run", "f.gd", "--godot", "godot4", "--tests", "res://t", "--json", "r.json"]
@@ -1282,12 +1305,27 @@ def test_parser_defaults() -> None:
     assert args.tests == "res://test"
     assert args.project is None
     assert args.json_path is None
+    assert args.html_path is None
     assert args.dry_run is False
     assert not hasattr(args, "report_path")  # no --report-path flag; the runner picks it itself
     assert args.timeout is None  # default: derived per-mutant from the baseline run time
     assert args.require_clean is False
     assert args.runner is None  # no silent default — main() refuses a real run without one
     assert args.test_command is None
+    assert args.since is None  # whole-file run, not diff-scoped
+    assert args.exclude is None
+    assert args.report is None  # no extra report (e.g. step-summary) by default
+    assert args.jobs == "1"  # serial by default
+    assert args.trust_config is False  # a project's own config can't self-grant trust
+    # Coverage analysis defaults to off (every mutant runs the whole suite). See
+    # `_COVERAGE_ANALYSIS_DEFAULT` in gdmutant/cli.py, which this pins from the outside, and the
+    # two `test_dry_run_*_coverage_analysis_*` tests below, which pin its two call sites (the
+    # argparse default and the --dry-run "ignored flags" note) against each other.
+    assert args.coverage_analysis == CoverageAnalysis.OFF.value
+    assert args.coverage_self_check == str(SELF_CHECK_SAMPLE)
+    # --progress's default ("auto") is deliberately not pinned here: it only changes how much the
+    # run narrates itself on stderr (heartbeat cadence), never a report, an exit code, or which
+    # mutants run — formatting, not behavior.
 
 
 def test_parser_rejects_an_unknown_runner() -> None:
