@@ -178,6 +178,13 @@ which tests ran, so a custom `--command` is refused rather than quietly run in f
 - If the reverse pass has failing tests while the forward pass was clean, the suite depends on the
   order its files run in. gdmutant says so, names the files that failed, and runs without selection
   for the rest of that run. You still get the `no coverage` verdicts.
+- The reverse pass also checks that your test runner ran the files it was given, and only those, in
+  that order. If it did not, selection would run your whole suite for every mutant while the
+  summary reported a saving, so gdmutant says so and runs without selection instead. The usual
+  cause is a test framework reading a configuration file of its own: GUT reads
+  `res://.gutconfig.json` unless told otherwise, and a `dirs` key there is *added* to whatever
+  `-gtest=` names, so nothing is ever restricted. Move those directories onto `--tests` and out of
+  the config file to get selection.
 - A kill from a selected run is confirmed before it is believed: the same test files run once
   against your unmutated source. If they fail there too, the kill was not the mutant's, so the
   mutant is re-run against the whole suite and the summary counts it as an order-coupled kill. Each
