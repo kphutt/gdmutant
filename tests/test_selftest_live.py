@@ -1150,10 +1150,15 @@ func test_a_deferred_call_lands() -> void:
 func test_b_starts_a_timer_it_does_not_wait_for() -> void:
 \tDeferred.start_timer()
 """,
+    # The observer starts the timer itself if nothing has yet. GdUnit4's discovery order is not
+    # alphabetical on every platform (Linux runs these two the other way round), so a file that
+    # only ever observes would fail outright whenever it happened to run first.
     "deferred_test/test_b_observer.gd": """extends GdUnitTestSuite
 
 
 func test_the_timer_started_in_another_file_fired() -> void:
+\tif Deferred.ticks == 0:
+\t\tDeferred.start_timer()
 \tawait get_tree().create_timer(0.5).timeout
 \tassert_int(Deferred.ticks).is_equal(3)
 """,
@@ -1176,6 +1181,8 @@ func test_b_starts_a_timer_it_does_not_wait_for() -> void:
 
 
 func test_the_timer_started_in_another_file_fired() -> void:
+\tif Deferred.ticks == 0:
+\t\tDeferred.start_timer()
 \tawait wait_seconds(0.5)
 \tassert_eq(Deferred.ticks, 3)
 """,
@@ -1408,7 +1415,7 @@ static var ticks := 0
 
 static func start_timer() -> void:
 \tvar tree := Engine.get_main_loop() as SceneTree
-\ttree.create_timer(0.3).timeout.connect(_tick)
+\ttree.create_timer(0.6).timeout.connect(_tick)
 
 
 static func started() -> bool:
@@ -1427,18 +1434,32 @@ _TIMER_LINE = next(
 
 
 def _crossing_tests(framework: str) -> dict[str, str]:
-    """One file that starts the timer, and one that runs long enough for it to fire."""
+    """Two files that each start a timer and then wait for less time than it needs, and one that
+    touches nothing.
+
+    Each timer therefore fires after its own file's window has closed, whichever order the
+    framework runs them in, and lands either inside the other file's window or after every window.
+    Both of those make the line it sets one no single file can be credited with, so this does not
+    depend on which file the framework decides to run first. It does not on every platform:
+    GdUnit4's discovery order is not alphabetical on Linux.
+
+    The third file exists so that selection has something to leave out, which is what makes the
+    assertion about the timer's own line worth making.
+    """
     if framework == "gdunit4":
         folder = "cross_test"
-        starts = "\tCrossing.start_timer()\n\tassert_bool(Crossing.started()).is_true()"
-        waits = "\tawait get_tree().create_timer(0.5).timeout\n\tassert_bool(true).is_true()"
+        starts = "\tCrossing.start_timer()\n\tawait get_tree().create_timer(0.4).timeout"
+        starts += "\n\tassert_bool(Crossing.started()).is_true()"
+        idle = "\tassert_bool(true).is_true()"
     else:
         folder = "cross_gut"
-        starts = "\tCrossing.start_timer()\n\tassert_true(Crossing.started())"
-        waits = "\tawait wait_seconds(0.5)\n\tassert_true(true)"
+        starts = "\tCrossing.start_timer()\n\tawait wait_seconds(0.4)"
+        starts += "\n\tassert_true(Crossing.started())"
+        idle = "\tassert_true(true)"
     return {
         f"{folder}/test_a_starts.gd": _suite(framework, "starts_a_timer", starts),
-        f"{folder}/test_b_waits.gd": _suite(framework, "waits", waits),
+        f"{folder}/test_b_starts.gd": _suite(framework, "starts_another_timer", starts),
+        f"{folder}/test_c_idle.gd": _suite(framework, "touches_nothing", idle),
     }
 
 
@@ -1446,12 +1467,13 @@ def _crossing_tests(framework: str) -> dict[str, str]:
 def test_deferred_code_that_crosses_test_files_runs_every_test_file(
     tmp_path: Path, runner: str
 ) -> None:
-    """The reverse pass earning its keep.
+    """A timer's callback belongs to no single test file, and gdmutant must not pretend it does.
 
-    A timer one file starts and never waits for fires while a *later* file is running, so the
-    forward pass credits the line it sets to that later file, which cannot possibly kill a mutant
-    there. Running the files backwards makes "later" a different file, or no file at all, so the
-    two passes cannot agree and the line runs every test instead.
+    Each of two files starts a timer and then waits for less time than the timer needs, so every
+    callback fires after its own file's window has closed: either inside another file's window,
+    where the forward and reverse passes cannot agree about which, or after every window, which is
+    load-time code. Either way the line it sets runs every test rather than the one file that
+    happened to be on screen when it went off.
     """
     _skip_without(runner)
     tests = _crossing_tests(runner)
@@ -1468,70 +1490,95 @@ def test_deferred_code_that_crosses_test_files_runs_every_test_file(
     assert Verdict.NO_COVERAGE not in verdicts[_TICK_LINE], (
         "a line a timer reaches is not unreached"
     )
-    # Not vacuous: the timer's own line is reached inside one file's window and is selected, so
-    # this project does select, and the crossing line is specifically the one it will not.
-    assert by_line[_TIMER_LINE] == {1}
+    # Not vacuous: the timer's own line is reached inside the two starters' own windows and is
+    # selected to just those two of the three files, so this project does select, and the line the
+    # callback sets is specifically the one it will not.
+    assert result.test_files == 3
+    assert by_line[_TIMER_LINE] == {2}
 
 
-#: Shared state two suites can seed and a third can depend on.
+#: Shared state one suite can seed and another can depend on. `seed` returns its value so a suite
+#: can call it from a class-level `static var`, which Godot runs when it *loads* the script rather
+#: than when it runs a test.
 _SHARED = """class_name Shared
 extends RefCounted
 
 static var seeded := 0
 
 
-static func seed() -> void:
+static func seed() -> int:
 \tseeded = 4
+\treturn seeded
 
 
 static func doubled(value: int) -> int:
 \treturn value * 2
 """
+#: The line of `_SHARED` only the dependent suite below reaches, found in the fixture rather than
+#: counted by hand.
+_DOUBLED_LINE = _SHARED.split("\n").index("\treturn value * 2") + 1
 
 
-def _shared_state_tests(framework: str, folder: str, *, trailing_seed: bool) -> dict[str, str]:
-    """Suites that share state through `_SHARED`: one that seeds it, then one that needs it.
-
-    `trailing_seed` adds a second seeding file *after* the one that needs it. With it, the forward
-    order and the reverse one both put a seeding file first, so both marker passes are green and
-    only running the middle file on its own fails, which is order coupling no pass can see. Without
-    it, reversing the two files is enough to break the suite, which is what the reverse pass is for.
-
-    One helper for both cases on purpose. They differ by one file, and two near-copies would be two
-    places to fix the day a framework's assertion syntax moves.
-    """
+def _shared_bodies(framework: str) -> tuple[str, str]:
+    """The seeding suite's test body and the dependent suite's, for `framework`."""
     if framework == "gdunit4":
-        seed_body = "\tShared.seed()\n\tassert_int(Shared.seeded).is_equal(4)"
-        user_body = (
-            "\tassert_int(Shared.seeded).is_equal(4)\n\tassert_int(Shared.doubled(3)).is_equal(6)"
+        return (
+            "\tassert_int(Shared.seeded).is_equal(4)",
+            "\tassert_int(Shared.seeded).is_equal(4)\n\tassert_int(Shared.doubled(3)).is_equal(6)",
         )
-    else:
-        seed_body = "\tShared.seed()\n\tassert_eq(Shared.seeded, 4)"
-        user_body = "\tassert_eq(Shared.seeded, 4)\n\tassert_eq(Shared.doubled(3), 6)"
-    files = {
-        f"{folder}/test_a_seed.gd": _suite(framework, "seed", seed_body),
+    return (
+        "\tassert_eq(Shared.seeded, 4)",
+        "\tassert_eq(Shared.seeded, 4)\n\tassert_eq(Shared.doubled(3), 6)",
+    )
+
+
+def _coupled_tests(framework: str, folder: str) -> dict[str, str]:
+    """A suite that seeds shared state **when its script loads**, and one that needs it.
+
+    Loading is what makes this independent of run order: both frameworks load every suite they were
+    given before they run any of them, so the dependent suite passes wherever it lands. Run it on
+    its own, though, and the seeding suite is never loaded, so it fails for a reason that has
+    nothing to do with any mutant. That is order coupling neither marker pass can see, which is
+    what the confirmation of a kill is for.
+    """
+    seed_body, user_body = _shared_bodies(framework)
+    head = "extends GdUnitTestSuite" if framework == "gdunit4" else "extends GutTest"
+    seeder = (
+        f"{head}\n\nstatic var _seeded := Shared.seed()\n\n\n"
+        f"func test_seeded() -> void:\n{seed_body}\n"
+    )
+    return {
+        f"{folder}/test_a_seed.gd": seeder,
         f"{folder}/test_b_user.gd": _suite(framework, "uses", user_body),
     }
-    if trailing_seed:
-        files[f"{folder}/test_c_seed.gd"] = _suite(framework, "seed_again", seed_body)
-    return files
+
+
+def _run_order(project: Path, runner: str, test_dir: str) -> list[str]:
+    """The test files of `test_dir`, by file stem, in the order this framework runs them here.
+
+    Asked rather than assumed. GdUnit4's discovery order is alphabetical on Windows and is not on
+    Linux, and a fixture that needs one file to run before another has to know which way round it
+    will be on the machine it is running on.
+    """
+    result = _live_runner(runner, test_dir).run(str(project))
+    return [Path(suite.name.split(".")[0]).stem for suite in result.suites]
 
 
 @pytest.mark.parametrize("runner", ["gdunit4", "gut"])
 def test_a_kill_is_not_believed_when_its_test_files_fail_unmutated(
     tmp_path: Path, runner: str
 ) -> None:
-    """The middle file reaches `doubled` and nothing else does, so a mutant there runs against that
-    file alone, where it fails for a reason that has nothing to do with the mutant. The kill is
+    """One file reaches `doubled` and nothing else does, so a mutant there runs against that file
+    alone, where it fails because the file that seeds its shared state was never loaded. The kill is
     confirmed against the unmutated source, found not to be the mutant's, and the whole suite
     decides instead."""
     _skip_without(runner)
     folder = "coupled_test" if runner == "gdunit4" else "coupled_gut"
-    tests = _shared_state_tests(runner, folder, trailing_seed=True)
+    tests = _coupled_tests(runner, folder)
     project = _coverage_project(tmp_path, f"coupled-{runner}", {"shared.gd": _SHARED, **tests})
     result = _per_file_run(project, runner, f"res://{folder}", self_check=0, target="shared.gd")
-    doubled = [o for o in result.outcomes if o.mutant.span.line == 12]
-    assert doubled, "the fixture no longer has a line only the middle file reaches"
+    doubled = [o for o in result.outcomes if o.mutant.span.line == _DOUBLED_LINE]
+    assert doubled, "the fixture no longer has a line only the dependent file reaches"
     assert result.order_coupled >= 1
     coupled = [o for o in doubled if o.order_coupled]
     assert coupled
@@ -1544,12 +1591,29 @@ def test_a_suite_that_depends_on_file_order_refuses_selection_and_keeps_no_cover
 ) -> None:
     """Selection is unsound for such a suite, so gdmutant says so and stops selecting for that run.
 
+    The fixture is built in two steps, because a suite that only passes one way round has to know
+    which way round this framework runs it: two seeding suites go in, the framework is asked which
+    one it runs last, and that one is rewritten to depend on the other having gone first.
+
     It is not an error: the forward pass alone is enough for the `no coverage` verdict, which is
     what the run still reports."""
     _skip_without(runner)
     folder = "ordered_test" if runner == "gdunit4" else "ordered_gut"
-    tests = _shared_state_tests(runner, folder, trailing_seed=False)
-    project = _coverage_project(tmp_path, f"ordered-{runner}", {"shared.gd": _SHARED, **tests})
+    seed_body, user_body = _shared_bodies(runner)
+    seeder = _suite(runner, "seeds", "\tShared.seed()\n" + seed_body)
+    project = _coverage_project(
+        tmp_path,
+        f"ordered-{runner}",
+        {
+            "shared.gd": _SHARED,
+            f"{folder}/test_a_one.gd": seeder,
+            f"{folder}/test_b_two.gd": seeder,
+        },
+    )
+    last = _run_order(project, runner, f"res://{folder}")[-1]
+    (project / folder / f"{last}.gd").write_text(
+        _suite(runner, "uses", user_body), encoding="utf-8", newline="\n"
+    )
     args = [*_runner_args(runner, f"res://{folder}"), "--coverage-analysis", "per-file"]
     done, report = _gdmutant(project, "shared.gd", args, tmp_path / f"ordered-{runner}.json")
     assert done.returncode == 0, done.stdout + done.stderr
