@@ -21,7 +21,8 @@ from gdmutant.adapters.gdscript.marker_run import (
     RECORDER_DIR,
     WRITER_AUTOLOAD,
     GDScriptMarker,
-    _with_writer_autoload,
+    _prepared_settings,
+    _with_setting,
 )
 from gdmutant.adapters.gdscript.markers import MARKER_AUTOLOAD
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner, GutRunner
@@ -115,17 +116,43 @@ def test_spot_ids_are_unique_across_files(tmp_path: Path, monkeypatch: pytest.Mo
     assert f"{MARKER_AUTOLOAD}.hit(1); return" in (copy / "b.gd").read_text(encoding="utf-8")
 
 
+def _writer_entry() -> str:
+    return f'{WRITER_AUTOLOAD}="*res://{RECORDER_DIR}/writer.gd"'
+
+
 def test_the_writer_is_registered_first_in_an_existing_autoload_section() -> None:
     settings = '[autoload]\n\nGame="*res://game.gd"\n'
-    assert _with_writer_autoload(settings) == (
-        f'[autoload]\n{WRITER_AUTOLOAD}="*res://{RECORDER_DIR}/writer.gd"\n\nGame="*res://game.gd"\n'
+    placed = _with_setting(
+        settings, "autoload", WRITER_AUTOLOAD, f'"*res://{RECORDER_DIR}/writer.gd"'
     )
+    assert placed == f'[autoload]\n{_writer_entry()}\n\nGame="*res://game.gd"\n'
 
 
 def test_a_project_with_no_autoloads_gains_a_section() -> None:
-    assert _with_writer_autoload("config_version=5\n\n") == (
-        f'config_version=5\n\n[autoload]\n\n{WRITER_AUTOLOAD}="*res://{RECORDER_DIR}/writer.gd"\n'
+    assert _prepared_settings("config_version=5\n\n").startswith(
+        f"config_version=5\n\n[autoload]\n\n{_writer_entry()}\n"
     )
+
+
+def test_the_copy_never_treats_a_gdscript_warning_as_an_error() -> None:
+    """The recorder is gdmutant's code in a throwaway copy, not code the project's own warning
+    policy is about. gdUnit4's own repository treats an untyped declaration as an error, which
+    stopped the recorder from compiling at all on a project whose own suite is healthy."""
+    assert "[debug]\n\ngdscript/warnings/enable=false" in _prepared_settings("config_version=5\n")
+
+
+def test_an_existing_warning_setting_is_replaced_where_it_stands() -> None:
+    settings = "[debug]\ngdscript/warnings/enable=true\nother/key=1\n\n[rendering]\nx=1\n"
+    prepared = _prepared_settings(settings)
+    assert "[debug]\ngdscript/warnings/enable=false\nother/key=1\n" in prepared
+    assert prepared.count("gdscript/warnings/enable") == 1
+
+
+def test_a_key_in_a_later_section_is_not_mistaken_for_this_ones() -> None:
+    settings = "[debug]\nkeep=1\n\n[other]\ngdscript/warnings/enable=true\n"
+    prepared = _prepared_settings(settings)
+    assert "[debug]\ngdscript/warnings/enable=false\nkeep=1\n" in prepared
+    assert "[other]\ngdscript/warnings/enable=true\n" in prepared
 
 
 def test_a_copy_with_no_project_file_is_refused(tmp_path: Path) -> None:
@@ -457,8 +484,8 @@ def test_a_commented_out_autoload_entry_is_not_a_taken_name(
 
 
 def test_trailing_blank_lines_are_trimmed_but_nothing_else() -> None:
-    assert _with_writer_autoload("k=VX\n\n\n").startswith("k=VX\n\n[autoload]")
-    assert _with_writer_autoload("k=V  \n").startswith("k=V  \n\n[autoload]")
+    assert _prepared_settings("k=VX\n\n\n").startswith("k=VX\n\n[autoload]")
+    assert _prepared_settings("k=V  \n").startswith("k=V  \n\n[autoload]")
 
 
 def test_a_project_file_with_non_ascii_text_is_read_as_utf8(

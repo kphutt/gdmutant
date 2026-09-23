@@ -116,10 +116,10 @@ func _notification(what: int) -> void:
 \tif what == NOTIFICATION_PREDELETE:
 \t\tvar windows := {{}}
 \t\tvar hits := {{}}
-\t\tfor key in {MARKER_AUTOLOAD}.windows:
+\t\tfor key: Variant in {MARKER_AUTOLOAD}.windows:
 \t\t\tvar spots: Array = {MARKER_AUTOLOAD}.windows[key].keys()
 \t\t\twindows[key] = spots
-\t\t\tfor spot in spots:
+\t\t\tfor spot: Variant in spots:
 \t\t\t\thits[spot] = true
 \t\tvar out := FileAccess.open("res://{HITS_FILE}", FileAccess.WRITE)
 \t\tout.store_string(JSON.stringify({{
@@ -177,7 +177,7 @@ class GDScriptMarker:
         (recorder / "marks.gd").write_text(_RECORDER_SOURCE, encoding="utf-8", newline="")
         (recorder / "writer.gd").write_text(_WRITER_SOURCE, encoding="utf-8", newline="")
         settings.write_text(
-            _with_writer_autoload(settings.read_text(encoding="utf-8")),
+            _prepared_settings(settings.read_text(encoding="utf-8")),
             encoding="utf-8",
             newline="",
         )
@@ -246,12 +246,53 @@ def _refuse_taken_names(copy: Path, settings: Path) -> None:
             )
 
 
-def _with_writer_autoload(settings: str) -> str:
-    """`settings` (a project.godot) with the hits writer registered as the FIRST autoload."""
-    entry = f'{WRITER_AUTOLOAD}="*res://{RECORDER_DIR}/writer.gd"'
+#: The project setting that turns every GDScript warning off, and the section it lives under.
+_WARNINGS_SECTION = "debug"
+_WARNINGS_KEY = "gdscript/warnings/enable"
+
+
+def _prepared_settings(settings: str) -> str:
+    """`settings` (a project.godot) as the marked copy needs it.
+
+    Two changes. The hits writer is registered as the first autoload, so Godot frees it last and it
+    can still see a hit made while another autoload shuts down.
+
+    And GDScript warnings are switched off for the copy. A project may set a warning to be treated
+    as an error, which is a rule about the code its author writes, and the recorder is not that: it
+    is gdmutant's code, dropped into a throwaway copy for one run. gdUnit4's own repository does
+    exactly this (``untyped_declaration=2``), and it stopped the recorder from compiling at all, so
+    the marker run failed on a project whose own suite is perfectly healthy. Turning the whole
+    category off rather than the one warning that bit is deliberate: a later Godot can add a warning
+    gdmutant has never heard of, and the recorder would fail the same way again.
+
+    It hides nothing that matters. A warning is not a parse error, so a marked file Godot genuinely
+    cannot load still fails the run, and a project whose own code trips a warning-as-error has a red
+    baseline long before coverage analysis is asked for.
+    """
+    with_writer = _with_setting(
+        settings, "autoload", WRITER_AUTOLOAD, f'"*res://{RECORDER_DIR}/writer.gd"'
+    )
+    return _with_setting(with_writer, _WARNINGS_SECTION, _WARNINGS_KEY, "false")
+
+
+def _with_setting(settings: str, section: str, key: str, value: str) -> str:
+    """`settings` (a project.godot) with ``key=value`` set first in ``[section]``.
+
+    First in the section, because the one caller that cares about position needs it: an autoload
+    registered first is freed last. A key already in that section is replaced where it stands, and a
+    section that is not there at all is added at the end.
+    """
+    entry = f"{key}={value}"
     lines = settings.split("\n")
-    for index, line in enumerate(lines):
-        if line.strip() == "[autoload]":
-            lines.insert(index + 1, entry)
+    header = f"[{section}]"
+    start = next((index for index, line in enumerate(lines) if line.strip() == header), None)
+    if start is None:
+        return settings.rstrip("\n") + f"\n\n{header}\n\n{entry}\n"
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("["):
+            break
+        if lines[index].split("=", 1)[0].strip() == key:
+            lines[index] = entry
             return "\n".join(lines)
-    return settings.rstrip("\n") + f"\n\n[autoload]\n\n{entry}\n"
+    lines.insert(start + 1, entry)
+    return "\n".join(lines)
