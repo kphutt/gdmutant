@@ -102,15 +102,27 @@ class Hits:
     ``--coverage-analysis all`` ever needs. The rest is what selection adds (step 3): `windows`
     maps each test file to the spots reached while it was running, `load_time` holds the spots
     reached while no test file was, and `opened` lists the test files that opened a window, in the
-    order they ran. A file that opened a window and reached nothing is still in both `windows` (with
-    an empty set) and `opened`, so "the hook never fired" and "this file reaches nothing" stay
-    distinguishable.
+    order they ran, once per suite it ran, so a file holding several suites appears several times
+    (`files` is the distinct list). A file that opened a window and reached nothing is still in both
+    `windows` (with an empty set) and `opened`, so "the hook never fired" and "this file reaches
+    nothing" stay distinguishable.
     """
 
     spots: frozenset[int]
     windows: Mapping[str, frozenset[int]] = field(default_factory=dict)
     load_time: frozenset[int] = frozenset()
     opened: tuple[str, ...] = ()
+
+    @property
+    def files(self) -> tuple[str, ...]:
+        """The distinct test files, in the order they first ran.
+
+        A framework may run several suites out of one file: GUT treats every inner class of a test
+        script as a suite of its own, so one file opens several windows in a row. The file is still
+        one file to hand back on a command line, and one file to be credited with a hit, so
+        everything outside `opened` itself works from this.
+        """
+        return tuple(dict.fromkeys(self.opened))
 
 
 #: A default that is not ``None``, since ``None`` is a value a hits file can really hold.
@@ -333,7 +345,7 @@ def build_map(forward: Hits, reverse: Hits) -> CoverageMap:
             # contradicts itself. Say everything, the one answer that cannot lose a kill.
             files[spot] = ahead or RUN_EVERYTHING
     return CoverageMap(
-        files=files, order_dependent=frozenset(order_dependent), test_files=forward.opened
+        files=files, order_dependent=frozenset(order_dependent), test_files=forward.files
     )
 
 

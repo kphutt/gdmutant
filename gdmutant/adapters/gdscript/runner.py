@@ -34,6 +34,7 @@ from gdmutant.adapters.gdscript.marker_run import WINDOW_HOOK_NAME
 from gdmutant.adapters.gdscript.markers import MARKER_AUTOLOAD
 from gdmutant.engine.loop import SourceOutsideProject
 from gdmutant.engine.runner import (
+    ReportedSuite,
     SuiteResult,
     SuiteTimeout,
     parse_junit_xml,
@@ -57,6 +58,29 @@ _GUT_WINDOW_HOOK_NAME = "gut_windows.gd"
 #: **fail-safe**: if a future GdUnit4 reworded this, the hint simply stops appearing and the generic
 #: no-report error is raised as before — the run still fails, it is only diagnosed less precisely.
 _GDUNIT_NO_TESTS_MARKER = "No test cases found"
+
+#: What every GDScript file ends in, which is where a report name stops being a path and
+#: starts naming an inner class inside it.
+_GDSCRIPT_SUFFIX = ".gd"
+
+
+def _tests_per_file(suites: Sequence[ReportedSuite]) -> dict[str, int]:
+    """How many tests each test *file* has, from GUT's report, keyed the way a selection names it.
+
+    GUT names a suite in its report by the file's path under ``res://`` (verified live against
+    v9.7.1: ``<testsuite name="test/unit/test_x.gd">``), and appends the inner class for a suite
+    written as one (``test_x.gd.TestThing``). A selection names the file, so an inner class's tests
+    count toward its file rather than being a file of their own. Without that, the drop guard would
+    expect far fewer tests than a selected run really produces, and read every one of them as a
+    suite GUT had skipped.
+    """
+    per_file: dict[str, int] = {}
+    for suite in suites:
+        cut = suite.name.find(_GDSCRIPT_SUFFIX)
+        name = suite.name if cut < 0 else suite.name[: cut + len(_GDSCRIPT_SUFFIX)]
+        per_file[f"res://{name}"] = per_file.get(f"res://{name}", 0) + suite.tests
+    return per_file
+
 
 # The runners' defaults. DEFAULT_TIMEOUT is exposed so the CLI can present it (its --timeout
 # default) from one source, without reading it off a class at parse time (which breaks when a test
@@ -649,7 +673,9 @@ func run() -> void:
 
 
 func _on_start_script(script_obj) -> void:
-\t{MARKER_AUTOLOAD}.begin_file(str(script_obj.get_full_name()))
+\t## `path`, not `get_full_name()`: the latter appends the inner class, and GUT runs every inner
+\t## class of a test script as a suite of its own. The file is what gdmutant hands back to it.
+\t{MARKER_AUTOLOAD}.begin_file(str(script_obj.path))
 
 
 func _on_end_script() -> void:
@@ -712,12 +738,7 @@ func _on_end_script() -> void:
             # instance is safe. A selected run is never the first: selection needs a marker run,
             # which needs a baseline.
             self._baseline_tests = tests
-            # GUT names a suite in its report by the file's path under ``res://`` (verified live
-            # against v9.7.1: ``<testsuite name="test/unit/test_x.gd">``), which is exactly what a
-            # selection calls it once ``res://`` is put back.
-            self._file_tests = {
-                f"res://{suite.name}": suite.tests for suite in (result.suites if result else ())
-            }
+            self._file_tests = _tests_per_file(result.suites if result else ())
             baseline = tests
         elif tests > baseline:
             # Non-determinism canary (symmetric to the < baseline guard below). A legitimate mutant

@@ -535,7 +535,10 @@ def test_install_windows_writes_a_hook_that_listens_to_guts_own_signals(tmp_path
     assert source.startswith("extends GutHookScript")
     assert "gut.start_script.connect" in source
     assert "gut.end_script.connect" in source
-    assert "_GdmMarks.begin_file(str(script_obj.get_full_name()))" in source
+    # `path`, not `get_full_name()`: GUT runs every inner class of a test script as a suite of its
+    # own, and `get_full_name()` appends that class. The file is what a selection can hand back.
+    assert "_GdmMarks.begin_file(str(script_obj.path))" in source
+    assert "get_full_name()" not in source.replace("`get_full_name()`", "")  # only in the comment
     assert "_GdmMarks.end_file()" in source
 
 
@@ -592,6 +595,55 @@ def test_a_skipped_suite_inside_a_selected_run_is_still_an_error(
     runner.run(str(tmp_path))
     with pytest.raises(RuntimeError, match="fewer than the 5 the 2 test files it was given"):
         runner.run_selected(str(tmp_path), ["res://test/unit/a.gd", "res://test/unit/b.gd"])
+
+
+_INNER_CLASS_XML = (
+    "<testsuites>"
+    '<testsuite name="test/unit/a.gd" tests="3" failures="0"/>'
+    '<testsuite name="test/unit/a.gd.TestOne" tests="2" failures="0"/>'
+    '<testsuite name="test/unit/a.gd.TestTwo" tests="4" failures="0"/>'
+    '<testsuite name="test/unit/b.gd" tests="1" failures="0"/>'
+    "</testsuites>"
+)
+
+
+def test_an_inner_class_suites_tests_count_toward_its_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GUT runs every inner class of a test script as a suite of its own, and names it
+    ``file.gd.TestThing`` in the report. A selection names the file, so running that one file must
+    be expected to produce all nine of its tests, not the three the plain suite has."""
+    runner = _baseline_then(
+        tmp_path,
+        monkeypatch,
+        [
+            _INNER_CLASS_XML,
+            "<testsuites>"
+            '<testsuite name="test/unit/a.gd" tests="3"/>'
+            '<testsuite name="test/unit/a.gd.TestOne" tests="2"/>'
+            '<testsuite name="test/unit/a.gd.TestTwo" tests="4"/>'
+            "</testsuites>",
+        ],
+    )
+    assert runner.run(str(tmp_path)).tests == 10
+    assert runner.run_selected(str(tmp_path), ["res://test/unit/a.gd"]).tests == 9
+
+
+def test_a_report_name_that_is_not_a_gdscript_path_is_left_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A framework that names a suite some other way keeps that name, so the guard simply never
+    matches it and stays out of the way instead of inventing a file."""
+    runner = _baseline_then(
+        tmp_path,
+        monkeypatch,
+        [
+            '<testsuites><testsuite name="Some Suite" tests="4" failures="0"/></testsuites>',
+            '<testsuites><testsuite name="Some Suite" tests="4" failures="0"/></testsuites>',
+        ],
+    )
+    assert runner.run(str(tmp_path)).tests == 4
+    assert runner.run_selected(str(tmp_path), ["res://Some Suite"]).tests == 4
 
 
 def test_a_selected_file_the_baseline_never_reported_only_lowers_the_floor(

@@ -879,7 +879,7 @@ def _reverse_pass(
     """
     if progress is not None:
         progress("running the suite once more, files in reverse order ...")
-    asked = tuple(reversed(forward.opened))
+    asked = tuple(reversed(forward.files))
     result, hits = _marker_pass(
         hits_path,
         lambda: runner.run_markers_files(str(copy), asked),
@@ -907,7 +907,7 @@ def _reverse_pass(
         _REVERSE,
     )
     assert not isinstance(hits, HitsUnreadable)  # _require_clean raises on that
-    if hits.opened != asked:
+    if hits.files != asked:
         # The reverse pass is the one place gdmutant can tell whether a runner really runs the test
         # files it is given, and only those, because it is the one pass whose expected answer is
         # known: the forward pass's files, backwards. A runner that ran something else would run
@@ -918,7 +918,7 @@ def _reverse_pass(
         if progress is not None:
             progress(
                 f"coverage: the runner was asked for {len(asked)} test files in a set order and "
-                f"ran {len(hits.opened)} in another, so it does not run only the test files it is "
+                f"ran {len(hits.files)} in another, so it does not run only the test files it is "
                 "given. Running fewer tests for a mutant would change nothing, so gdmutant will "
                 "not select tests for this run. It still reports the mutants no test reaches. "
                 "A test framework that reads its own configuration file is the usual cause: check "

@@ -69,6 +69,16 @@ def test_the_windows_and_the_order_the_files_ran_are_read_back(tmp_path: Path) -
     assert hits.opened == (A, B)
 
 
+def test_a_file_that_runs_several_suites_is_one_file(tmp_path: Path) -> None:
+    """GUT runs every inner class of a test script as a suite of its own, so one file opens a
+    window several times in a row. It is still one file to hand back on a command line."""
+    hits = read_hits(
+        _write(tmp_path, {"hits": [0], "windows": {A: [0], B: []}, "opened": [A, A, B, A]})
+    )
+    assert hits.opened == (A, A, B, A)
+    assert hits.files == (A, B)
+
+
 def test_a_file_that_opened_a_window_and_reached_nothing_is_still_there(tmp_path: Path) -> None:
     """ "This file reaches nothing" and "the hook never fired" must stay tellable apart."""
     hits = read_hits(_write(tmp_path, {"hits": [0], "windows": {A: [0], B: []}, "opened": [A, B]}))
