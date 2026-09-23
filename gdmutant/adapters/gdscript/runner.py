@@ -61,10 +61,28 @@ _GDUNIT_NO_TESTS_MARKER = "No test cases found"
 
 #: What every GDScript file ends in.
 _GDSCRIPT_SUFFIX = ".gd"
-#: What separates a test file's path from the inner class inside it in a report name. Matched from
-#: the right, and with the trailing dot, so a *directory* whose own name holds those letters
-#: (``v1.gd_legacy/``) cannot be mistaken for the end of the file's path.
-_INNER_CLASS_SEPARATOR = f"{_GDSCRIPT_SUFFIX}."
+
+
+def _reported_file(name: str) -> str:
+    """The test file a report name belongs to, with any inner class taken off the end.
+
+    The rule, and the reason it is this one: **only the last path segment is ever looked at**. A
+    report name is a path, and an inner class can only ever be a suffix on the file at the end of
+    it, so nothing a directory is called can take part in the decision. Two earlier versions of
+    this searched the whole name for ``.gd`` and then for ``.gd.``, and both could end the path
+    inside a directory (``v1.gd_legacy/``, then ``v1.gd.legacy/``) and lose the real file.
+
+    Inside that segment: a segment that already ends in ``.gd`` **is** the file, whatever else it
+    holds. Otherwise the last dot-separated piece is the inner class, because a GDScript class name
+    cannot hold a dot, and it is only taken off when what remains still ends in ``.gd``. So a name
+    that is no path at all keeps itself, and so does a suite a framework named some other way.
+    """
+    directory, slash, segment = name.rpartition("/")
+    if not segment.endswith(_GDSCRIPT_SUFFIX):
+        file, dot, _ = segment.rpartition(".")
+        if dot and file.endswith(_GDSCRIPT_SUFFIX):
+            segment = file
+    return directory + slash + segment
 
 
 def _tests_per_file(suites: Sequence[ReportedSuite]) -> dict[str, int]:
@@ -73,20 +91,14 @@ def _tests_per_file(suites: Sequence[ReportedSuite]) -> dict[str, int]:
     GUT names a suite in its report by the file's path under ``res://`` (verified live against
     v9.7.1: ``<testsuite name="test/unit/test_x.gd">``), and appends the inner class for a suite
     written as one (``test_x.gd.TestThing``). A selection names the file, so an inner class's tests
-    count toward its file rather than being a file of their own. Without that, the drop guard would
-    expect far fewer tests than a selected run really produces, and read every one of them as a
-    suite GUT had skipped.
-
-    The cut is made at the **last** ``.gd.`` in the name, not the first ``.gd``. A directory whose
-    own name holds those letters (``v1.gd_legacy/``) would otherwise end the path early, and every
-    file under it would be filed as one that no selection ever names, which makes the drop guard
-    quietly more forgiving there rather than louder. A name that is no path at all keeps itself.
+    count toward its file (`_reported_file`) rather than being a file of their own. Without that,
+    the drop guard would expect far fewer tests than a selected run really produces, and read every
+    one of them as a suite GUT had skipped.
     """
     per_file: dict[str, int] = {}
     for suite in suites:
-        head, separator, _ = suite.name.rpartition(_INNER_CLASS_SEPARATOR)
-        name = head + _GDSCRIPT_SUFFIX if separator else suite.name
-        per_file[f"res://{name}"] = per_file.get(f"res://{name}", 0) + suite.tests
+        name = f"res://{_reported_file(suite.name)}"
+        per_file[name] = per_file.get(name, 0) + suite.tests
     return per_file
 
 

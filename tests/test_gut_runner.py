@@ -649,14 +649,26 @@ def test_a_suite_the_report_does_not_name_gets_an_empty_name(
     [
         ("test/unit/test_x.gd", "res://test/unit/test_x.gd"),
         ("test/unit/test_x.gd.TestThing", "res://test/unit/test_x.gd"),
-        # A directory whose own name holds those two letters must not end the path early.
+        # Nothing a directory is called may take part in the decision. These are the shapes two
+        # earlier versions of this got wrong: a directory holding `.gd`, one holding `.gd.`, and
+        # one that is the only `.gd.` in the whole name because the suite has no inner class.
         ("test/v1.gd_legacy/test_x.gd", "res://test/v1.gd_legacy/test_x.gd"),
         ("test/v1.gd_legacy/test_x.gd.TestThing", "res://test/v1.gd_legacy/test_x.gd"),
-        # And one that really is a directory called `x.gd`, which is legal if unlikely.
-        # This one holds the separator twice, so reading it from the left and from the right
-        # disagree, which is what the first-occurrence bug actually was.
-        ("test/x.gd.old/test_y.gd.TestThing", "res://test/x.gd.old/test_y.gd"),
+        ("test/v1.gd.legacy/test_x.gd", "res://test/v1.gd.legacy/test_x.gd"),
+        ("test/v1.gd.legacy/test_x.gd.TestThing", "res://test/v1.gd.legacy/test_x.gd"),
+        ("test/x.gd/test_y.gd", "res://test/x.gd/test_y.gd"),
         ("test/x.gd/test_y.gd.TestThing", "res://test/x.gd/test_y.gd"),
+        ("test/x.gd.old/test_y.gd.TestThing", "res://test/x.gd.old/test_y.gd"),
+        # A file that really is called `x.gd.gd`, which is legal if unlikely.
+        ("test/x.gd.gd", "res://test/x.gd.gd"),
+        ("test/x.gd.gd.TestThing", "res://test/x.gd.gd"),
+        # And a name that is no path at all keeps itself, dots included.
+        ("Some Suite", "res://Some Suite"),
+        ("weird.name", "res://weird.name"),
+        # The case that proves only the last segment is read: a final segment with no `.gd` in it
+        # at all, under a directory that has one. Reading the whole name would cut at the
+        # directory's dot and answer `test/v1.gd`.
+        ("test/v1.gd.legacy/Some Suite", "res://test/v1.gd.legacy/Some Suite"),
     ],
 )
 def test_which_file_a_report_name_belongs_to(reported: str, file: str) -> None:
