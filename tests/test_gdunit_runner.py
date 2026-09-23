@@ -475,3 +475,104 @@ def test_run_names_the_attempted_godot_path_when_the_os_omits_it(
     with pytest.raises(FileNotFoundError) as excinfo:
         runner.run(str(tmp_path))
     assert excinfo.value.filename == "/nonexistent/godot"
+
+
+# --- per-file test selection (docs/decisions/0017, step 3) ---------------------------------------
+
+
+def test_a_file_list_replaces_the_test_directory_one_flag_per_file(tmp_path: Path) -> None:
+    """GdUnit4 takes a chosen list as one ``-a`` per file, and runs them in the order given.
+
+    The order is what the reverse marker pass depends on, so the flags must come out in the order
+    they were handed in, not sorted or folded into a set."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cmd = GdUnit4Runner(godot="godot4").command(
+        str(proj), markers=True, files=["res://t/b.gd", "res://t/a.gd"]
+    )
+    assert cmd[cmd.index("-s") + 2 :] == [
+        "-a",
+        "res://t/b.gd",
+        "-a",
+        "res://t/a.gd",
+        "-rc",
+        "1",
+        "--ignoreHeadlessMode",
+        "-c",
+    ]
+
+
+def test_run_selected_passes_the_files_and_keeps_every_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = _report(tmp_path)
+    seen: list[list[str]] = []
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess:
+        command = args[0]
+        assert isinstance(command, list)
+        seen.append(command)
+        if "--import" not in command:
+            report.write_text('<testsuites><testsuite tests="2" failures="0"/></testsuites>')
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    result = GdUnit4Runner().run_selected(str(tmp_path), ["res://t/a.gd"])
+    assert result.tests == 2
+    last = seen[-1]
+    assert last[last.index("-a") : last.index("-a") + 2] == ["-a", "res://t/a.gd"]
+    # The freshness guard still applies: this run wrote the report it was read from.
+    assert report.is_file()
+
+
+def test_a_selected_run_that_describes_no_tests_names_the_files_not_the_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The zero-test guard is the same one the whole-suite path uses, so it must say which scope
+    it actually measured, or it sends a reader to look in the wrong place."""
+    report = _report(tmp_path)
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        _writes(report, '<testsuites><testsuite tests="0" failures="0"/></testsuites>'),
+    )
+    with pytest.raises(RuntimeError, match="0 tests under the 2 selected test files"):
+        GdUnit4Runner().run_selected(str(tmp_path), ["res://t/a.gd", "res://t/b.gd"])
+
+
+def test_run_markers_files_asks_for_the_marker_variant_of_the_given_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reverse pass: the same files, in the order given, with the framework told to keep
+    going after a failure so the pass shows how far the suite really got."""
+    report = _report(tmp_path)
+    seen: list[list[str]] = []
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess:
+        command = args[0]
+        assert isinstance(command, list)
+        seen.append(command)
+        if "--import" not in command:
+            report.write_text('<testsuites><testsuite tests="2" failures="0"/></testsuites>')
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    result = GdUnit4Runner().run_markers_files(str(tmp_path), ["res://t/b.gd", "res://t/a.gd"])
+    assert result.tests == 2
+    assert seen[-1][-1] == "-c"
+    assert [flag for flag in seen[-1] if flag.startswith("res://t/")] == [
+        "res://t/b.gd",
+        "res://t/a.gd",
+    ]
+
+
+def test_install_windows_writes_a_hook_that_listens_to_gdunit4s_own_events(tmp_path: Path) -> None:
+    recorder = tmp_path / "_gdmutant"
+    recorder.mkdir()
+    GdUnit4Runner().install_windows(str(tmp_path), "_gdmutant")
+    source = (recorder / "windows.gd").read_text(encoding="utf-8")
+    assert "GdUnitSignals.instance().gdunit_event.connect" in source
+    assert "GdUnitEvent.TESTSUITE_BEFORE" in source
+    assert "GdUnitEvent.TESTSUITE_AFTER" in source
+    assert "_GdmMarks.begin_file(event.resource_path())" in source
+    assert "_GdmMarks.end_file()" in source

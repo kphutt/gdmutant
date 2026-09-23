@@ -42,7 +42,12 @@ from gdmutant.adapters.gdscript.marker_run import RECORDER_DIR, WRITER_AUTOLOAD,
 from gdmutant.adapters.gdscript.markers import MarkedSource, RunEverything, place_markers
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner, GutRunner
 from gdmutant.engine.coverage import CoverageAnalysis, MarkedCopy
-from gdmutant.engine.loop import CoverageRunFailed, CoverageSelfCheckFailed, MutationRun
+from gdmutant.engine.loop import (
+    CoverageRunFailed,
+    CoverageSelfCheckFailed,
+    MutationRun,
+    Verdict,
+)
 from gdmutant.engine.loop import run as engine_run
 from gdmutant.engine.runner import CommandRunner, Runner, SuiteResult
 
@@ -1017,9 +1022,13 @@ class _Sabotaged:
             marks = copy / RECORDER_DIR / "marks.gd"
             text = marks.read_text(encoding="utf-8")
             broken = text.replace(
-                "\thits[spot] = true", f"\tif spot != {self.drop_spot}:\n\t\thits[spot] = true"
+                "static func _record(spot: int) -> void:\n\tlast[spot] = window",
+                "static func _record(spot: int) -> void:\n"
+                f"\tif spot == {self.drop_spot}:\n"
+                "\t\treturn\n"
+                "\tlast[spot] = window",
             )
-            assert broken != text
+            assert broken != text, "the recorder no longer has the shape this sabotage edits"
             marks.write_text(broken, encoding="utf-8", newline="\n")
         if self.no_writer:
             settings = copy / "project.godot"
@@ -1141,10 +1150,15 @@ func test_a_deferred_call_lands() -> void:
 func test_b_starts_a_timer_it_does_not_wait_for() -> void:
 \tDeferred.start_timer()
 """,
+    # The observer starts the timer itself if nothing has yet. GdUnit4's discovery order is not
+    # alphabetical on every platform (Linux runs these two the other way round), so a file that
+    # only ever observes would fail outright whenever it happened to run first.
     "deferred_test/test_b_observer.gd": """extends GdUnitTestSuite
 
 
 func test_the_timer_started_in_another_file_fired() -> void:
+\tif Deferred.ticks == 0:
+\t\tDeferred.start_timer()
 \tawait get_tree().create_timer(0.5).timeout
 \tassert_int(Deferred.ticks).is_equal(3)
 """,
@@ -1167,6 +1181,8 @@ func test_b_starts_a_timer_it_does_not_wait_for() -> void:
 
 
 func test_the_timer_started_in_another_file_fired() -> void:
+\tif Deferred.ticks == 0:
+\t\tDeferred.start_timer()
 \tawait wait_seconds(0.5)
 \tassert_eq(Deferred.ticks, 3)
 """,
@@ -1222,3 +1238,459 @@ def test_a_script_error_outside_every_test_stops_the_marker_run(
     plain, plain_report = _gdmutant(project, TARGET, _runner_args(runner), tmp_path / "plain.json")
     assert plain.returncode == 0, plain.stderr
     assert plain_report is not None
+
+
+# Per-file test selection (docs/decisions/0017, Plan step 3), against real Godot and both JUnit
+# frameworks. The bar is the same two-sided evidence step 2 had, with a harder question behind it: a
+# mutant no longer runs every test, so a map that drops the one test file that could kill it would
+# turn a kill into a survivor and nothing else in the run would say so. Every test below is either
+# that check or one of the ways the ADR says the map can be wrong.
+
+#: Three functions, one per test file below, so every mutant is reached by exactly one file and
+#: killed by that file alone. A map that credited any of them to the wrong file would report a
+#: survivor, which is what makes the selected runs here worth measuring.
+_SPLIT = """class_name Split
+extends RefCounted
+
+
+static func earlier(a: int, b: int) -> bool:
+\treturn a > b
+
+
+static func under(value: int, cap: int) -> bool:
+\treturn value < cap
+
+
+static func tripled(value: int) -> int:
+\treturn value * 3
+"""
+#: Each mutated line of `_SPLIT`, and the function it sits in.
+_SPLIT_LINES = {6: "earlier", 10: "under", 14: "tripled"}
+
+
+def _suite(framework: str, name: str, body: str) -> str:
+    """One test suite for `framework`, holding a single test called `name` with `body`."""
+    head = "extends GdUnitTestSuite" if framework == "gdunit4" else "extends GutTest"
+    return f"{head}\n\n\nfunc test_{name}() -> void:\n{body}\n"
+
+
+def _split_tests(framework: str) -> dict[str, str]:
+    """One suite per function of `_SPLIT`, each in its own file."""
+    if framework == "gdunit4":
+        bodies = {
+            "earlier": "\tassert_bool(Split.earlier(5, 3)).is_true()\n"
+            "\tassert_bool(Split.earlier(3, 3)).is_false()",
+            "under": "\tassert_bool(Split.under(1, 4)).is_true()\n"
+            "\tassert_bool(Split.under(4, 4)).is_false()",
+            "tripled": "\tassert_int(Split.tripled(2)).is_equal(6)",
+        }
+        folder = "split_test"
+    else:
+        bodies = {
+            "earlier": "\tassert_true(Split.earlier(5, 3))\n\tassert_false(Split.earlier(3, 3))",
+            "under": "\tassert_true(Split.under(1, 4))\n\tassert_false(Split.under(4, 4))",
+            "tripled": "\tassert_eq(Split.tripled(2), 6)",
+        }
+        folder = "split_gut"
+    return {
+        f"{folder}/test_{name}.gd": _suite(framework, name, body) for name, body in bodies.items()
+    }
+
+
+def _live_runner(runner: str, tests: str) -> Runner:
+    """The shipped runner for `runner`, pointed at the test directory `tests`."""
+    if runner == "gdunit4":
+        return GdUnit4Runner(test_path=tests, godot=_GODOT_EXE)
+    return GutRunner(test_dir=tests, godot=_GODOT_EXE)
+
+
+def _per_file_run(
+    project: Path, runner: str, tests: str, self_check: int | None = 3, target: str = "split.gd"
+) -> MutationRun:
+    """Drive the engine itself with ``--coverage-analysis per-file``.
+
+    The two-sided check below goes through the CLI, because that is what ships. This is for the
+    questions the JSON report cannot answer: how many test files a given mutant actually ran,
+    whether its kill was trusted, and how many marked lines the two passes disagreed about.
+    """
+    source = (project / target).read_text(encoding="utf-8")
+    return engine_run(
+        str(project),
+        str(project / target),
+        source,
+        _live_runner(runner, tests),
+        ADAPTER,
+        coverage=CoverageAnalysis.PER_FILE,
+        marker=GDScriptMarker(godot=_GODOT_EXE),
+        self_check=self_check,
+    )
+
+
+def _skip_without(runner: str) -> None:
+    if not (ADDON if runner == "gdunit4" else GUT_ADDON).is_dir():
+        pytest.skip(f"{runner} addon not installed")
+
+
+@pytest.mark.parametrize("runner", ["gdunit4", "gut"])
+def test_per_file_selection_gives_every_mutant_the_verdict_it_gets_without_it(
+    tmp_path: Path, runner: str
+) -> None:
+    """The ADR's two-sided check, with the self-check on every mutant, through the shipped CLI.
+
+    Not vacuous: each of the three functions is reached and killed by one test file alone, so a map
+    that dropped that file would report a survivor while the run still looked perfectly healthy.
+    """
+    _skip_without(runner)
+    tests = _split_tests(runner)
+    test_dir = "res://" + next(iter(tests)).split("/")[0]
+    project = _coverage_project(tmp_path, f"split-{runner}", {"split.gd": _SPLIT, **tests})
+    args = _runner_args(runner, test_dir)
+    off, off_report = _gdmutant(project, "split.gd", args, tmp_path / f"{runner}-off.json")
+    assert off.returncode == 0, off.stdout + off.stderr
+    on, on_report = _gdmutant(
+        project,
+        "split.gd",
+        [*args, "--coverage-analysis", "per-file", "--coverage-self-check", "all"],
+        tmp_path / f"{runner}-on.json",
+    )
+    assert on.returncode == 0, on.stdout + on.stderr
+    assert off_report is not None and on_report is not None
+    assert not _assert_two_sided(off_report, on_report), "every line here is reached"
+    killed = {key for key, status in _statuses(on_report).items() if status == "Killed"}
+    assert {line for line, _, _, _ in killed} == set(_SPLIT_LINES)
+    assert "mutants ran only the test files that reach them (the suite has 3 test files)" in (
+        on.stdout
+    )
+    assert "mutants that ran only some test files against the whole suite" in on.stdout
+
+
+@pytest.mark.parametrize("runner", ["gdunit4", "gut"])
+def test_each_mutant_runs_one_of_the_three_test_files(tmp_path: Path, runner: str) -> None:
+    """The saving itself, measured: every mutant ran a third of the suite, not all of it."""
+    _skip_without(runner)
+    tests = _split_tests(runner)
+    test_dir = "res://" + next(iter(tests)).split("/")[0]
+    project = _coverage_project(tmp_path, f"share-{runner}", {"split.gd": _SPLIT, **tests})
+    result = _per_file_run(project, runner, test_dir, self_check=0)
+    assert result.test_files == 3
+    ran = [o for o in result.outcomes if o.verdict is not Verdict.INVALID]
+    assert ran, "no mutant ran"
+    assert {o.selected for o in ran} == {1}
+    assert result.order_dependent == 0
+    assert result.order_coupled == 0
+
+
+@pytest.mark.parametrize("runner", ["gdunit4", "gut"])
+def test_a_line_reached_only_at_load_time_runs_every_test_file(tmp_path: Path, runner: str) -> None:
+    """Stryker's static-mutant rule, live: an autoload's ``_init`` runs before any test file opens
+    a window, so nothing may be credited with it and every test has to run."""
+    _skip_without(runner)
+    tests = _split_tests(runner)
+    test_dir = "res://" + next(iter(tests)).split("/")[0]
+    project = _coverage_project(
+        tmp_path,
+        f"boot-{runner}",
+        {"boot.gd": _BOOT, "split.gd": _SPLIT, **tests},
+        autoloads='Boot="*res://boot.gd"',
+    )
+    result = _per_file_run(project, runner, test_dir, self_check=0, target="boot.gd")
+    by_line: dict[int, set[int | None]] = {}
+    for outcome in result.outcomes:
+        by_line.setdefault(outcome.mutant.span.line, set()).add(outcome.selected)
+    # `_compute`, called from `_init`, is reached with no test file running: every test ran for it.
+    assert by_line[11] == {None}
+    # `_unused` is called by nothing at all, which is a different answer from "runs everything".
+    assert {o.verdict for o in result.outcomes if o.mutant.span.line == 15} == {Verdict.NO_COVERAGE}
+
+
+#: A timer one test file starts and never waits for, whose callback therefore fires while some
+#: *other* file is running. Nothing asserts `ticks`, on purpose: this fixture is about which file
+#: the hit is credited to, and a test that also checked the value would make the suite depend on
+#: the order its files run in, which is a different rule with a different answer.
+_CROSSING = """class_name Crossing
+extends RefCounted
+
+static var ticks := 0
+
+
+static func start_timer() -> void:
+\tvar tree := Engine.get_main_loop() as SceneTree
+\ttree.create_timer(0.6).timeout.connect(_tick)
+
+
+static func started() -> bool:
+\treturn ticks >= 0
+
+
+static func _tick() -> void:
+\tticks = 3
+"""
+#: The two lines of `_CROSSING` the test below is about, found in the fixture rather than counted
+#: by hand, so editing the fixture cannot leave the test asserting about a blank line.
+_TICK_LINE = _CROSSING.split("\n").index("\tticks = 3") + 1
+_TIMER_LINE = next(
+    number for number, line in enumerate(_CROSSING.split("\n"), 1) if "create_timer" in line
+)
+
+
+def _crossing_tests(framework: str) -> dict[str, str]:
+    """Two files that each start a timer and then wait for less time than it needs, and one that
+    touches nothing.
+
+    Each timer therefore fires after its own file's window has closed, whichever order the
+    framework runs them in, and lands either inside the other file's window or after every window.
+    Both of those make the line it sets one no single file can be credited with, so this does not
+    depend on which file the framework decides to run first. It does not on every platform:
+    GdUnit4's discovery order is not alphabetical on Linux.
+
+    The third file exists so that selection has something to leave out, which is what makes the
+    assertion about the timer's own line worth making.
+    """
+    if framework == "gdunit4":
+        folder = "cross_test"
+        starts = "\tCrossing.start_timer()\n\tawait get_tree().create_timer(0.4).timeout"
+        starts += "\n\tassert_bool(Crossing.started()).is_true()"
+        idle = "\tassert_bool(true).is_true()"
+    else:
+        folder = "cross_gut"
+        starts = "\tCrossing.start_timer()\n\tawait wait_seconds(0.4)"
+        starts += "\n\tassert_true(Crossing.started())"
+        idle = "\tassert_true(true)"
+    return {
+        f"{folder}/test_a_starts.gd": _suite(framework, "starts_a_timer", starts),
+        f"{folder}/test_b_starts.gd": _suite(framework, "starts_another_timer", starts),
+        f"{folder}/test_c_idle.gd": _suite(framework, "touches_nothing", idle),
+    }
+
+
+@pytest.mark.parametrize("runner", ["gdunit4", "gut"])
+def test_deferred_code_that_crosses_test_files_runs_every_test_file(
+    tmp_path: Path, runner: str
+) -> None:
+    """A timer's callback belongs to no single test file, and gdmutant must not pretend it does.
+
+    Each of two files starts a timer and then waits for less time than the timer needs, so every
+    callback fires after its own file's window has closed: either inside another file's window,
+    where the forward and reverse passes cannot agree about which, or after every window, which is
+    load-time code. Either way the line it sets runs every test rather than the one file that
+    happened to be on screen when it went off.
+    """
+    _skip_without(runner)
+    tests = _crossing_tests(runner)
+    test_dir = "res://" + next(iter(tests)).split("/")[0]
+    project = _coverage_project(tmp_path, f"cross-{runner}", {"crossing.gd": _CROSSING, **tests})
+    result = _per_file_run(project, runner, test_dir, self_check=0, target="crossing.gd")
+    by_line: dict[int, set[int | None]] = {}
+    verdicts: dict[int, set[Verdict]] = {}
+    for outcome in result.outcomes:
+        by_line.setdefault(outcome.mutant.span.line, set()).add(outcome.selected)
+        verdicts.setdefault(outcome.mutant.span.line, set()).add(outcome.verdict)
+    # `ticks = 3`, set from the timer's callback, is the line no single file can be credited with.
+    assert by_line[_TICK_LINE] == {None}
+    assert Verdict.NO_COVERAGE not in verdicts[_TICK_LINE], (
+        "a line a timer reaches is not unreached"
+    )
+    # Not vacuous: the timer's own line is reached inside the two starters' own windows and is
+    # selected to just those two of the three files, so this project does select, and the line the
+    # callback sets is specifically the one it will not.
+    assert result.test_files == 3
+    assert by_line[_TIMER_LINE] == {2}
+
+
+#: Shared state one suite can seed and another can depend on. `seed` returns its value so a suite
+#: can call it from a class-level `static var`, which Godot runs when it *loads* the script rather
+#: than when it runs a test.
+_SHARED = """class_name Shared
+extends RefCounted
+
+static var seeded := 0
+
+
+static func seed() -> int:
+\tseeded = 4
+\treturn seeded
+
+
+static func doubled(value: int) -> int:
+\treturn value * 2
+"""
+#: The line of `_SHARED` only the dependent suite below reaches, found in the fixture rather than
+#: counted by hand.
+_DOUBLED_LINE = _SHARED.split("\n").index("\treturn value * 2") + 1
+
+
+def _shared_bodies(framework: str) -> tuple[str, str]:
+    """The seeding suite's test body and the dependent suite's, for `framework`."""
+    if framework == "gdunit4":
+        return (
+            "\tassert_int(Shared.seeded).is_equal(4)",
+            "\tassert_int(Shared.seeded).is_equal(4)\n\tassert_int(Shared.doubled(3)).is_equal(6)",
+        )
+    return (
+        "\tassert_eq(Shared.seeded, 4)",
+        "\tassert_eq(Shared.seeded, 4)\n\tassert_eq(Shared.doubled(3), 6)",
+    )
+
+
+def _coupled_tests(framework: str, folder: str) -> dict[str, str]:
+    """A suite that seeds shared state **when its script loads**, and one that needs it.
+
+    Loading is what makes this independent of run order: both frameworks load every suite they were
+    given before they run any of them, so the dependent suite passes wherever it lands. Run it on
+    its own, though, and the seeding suite is never loaded, so it fails for a reason that has
+    nothing to do with any mutant. That is order coupling neither marker pass can see, which is
+    what the confirmation of a kill is for.
+    """
+    seed_body, user_body = _shared_bodies(framework)
+    head = "extends GdUnitTestSuite" if framework == "gdunit4" else "extends GutTest"
+    seeder = (
+        f"{head}\n\nstatic var _seeded := Shared.seed()\n\n\n"
+        f"func test_seeded() -> void:\n{seed_body}\n"
+    )
+    return {
+        f"{folder}/test_a_seed.gd": seeder,
+        f"{folder}/test_b_user.gd": _suite(framework, "uses", user_body),
+    }
+
+
+def _run_order(project: Path, runner: str, test_dir: str) -> list[str]:
+    """The test files of `test_dir`, by file stem, in the order this framework runs them here.
+
+    Asked rather than assumed. GdUnit4's discovery order is alphabetical on Windows and is not on
+    Linux, and a fixture that needs one file to run before another has to know which way round it
+    will be on the machine it is running on.
+    """
+    result = _live_runner(runner, test_dir).run(str(project))
+    return [Path(suite.name.split(".")[0]).stem for suite in result.suites]
+
+
+@pytest.mark.parametrize("runner", ["gdunit4", "gut"])
+def test_a_kill_is_not_believed_when_its_test_files_fail_unmutated(
+    tmp_path: Path, runner: str
+) -> None:
+    """One file reaches `doubled` and nothing else does, so a mutant there runs against that file
+    alone, where it fails because the file that seeds its shared state was never loaded. The kill is
+    confirmed against the unmutated source, found not to be the mutant's, and the whole suite
+    decides instead."""
+    _skip_without(runner)
+    folder = "coupled_test" if runner == "gdunit4" else "coupled_gut"
+    tests = _coupled_tests(runner, folder)
+    project = _coverage_project(tmp_path, f"coupled-{runner}", {"shared.gd": _SHARED, **tests})
+    result = _per_file_run(project, runner, f"res://{folder}", self_check=0, target="shared.gd")
+    doubled = [o for o in result.outcomes if o.mutant.span.line == _DOUBLED_LINE]
+    assert doubled, "the fixture no longer has a line only the dependent file reaches"
+    assert result.order_coupled >= 1
+    coupled = [o for o in doubled if o.order_coupled]
+    assert coupled
+    assert {o.selected for o in coupled} == {None}  # the whole suite had the last word
+
+
+@pytest.mark.parametrize("runner", ["gdunit4", "gut"])
+def test_a_suite_that_depends_on_file_order_refuses_selection_and_keeps_no_coverage(
+    tmp_path: Path, runner: str
+) -> None:
+    """Selection is unsound for such a suite, so gdmutant says so and stops selecting for that run.
+
+    The fixture is built in two steps, because a suite that only passes one way round has to know
+    which way round this framework runs it: two seeding suites go in, the framework is asked which
+    one it runs last, and that one is rewritten to depend on the other having gone first.
+
+    It is not an error: the forward pass alone is enough for the `no coverage` verdict, which is
+    what the run still reports."""
+    _skip_without(runner)
+    folder = "ordered_test" if runner == "gdunit4" else "ordered_gut"
+    seed_body, user_body = _shared_bodies(runner)
+    seeder = _suite(runner, "seeds", "\tShared.seed()\n" + seed_body)
+    project = _coverage_project(
+        tmp_path,
+        f"ordered-{runner}",
+        {
+            "shared.gd": _SHARED,
+            f"{folder}/test_a_one.gd": seeder,
+            f"{folder}/test_b_two.gd": seeder,
+        },
+    )
+    last = _run_order(project, runner, f"res://{folder}")[-1]
+    (project / folder / f"{last}.gd").write_text(
+        _suite(runner, "uses", user_body), encoding="utf-8", newline="\n"
+    )
+    args = [*_runner_args(runner, f"res://{folder}"), "--coverage-analysis", "per-file"]
+    done, report = _gdmutant(project, "shared.gd", args, tmp_path / f"ordered-{runner}.json")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert report is not None
+    assert "depends on the order its files run in" in done.stderr
+    assert "will not select tests for this run" in done.stderr
+    assert "selected:" not in done.stdout
+    assert "Mutation score:" in done.stdout
+
+
+class _Blindfolded:
+    """Wraps the real marker, then makes the recorder credit one test file's hits to another.
+
+    That is the ADR's "a dropped credit", in the one direction that matters. The file still runs,
+    still passes and still opens its window, so nothing about the marker run looks wrong: the suite
+    is green, the windows are all there, the hits file is written. The only consequence is that the
+    mutants that file alone could kill are run against a file that cannot kill them.
+
+    Mis-crediting rather than simply dropping is the point. A dropped hit makes the line look
+    unreached, which the "no coverage" half of the self-check already catches. This is the half
+    that only step 3 needs: a line that really is reached, run against the wrong tests."""
+
+    def __init__(self, blind_to: str, credit_to: str) -> None:
+        self.inner = GDScriptMarker(godot=_GODOT_EXE)
+        self.blind_to = blind_to
+        self.credit_to = credit_to
+
+    def mark(self, copy_dir: str, files: Any) -> MarkedCopy:
+        marks = Path(copy_dir) / RECORDER_DIR / "marks.gd"
+        marked = self.inner.mark(copy_dir, files)
+        text = marks.read_text(encoding="utf-8")
+        broken = text.replace(
+            "static func _record(spot: int) -> void:\n\tlast[spot] = window",
+            "static func _record(spot: int) -> void:\n"
+            "\tvar credited := window\n"
+            f'\tif credited.ends_with("{self.blind_to}"):\n'
+            f'\t\tcredited = "{self.credit_to}"\n'
+            "\tlast[spot] = credited",
+        ).replace(
+            "\tif not windows.has(window):\n"
+            "\t\twindows[window] = {}\n"
+            "\twindows[window][spot] = true",
+            "\tif not windows.has(credited):\n"
+            "\t\twindows[credited] = {}\n"
+            "\twindows[credited][spot] = true",
+        )
+        assert "credited" in broken, "the recorder no longer has the shape this sabotage edits"
+        assert "windows[window][spot]" not in broken
+        marks.write_text(broken, encoding="utf-8", newline="\n")
+        return marked
+
+
+@pytest.mark.parametrize("runner", ["gdunit4", "gut"])
+def test_a_map_that_drops_the_file_that_kills_a_mutant_is_caught_loudly(
+    tmp_path: Path, runner: str
+) -> None:
+    """The failure this whole step has to survive, built on purpose.
+
+    Nothing else in the run notices: the suite is green, every file opens its window, the hits file
+    is there, and the mutant simply reads as survived. Only the self-check, which runs it against
+    the whole suite as well, can tell."""
+    _skip_without(runner)
+    tests = _split_tests(runner)
+    test_dir = "res://" + next(iter(tests)).split("/")[0]
+    project = _coverage_project(tmp_path, f"blind-{runner}", {"split.gd": _SPLIT, **tests})
+    with pytest.raises(CoverageSelfCheckFailed) as caught:
+        engine_run(
+            str(project),
+            str(project / "split.gd"),
+            _SPLIT,
+            _live_runner(runner, test_dir),
+            ADAPTER,
+            coverage=CoverageAnalysis.PER_FILE,
+            marker=_Blindfolded("test_earlier.gd", f"{test_dir}/test_under.gd"),
+            self_check=None,
+        )
+    assert "gave 'survived'" in str(caught.value)
+    assert "running it against the whole suite gave 'killed'" in str(caught.value)
+    # And the project was left exactly as it was.
+    assert (project / "split.gd").read_text(encoding="utf-8") == _SPLIT

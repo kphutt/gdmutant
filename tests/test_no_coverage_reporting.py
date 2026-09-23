@@ -16,7 +16,7 @@ import pytest
 from gdmutant import cli
 from gdmutant.adapters.gdscript.marker_run import GDScriptMarker
 from gdmutant.cli import main
-from gdmutant.engine.coverage import CoverageAnalysis
+from gdmutant.engine.coverage import SELF_CHECK_SAMPLE, CoverageAnalysis
 from gdmutant.engine.htmlreport import render_html, report_view
 from gdmutant.engine.loop import CoverageRunFailed, MutantOutcome, MutationRun, Verdict
 from gdmutant.engine.mutants import Mutant
@@ -69,7 +69,8 @@ def test_the_console_says_the_self_check_compared_nothing_when_nothing_was_uncov
     text = console_summary(run)
     assert "  no coverage: 0  " in text
     assert text.endswith(
-        "Coverage self-check: compared 0 mutants, because no mutant had no coverage."
+        "Coverage self-check: compared 0 mutants, because nothing was decided from the "
+        "coverage map."
     )
     assert "No coverage (" not in text
 
@@ -244,14 +245,54 @@ def test_the_option_defaults_to_off(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert captured["coverage"] is CoverageAnalysis.OFF
 
 
-def test_per_file_is_refused_before_anything_runs(
+def test_per_file_reaches_the_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _capture(monkeypatch, "run_mutation")
+    argv = ["run", str(_gd(tmp_path)), "--project", str(tmp_path), "--runner", "gut"]
+    assert main([*argv, "--coverage-analysis", "per-file"]) == 0
+    assert captured["coverage"] is CoverageAnalysis.PER_FILE
+
+
+def test_the_self_check_size_defaults_to_a_few_and_takes_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture(monkeypatch, "run_mutation")
+    argv = ["run", str(_gd(tmp_path)), "--project", str(tmp_path), "--runner", "gut"]
+    assert main([*argv, "--coverage-analysis", "all"]) == 0
+    assert captured["self_check"] == SELF_CHECK_SAMPLE
+    assert main([*argv, "--coverage-analysis", "all", "--coverage-self-check", "7"]) == 0
+    assert captured["self_check"] == 7
+    # `None` is the real answer for "every mutant", which is why it cannot also mean "bad input".
+    assert main([*argv, "--coverage-analysis", "all", "--coverage-self-check", "ALL"]) == 0
+    assert captured["self_check"] is None
+
+
+def test_a_self_check_size_that_is_not_a_number_is_refused_before_anything_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     captured = _capture(monkeypatch, "run_mutation")
     argv = ["run", str(_gd(tmp_path)), "--project", str(tmp_path), "--runner", "gut"]
+    assert main([*argv, "--coverage-self-check", "some"]) == 2
+    assert captured == {}
+    assert "error: --coverage-self-check takes a whole number of mutants, or 'all'" in (
+        capsys.readouterr().err
+    )
+
+
+def test_per_file_is_refused_for_the_command_runner_before_anything_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An exit code cannot say which tests ran, so a custom --command cannot be selected for.
+
+    Refused rather than quietly downgraded to whole-suite runs, which would look exactly like
+    selection working and take exactly as long as no selection at all."""
+    captured = _capture(monkeypatch, "run_mutation")
+    argv = ["run", str(_gd(tmp_path)), "--project", str(tmp_path), "--runner", "command"]
+    argv += ["--command", "true"]
     assert main([*argv, "--coverage-analysis", "per-file"]) == 2
     assert captured == {}
-    assert "error: --coverage-analysis per-file is not built yet" in capsys.readouterr().err
+    assert "error: --coverage-analysis per-file needs --runner gdunit4 or gut" in (
+        capsys.readouterr().err
+    )
 
 
 def test_an_unknown_value_is_an_argparse_error(tmp_path: Path) -> None:

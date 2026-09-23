@@ -1,4 +1,4 @@
-"""Coverage analysis: which mutants no test reaches (docs/decisions/0017, step 2).
+"""Coverage analysis: which mutants no test reaches, and which tests reach the rest (ADR 0017).
 
 Before any mutant runs, a language adapter marks a throwaway copy of the project: one small call in
 front of each mutation spot, which records "spot N was reached" when the suite runs. The engine runs
@@ -13,6 +13,12 @@ That argument only holds if the marker run is trustworthy, so the run must be cl
 language adapter implements (`Marker`), the hits file, the clean-run rules, and the sample. It
 never names a language: it sees spot numbers, paths and "run everything" placements, nothing else.
 The loop (`engine.loop`) runs the pieces in order.
+
+Step 3 adds selection (``--coverage-analysis per-file``). The recorder now files each hit under the
+test file that was running when it happened, so the map says not only *whether* some test reaches a
+spot but *which* tests do, and a mutant runs only those. Two passes build it, forward and then in
+reverse file order, and only a spot both passes agree about is trusted (`build_map`). Everything
+else, and everything reached with no test file running, runs the whole suite exactly as before.
 """
 
 from __future__ import annotations
@@ -20,7 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Protocol
@@ -37,8 +43,9 @@ class CoverageAnalysis(Enum):
     #: Markers, and the `no coverage` verdict. Every mutant that some test reaches still runs the
     #: whole suite.
     ALL = "all"
-    #: Markers, and each mutant runs only the test files that reach it. Not built yet
-    #: (docs/decisions/0017, step 3), so asking for it is refused rather than quietly downgraded.
+    #: Markers, and each mutant runs only the test files that reach it (docs/decisions/0017,
+    #: step 3). Needs a runner that can run a named list of test files
+    #: (`engine.runner.FileSelecting`); one that cannot is refused rather than quietly downgraded.
     PER_FILE = "per-file"
 
 
@@ -55,10 +62,13 @@ class MarkedCopy:
     `placements` maps each marked file (by the same project-relative path it was given) to one entry
     per mutant, in the order the mutants were given: the id of the spot whose marker covers it, or
     ``None`` when no marker can, which means the mutant always runs the whole suite.
+    `recorder_dir` is where in the copy the adapter put the recorder, which is where a runner
+    installs its file-window hook (`engine.runner.FileSelecting.install_windows`).
     """
 
     hits_path: str
     placements: Mapping[str, tuple[int | None, ...]]
+    recorder_dir: str = ""
 
 
 class Marker(Protocol):
@@ -78,8 +88,69 @@ class HitsUnreadable(Exception):
     """The hits file is missing, or holds something other than a list of spot numbers."""
 
 
-def read_hits(path: Path) -> frozenset[int]:
-    """The spot ids recorded in the hits file at `path`: a JSON object ``{"hits": [ids]}``.
+#: The key the recorder files a hit under when no test file was running: load time, the gap between
+#: two files, or after the last one. It is deliberately a value a framework can never produce as a
+#: file name, so it cannot collide with a real window.
+LOAD_TIME = ""
+
+
+@dataclass(frozen=True)
+class Hits:
+    """One marker pass, read back from the recorder's hits file.
+
+    `spots` is every spot reached anywhere in the pass, which is all
+    ``--coverage-analysis all`` ever needs. The rest is what selection adds (step 3): `windows`
+    maps each test file to the spots reached while it was running, `load_time` holds the spots
+    reached while no test file was, and `opened` lists the test files that opened a window, in the
+    order they ran, once per suite it ran, so a file holding several suites appears several times
+    (`files` is the distinct list). A file that opened a window and reached nothing is still in both
+    `windows` (with an empty set) and `opened`, so "the hook never fired" and "this file reaches
+    nothing" stay distinguishable.
+    """
+
+    spots: frozenset[int]
+    windows: Mapping[str, frozenset[int]] = field(default_factory=dict)
+    load_time: frozenset[int] = frozenset()
+    opened: tuple[str, ...] = ()
+
+    @property
+    def files(self) -> tuple[str, ...]:
+        """The distinct test files, in the order they first ran.
+
+        A framework may run several suites out of one file: GUT treats every inner class of a test
+        script as a suite of its own, so one file opens several windows in a row. The file is still
+        one file to hand back on a command line, and one file to be credited with a hit, so
+        everything outside `opened` itself works from this.
+        """
+        return tuple(dict.fromkeys(self.opened))
+
+
+#: How much of a malformed hits file a message quotes back. Enough to recognise it, not so much
+#: that a large file buries the sentence that says what is wrong with it.
+_QUOTED = 200
+
+
+def _spot_list(value: object, path: Path, what: str, shown: object) -> frozenset[int]:
+    """`value` as a set of spot ids, or raise `HitsUnreadable` naming `what` went wrong.
+
+    `shown` is what the message quotes back, which is not always `value`: a missing top-level key
+    would be quoted as the word "None", so that call quotes the whole file instead.
+    """
+    if not isinstance(value, list) or not all(
+        isinstance(spot, int) and not isinstance(spot, bool) for spot in value
+    ):
+        raise HitsUnreadable(f"the hits file at {path} {what}: {str(shown)[:_QUOTED]}")
+    return frozenset(value)
+
+
+def read_hits(path: Path) -> Hits:
+    """The hits file at `path`, as a `Hits`.
+
+    The file is a JSON object the recorder writes when the suite's process exits: ``hits`` is every
+    spot reached, ``windows`` maps a test file to the spots reached while it ran, and ``opened``
+    lists the test files whose window opened. Only ``hits`` is required, so a recorder that never
+    opened a window reads as a pass with no windows rather than as a broken file. The rule that
+    catches a hook that never fired is `window_problems`, which says so in words.
 
     Raises `HitsUnreadable` when the file is missing or malformed. Neither may ever read as
     "nothing was reached": a crash at exit that loses the file would otherwise turn every mutant
@@ -96,18 +167,42 @@ def read_hits(path: Path) -> frozenset[int]:
         ) from None
     except (OSError, ValueError) as error:
         raise HitsUnreadable(f"the hits file at {path} could not be read: {error}") from None
-    hits = data.get("hits") if isinstance(data, dict) else None
-    if not isinstance(hits, list) or not all(
-        isinstance(spot, int) and not isinstance(spot, bool) for spot in hits
-    ):
+    if not isinstance(data, dict):
+        raise HitsUnreadable(f"the hits file at {path} is not a JSON object: {str(data)[:_QUOTED]}")
+    spots = _spot_list(data.get("hits"), path, "is not a list of spot numbers", data)
+    raw_windows = data.get("windows", {})
+    if not isinstance(raw_windows, dict) or not all(isinstance(k, str) for k in raw_windows):
         raise HitsUnreadable(
-            f"the hits file at {path} is not a list of spot numbers: {str(data)[:200]}"
+            f"the hits file at {path} does not map test files to spot numbers: "
+            f"{str(raw_windows)[:_QUOTED]}"
         )
-    return frozenset(hits)
+    windows = {
+        name: _spot_list(value, path, f"records a bad spot list for {name!r}", value)
+        for name, value in raw_windows.items()
+        if name != LOAD_TIME
+    }
+    opened = data.get("opened", [])
+    if not isinstance(opened, list) or not all(isinstance(name, str) for name in opened):
+        raise HitsUnreadable(
+            f"the hits file at {path} does not list the test files that ran: "
+            f"{str(opened)[:_QUOTED]}"
+        )
+    # Named once and passed twice, as the value to read and the value to quote back if it cannot
+    # be read. Written out twice, the two copies could drift into disagreeing about what went
+    # wrong with what.
+    raw_load_time = raw_windows.get(LOAD_TIME, [])
+    return Hits(
+        spots=spots,
+        windows=windows,
+        load_time=_spot_list(
+            raw_load_time, path, "records a bad load-time spot list", raw_load_time
+        ),
+        opened=tuple(opened),
+    )
 
 
 def clean_run_problems(
-    result: SuiteResult, baseline_tests: int, hits: frozenset[int] | HitsUnreadable
+    result: SuiteResult, baseline_tests: int, hits: Hits | HitsUnreadable
 ) -> list[str]:
     """Every reason the marker run cannot be trusted, in plain words, or an empty list.
 
@@ -135,10 +230,39 @@ def clean_run_problems(
         )
     if isinstance(hits, HitsUnreadable):
         problems.append(str(hits))
-    elif not hits:
+    elif not hits.spots:
         problems.append(
             "no marker recorded a single hit, so the recorder never ran. A suite that passed "
             "must reach some of the code it tests"
+        )
+    return problems
+
+
+def window_problems(hits: Hits, result: SuiteResult) -> list[str]:
+    """Every reason the marker pass cannot be attributed to test files, or an empty list.
+
+    The ADR's two window rules, which only selection reads, so they are checked only in the pass
+    that builds a per-file map. Both guard the same silence: a "a test file started" hook that
+    never fires leaves every spot looking like load-time code or like code nothing reaches, and
+    nothing else in the run says a word about it.
+
+    The second rule compares counts, not names. The recorder gets a file's name from the framework's
+    event and the report gets it from the framework's reporter, and the two need not spell it the
+    same way, so comparing the names would fail on a cosmetic difference while comparing how many
+    there are catches the case that matters, a file that ran without its window opening.
+    """
+    problems: list[str] = []
+    if not hits.opened:
+        problems.append(
+            "no test file opened a coverage window, so the runner's 'a test file started' hook "
+            "never fired. Without it gdmutant cannot tell which test file reaches which line"
+        )
+    elif len(hits.opened) != len(result.suites):
+        problems.append(
+            f"{len(hits.opened)} test files opened a coverage window, but the run's own report "
+            f"describes {len(result.suites)}. A test file that runs without opening a window is "
+            "credited to no test, so a mutant on a line only it reaches would be run against the "
+            "wrong tests"
         )
     return problems
 
@@ -150,6 +274,84 @@ def uncovered(placements: Sequence[int | None], hits: frozenset[int]) -> frozens
     always runs the whole suite."""
     return frozenset(
         index for index, spot in enumerate(placements) if spot is not None and spot not in hits
+    )
+
+
+#: What a spot maps to when every test file must run for it: code that ran at load time or between
+#: files, or a spot the two marker passes disagreed about. Spelled out rather than written as a bare
+#: ``None`` at each call site, since "run everything" and "no test reaches this" are opposite
+#: answers and both are falsy.
+RUN_EVERYTHING = None
+
+#: A spot's test files, or `RUN_EVERYTHING`. A spot missing from a map entirely is unreached.
+SpotFiles = frozenset[str] | None
+
+
+@dataclass(frozen=True)
+class CoverageMap:
+    """Which test files reach each marked spot, from both marker passes.
+
+    `files` holds an entry for every spot either pass recorded: the test files that reach it, or
+    `RUN_EVERYTHING`. A spot neither pass recorded is absent, which is "no test reaches it".
+    `order_dependent` is the spots that are `RUN_EVERYTHING` because the two passes disagreed about
+    them, counted apart in the run's summary because they are a fact about the suite, not about the
+    code. `test_files` is every file that opened a window in the forward pass, which is the whole
+    suite as the framework itself ran it.
+    """
+
+    #: Keyed by spot, and read with ``.get``, so `select` can ask about a mutant that has no spot
+    #: at all without a branch of its own. ``None`` is never a key.
+    files: Mapping[int | None, SpotFiles]
+    order_dependent: frozenset[int]
+    test_files: tuple[str, ...]
+
+    def select(self, spot: int | None) -> SpotFiles:
+        """The test files to run for a mutant placed at `spot`, or `RUN_EVERYTHING`.
+
+        A mutant with no spot (`None`: the placement table could not mark it) runs everything, and
+        so does one whose spot no test reached. The second is not a contradiction with the
+        `no coverage` verdict: a caller decides that first, from `uncovered`, and only asks this
+        about mutants it is going to run. Answering "everything" for a spot this map has never heard
+        of is the safe answer to a question that should not have been asked.
+        """
+        # One lookup covers both: a mutant with no spot has ``None``, which is no key of this map,
+        # and neither is a spot no pass recorded. Both fall through to the same safe answer.
+        return self.files.get(spot, RUN_EVERYTHING)
+
+
+def build_map(forward: Hits, reverse: Hits) -> CoverageMap:
+    """The union of two marker passes, as a `CoverageMap`.
+
+    A spot's file set is trusted only when both passes agree on it exactly. Three things make a
+    spot `RUN_EVERYTHING` instead:
+
+    * It was reached while no test file was running. That is Stryker's static-mutant rule: code
+      that runs at load time, between files or after the summary belongs to no test, so every test
+      has to run. There is deliberately no option to skip such a mutant.
+    * The two passes credit it to different files. Deferred work that fires after the test file that
+      started it has ended lands in a *later* file, and running the files backwards makes "later" a
+      different file (or no file at all), so the sets cannot match. The same disagreement is what a
+      flaky test looks like, and it wants the same answer.
+    * Only one pass reached it at all, which is the same disagreement with one side empty.
+    """
+    files: dict[int | None, SpotFiles] = {}
+    order_dependent: set[int] = set()
+    for spot in forward.spots | reverse.spots:
+        if spot in forward.load_time or spot in reverse.load_time:
+            files[spot] = RUN_EVERYTHING
+            continue
+        ahead = frozenset(name for name, spots in forward.windows.items() if spot in spots)
+        behind = frozenset(name for name, spots in reverse.windows.items() if spot in spots)
+        if ahead != behind:
+            files[spot] = RUN_EVERYTHING
+            order_dependent.add(spot)
+        else:
+            # An empty set here would mean "run no tests at all", which is never an answer: a spot
+            # some pass recorded, credited to no file and not to load time, is a recorder that
+            # contradicts itself. Say everything, the one answer that cannot lose a kill.
+            files[spot] = ahead or RUN_EVERYTHING
+    return CoverageMap(
+        files=files, order_dependent=frozenset(order_dependent), test_files=forward.files
     )
 
 

@@ -45,6 +45,26 @@ def with_filename(error: FileNotFoundError, attempted: str) -> FileNotFoundError
     return FileNotFoundError(error.errno, error.strerror, attempted)
 
 
+@dataclass(frozen=True)
+class ReportedSuite:
+    """One test file as a run's own report describes it.
+
+    `name` is whatever the report calls it, so only the runner that produced it may turn that back
+    into something to pass on a command line. The engine reads `failed` and counts these, never
+    interprets a name.
+    """
+
+    name: str
+    tests: int
+    failures: int = 0
+    errors: int = 0
+
+    @property
+    def failed(self) -> bool:
+        """True if any test in this file failed or errored."""
+        return self.failures > 0 or self.errors > 0
+
+
 class SuiteTimeout(Exception):
     """The test suite exceeded its time budget.
 
@@ -72,6 +92,14 @@ class SuiteResult:
     #: the coverage marker run (docs/decisions/0017), where a function cut short can make code it
     #: would have reached look unreached. A per-mutant run ignores it, exactly as before.
     runtime_error: str = ""
+    #: One `ReportedSuite` per test file the run's report describes, in report order. Empty for a
+    #: runner with no report to read (the exit-code `CommandRunner`). The engine counts these, to
+    #: check that every test file the report names also opened a coverage window, and reads which
+    #: of them failed, to name the files that make a suite order-dependent (docs/decisions/0017,
+    #: step 3). A report that names no files and a runner that has none to name are deliberately
+    #: the same empty tuple: what reads this runs only for a runner that selects test files, and
+    #: such a runner always has a report.
+    suites: tuple[ReportedSuite, ...] = ()
 
     @property
     def failed(self) -> bool:
@@ -161,6 +189,53 @@ class MarkerRunnable(Protocol):
 
     def run_markers(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         """Run the whole suite once in the marked copy `project_dir`, for the marker run."""
+        ...
+
+
+@runtime_checkable
+class FileSelecting(Protocol):
+    """A runner that can run a named list of test files (docs/decisions/0017, step 3).
+
+    Optional, like `Preparable` and `MarkerRunnable`, and checked the same way. It is what
+    ``--coverage-analysis per-file`` needs on top of `MarkerRunnable`: a runner without it is
+    refused up front rather than quietly downgraded, because a run that silently stopped selecting
+    would look identical to one that did.
+
+    A **test file** here is an opaque string. The engine never builds one, parses one or compares
+    one to a path on disk: it gets them from `install_windows`' own recorder and hands the same
+    strings straight back. So a framework may name its files however it likes, and the engine stays
+    language-neutral (NF-3).
+
+    Both run methods must keep every check the whole-suite path keeps. A selected run is a second
+    road to a verdict, so a guard it skips is a guard the run does not have (`engine.runner.Runner`
+    spells out what those guards are). Where a guard compares against the whole suite's numbers,
+    the runner rescales it to the files it was given: GUT's drop-below-baseline guard is the one
+    that needs it, since every selected run has fewer tests than the whole suite.
+    """
+
+    def install_windows(self, project_dir: str, recorder_dir: str) -> None:
+        """Install this framework's "a test file started / ended" hook into the marked copy.
+
+        `project_dir` is the marked copy and `recorder_dir` is the copy-relative directory the
+        language adapter put its recorder in. Called once, after the copy is marked and before any
+        pass runs. A framework whose hook needs nothing installed may do nothing here.
+        """
+        ...
+
+    def run_markers_files(
+        self, project_dir: str, files: Sequence[str], timeout: float | None = None
+    ) -> SuiteResult:
+        """`MarkerRunnable.run_markers`, restricted to `files` and running them **in that order**.
+
+        The reverse marker pass is what needs the order: running the same files backwards is how a
+        hit that leaked out of its own test file into a later one is caught (docs/decisions/0017).
+        """
+        ...
+
+    def run_selected(
+        self, project_dir: str, files: Sequence[str], timeout: float | None = None
+    ) -> SuiteResult:
+        """`Runner.run`, restricted to `files`: one mutant against only the tests that reach it."""
         ...
 
 
@@ -309,9 +384,23 @@ def parse_junit_xml(xml: str) -> SuiteResult:
     if not suites:
         raise ValueError("no <testsuite> element in JUnit XML")
     tests = failures = errors = skipped = 0
+    named: list[ReportedSuite] = []
     for suite in suites:
-        tests += int(suite.get("tests", "0"))
-        failures += int(suite.get("failures", "0"))
-        errors += int(suite.get("errors", "0"))
+        one = ReportedSuite(
+            name=suite.get("name", ""),
+            tests=int(suite.get("tests", "0")),
+            failures=int(suite.get("failures", "0")),
+            errors=int(suite.get("errors", "0")),
+        )
+        tests += one.tests
+        failures += one.failures
+        errors += one.errors
         skipped += int(suite.get("skipped", "0"))
-    return SuiteResult(tests=tests, failures=failures, errors=errors, skipped=skipped)
+        named.append(one)
+    return SuiteResult(
+        tests=tests,
+        failures=failures,
+        errors=errors,
+        skipped=skipped,
+        suites=tuple(named),
+    )

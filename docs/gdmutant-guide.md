@@ -74,7 +74,8 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | `--exclude <glob>` | *(none)* | Skip matching files when expanding a directory (repeatable). |
 | `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. `auto` picks a worker count from your CPU count and throttles under load instead of a fixed N. |
 | `--timeout <seconds>` | 10x the baseline run | Per-mutant test timeout. |
-| `--coverage-analysis {off,all,per-file}` | `off` | `all` finds the mutants no test reaches before any mutant runs, and reports them as `no coverage` without running them. `per-file` is not built yet. See [Coverage analysis](#coverage-analysis). |
+| `--coverage-analysis {off,all,per-file}` | `off` | `all` finds the mutants no test reaches before any mutant runs, and reports them as `no coverage` without running them. `per-file` does that and runs every other mutant against only the test files that reach it, which is the setting that saves real time. See [Coverage analysis](#coverage-analysis). |
+| `--coverage-self-check N\|all` | `3` | How many of coverage analysis's own decisions are re-run against the whole suite to confirm them. `all` checks every mutant both ways. |
 | `--require-clean` / `--no-require-clean` | warn only | Refuse to run on an uncommitted source file. |
 | `--trust-config` | off | Act on `.gdmutant.toml`'s `command`/`godot`/`project` keys. |
 | `--progress {auto,plain,none}` | `auto` | How much the run narrates itself while it works. |
@@ -162,7 +163,40 @@ option off. The default, `off`, is what gdmutant has always done.
   example `--path .`), since the marked copy is where it starts. A command that names your project
   by an absolute path runs the unmarked original, writes no hits, and the run stops saying so.
 
-The design, and the per-file test selection still to come, is
+`--coverage-analysis per-file` does all of that, and then runs each remaining mutant against only
+the test files that reach it. It needs `--runner gdunit4` or `--runner gut`: an exit code cannot say
+which tests ran, so a custom `--command` is refused rather than quietly run in full.
+
+- The marker run becomes two passes instead of one: the suite forwards, then the same test files in
+  the opposite order. Every clean-run rule above applies to both, plus two more: at least one test
+  file must open a window, and the number of test files that opened one must match the number the
+  run's own report names. A hook that never fires would otherwise make every line look unreached.
+- A line is only run against a chosen few test files when both passes credit it to exactly the same
+  ones. A line reached while no test file was running (code that runs when a script loads, a timer
+  that fires after the suite's summary), and a line the two passes credit differently, both run the
+  whole suite. The summary counts the second kind as order-dependent lines.
+- If the reverse pass has failing tests while the forward pass was clean, the suite depends on the
+  order its files run in. gdmutant says so, names the files that failed, and runs without selection
+  for the rest of that run. You still get the `no coverage` verdicts.
+- The reverse pass also checks that your test runner ran the files it was given, and only those, in
+  that order. If it did not, selection would run your whole suite for every mutant while the
+  summary reported a saving, so gdmutant says so and runs without selection instead. The usual
+  cause is a test framework reading a configuration file of its own: GUT reads
+  `res://.gutconfig.json` unless told otherwise, and a `dirs` key there is *added* to whatever
+  `-gtest=` names, so nothing is ever restricted. Move those directories onto `--tests` and out of
+  the config file to get selection.
+- A kill from a selected run is confirmed before it is believed: the same test files run once
+  against your unmutated source. If they fail there too, the kill was not the mutant's, so the
+  mutant is re-run against the whole suite and the summary counts it as an order-coupled kill. Each
+  distinct set of files is confirmed once per run, not once per mutant.
+- The self-check covers selected mutants as well. A sample of them (three by default) also runs
+  against the whole suite, and the two verdicts must match. `--coverage-self-check all` checks
+  every mutant both ways, which is the full equivalence check and costs a whole-suite run per
+  mutant. The console summary always says how many it compared.
+- The summary reports what the selection bought: how many mutants ran a subset, the mean share of
+  the suite a mutant ran, and the order-dependent and order-coupled counts.
+
+The design is
 [`docs/decisions/0017`](decisions/0017-markers-for-no-coverage-and-test-selection.md).
 
 #### Refusing a dirty tree
@@ -259,8 +293,8 @@ none of them ever need trust.
   lines: that one is an empty report, not an empty stdout. `--dry-run` writes no `--json`/`--html`
   report at all, says so on stderr, and prints its mutant list to stdout instead.
 - `1`: the unmutated *baseline* suite failed. Fix your tests first. Mutation-testing a red
-  suite is meaningless. With `--coverage-analysis all`, also: the marker run was not clean, or the
-  self-check found a `no coverage` mutant that a real run does not agree with.
+  suite is meaningless. With `--coverage-analysis all` or `per-file`, also: a marker run was not
+  clean, or the self-check found a mutant a real run does not agree with.
 - `2`: a setup or input error. The stderr message says which one. The causes:
   - the source is unreadable or not valid GDScript, or no given path holds a parseable `.gd` file
   - `--project` does not name an existing directory

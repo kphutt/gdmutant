@@ -16,6 +16,12 @@ found while building step 1 (recorded in the ADR's update section):
   exit. Autoloads are freed last-registered first, so it is registered first, which makes it the
   last one freed and lets it see hits made while the others shut down.
 
+For ``--coverage-analysis per-file`` (step 3) the recorder also files each hit under the test file
+that was running when it happened. It learns which file that is from the test runner, which
+installs a hook of its own at `WINDOW_HOOK` (`engine.runner.FileSelecting.install_windows`); the
+writer autoload loads it if it is there. With no hook installed, every hit lands under the load-time
+window and the recorder behaves exactly as it did in step 2.
+
 A global class only resolves after Godot's import scan has listed it, so `mark` runs
 ``godot --import`` on the copy once, and checks that the class really was registered, whatever the
 test runner. That is the one step of coverage analysis that needs `godot`, even for
@@ -45,27 +51,82 @@ RECORDER_DIR = "_gdmutant"
 WRITER_AUTOLOAD = "_GdmHitsWriter"
 #: Where the writer puts the hits, relative to the copy.
 HITS_FILE = f"{RECORDER_DIR}/hits.json"
+#: What a runner calls its "a test file started / ended" hook when the writer autoload is to load
+#: it. The runner that installs one writes this name into the recorder directory it is given, so
+#: this constant is the one place the two ends agree on it.
+WINDOW_HOOK_NAME = "windows.gd"
+#: Where that hook sits, relative to the copy. The writer autoload loads it when it is there and
+#: runs without windows when it is not, so a runner that cannot select test files needs to install
+#: nothing (`engine.runner.FileSelecting`).
+WINDOW_HOOK = f"{RECORDER_DIR}/{WINDOW_HOOK_NAME}"
 
 _RECORDER_SOURCE = f"""class_name {MARKER_AUTOLOAD}
 extends Object
 ## gdmutant's coverage recorder. It exists only in gdmutant's throwaway marked copy of a project.
-## Every marker calls `hit` with its spot number, and the first call for a spot records it.
+## Every marker calls `hit` with its spot number, which records that the spot was reached while
+## the current test file was running. A runner's window hook calls `begin_file` and `end_file`.
 
-static var hits := {{}}
+## The test file running right now, or "" for load time, between files, and after the last one.
+static var window := ""
+## spot -> the window it was last recorded under. The whole of `hit`'s fast path.
+static var last := {{}}
+## window -> the spots reached while it was open, as a set (the values are always true).
+static var windows := {{"": {{}}}}
+## Every window that opened, in the order the files ran. A file that reaches nothing is still here.
+static var opened: Array = []
 
 
 static func hit(spot: int) -> void:
-\thits[spot] = true
+\t## One dictionary lookup and one comparison, so a marker in a hot loop records once per window
+\t## and pays almost nothing on every later pass through it.
+\tif last.get(spot) != window:
+\t\t_record(spot)
+
+
+static func _record(spot: int) -> void:
+\tlast[spot] = window
+\tif not windows.has(window):
+\t\twindows[window] = {{}}
+\twindows[window][spot] = true
+
+
+static func begin_file(path: String) -> void:
+\twindow = path
+\topened.append(path)
+\tif not windows.has(path):
+\t\twindows[path] = {{}}
+
+
+static func end_file() -> void:
+\twindow = ""
 """
 
 _WRITER_SOURCE = f"""extends Node
-## Writes the spots `{MARKER_AUTOLOAD}` recorded, once, when Godot frees this autoload at exit.
+## Writes what `{MARKER_AUTOLOAD}` recorded, once, when Godot frees this autoload at exit, and
+## loads the runner's window hook at startup if one was installed.
+
+
+func _ready() -> void:
+\tif ResourceLoader.exists("res://{WINDOW_HOOK}"):
+\t\tvar hook: Node = load("res://{WINDOW_HOOK}").new()
+\t\tadd_child(hook)
 
 
 func _notification(what: int) -> void:
 \tif what == NOTIFICATION_PREDELETE:
+\t\tvar windows := {{}}
+\t\tvar hits := {{}}
+\t\tfor key: Variant in {MARKER_AUTOLOAD}.windows:
+\t\t\tvar spots: Array = {MARKER_AUTOLOAD}.windows[key].keys()
+\t\t\twindows[key] = spots
+\t\t\tfor spot: Variant in spots:
+\t\t\t\thits[spot] = true
 \t\tvar out := FileAccess.open("res://{HITS_FILE}", FileAccess.WRITE)
-\t\tout.store_string(JSON.stringify({{"hits": {MARKER_AUTOLOAD}.hits.keys()}}))
+\t\tout.store_string(JSON.stringify({{
+\t\t\t"hits": hits.keys(),
+\t\t\t"windows": windows,
+\t\t\t"opened": {MARKER_AUTOLOAD}.opened,
+\t\t}}))
 \t\tout.close()
 """
 
@@ -116,12 +177,14 @@ class GDScriptMarker:
         (recorder / "marks.gd").write_text(_RECORDER_SOURCE, encoding="utf-8", newline="")
         (recorder / "writer.gd").write_text(_WRITER_SOURCE, encoding="utf-8", newline="")
         settings.write_text(
-            _with_writer_autoload(settings.read_text(encoding="utf-8")),
+            _prepared_settings(settings.read_text(encoding="utf-8")),
             encoding="utf-8",
             newline="",
         )
         self._register(copy)
-        return MarkedCopy(hits_path=str(copy / HITS_FILE), placements=placements)
+        return MarkedCopy(
+            hits_path=str(copy / HITS_FILE), placements=placements, recorder_dir=RECORDER_DIR
+        )
 
     def _register(self, copy: Path) -> None:
         """Run Godot's import scan on `copy` so the recorder class resolves, then check it did.
@@ -183,12 +246,53 @@ def _refuse_taken_names(copy: Path, settings: Path) -> None:
             )
 
 
-def _with_writer_autoload(settings: str) -> str:
-    """`settings` (a project.godot) with the hits writer registered as the FIRST autoload."""
-    entry = f'{WRITER_AUTOLOAD}="*res://{RECORDER_DIR}/writer.gd"'
+#: The project setting that turns every GDScript warning off, and the section it lives under.
+_WARNINGS_SECTION = "debug"
+_WARNINGS_KEY = "gdscript/warnings/enable"
+
+
+def _prepared_settings(settings: str) -> str:
+    """`settings` (a project.godot) as the marked copy needs it.
+
+    Two changes. The hits writer is registered as the first autoload, so Godot frees it last and it
+    can still see a hit made while another autoload shuts down.
+
+    And GDScript warnings are switched off for the copy. A project may set a warning to be treated
+    as an error, which is a rule about the code its author writes, and the recorder is not that: it
+    is gdmutant's code, dropped into a throwaway copy for one run. gdUnit4's own repository does
+    exactly this (``untyped_declaration=2``), and it stopped the recorder from compiling at all, so
+    the marker run failed on a project whose own suite is perfectly healthy. Turning the whole
+    category off rather than the one warning that bit is deliberate: a later Godot can add a warning
+    gdmutant has never heard of, and the recorder would fail the same way again.
+
+    It hides nothing that matters. A warning is not a parse error, so a marked file Godot genuinely
+    cannot load still fails the run, and a project whose own code trips a warning-as-error has a red
+    baseline long before coverage analysis is asked for.
+    """
+    with_writer = _with_setting(
+        settings, "autoload", WRITER_AUTOLOAD, f'"*res://{RECORDER_DIR}/writer.gd"'
+    )
+    return _with_setting(with_writer, _WARNINGS_SECTION, _WARNINGS_KEY, "false")
+
+
+def _with_setting(settings: str, section: str, key: str, value: str) -> str:
+    """`settings` (a project.godot) with ``key=value`` set first in ``[section]``.
+
+    First in the section, because the one caller that cares about position needs it: an autoload
+    registered first is freed last. A key already in that section is replaced where it stands, and a
+    section that is not there at all is added at the end.
+    """
+    entry = f"{key}={value}"
     lines = settings.split("\n")
-    for index, line in enumerate(lines):
-        if line.strip() == "[autoload]":
-            lines.insert(index + 1, entry)
+    header = f"[{section}]"
+    start = next((index for index, line in enumerate(lines) if line.strip() == header), None)
+    if start is None:
+        return settings.rstrip("\n") + f"\n\n{header}\n\n{entry}\n"
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("["):
+            break
+        if lines[index].split("=", 1)[0].strip() == key:
+            lines[index] = entry
             return "\n".join(lines)
-    return settings.rstrip("\n") + f"\n\n[autoload]\n\n{entry}\n"
+    lines.insert(start + 1, entry)
+    return "\n".join(lines)
