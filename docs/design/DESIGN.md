@@ -209,7 +209,11 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   that reach the mutated line. That last one landed in steps: marker placement in the GDScript
   adapter, then the marker run and the *no coverage* verdict (`--coverage-analysis all`), then
   per-test-file selection (`--coverage-analysis per-file`) for the two JUnit runners. All of it is
-  off by default. What it saves is test time, not Godot startup time: each mutant still gets its own
+  off by default, and stays off:
+  [ADR-0018](../decisions/0018-coverage-analysis-stays-off-by-default.md) measured all three
+  settings on three real projects and found that turning either of them on by default would stop a
+  working run on two of them. What it saves is test time, not Godot startup time: each mutant still
+  gets its own
   Godot process (ADR-0011), so a suite whose cost is mostly starting Godot gains little, and one
   whose cost is spread unevenly across many test files gains a lot. Keeping one Godot alive across
   mutants, the remaining lever, is out of scope: static variables are not reset on hot reload
@@ -336,6 +340,8 @@ incremental/diff-scoped mode (`--since`), parallel evaluation (`--jobs`), and co
 selection (the NF-6 seam), built in the steps of
 [ADR-0017](../decisions/0017-markers-for-no-coverage-and-test-selection.md), of which step 1 (marker
 placement), step 2 (the marker run and the *no coverage* verdict) and step 3 (per-test-file
-selection for the two JUnit runners) have landed. Still in progress there: the command runner's own
-selection contract, and a decision on the default. Still deferred: the optional LLM-semantic mutant
-mode, and additional language adapters.
+selection for the two JUnit runners) have landed, and step 5 (the decision on the default) is
+settled in [ADR-0018](../decisions/0018-coverage-analysis-stays-off-by-default.md): `off`, with the
+measurements and the trigger that would reopen it. Still in progress there: the command runner's own
+selection contract. Still deferred: the optional LLM-semantic mutant mode, and additional language
+adapters.
