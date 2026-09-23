@@ -633,10 +633,27 @@ def test_the_summary_counts_order_dependent_lines_and_order_coupled_kills() -> N
             coverage_analysis=True,
             test_files=4,
             order_dependent=2,
+            order_coupled_sets=((A, B),),
         )
     )
     assert "  order-dependent lines: 2" in summary
     assert "  order-coupled kills: 1" in summary
+    assert f"    these do not pass on their own: {A}, {B}" in summary
+
+
+@pytest.mark.parametrize(("count", "tail"), [(4, "and 1 more such set"), (5, "and 2 more such")])
+def test_the_summary_names_a_few_coupled_sets_and_counts_the_rest(count: int, tail: str) -> None:
+    """A run where every set is coupled has one problem, not fifty, so the list is capped."""
+    summary = console_summary(
+        MutationRun(
+            (_outcome(Verdict.KILLED, None, coupled=True),),
+            coverage_analysis=True,
+            test_files=9,
+            order_coupled_sets=tuple((f"res://t/{n}.gd",) for n in range(count)),
+        )
+    )
+    assert summary.count("these do not pass on their own") == 3
+    assert tail in summary
 
 
 def test_the_summary_says_nothing_about_selection_when_there_was_none() -> None:

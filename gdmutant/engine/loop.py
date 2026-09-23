@@ -147,12 +147,16 @@ class MutationRun:
     never a silent pass. `test_files` is how many test files the whole suite has, which is what a
     selected mutant's count is a share of, and ``0`` when nothing measured it. `order_dependent` is
     how many marked spots the two marker passes disagreed about, each of which runs everything.
+    `order_coupled_sets` names the sets of test files that turned out not to pass unmutated.
     """
 
     outcomes: tuple[MutantOutcome, ...]
     coverage_analysis: bool = False
     test_files: int = 0
     order_dependent: int = 0
+    #: Every set of test files that did not pass on the unmutated project, so no kill from it was
+    #: believed. Named in the summary, because the fix is to that suite, not to the mutated code.
+    order_coupled_sets: tuple[tuple[str, ...], ...] = ()
 
     def _count(self, verdict: Verdict) -> int:
         return sum(1 for o in self.outcomes if o.verdict is verdict)
@@ -591,6 +595,9 @@ def run(
         progress,
     )
     clock = _Progress(emit=progress, style=progress_style)
+    # One per run, not one per file: a set of test files confirmed while mutating one file is
+    # still confirmed while mutating the next.
+    trust = _Trust(runner) if plans is not None and isinstance(runner, FileSelecting) else None
     result = _mutate_file(
         project_dir,
         path,
@@ -604,6 +611,7 @@ def run(
         jobs_auto,
         clock,
         mutants=None if mutants is None else mutants[path],
+        trust=trust,
         coverage=None if plans is None else plans.files[path],
         test_files=0 if plans is None else plans.test_files,
         order_dependent=0 if plans is None else plans.order_dependent,
@@ -1087,6 +1095,7 @@ def _mutate_file(
     is_last_file: bool = True,
     mutants: list[Mutant] | None,
     coverage: _FileCoverage | None,
+    trust: _Trust | None = None,
     test_files: int = 0,
     order_dependent: int = 0,
 ) -> MutationRun:
@@ -1112,7 +1121,9 @@ def _mutate_file(
     them all before the marker run). `coverage` is that analysis's plan for this file: a mutant no
     test reaches gets `Verdict.NO_COVERAGE` without a run, unless the self-check sampled it, in
     which case it runs against the whole suite like any other mutant and must survive there
-    (`_self_check`); a mutant with a set of test files runs only those (`_evaluate`).
+    (`_self_check`); a mutant with a set of test files runs only those (`_evaluate`). `trust` is
+    what confirms such a mutant's kill, and belongs to the whole run rather than to one file, so
+    a set of test files is confirmed once however many of the run's files send mutants to it.
     """
     if mutants is None:
         mutants = adapter.generate_mutants(path, source, catalog)
@@ -1128,7 +1139,6 @@ def _mutate_file(
         jobs = 1
     if progress is not None:
         progress(_progress_plan(runnable, total, jobs, skipped))
-    trust = _Trust(runner) if isinstance(runner, FileSelecting) else None
     if jobs > 1 and total > 0:
         outcomes = _run_mutants_parallel(
             project_dir,
@@ -1175,6 +1185,7 @@ def _mutate_file(
         coverage_analysis=coverage is not None,
         test_files=test_files,
         order_dependent=order_dependent,
+        order_coupled_sets=() if trust is None else trust.coupled,
     )
 
 
@@ -1626,6 +1637,9 @@ def run_paths(
         progress,
     )
     clock = _Progress(emit=progress, style=progress_style)
+    # One per run, not one per file: a set of test files confirmed while mutating one file is
+    # still confirmed while mutating the next.
+    trust = _Trust(runner) if plans is not None and isinstance(runner, FileSelecting) else None
     runs: dict[str, MutationRun] = {}
     last_path = next(reversed(sources), None)
     for path, source in sources.items():
@@ -1646,6 +1660,7 @@ def run_paths(
             clock,
             is_last_file=path == last_path,
             mutants=None if mutants is None else mutants[path],
+            trust=trust,
             coverage=None if plans is None else plans.files[path],
             test_files=0 if plans is None else plans.test_files,
             order_dependent=0 if plans is None else plans.order_dependent,

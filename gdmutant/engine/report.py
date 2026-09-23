@@ -242,6 +242,11 @@ def console_summary(run: MutationRun) -> str:
     return "\n".join(lines)
 
 
+#: How many order-coupled sets of test files the summary names before it stops and counts the rest.
+#: A handful is enough to start on; a run where every set is coupled has one problem, not fifty.
+_NAMED_COUPLED_SETS = 3
+
+
 def _selection_lines(run: MutationRun) -> list[str]:
     """How much of the suite the run actually ran, or nothing when it ran all of it every time.
 
@@ -271,6 +276,13 @@ def _selection_lines(run: MutationRun) -> list[str]:
             f"  order-coupled kills: {run.order_coupled}  (the chosen test files do not pass "
             "unmutated either, so the whole suite decided instead)"
         )
+        # Name them. The fix is to those test files, which only pass when something else runs
+        # first, and a count alone leaves a reader with nowhere to start.
+        for coupled in run.order_coupled_sets[:_NAMED_COUPLED_SETS]:
+            lines.append(f"    these do not pass on their own: {', '.join(coupled)}")
+        rest = len(run.order_coupled_sets) - _NAMED_COUPLED_SETS
+        if rest > 0:
+            lines.append(f"    and {rest} more such set{'s' if rest > 1 else ''}")
     return lines
 
 

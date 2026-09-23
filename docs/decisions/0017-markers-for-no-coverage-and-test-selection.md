@@ -393,7 +393,8 @@ Each step is its own PR, off `main`, in this order.
    through console, JSON, HTML and scoring. Updates `AGENTS.md` and `DESIGN.md`.
 3. Selection for GdUnit4 and GUT (`--coverage-analysis per-file`). The file-window hooks, the
    file lists per runner, GUT's per-selection drop guard, the confirmation of kills, and the
-   self-check.
+   self-check. Built, with the five changes in
+   [the 2026-09-22 update](#update-2026-09-22-what-building-step-3-changed).
 4. The command-runner contract: windows, the environment variables and the receipt. Only once
    step 0's bar is met for a command harness.
 5. A decision on the default, in its own PR, only after steps 2 to 4 have run on real projects.
@@ -500,3 +501,76 @@ flag that checks every mutant stay in step 3.
 - The marker call costs about 100 ns on Godot 4.7: a loop of one million trivial additions took
   about 12 ms plain and 115 ms marked. A hot loop of cheap statements can run several times slower
   in the marker run, which is why the marker run gets the baseline's time budget, not a mutant's.
+
+
+## Update, 2026-09-22: what building step 3 changed
+
+Step 3 is built, for GdUnit4 and GUT, as `--coverage-analysis per-file`. Five things it found
+change the design above. The text above is left as it was accepted. Where it and this section
+disagree, this section is what was built.
+
+### The file list comes from the forward pass, not from discovery
+The design above has each runner enumerate its test files so both passes can be given a list. What
+was built asks the framework instead. The forward pass runs the suite exactly as the baseline does,
+with no file list at all, and the recorder's `opened` is then the framework's own answer to "which
+files, in which order". The reverse pass is that list, reversed. Three things fall out of it: no
+discovery code per runner, a forward pass that is the real suite rather than gdmutant's idea of it,
+and no way for a base class with no tests to be passed as a suite (GdUnit4's step-0 footnote).
+
+### A runner that ignores its file list is refused, and one real framework does
+GUT reads `res://.gutconfig.json` unless told otherwise, and a `dirs` key there is *added* to
+whatever `-gtest=` names on the command line. On GUT's own repository, which has such a file, every
+"selected" run silently ran all 1,524 tests. Nothing was wrong with any verdict, and nothing in the
+run said a word: the map was right, the files were run, and the summary reported a saving that had
+not happened.
+
+The reverse pass is the one place that is visible, because it is the one pass whose answer is known
+in advance: it asked for N files in a set order, so `opened` must be exactly that. It is checked,
+and a mismatch refuses selection for the run with a message that names a configuration file as the
+usual cause, the same graceful way an order-dependent suite is refused. This is a new rule the
+design above does not have, and it is the one that turns "selection quietly did nothing" from
+invisible into loud.
+
+### The window hook belongs to the runner, the recorder to the adapter
+As the design says, each runner owns its own hook, through a new optional protocol
+(`engine.runner.FileSelecting`). What that looks like in practice differs per framework, which is
+why neither could have been written by the other half:
+
+- GdUnit4 announces every suite on one process-wide signal,
+  `GdUnitSignals.instance().gdunit_event`, so the hook is a small node the recorder's writer
+  autoload loads by name and adds to the tree. Nothing goes on the command line.
+- GUT hands a pre-run hook script its `gut` object, so the hook is a `GutHookScript` connecting
+  `start_script` and `end_script`, named with `-gpre_run_script` on the marker passes only. It
+  cannot be the file the writer loads, because a `GutHookScript` is not a node.
+
+Neither framework needed the fallback the design keeps in reserve (injecting a `before_test` into
+every suite). Both event channels fire in a plain `--headless` CLI run.
+
+### The self-check needed a second half, and it is what catches the dangerous direction
+Step 2 shipped the "no coverage" half. Step 3 adds the other: a sample of *selected* mutants also
+runs against the whole suite, and the two verdicts must match, with killed and timeout counted as
+one answer. `--coverage-self-check N|all` sets the size, and `all` is the two-sided equivalence
+check as a feature rather than a one-off.
+
+It earns its place. A recorder deliberately blinded to one test file, so that the file still runs,
+still passes and still opens its window while its hits go uncredited, produces a run in which
+nothing at all looks wrong: green suite, windows opened, hits file written, and one mutant quietly
+reported as survived instead of killed. The clean-run rules cannot see it. The window rules cannot
+see it. Only running the mutant both ways can, and the live tests do exactly that on both
+frameworks.
+
+### What selection costs, and what it saves
+Selection saves test time. It saves no Godot time, because every mutant still gets its own process
+(ADR-0011), so what it is worth depends entirely on how much of a suite's wall-clock is spent
+inside its tests rather than starting up.
+
+On this repository's own corpus, it is a loss, and predictably so: two test files, five tests, a
+few milliseconds of actual testing inside about 1.6 s of Godot startup per mutant. Running half the
+files saves half of nothing, and the two marker passes, the import scan and the self-check's
+whole-suite runs are all real. Measured on one machine, 18 mutants, serial: 29.4 s with coverage
+analysis off, 34.9 s with `all`, 41.5 s with `per-file` under GdUnit4; 25.6 s, 30.9 s and 50.8 s
+under GUT with the self-check on every mutant. A corpus is the wrong shape for this lever, which is
+why the ADR asked for a real project.
+
+Step 0's 6.1x and 2.7x are the ceiling for a *random* fifth of a suite, and a real map does not pick
+randomly. The measured figures on real projects are in the implementation PR.

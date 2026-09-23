@@ -1304,11 +1304,15 @@ def run_mutation_paths(
     # per-file `MutationRun`. Taking them from the first keeps the aggregate reporting the run's
     # own numbers rather than zeroes.
     first = next(iter(runs.values()), None)
+    # The coupled sets are the exception: they are found as the run goes, so an early file's run
+    # has seen fewer of them than a late one. Merge them, keeping the order they were found in.
+    coupled = dict.fromkeys(files for r in runs.values() for files in r.order_coupled_sets)
     aggregate = MutationRun(
         tuple(o for r in runs.values() for o in r.outcomes),
         coverage_analysis=coverage is not CoverageAnalysis.OFF,
         test_files=first.test_files if first is not None else 0,
         order_dependent=first.order_dependent if first is not None else 0,
+        order_coupled_sets=tuple(coupled),
     )
     print(console_summary(aggregate), file=out)
     # Across every file: baseline passed but nothing was detected — usually the test command never
