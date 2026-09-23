@@ -10,8 +10,15 @@ from pathlib import Path
 import pytest
 
 import gdmutant.adapters.gdscript.runner as runner_mod
-from gdmutant.adapters.gdscript.runner import GutRunner
-from gdmutant.engine.runner import Runner, RunWarning, SuiteTimeout
+from gdmutant.adapters.gdscript.runner import GdUnit4Runner, GutRunner
+from gdmutant.engine.runner import (
+    CommandRunner,
+    FileSelecting,
+    MarkerRunnable,
+    Runner,
+    RunWarning,
+    SuiteTimeout,
+)
 
 
 def _report(tmp_path: Path) -> Path:
@@ -465,6 +472,17 @@ def test_run_warning_is_silent_when_test_count_is_stable(
 
 def test_gut_runner_satisfies_the_protocol() -> None:
     assert isinstance(GutRunner(), Runner)
+
+
+def test_which_runners_can_select_test_files_and_which_cannot() -> None:
+    """The seam ``--coverage-analysis per-file`` is refused on, pinned where both sides can be seen
+    at once. The exit-code runner deliberately does not satisfy it: an exit code cannot say which
+    tests ran, so it gets the "no coverage" verdict and nothing more (docs/decisions/0017)."""
+    assert isinstance(GutRunner(), FileSelecting)
+    assert isinstance(GdUnit4Runner(), FileSelecting)
+    assert not isinstance(CommandRunner(command=["true"]), FileSelecting)
+    # It is still a marker runner, which is what `--coverage-analysis all` needs.
+    assert isinstance(CommandRunner(command=["true"]), MarkerRunnable)
 
 
 def test_gut_runner_satisfies_the_run_warning_protocol() -> None:
