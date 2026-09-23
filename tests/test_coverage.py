@@ -17,6 +17,7 @@ from gdmutant.adapters.gdscript import ADAPTER
 from gdmutant.engine.coverage import (
     SELF_CHECK_SAMPLE,
     CoverageAnalysis,
+    Hits,
     HitsUnreadable,
     MarkedCopy,
     _sample_key,
@@ -52,7 +53,7 @@ def test_the_option_values_follow_strykers_names() -> None:
 def test_read_hits_returns_the_recorded_spots(tmp_path: Path) -> None:
     path = tmp_path / "hits.json"
     path.write_text(json.dumps({"hits": [3, 1, 3]}), encoding="utf-8")
-    assert read_hits(path) == frozenset({1, 3})
+    assert read_hits(path).spots == frozenset({1, 3})
 
 
 def test_read_hits_accepts_an_empty_list_and_leaves_judging_it_to_the_clean_run(
@@ -60,7 +61,7 @@ def test_read_hits_accepts_an_empty_list_and_leaves_judging_it_to_the_clean_run(
 ) -> None:
     path = tmp_path / "hits.json"
     path.write_text('{"hits": []}', encoding="utf-8")
-    assert read_hits(path) == frozenset()
+    assert read_hits(path).spots == frozenset()
 
 
 def test_a_missing_hits_file_is_unreadable_never_nothing_reached(tmp_path: Path) -> None:
@@ -84,7 +85,10 @@ def test_a_missing_hits_file_is_unreadable_never_nothing_reached(tmp_path: Path)
 def test_a_malformed_hits_file_is_unreadable(tmp_path: Path, text: str) -> None:
     path = tmp_path / "hits.json"
     path.write_text(text, encoding="utf-8")
-    with pytest.raises(HitsUnreadable, match=r"hits file at .* (could not be read|is not a list)"):
+    with pytest.raises(
+        HitsUnreadable,
+        match=r"hits file at .* (could not be read|is not a list|is not a JSON object)",
+    ):
         read_hits(path)
 
 
@@ -97,41 +101,41 @@ _CLEAN = SuiteResult(tests=4, failures=0, errors=0)
 
 
 def test_a_clean_run_has_no_problems() -> None:
-    assert clean_run_problems(_CLEAN, 4, frozenset({0})) == []
+    assert clean_run_problems(_CLEAN, 4, Hits(frozenset({0}))) == []
 
 
 def test_a_failing_test_in_the_marker_run_is_a_problem() -> None:
     result = SuiteResult(tests=4, failures=1, errors=0, detail="test_x failed")
-    (problem,) = clean_run_problems(result, 4, frozenset({0}))
+    (problem,) = clean_run_problems(result, 4, Hits(frozenset({0})))
     assert "not every test passed" in problem
     assert "1 failed, 0 errored" in problem
     assert problem.endswith("\ntest_x failed")
 
 
 def test_an_erroring_test_in_the_marker_run_is_a_problem() -> None:
-    (problem,) = clean_run_problems(SuiteResult(4, 0, 2), 4, frozenset({0}))
+    (problem,) = clean_run_problems(SuiteResult(4, 0, 2), 4, Hits(frozenset({0})))
     assert "0 failed, 2 errored" in problem
     assert not problem.endswith("\n")
 
 
 def test_a_script_error_in_the_marker_run_is_a_problem_even_when_every_test_passed() -> None:
     result = SuiteResult(tests=4, failures=0, errors=0, runtime_error="SCRIPT ERROR: boom")
-    (problem,) = clean_run_problems(result, 4, frozenset({0}))
+    (problem,) = clean_run_problems(result, 4, Hits(frozenset({0})))
     assert "runtime error" in problem
     assert problem.endswith("\nSCRIPT ERROR: boom")
 
 
 def test_a_test_count_that_differs_from_the_baseline_is_a_problem() -> None:
-    (problem,) = clean_run_problems(SuiteResult(3, 0, 0), 4, frozenset({0}))
+    (problem,) = clean_run_problems(SuiteResult(3, 0, 0), 4, Hits(frozenset({0})))
     assert problem == "the marker run ran 3 tests, but the baseline ran 4"
 
 
 def test_more_tests_than_the_baseline_is_a_problem_too() -> None:
-    assert clean_run_problems(SuiteResult(5, 0, 0), 4, frozenset({0}))
+    assert clean_run_problems(SuiteResult(5, 0, 0), 4, Hits(frozenset({0})))
 
 
 def test_zero_hits_is_a_problem() -> None:
-    (problem,) = clean_run_problems(_CLEAN, 4, frozenset())
+    (problem,) = clean_run_problems(_CLEAN, 4, Hits(frozenset()))
     assert "no marker recorded a single hit" in problem
 
 
@@ -141,7 +145,7 @@ def test_unreadable_hits_are_a_problem_with_their_own_message() -> None:
 
 def test_every_problem_is_reported_not_just_the_first() -> None:
     result = SuiteResult(tests=2, failures=1, errors=0, runtime_error="SCRIPT ERROR")
-    assert len(clean_run_problems(result, 4, frozenset())) == 4
+    assert len(clean_run_problems(result, 4, Hits(frozenset()))) == 4
 
 
 def test_uncovered_is_the_mutants_whose_spot_was_never_hit() -> None:
@@ -496,9 +500,14 @@ def test_neither_is_refused_by_name(tmp_path: Path) -> None:
 
 
 def test_per_file_is_refused_not_downgraded(tmp_path: Path) -> None:
+    """A runner that cannot run a named list of test files is refused, never quietly downgraded.
+
+    A silent fallback to whole-suite runs would report the same verdicts in the same time as
+    before and say nothing at all, which is the one outcome nobody could tell from selection
+    working."""
     lab = Lab()
     project, target = _project(tmp_path)
-    with pytest.raises(CoverageRunFailed, match="per-file is not built yet"):
+    with pytest.raises(CoverageRunFailed, match="needs a runner that can run a named list"):
         run(
             str(project),
             str(target),
@@ -809,7 +818,7 @@ def test_the_malformed_hits_message_quotes_at_most_200_characters(tmp_path: Path
 
 def test_the_clean_run_messages_in_full() -> None:
     result = SuiteResult(tests=2, failures=1, errors=0, runtime_error="SCRIPT ERROR: x")
-    assert clean_run_problems(result, 4, frozenset()) == [
+    assert clean_run_problems(result, 4, Hits(frozenset())) == [
         "not every test passed in the marker run (1 failed, 0 errored), though the same suite "
         "passed without markers",
         "the marker run's output holds a runtime error, which aborts the function it happens in "
@@ -855,8 +864,8 @@ def test_the_refusals_before_marking_say_exactly_what_is_missing(tmp_path: Path)
             marker=Lab(),
         )
     assert str(per_file.value) == (
-        "--coverage-analysis per-file is not built yet. Use 'all' for the no coverage verdict, "
-        "or 'off'."
+        "--coverage-analysis per-file needs a runner that can run a named list of test files, "
+        "and this one cannot. Use --coverage-analysis all for the no coverage verdict, or off."
     )
     with pytest.raises(CoverageRunFailed) as neither:
         run(

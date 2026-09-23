@@ -36,7 +36,7 @@ from gdmutant.adapters.gdscript.runner import (
     GutRunner,
 )
 from gdmutant.engine.adapter import Adapter
-from gdmutant.engine.coverage import CoverageAnalysis, Marker
+from gdmutant.engine.coverage import SELF_CHECK_SAMPLE, CoverageAnalysis, Marker
 from gdmutant.engine.loop import (
     BaselineFailed,
     MutationRun,
@@ -970,6 +970,19 @@ def list_mutants(source_path: str, only_lines: set[int] | None = None) -> int:
     return 0
 
 
+def _self_check_size(value: str) -> int | None:
+    """``--coverage-self-check`` as `loop.run` takes it: a count, or ``None`` for every mutant.
+
+    Raises ``ValueError`` for anything else, which the caller turns into an exit-2 message.
+    ``None`` is a real answer here, not an error, which is why this raises rather than returning
+    one. A number below one is not an error either: `engine.coverage.self_check_sample` raises it
+    to one, because a sample that quietly compared nothing is the silence it exists to break.
+    """
+    if value.strip().lower() == "all":
+        return None
+    return int(value)
+
+
 def run_mutation(
     source_path: str,
     project_dir: str,
@@ -986,6 +999,7 @@ def run_mutation(
     progress_style: ProgressStyle = ProgressStyle.RICH,
     coverage: CoverageAnalysis = CoverageAnalysis.OFF,
     marker: Marker | None = None,
+    self_check: int | None = SELF_CHECK_SAMPLE,
 ) -> int:
     """Mutate `source_path`, run via `runner`, print the summary, optionally write a report file.
 
@@ -1033,6 +1047,7 @@ def run_mutation(
             progress_style=progress_style,
             coverage=coverage,
             marker=marker,
+            self_check=self_check,
         )
     except (SourceOutsideProject, SourceWriteFailed) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -1224,6 +1239,7 @@ def run_mutation_paths(
     progress_style: ProgressStyle = ProgressStyle.RICH,
     coverage: CoverageAnalysis = CoverageAnalysis.OFF,
     marker: Marker | None = None,
+    self_check: int | None = SELF_CHECK_SAMPLE,
 ) -> int:
     """Mutate several `.gd` files against one project in a single pass — the baseline runs **once**
     and the score is aggregated across every file, with one merged report. Same return
@@ -1260,6 +1276,7 @@ def run_mutation_paths(
             progress_style=progress_style,
             coverage=coverage,
             marker=marker,
+            self_check=self_check,
         )
     except (SourceOutsideProject, SourceWriteFailed) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -1283,9 +1300,15 @@ def run_mutation_paths(
     print("", file=out)
     # Survivors carry their own path, so one aggregate summary lists them per file with the overall
     # score across every file's mutants.
+    # The marker run covers every file at once, so its run-level facts are the same on every
+    # per-file `MutationRun`. Taking them from the first keeps the aggregate reporting the run's
+    # own numbers rather than zeroes.
+    first = next(iter(runs.values()), None)
     aggregate = MutationRun(
         tuple(o for r in runs.values() for o in r.outcomes),
         coverage_analysis=coverage is not CoverageAnalysis.OFF,
+        test_files=first.test_files if first is not None else 0,
+        order_dependent=first.order_dependent if first is not None else 0,
     )
     print(console_summary(aggregate), file=out)
     # Across every file: baseline passed but nothing was detected — usually the test command never
@@ -1670,11 +1693,22 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "--coverage-analysis",
         choices=tuple(mode.value for mode in CoverageAnalysis),
         default=CoverageAnalysis.OFF.value,
-        help="find the mutants no test reaches before running any: off (default: every mutant "
-        "runs the whole suite), or all (run the suite once on a marked copy of the project, and "
+        help="find which tests reach each mutant before running any: off (default: every mutant "
+        "runs the whole suite), all (run the suite once on a marked copy of the project, and "
         "report a mutant whose line no test reached as 'no coverage' without running it. It is "
-        "scored like a survivor, so the score does not move). per-file (run only the tests that "
-        "reach a mutant) is not built yet. Needs --godot, whatever the runner",
+        "scored like a survivor, so the score does not move), or per-file (that, and every other "
+        "mutant runs only the test files that reach it, which is the one that saves real time). "
+        "per-file runs the suite twice up front, the second time with the files in reverse order, "
+        "and needs --runner gdunit4 or gut. Needs --godot, whatever the runner",
+    )
+    run_parser.add_argument(
+        "--coverage-self-check",
+        default=str(SELF_CHECK_SAMPLE),
+        metavar="N|all",
+        help="how many mutants coverage analysis decided are also run against the whole suite, to "
+        f"confirm it was right about them (default: {SELF_CHECK_SAMPLE} of each kind). 'all' "
+        "checks every one, which is the two-sided equivalence check and costs a whole-suite run "
+        "per mutant. Ignored with --coverage-analysis off",
     )
     run_parser.add_argument(
         "--dry-run",
@@ -1897,6 +1931,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--report", args.report, None),
                     ("--progress", args.progress_style, "auto"),
                     ("--coverage-analysis", args.coverage_analysis, "off"),
+                    ("--coverage-self-check", args.coverage_self_check, str(SELF_CHECK_SAMPLE)),
                 )
                 if value != default
             ]
@@ -1914,10 +1949,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if rc != 0:
                     return rc
             return 0
-        if args.coverage_analysis == CoverageAnalysis.PER_FILE.value:
+        try:
+            self_check = _self_check_size(args.coverage_self_check)
+        except ValueError:
             print(
-                "error: --coverage-analysis per-file is not built yet. Use 'all' to get the no "
-                "coverage verdict, or 'off'",
+                "error: --coverage-self-check takes a whole number of mutants, or 'all'",
+                file=sys.stderr,
+            )
+            return 2
+        if args.coverage_analysis == CoverageAnalysis.PER_FILE.value and args.runner == "command":
+            # An exit code cannot say which tests ran, so a command harness has to opt in to a
+            # contract of its own before gdmutant may run fewer tests against it
+            # (docs/decisions/0017, step 4). Refusing is the honest answer: quietly running the
+            # whole suite would look exactly like selection working.
+            print(
+                "error: --coverage-analysis per-file needs --runner gdunit4 or gut. An exit code "
+                "cannot say which tests ran, so gdmutant cannot tell which test files a custom "
+                "--command actually ran. Use --coverage-analysis all, which works with every "
+                "runner",
                 file=sys.stderr,
             )
             return 2
@@ -1985,6 +2034,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "step_summary": _wants_step_summary(args.report),
             "progress_style": _resolve_progress_style(args.progress_style),
             "coverage": CoverageAnalysis(args.coverage_analysis),
+            "self_check": self_check,
             # Coverage analysis runs Godot once to register its recorder in the marked copy, with
             # every runner, so it takes the executable from --godot even under --runner command.
             "marker": GDScriptMarker(godot=args.godot),

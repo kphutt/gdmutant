@@ -25,10 +25,13 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import ClassVar
 
+from gdmutant.adapters.gdscript.marker_run import WINDOW_HOOK_NAME
+from gdmutant.adapters.gdscript.markers import MARKER_AUTOLOAD
 from gdmutant.engine.loop import SourceOutsideProject
 from gdmutant.engine.runner import (
     SuiteResult,
@@ -40,6 +43,11 @@ from gdmutant.engine.runner import (
 
 _GDUNIT_CMD_TOOL = "res://addons/gdUnit4/bin/GdUnitCmdTool.gd"
 _GUT_CMD_TOOL = "res://addons/gut/gut_cmdln.gd"
+
+#: GUT's window hook is a `GutHookScript`, which is not a node, so the recorder's writer autoload
+#: cannot load it the way it loads GdUnit4's (`marker_run.WINDOW_HOOK_NAME`, imported above). GUT
+#: runs it itself, named with ``-gpre_run_script``, so it gets a name of its own.
+_GUT_WINDOW_HOOK_NAME = "gut_windows.gd"
 
 #: What GdUnit4 prints, and then exits 0 writing no report, when discovery finds no test suites
 #: under ``-a`` — a wrong ``--tests`` path, or a directory holding no suites (verified live against
@@ -149,17 +157,27 @@ class _GodotJUnitRunner:
         self._imported = True
 
     def command(  # pragma: no cover - overridden per adapter
-        self, project_dir: str, *, markers: bool = False
+        self, project_dir: str, *, markers: bool = False, files: Sequence[str] | None = None
     ) -> list[str]:
         """The ``godot --headless`` command that runs this framework's suite for `project_dir`.
-        `markers` asks for the marker run's variant (`run_markers`)."""
+
+        `markers` asks for the marker run's variant (`run_markers`). `files` restricts the run to
+        those test files, in that order, instead of the whole configured test directory
+        (`engine.runner.FileSelecting`); ``None`` runs the whole suite as it always did."""
         raise NotImplementedError
 
     def _result_from_report(  # pragma: no cover - overridden per adapter
-        self, report_text: str, completed: subprocess.CompletedProcess[str]
+        self,
+        report_text: str,
+        completed: subprocess.CompletedProcess[str],
+        files: Sequence[str] | None = None,
     ) -> SuiteResult:
         """Parse this run's report into a `SuiteResult`, enforcing the adapter's **crash-safety**
         contract (`engine.runner.Runner`) as it does.
+
+        `files` is the test files this run was restricted to, or ``None`` for the whole suite. A
+        guard that compares against the whole suite's numbers has to be rescaled to them, or every
+        selected run looks like a suite that failed to load (`engine.runner.FileSelecting`).
 
         **Abstract on purpose, with no parse-only default.** There used to be one, and GdUnit4
         inherited it — which is how the default runner ended up with no crash-safety enforcement of
@@ -193,6 +211,30 @@ class _GodotJUnitRunner:
         See `_execute`, which does the work."""
         return self._execute(project_dir, timeout, markers=False)
 
+    def install_windows(self, project_dir: str, recorder_dir: str) -> None:
+        """Install this framework's file-window hook into the marked copy
+        (`engine.runner.FileSelecting`). The base writes nothing; each adapter overrides it."""
+        raise NotImplementedError
+
+    def run_selected(
+        self, project_dir: str, files: Sequence[str], timeout: float | None = None
+    ) -> SuiteResult:
+        """One mutant against only `files` (`engine.runner.FileSelecting.run_selected`).
+
+        The same path `run` takes, with the framework told which test files to run. Every guard
+        `run` applies still applies: the report-freshness rule, the timeout, and the adapter's own
+        crash-safety enforcement, which is handed the file list so a count it compares against the
+        whole suite can be rescaled to this run's share of it.
+        """
+        return self._execute(project_dir, timeout, markers=False, files=files)
+
+    def run_markers_files(
+        self, project_dir: str, files: Sequence[str], timeout: float | None = None
+    ) -> SuiteResult:
+        """The marker run over exactly `files`, in that order
+        (`engine.runner.FileSelecting.run_markers_files`). The reverse pass is what needs it."""
+        return self._execute(project_dir, timeout, markers=True, files=files)
+
     def run_markers(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         """The coverage marker run (`engine.runner.MarkerRunnable`, docs/decisions/0017): the whole
         suite once in the marked copy `project_dir`, with the framework told to keep going after a
@@ -207,13 +249,24 @@ class _GodotJUnitRunner:
         into "no coverage"."""
         return self._execute(project_dir, timeout, markers=True)
 
-    def _execute(self, project_dir: str, timeout: float | None, *, markers: bool) -> SuiteResult:
+    def _execute(
+        self,
+        project_dir: str,
+        timeout: float | None,
+        *,
+        markers: bool,
+        files: Sequence[str] | None = None,
+    ) -> SuiteResult:
         """Run this framework's suite once against `project_dir` and return the parsed result.
 
         Deletes any stale report at `report_path` first and requires this run to write a fresh
         one, so a crash or hang can never be mistaken for a leftover pass. Raises
         `SourceOutsideProject` if `report_path` resolves outside `project_dir`, `SuiteTimeout` on a
         hang, and this adapter's `_missing_report_error` if no report appears at all.
+
+        `files` restricts the run to those test files. There is deliberately one body for the whole
+        suite and for a subset of it, rather than a second entry point beside it: a selected run is
+        a second road to a mutant's verdict, and every guard here is one it must not miss.
         """
         # Checked before any work happens, including the import warm-up below: no reason to spend a
         # Godot boot on a run that's about to be refused anyway.
@@ -256,7 +309,7 @@ class _GodotJUnitRunner:
         # failed run can be diagnosed instead of vanishing.
         try:
             completed = subprocess.run(
-                self.command(project_dir, markers=markers),
+                self.command(project_dir, markers=markers, files=files),
                 cwd=project_dir,
                 timeout=budget,
                 check=False,
@@ -273,7 +326,7 @@ class _GodotJUnitRunner:
             raise self._missing_report_error(report, completed)
         # Parse under the adapter's crash-safety contract — both adapters reject a zero-test report
         # rather than returning a pass; GUT additionally rejects a drop below its baseline count.
-        result = self._result_from_report(report.read_text(encoding="utf-8"), completed)
+        result = self._result_from_report(report.read_text(encoding="utf-8"), completed, files)
         if not markers:
             return result
         # A newline between them, so a last stdout line with no newline of its own cannot run
@@ -326,12 +379,18 @@ class GdUnit4Runner(_GodotJUnitRunner):
     _imported: bool = field(default=False, init=False, repr=False)
     _framework: ClassVar[str] = "GdUnit4"
 
-    def command(self, project_dir: str, *, markers: bool = False) -> list[str]:
+    def command(
+        self, project_dir: str, *, markers: bool = False, files: Sequence[str] | None = None
+    ) -> list[str]:
         """The ``godot --headless`` command that runs the GdUnit4 suite for `project_dir`.
 
         `markers` adds ``-c`` (``--continue``) for the marker run. GdUnit4 stops at the first
         failing test by default, which would hide how much of the suite actually ran. A mutant run
         leaves it out: there, stopping at the first failure is the fast way to a kill.
+
+        `files` replaces the single ``-a <test dir>`` with one ``-a`` per test file, in the order
+        given, which is how GdUnit4 takes a chosen list (verified live against v6.1.3 + Godot 4.7:
+        the suites run in exactly the order the flags appear, forwards and backwards).
 
         ``-rc 1`` (report-count = 1) is essential: GdUnit4's CI runner otherwise keeps a report
         history, writing each invocation to an incrementing ``reports/report_N/`` dir. Since the
@@ -350,6 +409,7 @@ class GdUnit4Runner(_GodotJUnitRunner):
         # project_dir (e.g. ``--project corpus``) would otherwise be applied twice — Godot would
         # look for ``corpus/corpus`` and abort with "Invalid project path" (caught by the live
         # self-test). An absolute --path is cwd-independent; absolute inputs are unchanged.
+        targets = [self.test_path] if files is None else list(files)
         return [
             self.godot,
             "--headless",
@@ -357,16 +417,51 @@ class GdUnit4Runner(_GodotJUnitRunner):
             str(Path(project_dir).resolve()),
             "-s",
             _GDUNIT_CMD_TOOL,
-            "-a",
-            self.test_path,
+            *(flag for target in targets for flag in ("-a", target)),
             "-rc",
             "1",
             "--ignoreHeadlessMode",
             *(["-c"] if markers else []),
         ]
 
+    def install_windows(self, project_dir: str, recorder_dir: str) -> None:
+        """Write GdUnit4's file-window hook into the marked copy
+        (`engine.runner.FileSelecting.install_windows`).
+
+        GdUnit4 announces every suite it starts and finishes on one process-wide signal,
+        ``GdUnitSignals.instance().gdunit_event``, which its own command-line runner listens to. So
+        the hook is a small node that listens to the same signal and tells gdmutant's recorder when
+        a window opens and closes. The recorder's writer autoload loads it by name, so nothing has
+        to be passed on the command line.
+
+        The alternative, injecting a ``before_test`` into every suite of the copy, would collide
+        with any suite that already defines one and would have to be merged into user code. A
+        signal that never fires is caught out loud by the window rules
+        (`engine.coverage.window_problems`), not guessed at.
+        """
+        source = f"""extends Node
+## gdmutant's GdUnit4 file-window hook, in gdmutant's throwaway marked copy of a project only.
+## It tells `{MARKER_AUTOLOAD}` which test file is running, so each marker hit is credited to it.
+
+
+func _ready() -> void:
+\tGdUnitSignals.instance().gdunit_event.connect(_on_event)
+
+
+func _on_event(event: GdUnitEvent) -> void:
+\tif event.type() == GdUnitEvent.TESTSUITE_BEFORE:
+\t\t{MARKER_AUTOLOAD}.begin_file(event.resource_path())
+\telif event.type() == GdUnitEvent.TESTSUITE_AFTER:
+\t\t{MARKER_AUTOLOAD}.end_file()
+"""
+        hook = Path(project_dir) / recorder_dir / WINDOW_HOOK_NAME
+        hook.write_text(source, encoding="utf-8", newline="")
+
     def _result_from_report(
-        self, report_text: str, completed: subprocess.CompletedProcess[str]
+        self,
+        report_text: str,
+        completed: subprocess.CompletedProcess[str],
+        files: Sequence[str] | None = None,
     ) -> SuiteResult:
         """Crash-safety (see the class docstring): a report GdUnit4 *did* write, but describing zero
         tests, is an error rather than a pass.
@@ -384,8 +479,12 @@ class GdUnit4Runner(_GodotJUnitRunner):
             result = None  # a report with no <testsuite> at all — a run that described nothing
         if result is None or result.tests == 0:
             detail = (completed.stderr or completed.stdout or "").strip()
+            # Name what actually ran. Under selection that is a handful of chosen files, not the
+            # test directory, and sending a reader to look at the wrong scope is how a real fault
+            # gets chased in the wrong place.
+            scope = self.test_path if files is None else f"the {len(files)} selected test files"
             raise RuntimeError(
-                f"GdUnit4 wrote a report describing 0 tests under {self.test_path}, so nothing "
+                f"GdUnit4 wrote a report describing 0 tests under {scope}, so nothing "
                 "actually ran. That cannot be a passing suite, and treating it as one would report "
                 "this mutant as SURVIVED off a run that never happened"
                 + (f":\n{detail[-1000:]}" if detail else "")
@@ -482,13 +581,29 @@ class GutRunner(_GodotJUnitRunner):
     #: legitimate mutant cannot cause), proving collection is non-deterministic. Read out by
     #: `run_warning` as a run-level warning; never raises. See the class docstring, point (3).
     _nondeterminism_canary: bool = field(default=False, init=False, repr=False)
+    #: Each test file's own test count, from the same healthy baseline run that fixed
+    #: `_baseline_tests`, keyed by the ``res://`` path a selection names it by. It is what the drop
+    #: guard rescales to under selection: a run of three files out of thirty is expected to be
+    #: exactly those three files' tests, not the whole suite's. Written once, on the baseline run,
+    #: and only read afterwards, so the shared instance stays safe across ``--jobs`` workers.
+    _file_tests: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    #: Where the marker run's file-window hook was installed, as a ``res://`` path, or ``None``
+    #: when none was (``--coverage-analysis off`` or ``all``). Set by `install_windows` before any
+    #: pass runs, and read only by the marker passes, which are serial.
+    _window_hook: str | None = field(default=None, init=False, repr=False)
     _framework: ClassVar[str] = "GUT"
 
-    def command(self, project_dir: str, *, markers: bool = False) -> list[str]:
+    def command(
+        self, project_dir: str, *, markers: bool = False, files: Sequence[str] | None = None
+    ) -> list[str]:
         """The ``godot --headless`` command that runs the GUT suite for `project_dir`.
 
-        `markers` changes nothing: GUT already runs every test after a failure, so the marker run
-        needs no extra switch.
+        `markers` adds the file-window hook as GUT's pre-run script, when one was installed. GUT
+        already runs every test after a failure, so the marker run needs no "keep going" switch.
+
+        `files` replaces ``-gdir`` with one ``-gtest=`` per test file, in the order given, which is
+        how GUT takes a chosen list (verified live against v9.7.1 + Godot 4.7: the scripts run in
+        exactly the order the flags appear, forwards and backwards).
 
         GUT's command-line flags are ``=``-joined (``-gdir=…``), not space-separated. ``-gexit``
         makes GUT quit when the run finishes (headless CI mode); ``-gjunit_xml_file`` writes the
@@ -497,6 +612,10 @@ class GutRunner(_GodotJUnitRunner):
         """
         # Resolve --path to an absolute path for the same reason as GdUnit4 (run() sets
         # cwd=project_dir; a relative --path would be applied twice).
+        targets = (
+            [f"-gdir={self.test_dir}"] if files is None else [f"-gtest={file}" for file in files]
+        )
+        hook = [f"-gpre_run_script={self._window_hook}"] if markers and self._window_hook else []
         return [
             self.godot,
             "--headless",
@@ -504,13 +623,65 @@ class GutRunner(_GodotJUnitRunner):
             str(Path(project_dir).resolve()),
             "-s",
             _GUT_CMD_TOOL,
-            f"-gdir={self.test_dir}",
+            *targets,
             f"-gjunit_xml_file=res://{self.report_path}",
             "-gexit",
+            *hook,
         ]
 
+    def install_windows(self, project_dir: str, recorder_dir: str) -> None:
+        """Write GUT's file-window hook into the marked copy
+        (`engine.runner.FileSelecting.install_windows`).
+
+        GUT's own ``gut`` object emits ``start_script`` and ``end_script`` around every test file,
+        and GUT hands a pre-run hook script that object, so the hook is a `GutHookScript` that
+        connects the two signals to gdmutant's recorder. It is named on the command line with
+        ``-gpre_run_script``, which is also why it is not the file the recorder's writer autoload
+        loads by name: a `GutHookScript` is not a node, and only GUT knows how to run one.
+
+        The alternative, injecting a ``before_each`` into every suite of the copy, would collide
+        with any suite that already defines one. A hook that never fires is caught out loud by the
+        window rules (`engine.coverage.window_problems`), not guessed at.
+        """
+        source = f"""extends GutHookScript
+## gdmutant's GUT file-window hook, in gdmutant's throwaway marked copy of a project only.
+## It tells `{MARKER_AUTOLOAD}` which test file is running, so each marker hit is credited to it.
+
+
+func run() -> void:
+\tgut.start_script.connect(_on_start_script)
+\tgut.end_script.connect(_on_end_script)
+
+
+func _on_start_script(script_obj) -> void:
+\t{MARKER_AUTOLOAD}.begin_file(str(script_obj.get_full_name()))
+
+
+func _on_end_script() -> void:
+\t{MARKER_AUTOLOAD}.end_file()
+"""
+        hook = Path(project_dir) / recorder_dir / _GUT_WINDOW_HOOK_NAME
+        hook.write_text(source, encoding="utf-8", newline="")
+        self._window_hook = f"res://{Path(recorder_dir).as_posix()}/{_GUT_WINDOW_HOOK_NAME}"
+
+    def _expected_tests(self, files: Sequence[str] | None) -> int | None:
+        """How many tests this run should collect: the whole baseline, or the selected files' share.
+
+        ``None`` until a baseline has run. A selected file the baseline never reported is left out
+        of the sum, which lowers the floor rather than raising it: an unknown file can only make
+        the guard more forgiving, never turn a healthy run into an error.
+        """
+        if self._baseline_tests is None:
+            return None
+        if files is None:
+            return self._baseline_tests
+        return sum(self._file_tests.get(file, 0) for file in files)
+
     def _result_from_report(
-        self, report_text: str, completed: subprocess.CompletedProcess[str]
+        self,
+        report_text: str,
+        completed: subprocess.CompletedProcess[str],
+        files: Sequence[str] | None = None,
     ) -> SuiteResult:
         """Crash-safety (see the class docstring): raise — never return a pass — when the report
         reflects a suite that failed to load rather than a real, complete run.
@@ -538,12 +709,20 @@ class GutRunner(_GodotJUnitRunner):
         except ValueError:
             result = None  # no <testsuite> at all — GUT's empty crash report
         tests = result.tests if result is not None else 0
-        baseline = self._baseline_tests
+        baseline = self._expected_tests(files)
         is_baseline = baseline is None
         if baseline is None:
             # First run = the engine's healthy baseline (run serially before any --jobs fan-out): it
-            # fixes the expected count. Later runs only read it, so the shared instance is safe.
+            # fixes the expected count, whole and per file. Later runs only read it, so the shared
+            # instance is safe. A selected run is never the first: selection needs a marker run,
+            # which needs a baseline.
             self._baseline_tests = tests
+            # GUT names a suite in its report by the file's path under ``res://`` (verified live
+            # against v9.7.1: ``<testsuite name="test/unit/test_x.gd">``), which is exactly what a
+            # selection calls it once ``res://`` is put back.
+            self._file_tests = {
+                f"res://{suite.name}": suite.tests for suite in (result.suites if result else ())
+            }
             baseline = tests
         elif tests > baseline:
             # Non-determinism canary (symmetric to the < baseline guard below). A legitimate mutant
@@ -567,10 +746,15 @@ class GutRunner(_GodotJUnitRunner):
                     "-ginclude_subdirs via --runner command"
                 )
             else:
+                # Under selection the floor is the selected files' own tests, not the whole
+                # suite's, so say which of the two this run was measured against.
+                scope = (
+                    "the baseline" if files is None else f"the {len(files)} test files it was given"
+                )
                 reason = (
                     "GUT ran 0 tests"
                     if tests == 0
-                    else f"GUT ran {tests} tests, fewer than the baseline {baseline}"
+                    else f"GUT ran {tests} tests, fewer than the {baseline} {scope} expects"
                 )
                 message = (
                     f"{reason}: a test suite failed to compile/load and GUT skipped it (it runs "

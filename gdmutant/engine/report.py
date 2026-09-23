@@ -237,8 +237,41 @@ def console_summary(run: MutationRun) -> str:
     if run.coverage_analysis or run.no_coverage:
         lines.append(f"  no coverage: {run.no_coverage}  (no test reaches it, scored as survived)")
     if run.coverage_analysis:
-        lines.append(_self_check_line(run))
+        lines += _selection_lines(run)
+        lines += _self_check_lines(run)
     return "\n".join(lines)
+
+
+def _selection_lines(run: MutationRun) -> list[str]:
+    """How much of the suite the run actually ran, or nothing when it ran all of it every time.
+
+    Printed as a saving, because that is the question selection exists to answer and the one number
+    a reader cannot work out from the verdict counts. Mutants that ran the whole suite are in the
+    average, so this is the run's real share and not the share on its best mutants. The
+    order-coupled count sits here rather than beside the kills on purpose: those mutants were not
+    killed by the tests that appeared to kill them.
+    """
+    if not run.test_files:
+        return []
+    share = run.selected_share
+    files = "test file" if run.test_files == 1 else "test files"
+    lines = [
+        f"  selected: {run.selected} of {run.detected + run.survived} mutants ran only the test "
+        f"files that reach them (the suite has {run.test_files} {files})"
+    ]
+    if share is not None:
+        lines.append(f"  test files run: {share * 100:.1f}% of the suite per mutant, on average")
+    if run.order_dependent:
+        lines.append(
+            f"  order-dependent lines: {run.order_dependent}  (reached by different test files "
+            "in the two marker passes, so every test ran for them)"
+        )
+    if run.order_coupled:
+        lines.append(
+            f"  order-coupled kills: {run.order_coupled}  (the chosen test files do not pass "
+            "unmutated either, so the whole suite decided instead)"
+        )
+    return lines
 
 
 def _location(mutant: Mutant) -> str:
@@ -246,16 +279,32 @@ def _location(mutant: Mutant) -> str:
     return f"{Path(mutant.path).as_posix()}:{mutant.span.line}:{mutant.span.column}"
 
 
-def _self_check_line(run: MutationRun) -> str:
-    """How many "no coverage" mutants the self-check re-ran against the whole suite. Always
-    printed when coverage analysis was on, zero included, so an empty check is visible rather than
-    silent. A disagreement never reaches this line: it stops the run instead."""
-    if not run.no_coverage:
-        return "Coverage self-check: compared 0 mutants, because no mutant had no coverage."
-    return (
-        f"Coverage self-check: re-ran {run.self_checked} of the {run.no_coverage} no-coverage "
-        "mutants against the whole suite, and every one survived there, as the map said."
-    )
+def _self_check_lines(run: MutationRun) -> list[str]:
+    """How many mutants the self-check re-ran against the whole suite, one line per kind.
+
+    Always printed when coverage analysis was on, zero included, so an empty check is visible
+    rather than silent: a check that compared nothing looks exactly like one that found nothing
+    wrong. A disagreement never reaches these lines, because it stops the run instead.
+    """
+    lines = []
+    if run.no_coverage:
+        lines.append(
+            f"Coverage self-check: re-ran {run.no_coverage_checked} of the {run.no_coverage} "
+            "no-coverage mutants against the whole suite, and every one survived there, as the "
+            "map said."
+        )
+    if run.selected:
+        lines.append(
+            f"Coverage self-check: re-ran {run.selection_checked} of the {run.selected} mutants "
+            "that ran only some test files against the whole suite, and every one got the same "
+            "verdict there."
+        )
+    if not lines:
+        return [
+            "Coverage self-check: compared 0 mutants, because nothing was decided from the "
+            "coverage map."
+        ]
+    return lines
 
 
 def _assert_survivor_note(on_asserts: int, survivors: int) -> str | None:

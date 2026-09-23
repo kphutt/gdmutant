@@ -307,7 +307,7 @@ def test_run_errors_when_test_count_drops_below_baseline(
     monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
     runner = GutRunner()
     assert runner.run(str(tmp_path)).passed  # baseline: 5 tests, all suites loaded
-    with pytest.raises(RuntimeError, match="fewer than the baseline"):
+    with pytest.raises(RuntimeError, match="fewer than the 5 the baseline expects"):
         runner.run(str(tmp_path))  # 2 tests -> a suite was skipped -> error, not a false survivor
 
 
