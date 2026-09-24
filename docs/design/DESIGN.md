@@ -216,9 +216,13 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   gets its own
   Godot process (ADR-0011), so a suite whose cost is mostly starting Godot gains little, and one
   whose cost is spread unevenly across many test files gains a lot. Keeping one Godot alive across
-  mutants, the remaining lever, is out of scope: static variables are not reset on hot reload
-  (Godot issue 105667). The command runner cannot select, because an exit code cannot say which
-  tests ran.
+  mutants, the remaining lever, stays out of scope, and
+  [ADR-0019](../decisions/0019-one-godot-per-mutant-stays.md) now measures why rather than citing one
+  issue: a reused process leaks a static variable, an autoload's field and a node left in the tree,
+  each of which turns a survivor into a mutant reported killed, and no reload available from GDScript
+  resets any of them. That ADR also measures the prize, 1.4x to 1.9x on a real project, and records
+  the three things that would reopen the question. The command runner cannot select, because an exit
+  code cannot say which tests ran.
 - NF-7: Safe source writes. Every write to a source file either lands whole or does not happen at
   all. gdmutant rewrites the user's own file twice per mutant (§4), and a plain in-place write empties
   the file before putting anything back, so a crash inside that window would destroy the file instead
