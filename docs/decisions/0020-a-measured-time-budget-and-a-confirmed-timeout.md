@@ -28,7 +28,7 @@ capped at ten minutes, and then multiplied again by the worker count under `--jo
 Two things are wrong with that, and both are about which part of a run a mutation can actually
 change.
 
-**It multiplied a fixed cost.** A mutant can make your tests slower. It cannot make Godot boot
+It multiplied a fixed cost. A mutant can make your tests slower. It cannot make Godot boot
 slower or your test framework start up slower, because those happen before any mutated code runs.
 On the bundled corpus, a GdUnit4 baseline takes 1.378 s of which the report says 0.031 s was tests:
 97.8% of what was being multiplied by ten is a fixed cost no mutation can touch. On a real game
@@ -36,7 +36,7 @@ project with 33 test files and 242 tests, the baseline takes 5.969 s of which 3.
 so 44% of it was still fixed cost. Multiplying that gave every mutant 59.7 s where the suite really
 needs six.
 
-**The worker multiplier cancelled the parallelism exactly where it was needed.** N hanging mutants
+The worker multiplier cancelled the parallelism exactly where it was needed. N hanging mutants
 spread across W workers, each allowed W times the budget, take the same wall-clock as running them
 one after another. That is why `--jobs 4` bought only 9.5% on a project where 13 to 24% of mutants
 time out: the mutants that dominate the run were the ones the multiplier slowed back down.
@@ -108,43 +108,43 @@ budget = 2.0 x netTime + 8 s + measuredOverhead
 ```
 floored at 10 s, capped at 600 s, and taking no worker count at all.
 
-* **`netTime`** is what the baseline's own report says its tests took. With
+* `netTime` is what the baseline's own report says its tests took. With
   `--coverage-analysis per-file`, it is the summed time of the test files this mutant will actually
   run. With selection off, or for a test file the report never named, it is the whole suite's test
   time. One unknown file falls back for the whole set: adding up the files that *are* known and
   skipping the rest would budget a mutant for part of its run while looking like a measurement.
-* **`measuredOverhead`** is the baseline's wall-clock minus `netTime`, recorded once, free, at the
+* `measuredOverhead` is the baseline's wall-clock minus `netTime`, recorded once, free, at the
   baseline that had to run anyway. It is the framework's startup and the engine's boot, per project
   and per framework, and it is added back unmultiplied.
-* **The constant** absorbs variance and contention.
+* The constant absorbs variance and contention.
 
 ### How the numbers were chosen
 Stryker uses factor 1.5 with a 5000 ms constant and PIT uses 1.25 with 4000 ms. Those were not
-copied. The decomposition transfers; the numbers do not, because Godot's startup variance on
+copied. The decomposition transfers, the numbers do not, because Godot's startup variance on
 Windows is worse than either runtime's.
 
-**Factor 2.0.** The factor multiplies test time, so it has to cover every way test time can grow
+Factor 2.0. The factor multiplies test time, so it has to cover every way test time can grow
 without the suite being broken. Measured worst case under eight concurrent processes: the reported
 test time went from 3.263 s to 4.418 s, a factor of 1.354. A factor of 2.0 covers that with roughly
 48% of the budget left over for a mutant that legitimately runs slower without failing. It is
 deliberately looser than both prior-art tools, for the reason in "Why the failure direction
 matters".
 
-**Constant 8 s.** The constant carries the contention allowance, which is what the worker
+Constant 8 s. The constant carries the contention allowance, which is what the worker
 multiplier used to do badly. Measured worst case: the fixed cost ran 1.12 s above its worst solo
 reading with eight suites at once. 8 s is about seven times that, which leaves room for a machine
 with fewer cores than this one, a cold asset cache, or a virus scanner arriving at the wrong
 moment. It is also close to Stryker's 5 s, arrived at from a different direction.
 
-**Floor 10 s, cap 600 s.** Both unchanged. On a suite fast enough that the floor is the whole
+Floor 10 s, cap 600 s. Both unchanged. On a suite fast enough that the floor is the whole
 budget, the floor is already many times the real run.
 
 ### A timeout is confirmed, not assumed
 A tight budget alone would be the same unverified guess as everyone else's, just in the dangerous
 direction. So it is not alone.
 
-**When a mutant runs past its budget, it is re-run once, on its own, under a much larger budget:
-`10.0 x netTime + 8 s + measuredOverhead`.** If it finishes, it was never hanging, and its real
+When a mutant runs past its budget, it is re-run once, on its own, under a much larger
+budget: `10.0 x netTime + 8 s + measuredOverhead`. If it finishes, it was never hanging, and its real
 verdict is recorded. Only the mutants that ran long pay for this.
 
 The confirmation factor of 10.0 is the old whole-wall-clock factor, now applied only to the part a
@@ -170,7 +170,7 @@ That count is also this design's own tripwire. If the budget is ever set too tig
 climbs and says so in the summary, instead of the score quietly going up.
 
 ### What was considered and left out
-**Watching the coverage markers to detect a hang instead of waiting it out.** A mutant that is
+Watching the coverage markers to detect a hang instead of waiting it out. A mutant that is
 genuinely stuck stops firing markers, which is a live signal no production mutation tester has.
 Two things rule it out today, and neither is a guess. The recorder writes its hits file only at
 `NOTIFICATION_PREDELETE`, at process teardown, so a hung process writes nothing at all and there is

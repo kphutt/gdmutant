@@ -353,7 +353,7 @@ and the cost of several suites running at once. The budget never drops below 10 
 With `--coverage-analysis per-file`, a mutant that runs three of your thirty test files is
 budgeted for those three files' time, not the whole suite's.
 
-**A mutant that runs out of budget is not called a hang on that evidence.** It runs again, on its
+A mutant that runs out of budget is not called a hang on that evidence. It runs again, on its
 own, under a much larger budget that allows the tests to take ten times as long. If it finishes,
 it was never stuck, and its real verdict is what gets reported. Only the mutants that ran long pay
 for this. The summary says what happened:
