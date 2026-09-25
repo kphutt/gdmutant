@@ -135,9 +135,11 @@ a release gate.
 2. Date the changelog. Change `CHANGELOG.md`'s bare `## [Unreleased]` heading (Keep a Changelog's
    own convention: no version number yet, since nothing under it has shipped) to
    `## [X.Y.Z] - YYYY-MM-DD`, using the date you expect to publish: one rename adds both the
-   version number and the date together. Nothing automates this and no check enforces it, and it
-   has to happen before the tag: the tag ships the commit it points at, so tagging first publishes
-   a changelog that calls the shipped version unreleased.
+   version number and the date together. `scripts/check_release_tag.py` now refuses a release whose
+   changelog is still `## [Unreleased]`, names a different version, or carries no date, and both
+   `release.yml` and `publish.yml` run it. It still has to happen before the tag: the tag ships the
+   commit it points at, so tagging first publishes a changelog that calls the shipped version
+   unreleased.
 3. Merge both to `main` through the usual PR. A tag whose commit is not an ancestor of `main` is
    refused.
 4. Push the tag: `git tag vX.Y.Z <commit>` then `git push origin vX.Y.Z`. Get it right the first
