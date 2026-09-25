@@ -1881,6 +1881,15 @@ def test_the_run_says_so_when_a_selected_file_has_no_known_duration() -> None:
     ]
 
 
+def test_the_budget_note_is_silent_under_an_explicit_timeout() -> None:
+    # The user named a number and every mutant gets it, so neither half of the note applies.
+    # Reporting that the baseline's report gave no durations would be true and misleading at once:
+    # it is not what set the budget.
+    lines: list[str] = []
+    _budget_note(TimeBudget(fixed=30.0), _coverage_with_selection(("a.gd",)), lines.append)
+    assert lines == []
+
+
 def test_the_budget_note_is_silent_with_no_coverage_analysis_or_no_progress() -> None:
     # Coverage analysis off means no selection, so there is nothing about per-file budgets to say.
     # And a caller with no progress callback asked for silence.

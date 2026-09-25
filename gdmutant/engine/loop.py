@@ -920,7 +920,10 @@ def _budget_note(
     Called by `run` and `run_paths` alike, from one place, so the single-file and many-file runs
     cannot end up saying different things about the same run.
     """
-    if progress is None or plans is None:
+    if progress is None or plans is None or budget.fixed is not None:
+        # An explicit --timeout is the user's own number and is used for every mutant whatever the
+        # report said, so neither half of this has anything to report. Saying the report gave no
+        # durations would be true and misleading at once: it is not what set the budget.
         return
     if not budget.measured:
         progress(
