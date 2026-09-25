@@ -234,6 +234,7 @@ def console_summary(run: MutationRun) -> str:
         f"  invalid:  {run.invalid}",
         f"  error:    {run.errors}",
     ]
+    lines += _budget_lines(run)
     if run.coverage_analysis or run.no_coverage:
         lines.append(f"  no coverage: {run.no_coverage}  (no test reaches it, scored as survived)")
     if run.coverage_analysis:
@@ -245,6 +246,32 @@ def console_summary(run: MutationRun) -> str:
 #: How many order-coupled sets of test files the summary names before it stops and counts the rest.
 #: A handful is enough to start on; a run where every set is coupled has one problem, not fifty.
 _NAMED_COUPLED_SETS = 3
+
+
+def _budget_lines(run: MutationRun) -> list[str]:
+    """What the per-mutant time budget did, when it did anything worth saying.
+
+    Two facts, and both are about trust rather than about the score. A **reprieved** mutant ran
+    past its first budget and then finished under the larger confirmation budget: it was never
+    hanging, and a run that took the first budget's word for it would have recorded a kill that
+    was not one. Every other mutation tester records exactly that kill, silently. A **confirmed**
+    timeout is the opposite: a hang that a second, much longer run agreed was a hang.
+
+    Nothing is printed when neither happened, so a run with no timeouts stays as quiet as it
+    always was. But a run that *had* timeouts always says how many of them were checked, including
+    when the answer is none, because "no timeout was confirmed" is a real limit on what the tally
+    above means and silence would read as confirmation.
+    """
+    lines: list[str] = []
+    if run.reprieved:
+        lines.append(
+            f"  reprieved: {run.reprieved}  (ran past the first budget, then finished: not hangs)"
+        )
+    if run.timeouts:
+        checked = run.confirmed_timeouts
+        how = "confirmed by a second, longer run" if checked else "not confirmed by a second run"
+        lines.append(f"  of the timeouts, {checked} {how}")
+    return lines
 
 
 def _selection_lines(run: MutationRun) -> list[str]:

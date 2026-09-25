@@ -1382,7 +1382,9 @@ def test_parser_help_text(
         "test command for --runner command (exit 0 = pass), e.g. 'godot --headless --script res://tests/run_tests.gd'",  # noqa: E501
         "the Godot executable (default: godot)",
         "the test directory (gdunit4's -a / gut's -gdir) (default: res://test)",
-        "per-mutant test-run timeout, in seconds (default: derived from the baseline run: 10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",  # noqa: E501
+        "per-mutant test-run timeout, in seconds (default: derived from the baseline, "
+        "multiplying only the time its tests took, and re-checking any mutant that runs past "
+        "it)",
         "refuse to run if the source file has uncommitted git changes (default: warn only)",
         "write the Stryker JSON report here (use - for stdout; bare --json defaults to a "
         "timestamped filename)",

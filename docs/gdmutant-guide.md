@@ -73,7 +73,7 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | `--since <ref>` | mutate everything | Only mutate lines changed since a git ref: the per-PR mode. |
 | `--exclude <glob>` | *(none)* | Skip matching files when expanding a directory (repeatable). |
 | `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. `auto` picks a worker count from your CPU count and throttles under load instead of a fixed N. |
-| `--timeout <seconds>` | 10x the baseline run | Per-mutant test timeout. |
+| `--timeout <seconds>` | derived from the baseline | Per-mutant test timeout. See [How long a mutant gets](#how-long-a-mutant-gets). |
 | `--coverage-analysis {off,all,per-file}` | `off` | `all` finds the mutants no test reaches before any mutant runs, and reports them as `no coverage` without running them. `per-file` does that and runs every other mutant against only the test files that reach it, which is the setting that saves real time. See [Coverage analysis](#coverage-analysis). |
 | `--coverage-self-check N\|all` | `3` | How many of coverage analysis's own decisions are re-run against the whole suite to confirm them. `all` checks every mutant both ways. |
 | `--require-clean` / `--no-require-clean` | warn only | Refuse to run on an uncommitted source file. |
@@ -330,6 +330,50 @@ none of them ever need trust.
     documents, one stdout
   - a report file could not be written, or the source file could not be rewritten or put back
 
+### How long a mutant gets
+
+A mutation can put your code in an infinite loop, so every mutant runs under a time budget. Run
+out of it and the mutant counts as caught, the same as a failing test. That makes the budget
+load-bearing in an uncomfortable way: set it too low and a suite that was merely slow gets
+recorded as a hang, which is a kill that never happened, and your mutation score quietly goes up.
+
+gdmutant sets it from your own baseline run, which it has to do anyway:
+
+```
+budget = 2 x (the time your tests took) + 8 seconds + (your framework's startup)
+```
+
+The split is the point. Your test framework's report says how long the tests themselves took.
+Whatever is left of the baseline's wall-clock is Godot booting and the framework starting up, and
+no mutation can make a process boot slower, so that part is added back as measured rather than
+multiplied. On a small Godot suite the startup is most of the run, so multiplying all of it used
+to inflate every budget several times over for no reason. The 8 seconds absorb run-to-run variance
+and the cost of several suites running at once. The budget never drops below 10 seconds.
+
+With `--coverage-analysis per-file`, a mutant that runs three of your thirty test files is
+budgeted for those three files' time, not the whole suite's.
+
+**A mutant that runs out of budget is not called a hang on that evidence.** It runs again, on its
+own, under a much larger budget that allows the tests to take ten times as long. If it finishes,
+it was never stuck, and its real verdict is what gets reported. Only the mutants that ran long pay
+for this. The summary says what happened:
+
+```
+  timeout:  2  (counted as killed)
+  reprieved: 1  (ran past the first budget, then finished: not hangs)
+  of the timeouts, 2 confirmed by a second, longer run
+```
+
+`reprieved` is the number of kills you would have been handed by a tool that took the first budget
+at its word. Every other mutation tester reports those as kills without checking.
+
+`--jobs N` does not change the budget. Multiplying it by the worker count, which gdmutant used to
+do, cancelled the parallelism on exactly the mutants that hang: N hanging mutants across N
+workers, each allowed N times the budget, take as long as running them one at a time.
+
+Setting `--timeout` yourself fixes the budget at that number and turns the second run off. You
+named a number, so gdmutant uses it.
+
 ### How gdmutant writes to your files
 
 What gdmutant does to the file you point it at depends on `--jobs`.
@@ -519,7 +563,8 @@ mutant is killable, it usually is. Write the test.
 - It's slow. Godot boots once per mutant. Mutate one file at a time, and use `--jobs N`, real but
   sub-linear (~3× at `--jobs 4`), since the workers contend for CPU and RAM. Watch the closing line
   for how much of the time was timeouts. A few hanging mutants can outweigh every other mutant
-  combined, and `--timeout` caps each one.
+  combined, and the per-mutant budget caps each one: see
+  [How long a mutant gets](#how-long-a-mutant-gets).
 - The first run goes quiet for minutes right after it starts. gdmutant does warn you first (the
   GUT/gdUnit4 runners print a "preparing the project" notice, and `--runner command` warns too when
   the project has no `.godot/` directory), but the wait itself is silent: that's Godot importing

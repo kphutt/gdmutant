@@ -60,16 +60,134 @@ from gdmutant.engine.runner import (
     SuiteTimeout,
 )
 
-# Per-mutant timeout derived from the baseline's wall-clock, so a hanging mutant is cut off in
-# seconds rather than blocking for a flat default (the #1 first-run "looks frozen" complaint).
+# Per-mutant time budget, derived from the baseline run so a hanging mutant is cut off in seconds
+# rather than blocking for a flat default (the #1 first-run "looks frozen" complaint). The numbers
+# and how they were chosen live in docs/decisions/0020.
 _MIN_TIMEOUT = 10.0  # floor: never rule a mutant a hang in under 10s (absorbs jitter/cold caches)
-_TIMEOUT_FACTOR = 10.0  # a mutant gets 10x the baseline's time before it's a hang
+#: What the first pass multiplies the **test time** by. A mutant can make the tests slower; it
+#: cannot make the framework's startup or the engine's boot slower, so only this part is
+#: multiplied. Measured on this project's own machine: under eight concurrent Godot processes the
+#: reported test time of a real game project's healthy suite grew from 3.26s to at worst 4.42s, a
+#: factor of 1.36, so 2.0 covers every contention effect measured and still leaves nearly half the
+#: budget for a mutant that legitimately runs slower without failing. Stryker uses 1.5 and PIT
+#: 1.25; this is deliberately looser than both, because Godot's startup variance is worse than
+#: either runtime's and a false kill is the one failure this tool refuses.
+_TIMEOUT_FACTOR = 2.0
+#: What the **confirmation** pass multiplies the test time by instead, when a mutant runs past its
+#: first budget. Ten times the test time is the old whole-wall-clock factor, now applied only to
+#: the part a mutant can actually make slower. A mutant that needs more than this is hanging.
+_CONFIRM_FACTOR = 10.0
+#: Seconds added on top, to absorb variance and the cost of running several suites at once. This
+#: is where the contention allowance lives, instead of in a multiplier on the whole budget.
+#: Measured on the same real game project: the fixed cost ran 2.61–2.74s alone and 3.34–3.73s with
+#: eight suites at once, so contention cost at most 1.12s above the worst solo run. 8.0s is about
+#: seven times that, which covers a machine with fewer cores, a cold asset cache, or a virus
+#: scanner picking exactly that moment.
+_TIMEOUT_CONSTANT = 8.0
+#: What a run that reported no test durations at all multiplies its whole wall-clock by. This is
+#: the pre-decomposition behaviour, kept unchanged for the one case where the decomposition is
+#: impossible: the exit-code `CommandRunner` has no report, so nothing can say which part of its
+#: baseline was startup. Guessing would risk the false kill; multiplying everything is what this
+#: tool did before and is strictly the safe direction.
+_UNMEASURED_FACTOR = 10.0
 _MAX_DERIVED_TIMEOUT = 600.0  # cap: a slow suite is never worse off than the historical default
 
 
-def _derive_timeout(baseline_secs: float) -> float:
-    """Per-mutant timeout from the baseline run time: ``baseline * factor``, floored and capped."""
-    return min(_MAX_DERIVED_TIMEOUT, max(_MIN_TIMEOUT, baseline_secs * _TIMEOUT_FACTOR))
+def _bounded(secs: float) -> float:
+    """`secs`, never below the floor and never above the cap."""
+    return min(_MAX_DERIVED_TIMEOUT, max(_MIN_TIMEOUT, secs))
+
+
+@dataclass(frozen=True)
+class TimeBudget:
+    """How long one mutant's suite may run before gdmutant treats it as a hang.
+
+    ``factor x test time + constant + measured startup``, and **nothing here is multiplied by the
+    worker count**. The three parts each answer a different question, which is the whole point of
+    splitting them up (docs/decisions/0020):
+
+    * `net` is what the baseline's own report says its tests took. A mutant can make that slower,
+      so that is the part `_TIMEOUT_FACTOR` multiplies.
+    * `overhead` is the baseline's wall-clock minus `net`: the framework's startup and the engine's
+      boot. No mutation can make a process start up slower, so multiplying it only inflated every
+      budget by a constant nobody chose. It is measured once, free, at the baseline, and added
+      back unmultiplied.
+    * `_TIMEOUT_CONSTANT` absorbs run-to-run variance and the cost of several suites running at
+      once.
+
+    `per_file` is how long each test file took, so a mutant that ``--coverage-analysis per-file``
+    sent to three of thirty files is budgeted for those three. A file the baseline's report never
+    named falls back to the whole suite's `net`, never to zero seconds: an unknown file must make
+    the budget bigger or leave it alone, never smaller.
+
+    `fixed` is an explicit ``--timeout``, which overrides all of it, including the confirmation
+    pass. Someone who named a number meant that number.
+
+    `measured` records whether the baseline's report actually carried durations. When it did not
+    there is nothing to decompose, so the whole wall-clock is multiplied exactly as it was before
+    this existed. That case is real, not theoretical: the exit-code runner has no report at all.
+    """
+
+    #: The whole suite's test time, from the baseline report, in seconds.
+    net: float = 0.0
+    #: The baseline's fixed cost: its wall-clock minus `net`.
+    overhead: float = 0.0
+    #: Each test file's own share of `net`, keyed the way a selection names it.
+    per_file: Mapping[str, float] = field(default_factory=dict)
+    #: An explicit ``--timeout``, which overrides the derivation entirely.
+    fixed: float | None = None
+    #: True when the baseline report really said how long its tests took.
+    measured: bool = False
+
+    def first(self, files: tuple[str, ...] | None = None) -> float:
+        """The budget a mutant gets on its first try, running `files` (``None`` = everything)."""
+        return self._with(_TIMEOUT_FACTOR, files)
+
+    def confirmation(self, files: tuple[str, ...] | None = None) -> float | None:
+        """The larger budget a mutant gets when it runs past `first`, or ``None`` for no second try.
+
+        This is what makes a tight first budget safe. Every other mutation tester — Stryker, PIT,
+        Infection, mutant — waits out one wall-clock budget and records a kill, with nothing
+        checking that the suite was really stuck. A loose budget does not fix that; it just hides
+        the same guess behind a bigger number. Re-running only the mutants that ran long, under a
+        budget that allows the tests to take ten times as long, turns the guess into an answer: a
+        mutant that finishes was never hanging, and its real verdict is recorded instead.
+
+        ``None`` in three cases, each meaning "a second run could not say anything the first did
+        not". An explicit ``--timeout`` is the user's own number and is honoured exactly. An
+        unmeasured baseline has no decomposition to loosen. And a budget already sitting on the
+        floor or the cap cannot grow, which is what happens on a suite so fast that the floor is
+        the whole budget — there, the first budget is already many times the real run.
+        """
+        if self.fixed is not None or not self.measured:
+            return None
+        larger = self._with(_CONFIRM_FACTOR, files)
+        return larger if larger > self.first(files) else None
+
+    def _with(self, factor: float, files: tuple[str, ...] | None) -> float:
+        if self.fixed is not None:
+            return self.fixed
+        if not self.measured:
+            return _bounded(_UNMEASURED_FACTOR * self.overhead)
+        return _bounded(factor * self._net_of(files) + _TIMEOUT_CONSTANT + self.overhead)
+
+    def _net_of(self, files: tuple[str, ...] | None) -> float:
+        """The test time `files` is expected to take, or the whole suite's when that is unknown.
+
+        One unknown file is enough to fall back for the whole set. Adding up the files that *are*
+        known and quietly skipping the rest would hand a mutant a budget for part of its run — the
+        exact shape of a check that looks like it is measuring something while measuring less than
+        it claims.
+        """
+        if files is None:
+            return self.net
+        total = 0.0
+        for name in files:
+            seconds = self.per_file.get(name)
+            if seconds is None:
+                return self.net
+            total += seconds
+        return total
 
 
 class BaselineFailed(Exception):
@@ -129,6 +247,13 @@ class MutantOutcome:
     ones it decided must run everything). `order_coupled` marks a mutant whose selected run looked
     like a kill, but whose chosen files do not pass on the unmutated project either: the kill was
     not trusted, and the verdict here comes from a whole-suite re-run.
+
+    `over_budget` marks a mutant that ran past its first time budget and was re-run under the
+    larger confirmation budget (`TimeBudget.confirmation`). Paired with `verdict` it says which of
+    two very different things happened. A `TIMEOUT` that is `over_budget` is a hang gdmutant
+    **checked**, not one it assumed. Anything else that is `over_budget` is a mutant the first
+    budget would have called a hang and which turned out to be merely slow — the count that says
+    out loud how often the tight budget was about to be wrong.
     """
 
     mutant: Mutant
@@ -136,6 +261,7 @@ class MutantOutcome:
     self_checked: bool = False
     selected: int | None = None
     order_coupled: bool = False
+    over_budget: bool = False
 
 
 @dataclass(frozen=True)
@@ -220,6 +346,22 @@ class MutationRun:
     def selected(self) -> int:
         """Count of mutants that ran only the test files reaching them, rather than every test."""
         return sum(1 for o in self.outcomes if o.selected is not None)
+
+    @property
+    def reprieved(self) -> int:
+        """Count of mutants that ran past the first time budget and then finished under the
+        confirmation budget. Every one of them would have been recorded as a hang, and scored as
+        killed, by a run that took the first budget's word for it — which is what every other
+        mutation tester does. A nonzero count here is the tight budget being caught out, and a zero
+        one is the only honest way to say it was not."""
+        return sum(1 for o in self.outcomes if o.over_budget and o.verdict is not Verdict.TIMEOUT)
+
+    @property
+    def confirmed_timeouts(self) -> int:
+        """Of the timeouts, how many were re-run under the confirmation budget and hung there too.
+        The rest are timeouts nothing checked: an explicit ``--timeout``, a baseline whose report
+        gave no durations, or a budget already on the floor or the cap."""
+        return sum(1 for o in self.outcomes if o.over_budget and o.verdict is Verdict.TIMEOUT)
 
     @property
     def order_coupled(self) -> int:
@@ -324,24 +466,13 @@ _HEARTBEAT_FRACTION_PLAIN = 0.10  # …and at least a tenth of the mutants, whic
 #: finish time is a guess this tool has no way to make honestly.
 
 
-def _contention_budget(per_mutant_timeout: float, workers: int) -> float:
-    """The per-mutant time budget actually enforced when `workers` suites run at once.
-
-    The single source of that arithmetic: `_run_mutants_parallel` enforces it and `_progress_plan`
-    announces it, and when the two computed it separately the announcement drifted — it named the
-    unscaled figure while the run allowed up to N times that. The number is the answer to "how long
-    is silence normal?", so an announcement that understates it is exactly the thing that makes a
-    healthy run look hung. `_run_mutants_parallel` explains why the scaling itself is right.
-    """
-    return per_mutant_timeout * max(workers, 1)
-
-
 #: How often `_wait_for_load_capacity` re-checks the load average, and how long it waits at most
 #: before giving up and starting the worker anyway. `make -l` can defer a job indefinitely under
 #: sustained load; gdmutant doesn't, because "looks hung" is already the #1 documented reason
 #: people abandon a mutation run (`_progress_plan`), so this bounds the wait instead. A worker that
-#: waited its full budget and started anyway is still covered by the contention-scaled per-mutant
-#: timeout (`_contention_budget`) — failing toward slower, never toward a lost result.
+#: waited its full budget and started anyway is still covered by `TimeBudget`'s constant, which
+#: holds the contention allowance, and by the confirmation pass behind it — failing toward slower,
+#: never toward a lost result.
 _LOAD_THROTTLE_POLL_SECS = 1.0
 _LOAD_THROTTLE_MAX_WAIT_SECS = 30.0
 
@@ -389,7 +520,7 @@ def _progress_plan(runnable: int, total: int, jobs: int, uncovered: int = 0) -> 
     abandon mutation testing, and a static number stated once was better than silence. It no longer
     carries that job: the heartbeat (`_HEARTBEAT_SECS`) now fires every few seconds instead of every
     30, so a still terminal gets live, repeated proof of life instead of one number to do the math
-    on. The cap is still enforced exactly as before (`_contention_budget`), just not announced here.
+    on. The budget is still enforced exactly as before (`TimeBudget`), just not announced here.
 
     `uncovered` is how many non-ignored mutants coverage analysis already decided as "no coverage"
     without a run. They are left out of the count and named in the note instead, so the number
@@ -465,8 +596,8 @@ class _Progress:
         elif verdict is Verdict.TIMEOUT:
             self.file_timeouts += 1
             self.timeouts += 1
-            # Measured, not `timeouts × budget`: under --jobs the budget is scaled and the waits
-            # overlap, so only the real elapsed time is true on both paths.
+            # Measured, not `timeouts × budget`: a confirmed hang pays two budgets and under
+            # --jobs the waits overlap, so only the real elapsed time is true on every path.
             self.timeout_secs += elapsed
         self.beat()
 
@@ -554,16 +685,18 @@ def run(
     Raises `BaselineFailed` if the unmutated suite doesn't pass first (FG-3.3). The file at `path`
     must hold `source` when this is called; it is restored to `source` before returning.
 
-    `timeout` is the per-mutant time budget in seconds. When ``None`` (the default), it is *derived
-    from the baseline run's own wall-clock* (`_derive_timeout`), so a hanging mutant is cut off in
-    seconds instead of blocking for the flat default — an explicit value overrides the derivation.
+    `timeout` is the per-mutant time budget in seconds. When ``None`` (the default), it is
+    *derived from the baseline run itself* (`TimeBudget`): the tests' own reported time is
+    multiplied, the framework startup measured alongside it is added back unmultiplied, and a
+    mutant that still runs long is re-run once under a larger budget before being called a hang.
+    An explicit value overrides all of that, confirmation included.
 
     `jobs` is the number of mutants to evaluate concurrently (default 1 = serial). With ``jobs > 1``
     the loop gives each worker its own copy of the project so in-place mutation can't collide, then
     reassembles the outcomes in generation order (ADR-0003). Process isolation makes the pass/fail
-    verdict of each mutant identical to a serial run; to keep the *timeout* verdict identical too,
-    the per-mutant time budget is scaled by the worker count so CPU/RAM contention can't turn a
-    genuinely-passing suite into a false TIMEOUT (see `_run_mutants_parallel`).
+    verdict of each mutant identical to a serial run; the *timeout* verdict stays identical because
+    every worker gets the same budget a serial run would give, with the contention allowance in its
+    constant and the confirmation pass behind it (see `_run_mutants_parallel`).
 
     `jobs_auto` holds off starting a worker beyond the first while the system's already under
     load, checked live via the system load average (POSIX only; a no-op elsewhere) each time the
@@ -586,7 +719,7 @@ def run(
     run against the whole suite as a standing check (``None`` runs them all). Raises
     `CoverageRunFailed` when that cannot be trusted. See `_coverage_pass`.
     """
-    per_mutant_timeout, baseline_tests = _run_baseline(project_dir, runner, timeout, progress)
+    budget, baseline_tests = _run_baseline(project_dir, runner, timeout, progress)
     mutants, plans = _coverage_plans(
         project_dir,
         {path: source},
@@ -599,6 +732,7 @@ def run(
         baseline_tests,
         progress,
     )
+    _budget_note(budget, plans, progress)
     clock = _Progress(emit=progress, style=progress_style)
     # One per run, not one per file: a set of test files confirmed while mutating one file is
     # still confirmed while mutating the next.
@@ -609,7 +743,7 @@ def run(
         source,
         runner,
         adapter,
-        per_mutant_timeout,
+        budget,
         catalog,
         progress,
         jobs,
@@ -630,10 +764,10 @@ def _run_baseline(
     runner: Runner,
     timeout: float | None,
     progress: Callable[[str], None] | None,
-) -> tuple[float, int]:
-    """Run the unmutated suite once. Returns ``(per_mutant_timeout, baseline_tests)``: the
-    per-mutant budget (derived from the baseline's wall-clock unless `timeout` overrides) and the
-    number of tests the baseline ran, which the coverage marker run must match.
+) -> tuple[TimeBudget, int]:
+    """Run the unmutated suite once. Returns ``(budget, baseline_tests)``: the per-mutant time
+    budget (derived from this run unless `timeout` overrides) and the number of tests the baseline
+    ran, which the coverage marker run must match.
     Raises `BaselineFailed` if the suite can't run or is red (FG-3.3)."""
     # One-time setup (e.g. a Godot import scan) runs BEFORE the clock starts, so its cost never
     # inflates the baseline wall-clock that derives per-mutant timeouts and the ETA. A
@@ -690,8 +824,35 @@ def _run_baseline(
             "check that the runner is pointed at your tests (--tests, or --command for a "
             "custom harness) and that the suite runs on its own."
         )
-    per_mutant_timeout = timeout if timeout is not None else _derive_timeout(baseline_secs)
-    return per_mutant_timeout, baseline.tests
+    return _baseline_budget(baseline, baseline_secs, timeout), baseline.tests
+
+
+def _baseline_budget(baseline: SuiteResult, wall: float, timeout: float | None) -> TimeBudget:
+    """The run's `TimeBudget`, read off the baseline that just finished.
+
+    This is the whole measurement the budget rests on, and it costs nothing extra: the baseline had
+    to run anyway, and its report already says how long its tests took. What is left of the
+    wall-clock after that is the framework's startup and the engine's boot, per project and per
+    framework, measured rather than guessed at.
+
+    `net` is clamped to the wall-clock and `overhead` floored at zero, because a framework may
+    report more test time than the run took (tests that overlap), and a negative fixed cost is not
+    a thing. Both keep the arithmetic on numbers that mean something.
+    """
+    if timeout is not None:
+        return TimeBudget(fixed=timeout)
+    reported = baseline.reported_time
+    net = min(reported, wall)
+    return TimeBudget(
+        net=net,
+        overhead=max(0.0, wall - net),
+        per_file=baseline.file_times,
+        # A report that named no durations is indistinguishable from one that named zero, and both
+        # mean the same thing: nothing here says how much of the baseline was tests. So the
+        # decomposition is switched off rather than applied to a zero it invented, and the whole
+        # wall-clock is multiplied exactly as it was before any of this existed.
+        measured=reported > 0.0,
+    )
 
 
 @dataclass(frozen=True)
@@ -734,6 +895,52 @@ class _FileCoverage:
         not pick them. A sampled one is deliberately absent, because it does run."""
         return frozenset(
             index for index, plan in self.plans.items() if plan.no_coverage and not plan.self_check
+        )
+
+
+def _budget_note(
+    budget: TimeBudget,
+    plans: _RunCoverage | None,
+    progress: Callable[[str], None] | None,
+) -> None:
+    """Say so when per-file time budgets cannot be used, and say nothing when they can.
+
+    Selection hands a mutant a list of test files, and the budget looks each one up among the
+    durations the baseline's report gave. Those two lists are produced by different halves of a
+    framework — the recorder reads the "a test file started" event, the report comes from the
+    reporter — and nothing makes them spell a file the same way. When they do not, every selected
+    mutant quietly falls back to the whole suite's time. That is sound, and it is invisible: the
+    run is exactly as correct and the saving simply never happens.
+
+    Invisible is the problem. A capability that silently does nothing is the shape this project
+    keeps finding (AGENTS.md's first recurring bug), so it is stated once instead. Both halves are
+    named because the two causes have different cures: a report with no durations at all, and a
+    report whose durations are filed under names no selection asks for.
+
+    Called by `run` and `run_paths` alike, from one place, so the single-file and many-file runs
+    cannot end up saying different things about the same run.
+    """
+    if progress is None or plans is None:
+        return
+    if not budget.measured:
+        progress(
+            "budget: the baseline's report did not say how long its tests took, so the whole "
+            "baseline wall-clock sets each mutant's time budget rather than the test time alone."
+        )
+        return
+    wanted = {
+        name
+        for file_plans in plans.files.values()
+        for plan in file_plans.plans.values()
+        if plan.files is not None
+        for name in plan.files
+    }
+    unknown = wanted - set(budget.per_file)
+    if unknown:
+        progress(
+            f"budget: {len(unknown)} of the {len(wanted)} test files selection chose are named "
+            "differently in the baseline's report, so a selected mutant is budgeted for the whole "
+            "suite's test time rather than its own files'. Verdicts are unaffected."
         )
 
 
@@ -1090,7 +1297,7 @@ def _mutate_file(
     source: str,
     runner: Runner,
     adapter: Adapter,
-    per_mutant_timeout: float,
+    budget: TimeBudget,
     catalog: tuple[Operator, ...],
     progress: Callable[[str], None] | None,
     jobs: int,
@@ -1152,7 +1359,7 @@ def _mutate_file(
             runner,
             adapter,
             mutants,
-            per_mutant_timeout,
+            budget,
             jobs,
             jobs_auto,
             clock,
@@ -1168,7 +1375,7 @@ def _mutate_file(
             runner,
             adapter,
             mutants,
-            per_mutant_timeout,
+            budget,
             clock,
             skip,
             plans,
@@ -1247,6 +1454,14 @@ _DETECTED = (Verdict.KILLED, Verdict.TIMEOUT)
 
 
 @dataclass(frozen=True)
+class _Ran:
+    """One suite run's answer, plus whether the confirmation pass had to be used to get it."""
+
+    verdict: Verdict
+    over_budget: bool = False
+
+
+@dataclass(frozen=True)
 class _Evaluation:
     """Everything one mutant's evaluation needs that does not change from mutant to mutant.
 
@@ -1258,13 +1473,49 @@ class _Evaluation:
     path: str
     source: str
     runner: Runner
-    timeout: float
+    budget: TimeBudget
     trust: _Trust | None
 
-    def once(self, mutated: str, files: tuple[str, ...] | None) -> Verdict:
-        """Run `mutated` against `files`, or the whole suite when `files` is ``None``."""
-        return _run_one(
-            self.project_dir, self.path, self.source, mutated, self.runner, self.timeout, files
+    def once(self, mutated: str, files: tuple[str, ...] | None) -> _Ran:
+        """Run `mutated` against `files` (``None`` = the whole suite), confirming any hang.
+
+        A mutant that runs past its first budget is not called a hang on that evidence. It is run
+        again, alone, under `TimeBudget.confirmation`, and whatever *that* run says is the answer.
+        Only the mutants that ran long pay for this, and the payment buys the one thing a
+        wall-clock budget cannot give on its own: the difference between a suite that is stuck and
+        a suite that is merely slower than expected.
+
+        The confirmation lives here, at the innermost run, rather than up in `_evaluate`. Every
+        road to a verdict goes through this method — the selected run, the whole-suite fallback
+        behind an unconfirmed kill, and the self-check's second run — so putting it here is what
+        makes those roads agree. A confirmation wired into one of them would leave the others
+        recording an unchecked hang, and no test comparing one road to itself would ever notice.
+        """
+        verdict = _run_one(
+            self.project_dir,
+            self.path,
+            self.source,
+            mutated,
+            self.runner,
+            self.budget.first(files),
+            files,
+        )
+        if verdict is not Verdict.TIMEOUT:
+            return _Ran(verdict)
+        confirmation = self.budget.confirmation(files)
+        if confirmation is None:
+            return _Ran(verdict)
+        return _Ran(
+            _run_one(
+                self.project_dir,
+                self.path,
+                self.source,
+                mutated,
+                self.runner,
+                confirmation,
+                files,
+            ),
+            over_budget=True,
         )
 
 
@@ -1281,21 +1532,30 @@ def _evaluate(ctx: _Evaluation, mutant: Mutant, mutated: str, plan: MutantPlan) 
        match. They are the same run when step 2 already fell back to the whole suite.
     """
     files = plan.files
-    verdict = ctx.once(mutated, files)
+    ran = ctx.once(mutated, files)
+    verdict = ran.verdict
+    over_budget = ran.over_budget
     if (
         files is not None
         and verdict in _DETECTED
         and ctx.trust is not None
-        and not ctx.trust.confirms(ctx.project_dir, files, ctx.timeout)
+        and not ctx.trust.confirms(ctx.project_dir, files, ctx.budget.first(files))
     ):
         files = None
-        verdict = ctx.once(mutated, None)
+        ran = ctx.once(mutated, None)
+        verdict = ran.verdict
+        over_budget = over_budget or ran.over_budget
     # Read off what happened rather than tracked while it happened: order-coupled *is* "this
     # mutant had its own test files and does not have them any more", and a flag set in one branch
     # is a second place for that fact to live and disagree from.
     coupled = plan.files is not None and files is None
     if plan.self_check and not plan.no_coverage:
-        whole = verdict if files is None else ctx.once(mutated, None)
+        if files is None:
+            whole = verdict
+        else:
+            whole_ran = ctx.once(mutated, None)
+            whole = whole_ran.verdict
+            over_budget = over_budget or whole_ran.over_budget
         if not (whole is verdict or (whole in _DETECTED and verdict in _DETECTED)):
             raise CoverageSelfCheckFailed(
                 "the coverage self-check failed: running "
@@ -1313,12 +1573,14 @@ def _evaluate(ctx: _Evaluation, mutant: Mutant, mutated: str, plan: MutantPlan) 
             self_checked=True,
             selected=None if files is None else len(files),
             order_coupled=coupled,
+            over_budget=over_budget,
         )
     return MutantOutcome(
         mutant,
         verdict,
         selected=None if files is None else len(files),
         order_coupled=coupled,
+        over_budget=over_budget,
     )
 
 
@@ -1368,7 +1630,7 @@ def _run_mutants_serial(
     runner: Runner,
     adapter: Adapter,
     mutants: Sequence[Mutant],
-    per_mutant_timeout: float,
+    budget: TimeBudget,
     clock: _Progress,
     skip: frozenset[int],
     plans: Callable[[int], MutantPlan],
@@ -1391,7 +1653,7 @@ def _run_mutants_serial(
     the pre-run plan line has already said it once; the heartbeat already answers "is this still
     going" without repeating a number nobody needs restated per mutant.
     """
-    ctx = _Evaluation(project_dir, path, source, runner, per_mutant_timeout, trust)
+    ctx = _Evaluation(project_dir, path, source, runner, budget, trust)
     outcomes: list[MutantOutcome] = []
     for index, mutant in enumerate(mutants):
         ran: float | None = None
@@ -1482,7 +1744,7 @@ def _run_mutants_parallel(
     runner: Runner,
     adapter: Adapter,
     mutants: Sequence[Mutant],
-    per_mutant_timeout: float,
+    budget: TimeBudget,
     jobs: int,
     jobs_auto: bool,
     clock: _Progress,
@@ -1507,13 +1769,16 @@ def _run_mutants_parallel(
     workers; each passes its own copy's dir. The Godot import cache (`.godot/`) is copied along with
     the project, so a worker doesn't pay a cold re-scan.
 
-    The per-mutant timeout is scaled by the worker count. The budget is derived from the *serial*
-    baseline (`_derive_timeout` = 10x its wall-clock), but W workers contend for CPU/RAM, so each
-    suite runs up to ~Wx slower in wall-clock than it did alone. Without scaling, a genuinely
-    *passing* suite could exceed its serial budget under contention and be misrecorded as a TIMEOUT
-    (scored as killed) — silently hiding a survivor. Multiplying the budget by W restores the same
-    10x headroom in per-worker-second terms, so a timeout still means a real hang, not a lost CPU
-    lottery (fail toward slower, never toward fewer — the prime directive).
+    **Every worker uses the same `TimeBudget` the serial path uses.** The budget used to be
+    multiplied by the worker count, on the reasoning that W workers contend and each suite runs
+    up to ~Wx slower. Measured, that reasoning was wrong by an order of magnitude: on a real game
+    project, eight concurrent Godot processes made a healthy suite take 28% longer, not 700%. And
+    the multiplier cancelled the parallelism exactly where it was needed — N hanging mutants across
+    W workers, each allowed W x budget, take the same wall-clock as running them one at a time. So
+    the contention allowance lives in `TimeBudget`'s constant, sized from that measurement, and a
+    mutant that still runs long is re-run under the confirmation budget rather than assumed to be
+    hanging (`_Evaluation.once`). That is what keeps a genuinely passing suite from being recorded
+    as a TIMEOUT: a check, not a bigger guess.
 
     `jobs_auto` (set only by `--jobs auto`, never by an explicit `--jobs N`) holds off starting
     worker index 1 and up while the load average is at or above `jobs` itself, polling via
@@ -1523,9 +1788,9 @@ def _run_mutants_parallel(
     in scope rather than recomputed from `os.cpu_count()` a second time — two independently
     hardcoded copies of the same formula would agree today by coincidence and silently drift the
     moment either one changed. Worker 0 always starts immediately regardless — an auto run should
-    never do *less* than a serial one would. `worker_count` and the contention-scaled timeout are
-    still computed from the full `jobs` ceiling up front, so a worker delayed by load still runs
-    against the same budget every other worker got, not a recomputed one.
+    never do *less* than a serial one would. `worker_count` is still computed from the full `jobs`
+    ceiling up front, and the budget does not depend on it at all, so a worker delayed by load runs
+    against exactly the same budget every other worker got.
 
     `skip` is decided in the serial pre-pass exactly as `_run_mutants_serial` decides it: a valid
     mutant in it is `NO_COVERAGE` and never reaches a worker. `plans` and `trust` are read inside
@@ -1554,7 +1819,6 @@ def _run_mutants_parallel(
         return [outcomes[index] for index in range(total)]
 
     worker_count = min(jobs, len(runnable))
-    contention_timeout = _contention_budget(per_mutant_timeout, worker_count)
     work: queue.Queue[tuple[int, Mutant, str]] = queue.Queue()
     for item in runnable:
         work.put(item)
@@ -1565,9 +1829,7 @@ def _run_mutants_parallel(
         """Drain `work` against this worker's own project copy at `worker_dir`, recording each
         mutant's outcome (or, on an exception, stashing it in `errors` for the main thread to
         re-raise) until the queue is empty."""
-        ctx = _Evaluation(
-            worker_dir, str(Path(worker_dir) / rel), source, runner, contention_timeout, trust
-        )
+        ctx = _Evaluation(worker_dir, str(Path(worker_dir) / rel), source, runner, budget, trust)
         while True:
             try:
                 index, mutant, mutated = work.get_nowait()
@@ -1630,7 +1892,7 @@ def run_paths(
     with one marker run covering every file. Returns ``{path: MutationRun}`` in `sources` order.
     Raises `BaselineFailed` (like `run`) if the baseline can't run or is red.
     """
-    per_mutant_timeout, baseline_tests = _run_baseline(project_dir, runner, timeout, progress)
+    budget, baseline_tests = _run_baseline(project_dir, runner, timeout, progress)
     mutants, plans = _coverage_plans(
         project_dir,
         sources,
@@ -1643,6 +1905,7 @@ def run_paths(
         baseline_tests,
         progress,
     )
+    _budget_note(budget, plans, progress)
     clock = _Progress(emit=progress, style=progress_style)
     # One per run, not one per file: a set of test files confirmed while mutating one file is
     # still confirmed while mutating the next.
@@ -1659,7 +1922,7 @@ def run_paths(
             source,
             runner,
             adapter,
-            per_mutant_timeout,
+            budget,
             catalog,
             progress,
             jobs,

@@ -1,5 +1,6 @@
 """Tests for the mutation-run loop (no Godot — fake runners drive killed/survived)."""
 
+import inspect
 import os
 import stat
 import time
@@ -15,18 +16,21 @@ from gdmutant.adapters.gdscript import ADAPTER
 from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.loop import (
     BaselineFailed,
+    MutantPlan,
     ProgressStyle,
     SourceOutsideProject,
     SourceWriteFailed,
+    TimeBudget,
     Verdict,
-    _contention_budget,
-    _derive_timeout,
+    _budget_note,
     _detect_eol,
+    _FileCoverage,
     _format_duration,
     _load_average_allows_more_workers,
     _plain_beat_every,
     _Progress,
     _progress_plan,
+    _RunCoverage,
     _wait_for_load_capacity,
     _write_source,
 )
@@ -34,7 +38,7 @@ from gdmutant.engine.loop import run as _run
 from gdmutant.engine.loop import run_paths as _run_paths
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import TableOperator
-from gdmutant.engine.runner import SuiteResult, SuiteTimeout
+from gdmutant.engine.runner import ReportedSuite, SuiteResult, SuiteTimeout
 from gdmutant.engine.spans import Span
 
 
@@ -156,8 +160,10 @@ def test_prepare_runs_before_baseline_and_its_cost_is_excluded_from_the_timeout(
     # baseline_secs = suite_cost only (prepare excluded); mutant timeouts derive from it.
     mutant_timeouts = runner.seen_timeouts[1:]
     assert mutant_timeouts, "the source should produce at least one runnable mutant"
-    assert all(t == _derive_timeout(0.05) for t in mutant_timeouts)
-    assert all(t != _derive_timeout(5.05) for t in mutant_timeouts)  # prepare NOT folded in
+    # This runner's result names no test suites, so nothing says how much of the baseline was
+    # tests and the whole wall-clock is multiplied, exactly as it was before the decomposition.
+    assert all(t == TimeBudget(overhead=0.05).first() for t in mutant_timeouts)
+    assert all(t != TimeBudget(overhead=5.05).first() for t in mutant_timeouts)  # prepare left out
 
 
 def test_prepare_failure_becomes_baseline_failed(tmp_path: Path) -> None:
@@ -369,14 +375,74 @@ def test_suite_timeout_is_tallied_as_timeout_and_counts_as_detected(tmp_path: Pa
     assert Path(path).read_text(encoding="utf-8") == src  # restored despite the timeout
 
 
-def test_derive_timeout_formula() -> None:
-    # Per-mutant budget = baseline * 10, floored at 10s and capped at 600s (a slow suite is never
-    # worse off than the historical flat default; a fast suite gets a tight budget so a hang is
-    # caught in seconds).
-    assert _derive_timeout(0.0) == 10.0  # floor
-    assert _derive_timeout(0.5) == 10.0  # 5s -> floored to 10
-    assert _derive_timeout(4.0) == 40.0  # 10x
-    assert _derive_timeout(100.0) == 600.0  # capped
+def test_budget_multiplies_the_test_time_and_adds_the_measured_startup_back() -> None:
+    # The whole formula, in one place: factor x the tests' own reported time, plus a constant,
+    # plus the startup measured alongside them. The startup is added back UNMULTIPLIED, which is
+    # the error the old `baseline x 10` made: a mutant cannot make a process boot slower, so
+    # multiplying the boot inflated every budget by a number nobody chose.
+    budget = TimeBudget(net=4.0, overhead=20.0, measured=True)
+    assert budget.first() == 2.0 * 4.0 + 8.0 + 20.0  # 36.0, not 10 x 24 = 240
+    assert budget.confirmation() == 10.0 * 4.0 + 8.0 + 20.0  # 68.0
+
+
+def test_budget_is_floored_and_capped() -> None:
+    assert TimeBudget(net=0.0, overhead=0.0, measured=True).first() == 10.0  # floor
+    assert TimeBudget(net=0.01, overhead=0.5, measured=True).first() == 10.0  # 8.52 -> floored
+    assert TimeBudget(net=1000.0, overhead=5.0, measured=True).first() == 600.0  # capped
+
+
+def test_a_budget_on_the_floor_or_the_cap_gets_no_confirmation_run() -> None:
+    # A confirmation that cannot allow more time than the first try already did would only repeat
+    # it, so it is not run at all. That is the whole rule: a second run has to be able to say
+    # something the first could not.
+    assert TimeBudget(net=0.01, overhead=0.5, measured=True).confirmation() is None  # both floored
+    assert TimeBudget(net=1000.0, overhead=5.0, measured=True).confirmation() is None  # both capped
+    assert TimeBudget(net=4.0, overhead=20.0, measured=True).confirmation() == 68.0  # room to grow
+
+
+def test_an_unmeasured_baseline_multiplies_the_whole_wall_clock() -> None:
+    # The exit-code runner has no report, so nothing says which part of its baseline was tests.
+    # Guessing zero would set the budget to the constant alone and turn slow suites into false
+    # hangs, so the decomposition switches off and the pre-decomposition behaviour is kept.
+    unmeasured = TimeBudget(net=0.0, overhead=24.0, measured=False)
+    assert unmeasured.first() == 240.0
+    assert unmeasured.confirmation() is None  # nothing to loosen, so nothing to confirm with
+
+
+def test_an_explicit_timeout_overrides_everything_including_the_confirmation() -> None:
+    # Someone who names a number meant that number, on every run and on every road to a verdict.
+    fixed = TimeBudget(net=4.0, overhead=20.0, measured=True, fixed=3.0)
+    assert fixed.first() == 3.0
+    assert fixed.first(("a.gd",)) == 3.0
+    assert fixed.confirmation() is None
+
+
+def test_selected_files_are_budgeted_for_their_own_time() -> None:
+    budget = TimeBudget(
+        net=30.0, overhead=5.0, per_file={"a.gd": 1.0, "b.gd": 2.0, "c.gd": 27.0}, measured=True
+    )
+    assert budget.first(("a.gd", "b.gd")) == 2.0 * 3.0 + 8.0 + 5.0  # 19.0, not 2 x 30 + 13
+    assert budget.first() == 2.0 * 30.0 + 8.0 + 5.0  # 73.0: no selection, so the whole suite
+
+
+def test_a_mutant_with_no_selection_falls_back_to_the_whole_suite() -> None:
+    # Every mutant unless --coverage-analysis per-file is on, and the ones it decided must run
+    # everything anyway. `None` is the whole suite, and it must not be read as "no files, no time".
+    budget = TimeBudget(net=30.0, overhead=5.0, per_file={"a.gd": 1.0}, measured=True)
+    assert budget.first(None) == budget.first()
+    assert budget.first(None) == 2.0 * 30.0 + 8.0 + 5.0
+
+
+def test_an_unknown_selected_file_falls_back_to_the_whole_suite_not_to_zero() -> None:
+    # A file the baseline's report never named has no known duration. Skipping it and adding up
+    # the rest would hand the mutant a budget for part of its run while looking like a
+    # measurement, which is the shape of a check that quietly measures less than it claims. One
+    # unknown file is enough to fall back for the whole set.
+    budget = TimeBudget(net=30.0, overhead=5.0, per_file={"a.gd": 1.0}, measured=True)
+    assert budget.first(("a.gd", "mystery.gd")) == budget.first()
+    assert budget.first(("mystery.gd",)) == budget.first()
+    # And the fallback is genuinely bigger than the zero-seconds answer would have been.
+    assert budget.first(("mystery.gd",)) > 2.0 * 0.0 + 8.0 + 5.0
 
 
 def test_derived_timeout_is_handed_to_each_mutant_when_unset(tmp_path: Path) -> None:
@@ -524,14 +590,15 @@ def test_progress_plan_never_predicts_a_finish_time() -> None:
         assert forecast not in line
 
 
-def test_contention_budget_scales_by_worker_count() -> None:
-    # The per-mutant time budget `_run_mutants_parallel` actually enforces under `--jobs N`. No
-    # longer announced anywhere in the progress stream, but still real, load-bearing arithmetic:
-    # under-scaling it would let CPU/RAM contention turn a genuinely-passing suite into a false
-    # TIMEOUT (see `_run_mutants_parallel`).
-    assert _contention_budget(30.0, workers=4) == 120.0
-    assert _contention_budget(30.0, workers=1) == 30.0  # serial: can't contend with itself
-    assert _contention_budget(30.0, workers=0) == 30.0  # never scale to zero
+def test_the_worker_count_does_not_multiply_the_budget() -> None:
+    # The budget takes no worker count at all, and that is the point. Multiplying it by W cancelled
+    # the parallelism exactly where it was needed: N hanging mutants across W workers, each allowed
+    # W x budget, cost the same wall-clock as running them one at a time. The contention allowance
+    # lives in the constant instead, sized from measurement (docs/decisions/0020).
+    budget = TimeBudget(net=4.0, overhead=20.0, measured=True)
+    assert budget.first() == 36.0
+    assert set(inspect.signature(budget.first).parameters) == {"files"}
+    assert set(inspect.signature(budget.confirmation).parameters) == {"files"}
 
 
 def _clock(style: ProgressStyle, total: int, lines: list[str]) -> _Progress:
@@ -911,11 +978,13 @@ def test_parallel_matches_serial_verdicts_and_order(tmp_path: Path) -> None:
     assert Path(parallel_path).read_text(encoding="utf-8") == src
 
 
-def test_parallel_scales_the_per_mutant_timeout_by_worker_count(tmp_path: Path) -> None:
-    # Soundness on the timeout axis: the per-mutant budget is derived from the SERIAL baseline, but
-    # W workers contend for CPU so each suite runs slower in wall-clock. Scaling the budget by the
-    # worker count keeps a genuinely-passing suite from crossing its timeout under load and being
-    # misrecorded as a (killed) TIMEOUT — which would silently hide a survivor.
+def test_parallel_gives_every_worker_the_unscaled_budget(tmp_path: Path) -> None:
+    # Soundness on the timeout axis, the other way round from how it used to be argued. The budget
+    # used to be multiplied by the worker count, on the reasoning that W workers contend so each
+    # suite runs ~Wx slower. Measured on a real project, eight concurrent Godot processes cost 28%,
+    # not 700%, and the multiplier cancelled the parallelism on exactly the mutants that hang. The
+    # contention allowance now lives in the budget's constant, and a mutant that still runs long is
+    # re-run before it is called a hang (docs/decisions/0020).
     src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"  # 3 runnable mutants
     path = _write(tmp_path, "f.gd", src)
     runner = TimeoutRecordingRunner()
@@ -923,8 +992,7 @@ def test_parallel_scales_the_per_mutant_timeout_by_worker_count(tmp_path: Path) 
     baseline, *mutant_timeouts = runner.seen
     assert baseline is None  # the baseline still uses the runner's own budget
     assert len(mutant_timeouts) == 3  # every mutant ran
-    # worker_count = min(jobs=2, mutants=3) = 2, so each budget is the 5.0s serial value x2.
-    assert all(t == 5.0 * 2 for t in mutant_timeouts)
+    assert all(t == 5.0 for t in mutant_timeouts)  # 5.0, not 5.0 x min(jobs=2, mutants=3)
 
 
 def test_load_average_allows_more_workers_with_no_getloadavg_available(
@@ -1023,19 +1091,26 @@ def test_explicit_jobs_never_throttles_even_with_more_workers_than_cores(tmp_pat
     assert calls == []
 
 
-def test_the_runner_is_given_the_contention_scaled_cap(tmp_path: Path) -> None:
-    # `_contention_budget` is the single source of this arithmetic (see its own docstring on why a
-    # second, separately-computed figure is how a past version of this drifted to a quarter of the
-    # enforced value). Verify the runner actually receives that scaled figure, not a hand-derived
-    # one.
+def test_a_parallel_worker_is_given_the_same_budget_a_serial_run_would_give(
+    tmp_path: Path,
+) -> None:
+    # The budget a `--jobs N` worker actually enforces is the serial one, unscaled. It used to be
+    # multiplied by the worker count, which made N hanging mutants across N workers cost exactly
+    # what running them one at a time would have (see `_run_mutants_parallel`). Checked against a
+    # real parallel run rather than against the arithmetic alone, because the arithmetic living in
+    # the right place proves nothing about which number reaches the runner.
     src = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"  # 3 runnable mutants
     path = _write(tmp_path, "f.gd", src)
-    runner = TimeoutRecordingRunner()
-    run(str(tmp_path), path, src, runner, timeout=5.0, jobs=2)
 
-    expected = _contention_budget(5.0, workers=2)  # min(jobs=2, runnable=3) workers
-    _, *mutant_timeouts = runner.seen  # drop the baseline, which uses the runner's own budget
-    assert mutant_timeouts and all(t == expected for t in mutant_timeouts)
+    parallel = TimeoutRecordingRunner()
+    run(str(tmp_path), path, src, parallel, timeout=5.0, jobs=2)
+    serial = TimeoutRecordingRunner()
+    run(str(tmp_path), path, src, serial, timeout=5.0)
+
+    _, *under_jobs = parallel.seen  # drop the baseline, which uses the runner's own budget
+    _, *alone = serial.seen
+    assert under_jobs and all(t == 5.0 for t in under_jobs)
+    assert under_jobs == alone
 
 
 def test_parallel_classifies_an_invalid_mutant_like_serial(tmp_path: Path) -> None:
@@ -1604,3 +1679,212 @@ def test_a_symlinked_source_is_written_through_rather_than_replaced(tmp_path: Pa
 
     assert link.is_symlink(), "the symlink itself must survive the write"
     assert real.read_text(encoding="utf-8") == "func f(a, b) -> bool:\n\treturn a >= b\n"
+
+
+@dataclass
+class SlowRunner:
+    """A runner whose suite takes `cost` seconds of make-believe: it raises `SuiteTimeout` for any
+    budget under that and passes for any budget over it. Its baseline run advances `clock` by
+    `wall`, so the engine measures a real-looking wall-clock to decompose.
+
+    This is the whole question a wall-clock budget cannot answer on its own. A suite that needs 40s
+    and a suite that needs forever both look identical to a 20s budget, and every other mutation
+    tester records the same kill for both."""
+
+    cost: float
+    baseline: SuiteResult
+    clock: list[float]
+    wall: float
+    budgets: list[float | None] = field(default_factory=list)
+    failing: bool = False
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        if timeout is None:  # the baseline, run on the runner's own budget
+            self.clock[0] += self.wall
+            return self.baseline
+        self.budgets.append(timeout)
+        if timeout < self.cost:
+            raise SuiteTimeout(f"took longer than {timeout:g}s")
+        return SuiteResult(tests=1, failures=1 if self.failing else 0, errors=0)
+
+
+def _slow(
+    monkeypatch: pytest.MonkeyPatch, cost: float, *, net: float = 40.0, failing: bool = False
+) -> SlowRunner:
+    """A `SlowRunner` on a fake clock, whose baseline takes 50s of which `net` was tests.
+
+    The clock is what makes the decomposition real here: `TimeBudget` clamps the reported test
+    time to the wall-clock it was measured against, so a baseline that returns instantly would
+    have no startup to measure and every budget would land on the floor.
+    """
+    from gdmutant.engine import loop as loop_mod
+
+    clock = [0.0]
+    monkeypatch.setattr(loop_mod.time, "monotonic", lambda: clock[0])
+    return SlowRunner(
+        cost=cost, baseline=_measured_baseline(net), clock=clock, wall=50.0, failing=failing
+    )
+
+
+def _measured_baseline(net: float) -> SuiteResult:
+    """A baseline result whose report says its tests took `net` seconds, as a real one does."""
+    return SuiteResult(
+        tests=1,
+        failures=0,
+        errors=0,
+        suites=(ReportedSuite("only", tests=1, time=net, file="res://test/only.gd"),),
+    )
+
+
+def _one_mutant(tmp_path: Path) -> tuple[str, str]:
+    src = "func f(a, b) -> bool:\n\treturn a > b\n"
+    return src, _write(tmp_path, "f.gd", src)
+
+
+def test_a_mutant_that_runs_long_is_re_run_before_it_is_called_a_hang(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The mutant needs more time than the first budget allows and less than the confirmation
+    # budget. Every other mutation tester records that as a kill. gdmutant runs it again and finds
+    # out it was never hanging, so the verdict is the real one: SURVIVED.
+    src, path = _one_mutant(tmp_path)
+    budget = TimeBudget(net=40.0, overhead=10.0, measured=True)  # a 50s baseline, 40s of it tests
+    assert budget.first() < 120.0 < budget.confirmation()  # 98.0 < 120.0 < 418.0
+    runner = _slow(monkeypatch, cost=120.0)
+
+    result = run(str(tmp_path), path, src, runner)
+
+    assert [o.verdict for o in result.outcomes] == [Verdict.SURVIVED]
+    assert result.reprieved == 1  # it would have been a false kill
+    assert result.timeouts == 0
+    assert runner.budgets == [budget.first(), budget.confirmation()]  # exactly two runs, no more
+
+
+def test_a_mutant_that_hangs_through_both_budgets_stays_a_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The other half of the same rule. A real hang pays the first budget and then the confirmation
+    # budget, and is recorded as a TIMEOUT that something actually checked.
+    src, path = _one_mutant(tmp_path)
+    runner = _slow(monkeypatch, cost=10_000.0)
+
+    result = run(str(tmp_path), path, src, runner)
+
+    assert [o.verdict for o in result.outcomes] == [Verdict.TIMEOUT]
+    assert result.confirmed_timeouts == 1
+    assert result.reprieved == 0
+
+
+def test_a_confirmation_run_reports_the_verdict_it_reaches_not_just_a_reprieve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A reprieved mutant is not automatically a survivor. Whatever the second run says is the
+    # answer, kills included, so the score is built from the run that finished.
+    src, path = _one_mutant(tmp_path)
+    runner = _slow(monkeypatch, cost=120.0, failing=True)
+
+    result = run(str(tmp_path), path, src, runner)
+
+    assert [o.verdict for o in result.outcomes] == [Verdict.KILLED]
+    assert result.reprieved == 1
+
+
+def test_an_explicit_timeout_is_never_second_guessed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Someone who names a number meant it. The mutant runs once, on that number, and a timeout
+    # there stands unconfirmed rather than quietly buying itself a longer run.
+    src, path = _one_mutant(tmp_path)
+    runner = _slow(monkeypatch, cost=120.0)
+
+    result = run(str(tmp_path), path, src, runner, timeout=30.0)
+
+    assert [o.verdict for o in result.outcomes] == [Verdict.TIMEOUT]
+    assert result.confirmed_timeouts == 0  # nothing checked it, and the summary says so
+    assert runner.budgets == [30.0]
+
+
+def test_the_overhead_is_measured_from_the_report_not_assumed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The measurement the whole formula rests on. Two baselines take the SAME wall-clock; they
+    # differ only in what their reports say the tests took. The budgets must differ accordingly,
+    # which is only possible if the startup is read off the report rather than guessed at.
+    from gdmutant.engine import loop as loop_mod
+
+    src, path = _one_mutant(tmp_path)
+
+    def budget_for(net: float) -> float:
+        clock = [0.0]
+        monkeypatch.setattr(loop_mod.time, "monotonic", lambda: clock[0])
+
+        @dataclass
+        class Ticking:
+            result: SuiteResult
+            seen: list[float | None] = field(default_factory=list)
+
+            def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+                self.seen.append(timeout)
+                clock[0] += 50.0  # every run, baseline included, takes 50s of wall-clock
+                return self.result if timeout is None else SuiteResult(1, 0, 0)
+
+        runner = Ticking(_measured_baseline(net))
+        run(str(tmp_path), path, src, runner)
+        _, first, *_ = runner.seen
+        assert first is not None
+        return first
+
+    # Same 50s wall-clock both times. 40s of tests leaves 10s of startup; 5s of tests leaves 45s.
+    assert budget_for(40.0) == 2.0 * 40.0 + 8.0 + 10.0  # 98.0
+    assert budget_for(5.0) == 2.0 * 5.0 + 8.0 + 45.0  # 63.0
+    # And neither is the old answer, which multiplied the startup along with everything else.
+    assert 2.0 * 40.0 + 8.0 + 10.0 != 10.0 * 50.0
+
+
+def _coverage_with_selection(*file_sets: tuple[str, ...]) -> _RunCoverage:
+    """A coverage plan whose mutants were sent to `file_sets`, and one that runs everything."""
+    plans: dict[int, MutantPlan] = {index: MutantPlan(files=f) for index, f in enumerate(file_sets)}
+    plans[len(file_sets)] = MutantPlan()  # a whole-suite mutant, which asks for no file's time
+    return _RunCoverage(files={"f.gd": _FileCoverage(plans=plans)})
+
+
+def test_the_run_says_nothing_when_per_file_budgets_work() -> None:
+    # The quiet case, and the one that has to stay quiet: every file selection chose has a
+    # duration, so a selected mutant really is budgeted for its own files.
+    lines: list[str] = []
+    budget = TimeBudget(net=10.0, overhead=2.0, per_file={"a.gd": 1.0, "b.gd": 2.0}, measured=True)
+    _budget_note(budget, _coverage_with_selection(("a.gd",), ("a.gd", "b.gd")), lines.append)
+    assert lines == []
+
+
+def test_the_run_says_so_when_the_report_named_no_durations() -> None:
+    lines: list[str] = []
+    _budget_note(TimeBudget(overhead=5.0), _coverage_with_selection(("a.gd",)), lines.append)
+    assert lines == [
+        "budget: the baseline's report did not say how long its tests took, so the whole "
+        "baseline wall-clock sets each mutant's time budget rather than the test time alone."
+    ]
+
+
+def test_the_run_says_so_when_a_selected_file_has_no_known_duration() -> None:
+    # The failure this exists to make visible. The recorder's spelling of a test file and the
+    # report's need not match, and when they do not, every selected mutant quietly falls back to
+    # the whole suite's time: the run stays correct and the saving simply never happens. A
+    # capability that silently does nothing is the shape this project keeps finding.
+    lines: list[str] = []
+    budget = TimeBudget(net=10.0, overhead=2.0, per_file={"a.gd": 1.0}, measured=True)
+    _budget_note(budget, _coverage_with_selection(("a.gd", "b.gd"), ("c.gd",)), lines.append)
+    assert lines == [
+        "budget: 2 of the 3 test files selection chose are named differently in the baseline's "
+        "report, so a selected mutant is budgeted for the whole suite's test time rather than "
+        "its own files'. Verdicts are unaffected."
+    ]
+
+
+def test_the_budget_note_is_silent_with_no_coverage_analysis_or_no_progress() -> None:
+    # Coverage analysis off means no selection, so there is nothing about per-file budgets to say.
+    # And a caller with no progress callback asked for silence.
+    lines: list[str] = []
+    _budget_note(TimeBudget(overhead=5.0), None, lines.append)
+    assert lines == []
+    _budget_note(TimeBudget(overhead=5.0), _coverage_with_selection(("a.gd",)), None)

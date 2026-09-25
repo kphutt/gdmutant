@@ -85,20 +85,50 @@ def _reported_file(name: str) -> str:
     return directory + slash + segment
 
 
+def _gut_reported_file(name: str, _package: str) -> str:
+    """The ``res://`` test file GUT's report name belongs to (`engine.runner.parse_junit_xml`).
+
+    GUT names a suite in its report by the file's path under ``res://`` (verified live against
+    v9.7.1: ``<testsuite name="test/unit/test_x.gd">``), so the file is the name with the
+    ``res://`` put back and any inner class taken off (`_reported_file`). GUT writes no
+    ``package`` attribute, so it is ignored rather than consulted and found empty.
+    """
+    return f"res://{_reported_file(name)}"
+
+
+def _gdunit4_reported_file(name: str, package: str) -> str:
+    """The ``res://`` test file GdUnit4's report name belongs to
+    (`engine.runner.parse_junit_xml`).
+
+    GdUnit4 splits what GUT puts in one attribute across two: the suite's ``name`` is the file's
+    stem and its ``package`` is the directory below ``res://``, nested directories included
+    (verified live against v6.1.3 + Godot 4.7: a suite in ``res://test/deep/inner`` reports
+    ``name="test_nested" package="test/deep/inner"``). That is exactly the path GdUnit4's own
+    ``TESTSUITE_BEFORE`` event reports as ``resource_path()``, which is the string a selection
+    names the file by, so the two spell the same file the same way.
+
+    A suite with no ``package`` gets ``""`` rather than a guess at ``res://<name>.gd``: an empty
+    file simply keeps that suite out of the per-file durations, and the whole suite's time is used
+    instead, which is the safe direction. A wrong path would not be.
+    """
+    return f"res://{package}/{name}{_GDSCRIPT_SUFFIX}" if package else ""
+
+
 def _tests_per_file(suites: Sequence[ReportedSuite]) -> dict[str, int]:
     """How many tests each test *file* has, from GUT's report, keyed the way a selection names it.
 
-    GUT names a suite in its report by the file's path under ``res://`` (verified live against
-    v9.7.1: ``<testsuite name="test/unit/test_x.gd">``), and appends the inner class for a suite
-    written as one (``test_x.gd.TestThing``). A selection names the file, so an inner class's tests
-    count toward its file (`_reported_file`) rather than being a file of their own. Without that,
-    the drop guard would expect far fewer tests than a selected run really produces, and read every
-    one of them as a suite GUT had skipped.
+    A selection names the file, so a suite written as an inner class counts toward its file rather
+    than being a file of its own. Without that, the drop guard would expect far fewer tests than a
+    selected run really produces, and read every one of them as a suite GUT had skipped.
+
+    It reads `ReportedSuite.file`, which `_gut_reported_file` already filled while the report was
+    parsed, rather than deriving the same spelling a second time here. One convention, one place:
+    a suite's test count and its duration are now keyed identically by construction, so a change
+    to how GUT names a file cannot fix one and leave the other behind.
     """
     per_file: dict[str, int] = {}
     for suite in suites:
-        name = f"res://{_reported_file(suite.name)}"
-        per_file[name] = per_file.get(name, 0) + suite.tests
+        per_file[suite.file] = per_file.get(suite.file, 0) + suite.tests
     return per_file
 
 
@@ -513,7 +543,7 @@ func _on_event(event: GdUnitEvent) -> void:
         false-survivor possible in the first place.
         """
         try:
-            result = parse_junit_xml(report_text)
+            result = parse_junit_xml(report_text, file_of=_gdunit4_reported_file)
         except ValueError:
             result = None  # a report with no <testsuite> at all — a run that described nothing
         if result is None or result.tests == 0:
@@ -746,7 +776,7 @@ func _on_end_script() -> void:
         that fixes it.
         """
         try:
-            result = parse_junit_xml(report_text)
+            result = parse_junit_xml(report_text, file_of=_gut_reported_file)
         except ValueError:
             result = None  # no <testsuite> at all — GUT's empty crash report
         tests = result.tests if result is not None else 0

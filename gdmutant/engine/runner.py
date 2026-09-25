@@ -8,8 +8,9 @@ GDScript-adapter concern that lands with the end-to-end slice (it needs real God
 
 from __future__ import annotations
 
+import math
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 from xml.etree import ElementTree
@@ -58,6 +59,18 @@ class ReportedSuite:
     tests: int
     failures: int = 0
     errors: int = 0
+    #: How long the report says this suite's tests took, in seconds, or ``0.0`` when the report
+    #: does not say. This is the part of a run a mutant can make slower: it excludes the framework
+    #: startup and the engine boot that surround it, which no mutation can touch. The engine
+    #: multiplies this, and only this, to set a per-mutant time budget (`engine.loop.TimeBudget`).
+    time: float = 0.0
+    #: The test **file** this suite belongs to, spelled the way a selection names it, or ``""``
+    #: when the runner that produced the report has no such spelling. A framework may report one
+    #: file as several suites (an inner class is one), so several `ReportedSuite`s may share a
+    #: `file` and their times add up. Filled by the runner, because only the runner knows how its
+    #: framework's reporter and its command line spell the same file — the engine hands these
+    #: strings straight back and never parses one (NF-3).
+    file: str = ""
 
     @property
     def failed(self) -> bool:
@@ -110,6 +123,35 @@ class SuiteResult:
     def passed(self) -> bool:
         """True if no test failed or errored — the signal that a mutant survived."""
         return not self.failed
+
+    @property
+    def reported_time(self) -> float:
+        """The run's own test time: every `ReportedSuite`'s `time`, added up.
+
+        ``0.0`` both for a runner with no report to read and for a report that carries no
+        durations. The engine treats that one answer as "this run did not say", and falls back to
+        multiplying the whole wall-clock rather than pretending the tests took no time
+        (`engine.loop.TimeBudget`). Reading zero as a measurement would set every budget to the
+        constant alone and turn slow suites into false hangs, which is the one direction this tool
+        must never fail in.
+        """
+        return sum(suite.time for suite in self.suites)
+
+    @property
+    def file_times(self) -> dict[str, float]:
+        """How long each test **file** took, keyed the way a selection names it.
+
+        A framework may report one file as several suites, so their times are added rather than
+        overwritten — the same rule the GUT adapter's per-file test counts already use, for the
+        same reason. A suite whose runner gave it no `ReportedSuite.file` is left out entirely,
+        which is what makes an unknown file fall back to the whole suite's time downstream instead
+        of silently counting as zero seconds.
+        """
+        per_file: dict[str, float] = {}
+        for suite in self.suites:
+            if suite.file:
+                per_file[suite.file] = per_file.get(suite.file, 0.0) + suite.time
+        return per_file
 
 
 @runtime_checkable
@@ -369,12 +411,38 @@ def script_error_excerpt(output: str) -> str:
     return ""
 
 
-def parse_junit_xml(xml: str) -> SuiteResult:
+def suite_seconds(raw: str | None) -> float:
+    """A JUnit ``time`` attribute as seconds, or ``0.0`` when it does not say a usable number.
+
+    Every unusable shape collapses to the one answer "this report did not say": absent, blank,
+    not a number, negative, or an infinity/NaN a plain ``float()`` would happily accept. That
+    matters because the caller multiplies this to decide when a mutant is hanging, and a NaN
+    propagates through every comparison as False — the budget would end up neither floored nor
+    capped, and every mutant would be ruled a hang the moment it started. Refusing here keeps
+    that arithmetic on real numbers, and the caller already treats ``0.0`` as "fall back to the
+    whole wall-clock", which is the safe direction.
+    """
+    if raw is None:
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.0
+    return value if math.isfinite(value) and value > 0.0 else 0.0
+
+
+def parse_junit_xml(xml: str, *, file_of: Callable[[str, str], str] | None = None) -> SuiteResult:
     """Parse JUnit XML (as GdUnit4 emits) into a `SuiteResult`, summing every ``<testsuite>``.
 
     The XML is the test runner's own output with a fixed structure (no DTD/entities), so stdlib
     ElementTree is used. Raises ``xml.etree.ElementTree.ParseError`` on malformed XML and
     ``ValueError`` if it contains no ``<testsuite>``.
+
+    `file_of` is how the calling runner spells the test **file** a suite belongs to, given the
+    suite's ``name`` and ``package`` attributes. Only the runner knows that, since it is the same
+    runner that later passes those strings back on a command line, so this parser stays
+    language-neutral and simply asks. Left out (the default), every `ReportedSuite.file` is empty
+    and nothing downstream can select a per-file duration — the whole suite's time is used instead.
     """
     root = ElementTree.fromstring(xml)
     # Sum direct <testsuite> elements only: a root <testsuite> itself, or the children of a
@@ -386,11 +454,14 @@ def parse_junit_xml(xml: str) -> SuiteResult:
     tests = failures = errors = skipped = 0
     named: list[ReportedSuite] = []
     for suite in suites:
+        name = suite.get("name", "")
         one = ReportedSuite(
-            name=suite.get("name", ""),
+            name=name,
             tests=int(suite.get("tests", "0")),
             failures=int(suite.get("failures", "0")),
             errors=int(suite.get("errors", "0")),
+            time=suite_seconds(suite.get("time")),
+            file="" if file_of is None else file_of(name, suite.get("package", "")),
         )
         tests += one.tests
         failures += one.failures
