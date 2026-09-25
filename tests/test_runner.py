@@ -314,6 +314,25 @@ def test_a_suite_carries_the_file_its_runner_says_it_belongs_to() -> None:
     assert result.file_times == {"res://test/deep/test_x.gd": 2.0}
 
 
+def test_a_suite_with_no_package_is_handed_an_empty_one() -> None:
+    # A report that names no `package` must hand the runner an empty string, not a placeholder.
+    # The GdUnit4 spelling turns an empty package into an empty file, which keeps that suite out
+    # of the per-file durations and falls back to the whole suite's time. Any other default would
+    # build a path that looks real, points nowhere, and no selection would ever ask for.
+    seen: list[tuple[str, str]] = []
+
+    def record(name: str, package: str) -> str:
+        seen.append((name, package))
+        return f"res://{package}/{name}.gd" if package else ""
+
+    result = parse_junit_xml(
+        '<testsuite name="lonely" tests="1" failures="0" time="1.0"/>', file_of=record
+    )
+    assert seen == [("lonely", "")]
+    assert result.suites[0].file == ""
+    assert result.file_times == {}
+
+
 def test_without_a_file_of_no_suite_claims_a_file() -> None:
     # The default, and what the exit-code runner and any future runner without the knowledge get.
     # An empty file keeps that suite out of the per-file durations entirely, so a selected mutant

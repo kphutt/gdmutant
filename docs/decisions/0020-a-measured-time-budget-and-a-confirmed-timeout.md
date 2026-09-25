@@ -170,6 +170,16 @@ That count is also this design's own tripwire. If the budget is ever set too tig
 climbs and says so in the summary, instead of the score quietly going up.
 
 ### What was considered and left out
+Raising the first budget as a run learns. The measurement below shows six mutants on one real
+file that legitimately needed three to seven times the baseline, which is what the confirmation
+pass is paying for. A run could notice its first reprieve and raise the first budget for every
+mutant after it, so the cost is paid once instead of per slow mutant. It was left out because it
+makes the budget depend on the order mutants happen to run in, and this engine's verdicts are
+deterministic and reproducible on purpose (a CI check can trust them). A budget that differs
+between two runs of the same project is a verdict that can differ between them. Worth revisiting
+if the confirmation cost shows up as a real complaint, and it would need a way to stay
+reproducible.
+
 Watching the coverage markers to detect a hang instead of waiting it out. A mutant that is
 genuinely stuck stops firing markers, which is a live signal no production mutation tester has.
 Two things rule it out today, and neither is a guess. The recorder writes its hits file only at
@@ -179,6 +189,15 @@ in: a per-mutant run uses an unmarked project, so there is no marker stream to w
 principle without marking every worker copy and paying the marker cost on every single run. This
 needs a different channel, not a different reader of the same one, so it is not being built on a
 guess.
+
+### The check that decided this
+Verdicts, not the score. The same mutants were run twice on the same project copy layout, once
+under the old budget and once under the new one, and every mutant's verdict compared. The rule: a
+mutant that was `Survived` must not become `Timeout`, because that is the false kill this whole
+design is built to avoid. The old budget was reproduced exactly by passing it as an explicit
+`--timeout`, which fixes the budget and turns the confirmation off, which is what the old code did.
+
+PLACEHOLDER_EVIDENCE_TABLE
 
 ## Consequences
 * On a project whose mutants do not hang, almost nothing changes: the budget never fires, so the
