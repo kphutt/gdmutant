@@ -69,8 +69,101 @@ def test_main_fails_on_a_mismatched_tag() -> None:
     assert check_release_tag.main(["check_release_tag.py", "v999.999.999"]) == 1
 
 
-def test_main_succeeds_on_the_packaged_version() -> None:
+def test_main_succeeds_on_the_packaged_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Focused on the tag/version match `main` also performs, so the changelog half is stubbed out
+    with a heading that already satisfies it. The real repo's CHANGELOG.md is mid-development
+    (an `## [Unreleased]` section above the packaged version's own dated entry), which is a real
+    and expected state between releases, not a fixture the tag-match assertion should depend on.
+    """
     version = check_release_tag.packaged_version()
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(f"## [{version}] - 2026-09-25\n", encoding="utf-8")
+    monkeypatch.setattr(check_release_tag, "CHANGELOG", changelog)
+    assert check_release_tag.main(["check_release_tag.py", f"v{version}"]) == 0
+
+
+# --- The changelog-was-dated guard ---------------------------------------------------------------
+# docs/releasing.md's step 2 says to rename CHANGELOG.md's `## [Unreleased]` heading to
+# `## [X.Y.Z] - YYYY-MM-DD` before tagging, and used to admit "nothing automates this and no check
+# enforces it". Miss it and the tag ships a changelog that still calls the released version
+# unreleased. This lives next to the version-tag guard above, on the same script, because both
+# workflows that call it (release.yml and publish.yml) already run it with the tag as their one
+# argument, so extending it here reaches both call sites with no workflow-file change at all.
+
+
+def test_changelog_matching_version_and_date_is_accepted(tmp_path: Path) -> None:
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("## [1.2.3] - 2026-09-25\n\n### Added\n\n- a thing\n", encoding="utf-8")
+    assert check_release_tag.changelog_problem("1.2.3", changelog) is None
+
+
+def test_changelog_still_unreleased_is_rejected(tmp_path: Path) -> None:
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("## [Unreleased]\n\n### Added\n\n- a thing\n", encoding="utf-8")
+    problem = check_release_tag.changelog_problem("1.2.3", changelog)
+    assert problem is not None
+    assert "Unreleased" in problem
+
+
+def test_changelog_wrong_version_is_rejected(tmp_path: Path) -> None:
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("## [1.2.4] - 2026-09-25\n", encoding="utf-8")
+    problem = check_release_tag.changelog_problem("1.2.3", changelog)
+    assert problem is not None
+    assert "1.2.3" in problem and "1.2.4" in problem
+
+
+def test_changelog_with_no_date_is_rejected(tmp_path: Path) -> None:
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("## [1.2.3]\n\n### Added\n\n- a thing\n", encoding="utf-8")
+    problem = check_release_tag.changelog_problem("1.2.3", changelog)
+    assert problem is not None
+    assert "1.2.3" in problem
+
+
+def test_changelog_with_an_unparseable_date_is_rejected(tmp_path: Path) -> None:
+    """A trailing date-shaped string that isn't ISO (`YYYY-MM-DD`) must not be waved through."""
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("## [1.2.3] - Sept 25, 2026\n", encoding="utf-8")
+    problem = check_release_tag.changelog_problem("1.2.3", changelog)
+    assert problem is not None
+
+
+def test_changelog_that_cannot_be_read_fails_loudly(tmp_path: Path) -> None:
+    """A missing file must be an explicit error, never a silent pass."""
+    missing = tmp_path / "does-not-exist.md"
+    problem = check_release_tag.changelog_problem("1.2.3", missing)
+    assert problem is not None
+    assert "1.2.3" not in problem or "read" in problem.lower()
+
+
+def test_changelog_with_no_heading_at_all_is_rejected(tmp_path: Path) -> None:
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\nnothing here yet\n", encoding="utf-8")
+    problem = check_release_tag.changelog_problem("1.2.3", changelog)
+    assert problem is not None
+
+
+def test_main_fails_when_the_changelog_is_still_unreleased(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end through `main`, the same entry point release.yml and publish.yml both call."""
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("## [Unreleased]\n", encoding="utf-8")
+    monkeypatch.setattr(check_release_tag, "CHANGELOG", changelog)
+    version = check_release_tag.packaged_version()
+    assert check_release_tag.main(["check_release_tag.py", f"v{version}"]) == 1
+
+
+def test_main_succeeds_when_the_changelog_is_dated_for_the_packaged_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    version = check_release_tag.packaged_version()
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(f"## [{version}] - 2026-09-25\n", encoding="utf-8")
+    monkeypatch.setattr(check_release_tag, "CHANGELOG", changelog)
     assert check_release_tag.main(["check_release_tag.py", f"v{version}"]) == 0
 
 
