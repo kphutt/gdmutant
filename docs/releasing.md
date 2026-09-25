@@ -270,9 +270,11 @@ manual version becomes the way to reproduce a failure by hand.
    same private window. *Pass:* it lands on the survivor reference, at that operator's section. Every
    user sees that URL on every run, which makes it the most-read link the project has.
 
-   A badge reading "no status" is reporting a workflow that has no automatic trigger, not a check
-   that failed. The fix is "`ci.yml` runs automatically again", the last item under
-   [One-time](#one-time-setup-confirmed-once).
+   A badge reading "no status" would mean `ci.yml`'s automatic triggers are gone, not that a check
+   failed. That would be a regression: `ci.yml` has run on every pull request and push to `main`,
+   plus a weekly schedule, since 2026-08-04 (the last item under
+   [One-time](#one-time-setup-confirmed-once) has the details). If the badge ever reads that way,
+   check the workflow's `on:` block first, rather than assuming a check simply failed.
 
 ### One-time: setup, confirmed once
 
@@ -329,21 +331,22 @@ manual version becomes the way to reproduce a failure by hand.
   if the render used to produce the PNG resolves a different font than most real viewers would.
 
 - `ci.yml` runs automatically again. The README's CI badge reports on `ci.yml`, and a workflow
-  with no automatic trigger has no result to report, so the badge reads "no status" to every
-  visitor, the thing item 4 above catches without saying what to do about it. Restoring the triggers belongs
-  to the move to public, where the reason they were removed, billed Actions minutes on a private
-  repository, stops applying. The steps live in
-  [ADR-0012](decisions/0012-merge-time-local-ship-time-cloud.md)'s Decision section, under "Trivial to
-  reverse, by design". Follow them there rather than from here, so the two cannot drift. *Pass:*
-  signed out, the badge on the repository front page shows a real result, passing or failing, instead
-  of "no status". One knock-on to know about: this changes which checks report on a pull request, and
-  `scripts/harden_github.py` converges branch protection off the back of that. The script carries no
-  hand-written list. It reads the workflow files, derives each context string including the matrix
-  suffixes GitHub appends, and refuses to require a job whose workflow no pull request triggers, so
-  the usual version of this mistake is caught for you. Run
-  `uv run python scripts/harden_github.py --check` after the change and read what it reports anyway,
-  because the stake is worth a second look: a required check that nothing reports blocks every pull
-  request forever.
+  with no automatic trigger has no result to report, which is why item 4 above ever saw "no status".
+  This was fixed 2026-08-04, ahead of going public: the reason the triggers were ever removed,
+  billed Actions minutes on a private repository, stopped applying once Actions became free and
+  unlimited here. Full history and the reasoning for reversing it live in
+  [ADR-0012](decisions/0012-merge-time-local-ship-time-cloud.md)'s two Correction sections, and
+  AGENTS.md records the restored state for contributors. *Pass:* `ci.yml`'s `on:` block carries
+  `pull_request`, `push` to `main`, `workflow_dispatch` and a weekly `schedule` cron, and signed
+  out, the badge on the repository front page shows a real result, passing or failing, instead of
+  "no status". One knock-on worth knowing about: this changes which checks report on a pull
+  request, and `scripts/harden_github.py` converges branch protection off the back of that. The
+  script carries no hand-written list. It reads the workflow files, derives each context string
+  including the matrix suffixes GitHub appends, and refuses to require a job whose workflow no pull
+  request triggers, so the usual version of this mistake is caught for you. Run
+  `uv run python scripts/harden_github.py --check` after any future change here and read what it
+  reports anyway, because the stake is worth a second look: a required check that nothing reports
+  blocks every pull request forever.
 
 - Secret scanning and push protection are on. Both are GitHub Advanced Security features that are
   free on a public repository but unavailable while it stays private, so they cannot be turned on
