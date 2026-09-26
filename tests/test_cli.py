@@ -1382,7 +1382,9 @@ def test_parser_help_text(
         "test command for --runner command (exit 0 = pass), e.g. 'godot --headless --script res://tests/run_tests.gd'",  # noqa: E501
         "the Godot executable (default: godot)",
         "the test directory (gdunit4's -a / gut's -gdir) (default: res://test)",
-        "per-mutant test-run timeout, in seconds (default: derived from the baseline run: 10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",  # noqa: E501
+        "per-mutant test-run timeout, in seconds (default: derived from the baseline, "
+        "multiplying only the time its tests took, and re-checking any mutant that runs past "
+        "it)",
         "refuse to run if the source file has uncommitted git changes (default: warn only)",
         "write the Stryker JSON report here (use - for stdout; bare --json defaults to a "
         "timestamped filename)",
@@ -1390,6 +1392,10 @@ def test_parser_help_text(
     ):
         assert f"{expected}\n" in run_help
     assert "--report-path" not in run_help  # the flag is gone, not just undocumented
+    # --jobs' help is too long to pin whole at this width, but the one claim in it that is about
+    # behaviour rather than wording has to stay true: the per-mutant budget does not scale with N
+    # any more, which is the whole reason N hanging mutants stopped costing N budgets.
+    assert "does not depend on N" in run_help
 
 
 def test_main_dispatches_run_with_injected_runner(

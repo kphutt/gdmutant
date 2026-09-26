@@ -674,20 +674,29 @@ def test_a_suite_the_report_does_not_name_gets_an_empty_name(
 def test_which_file_a_report_name_belongs_to(reported: str, file: str) -> None:
     """Cutting at the first `.gd` would end a path inside a directory name, and every file under
     that directory would be filed as one no selection ever asks for, which makes the drop guard
-    quietly more forgiving there rather than louder."""
-    assert runner_mod._tests_per_file([ReportedSuite(reported, 2)]) == {file: 2}
+    quietly more forgiving there rather than louder.
+
+    GUT writes no `package` attribute, so the second argument is always the empty string here."""
+    assert runner_mod._gut_reported_file(reported, "") == file
 
 
 def test_a_files_suites_are_counted_together_not_overwritten() -> None:
     """A file's tests are the sum of every suite the report files under it. Keeping only the last
     one would make the drop guard expect fewer tests than the file really has, and read the rest as
     a suite GUT had skipped."""
+
+    def suite(name: str, tests: int) -> ReportedSuite:
+        # `file` is what the parser fills from `_gut_reported_file` while the report is read, so a
+        # test that built it by hand here would be checking its own arithmetic rather than the
+        # runner's. Route it through the same function the parser uses.
+        return ReportedSuite(name, tests, file=runner_mod._gut_reported_file(name, ""))
+
     assert runner_mod._tests_per_file(
         [
-            ReportedSuite("test/unit/a.gd", 3),
-            ReportedSuite("test/unit/a.gd.One", 2),
-            ReportedSuite("test/unit/a.gd.Two", 4),
-            ReportedSuite("test/unit/b.gd", 1),
+            suite("test/unit/a.gd", 3),
+            suite("test/unit/a.gd.One", 2),
+            suite("test/unit/a.gd.Two", 4),
+            suite("test/unit/b.gd", 1),
         ]
     ) == {"res://test/unit/a.gd": 9, "res://test/unit/b.gd": 1}
 

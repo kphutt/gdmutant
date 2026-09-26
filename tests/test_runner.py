@@ -1,5 +1,6 @@
 """Tests for the runner interface + JUnit-XML parsing."""
 
+import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,6 +14,7 @@ from gdmutant.engine.runner import (
     SuiteResult,
     SuiteTimeout,
     parse_junit_xml,
+    suite_seconds,
     with_filename,
 )
 
@@ -253,3 +255,115 @@ def test_with_filename_patches_a_filename_less_error() -> None:
     patched = with_filename(error, "/attempted/godot")
     assert patched.filename == "/attempted/godot"
     assert patched.errno == 2
+
+
+def test_a_suites_reported_duration_is_read_and_added_up() -> None:
+    # The measurement the per-mutant budget rests on. A mutant can make the tests slower and can
+    # do nothing at all about the framework's startup, so the two have to be told apart, and the
+    # report is what tells them apart for free.
+    result = parse_junit_xml(
+        "<testsuites>"
+        '<testsuite name="a" tests="2" failures="0" time="1.25"/>'
+        '<testsuite name="b" tests="3" failures="0" time="0.75"/>'
+        "</testsuites>"
+    )
+    assert [suite.time for suite in result.suites] == [1.25, 0.75]
+    assert result.reported_time == 2.0
+
+
+def test_a_report_with_no_durations_reports_no_test_time() -> None:
+    # Not an error and not a zero measurement: it is "this report did not say". The engine reads
+    # that one answer and falls back to multiplying the whole wall-clock, which is the safe
+    # direction. A report that named zero and one that named nothing must look the same here,
+    # because nothing downstream could tell them apart anyway.
+    result = parse_junit_xml('<testsuite name="a" tests="1" failures="0"/>')
+    assert result.reported_time == 0.0
+    assert result.suites[0].time == 0.0
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        None,  # the attribute is absent
+        "",  # present and empty
+        "not-a-number",
+        "-1.5",  # a negative duration is not a duration
+        "0",  # zero says nothing about how long the tests took
+        "nan",  # float() accepts these, and they poison every comparison downstream
+        "inf",
+        "-inf",
+    ],
+)
+def test_an_unusable_duration_reads_as_no_measurement(raw: str | None) -> None:
+    # `nan` is the one that matters most and is the easiest to miss. `float("nan")` succeeds, and
+    # a NaN budget compares False against both the floor and the cap, so it would come out of the
+    # bounding untouched and every mutant would be ruled a hang the instant it started.
+    assert suite_seconds(raw) == 0.0
+
+
+def test_an_unusable_duration_comes_back_as_a_positive_zero() -> None:
+    # The boundary is "greater than zero", not "at least zero", and the difference is visible on
+    # a negative zero: `float("-0.0")` is finite and compares equal to zero, so a rule that
+    # admitted it would let a signed zero through into the budget arithmetic. Nothing here should
+    # ever hand its caller a duration with a sign on it.
+    assert math.copysign(1.0, suite_seconds("-0.0")) == 1.0
+    assert math.copysign(1.0, suite_seconds("-3.0")) == 1.0
+    assert math.copysign(1.0, suite_seconds("0")) == 1.0
+
+
+def test_a_suite_carries_the_file_its_runner_says_it_belongs_to() -> None:
+    # The engine hands these strings straight back to the runner and never parses one, so only the
+    # runner may spell them. `file_of` is how it does the spelling, from the two attributes JUnit
+    # gives it.
+    result = parse_junit_xml(
+        "<testsuites>"
+        '<testsuite name="test_x" package="test/deep" tests="1" failures="0" time="2.0"/>'
+        "</testsuites>",
+        file_of=lambda name, package: f"res://{package}/{name}.gd",
+    )
+    assert result.suites[0].file == "res://test/deep/test_x.gd"
+    assert result.file_times == {"res://test/deep/test_x.gd": 2.0}
+
+
+def test_a_suite_with_no_package_is_handed_an_empty_one() -> None:
+    # A report that names no `package` must hand the runner an empty string, not a placeholder.
+    # The GdUnit4 spelling turns an empty package into an empty file, which keeps that suite out
+    # of the per-file durations and falls back to the whole suite's time. Any other default would
+    # build a path that looks real, points nowhere, and no selection would ever ask for.
+    seen: list[tuple[str, str]] = []
+
+    def record(name: str, package: str) -> str:
+        seen.append((name, package))
+        return f"res://{package}/{name}.gd" if package else ""
+
+    result = parse_junit_xml(
+        '<testsuite name="lonely" tests="1" failures="0" time="1.0"/>', file_of=record
+    )
+    assert seen == [("lonely", "")]
+    assert result.suites[0].file == ""
+    assert result.file_times == {}
+
+
+def test_without_a_file_of_no_suite_claims_a_file() -> None:
+    # The default, and what the exit-code runner and any future runner without the knowledge get.
+    # An empty file keeps that suite out of the per-file durations entirely, so a selected mutant
+    # falls back to the whole suite's time rather than being budgeted for zero seconds.
+    result = parse_junit_xml('<testsuite name="a" tests="1" failures="0" time="3.0"/>')
+    assert result.suites[0].file == ""
+    assert result.file_times == {}
+    assert result.reported_time == 3.0  # the whole-suite figure is still there
+
+
+def test_several_suites_in_one_file_have_their_times_added_not_overwritten() -> None:
+    # A framework may report one file as several suites (an inner class is one). Keeping only the
+    # last would budget a mutant for a fraction of the time its file really takes, which is the
+    # tight-budget failure this tool refuses.
+    result = parse_junit_xml(
+        "<testsuites>"
+        '<testsuite name="a" package="t" tests="1" failures="0" time="1.0"/>'
+        '<testsuite name="a" package="t" tests="1" failures="0" time="2.5"/>'
+        '<testsuite name="b" package="t" tests="1" failures="0" time="0.5"/>'
+        "</testsuites>",
+        file_of=lambda name, package: f"res://{package}/{name}.gd",
+    )
+    assert result.file_times == {"res://t/a.gd": 3.5, "res://t/b.gd": 0.5}

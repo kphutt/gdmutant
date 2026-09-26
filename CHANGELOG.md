@@ -10,7 +10,7 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.4] - 2026-09-25
 
 ### Added
 
@@ -53,6 +53,32 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ### Changed
 
+- A mutant's time budget is now built from measured parts instead of one multiplier on the whole
+  baseline run, and a mutant that runs out of it is re-run before it counts as a hang. The budget
+  used to be ten times the baseline's wall-clock, multiplied again by the worker count under
+  `--jobs N`. It is now `2 x (the time your tests took) + 8 seconds + (your framework's startup)`,
+  with the same 10 second floor and 10 minute cap, and no worker multiplier at all. Your test
+  framework's report says how long the tests themselves took, and whatever is left of the baseline
+  is Godot booting and the framework starting up. No mutation can make a process boot slower, so
+  that part is now added back as measured rather than multiplied. On a small Godot suite it was
+  98% of what was being multiplied by ten. The worker multiplier also cancelled the parallelism on
+  exactly the mutants that hang: N hanging mutants across N workers, each allowed N times the
+  budget, took as long as running them one at a time. Eight concurrent Godot processes were
+  measured to cost 28%, not 700%, so that allowance moved into the constant. With
+  `--coverage-analysis per-file`, a mutant is budgeted for the time its own test files take rather
+  than the whole suite's.
+
+  A tighter budget on its own would just move the risk: a slow suite recorded as a hang is a kill
+  that never happened, and the mutation score goes up for nothing. So a mutant that runs past its
+  budget is now run once more, on its own, under a much larger one that lets the tests take ten
+  times as long. If it finishes, it was never stuck and its real verdict is what gets reported.
+  Only the mutants that ran long pay for this. The summary says what happened: `reprieved` counts
+  the mutants that would have been false kills, and a run with timeouts always states how many of
+  them a second run confirmed, including when the answer is none. No other mutation tester checks
+  a timeout at all. `--timeout` still overrides everything, and now also turns the second run off:
+  you named a number, so gdmutant uses it. The measurement, the chosen numbers and the
+  verdict-by-verdict comparison against the old budget are in
+  [ADR-0020](docs/decisions/0020-a-measured-time-budget-and-a-confirmed-timeout.md).
 - gdmutant's own work per mutant is faster. Every mutant is re-parsed to check it is still valid
   GDScript, and that check now skips gathering position data it never used. Over 54,677 mutants
   from three real GDScript projects, it gave the same valid or invalid answer every time. On the

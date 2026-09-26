@@ -1511,7 +1511,7 @@ def _scaffold_config_text(runner: str | None) -> str:
         "# Optional, and never trust-required:",
         "# timeout = 30  # per-mutant timeout in seconds; left unset, gdmutant derives one from "
         "the",
-        "# baseline run's own wall-clock (10x it) instead of a fixed number",
+        "# baseline run itself, multiplying the tests' own time and not the framework startup",
         "# require-clean = true  # refuse to run on an uncommitted source file "
         "(default: warn only)",
         '# exclude = ["*_generated.gd", "*/vendor/*"]  # globs to skip when expanding a directory',
@@ -1635,8 +1635,9 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "--timeout",
         type=float,
         default=None,
-        help="per-mutant test-run timeout, in seconds (default: derived from the baseline run: "
-        "10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",
+        help="per-mutant test-run timeout, in seconds (default: derived from the baseline, "
+        "multiplying only the time its tests took, and re-checking any mutant that runs past "
+        "it)",
     )
     run_parser.add_argument(
         "--json",
@@ -1696,8 +1697,9 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         metavar="N",
         default="1",
         help="evaluate N mutants in parallel, each on its own copy of the project (default: 1 = "
-        "serial), for a faster run with the same verdicts: process isolation, and the per-mutant "
-        "timeout is scaled by N so contention can't cause a false timeout. Bounded by your "
+        "serial), for a faster run with the same verdicts: process isolation, and a per-mutant "
+        "budget that does not depend on N, so N hanging mutants cost one budget between them "
+        "rather than N. Bounded by your "
         "cores/RAM; a plain per-worker copy is made per job. Pass 'auto' instead of a number to "
         "pick a worker count from your CPU count and hold off starting another worker while the "
         "system is already under load (POSIX only, via the load average make -l uses; always "
