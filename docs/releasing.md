@@ -103,6 +103,23 @@ a release gate.
 
 ## Real release -> PyPI (push a tag, then press Publish)
 
+Every merge to `main` rehearses the steps below on a throwaway copy
+([`.github/workflows/rehearse-release.yml`](../.github/workflows/rehearse-release.yml), running
+[`scripts/rehearse_release.py`](../scripts/rehearse_release.py)). It makes the step 1 and 2 edits,
+runs the suite on the version-bump commit, tags it locally, runs the tag guard, the suite, the
+build and the image check on the tagged commit, then runs step 10's pin bump and the strict pin
+test. Its `origin` is a bare repo in a temp directory, so nothing it does can reach GitHub or an
+index. A red rehearsal means this runbook would fail today, found weeks before the release that
+would have hit it. Run it by hand before cutting a real release:
+
+```sh
+uv run python scripts/rehearse_release.py            # what CI runs
+uv run python scripts/rehearse_release.py --quick    # release-shaped tests only, under a minute
+```
+
+It cannot reach the ancestry guard's authenticated fetch, the OIDC upload, the Windows and Godot
+legs of the gate, or `verify-published`. A green rehearsal clears the path, not those.
+
 1. Set the version in `pyproject.toml`. The tag must match it exactly.
    `scripts/check_release_tag.py` fails the release if it doesn't.
 
