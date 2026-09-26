@@ -1,0 +1,51 @@
+name: Release rehearsal
+
+# Walks the release path end to end on a throwaway copy, on every merge to main: the version bump,
+# the dated changelog, a local tag, the tag guard, the full suite on the tagged commit, `uv build` +
+# `twine check`, every image in the built long description, and the post-release pin bump. The
+# script's own docstring (scripts/rehearse_release.py) says what each step is and what the
+# rehearsal cannot reach.
+#
+# WHY ON MERGE, NOT ON A PULL REQUEST. The bugs this catches live on the path between merge and
+# release, and they used to surface only on release day (#286, #290, #305). Running on push to main
+# finds them the day the change that caused them lands, which is still weeks before a release.
+# It is not a required check: nothing reports it on a pull request, so requiring it would block
+# every PR forever (scripts/harden_github.py refuses to require a job no pull request triggers).
+#
+# NOTHING HERE CAN PUBLISH. The rehearsal's `origin` is a bare repo in a temp directory, the tag it
+# makes never leaves the runner, and this job holds no id-token and no write permission.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # Actions -> Release rehearsal -> "Run workflow", for an ad-hoc run
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rehearse-release:
+    name: Release rehearsal
+    runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so a runner-image migration can't silently break us
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history and every tag: the rehearsal decides which version to cut from the tags
+          # that exist, and checks the commit is on origin/main before fetching its assets.
+          fetch-depth: 0
+          persist-credentials: false # the rehearsal pushes only to a local bare repo, never to GitHub
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.11.28"
+          enable-cache: true # cache uv's global store: the rehearsal installs the locked deps twice
+
+      - name: Install deps (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Rehearse the release
+        run: uv run python scripts/rehearse_release.py
