@@ -1,5 +1,6 @@
 """Tests for the runner interface + JUnit-XML parsing."""
 
+import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -298,6 +299,16 @@ def test_an_unusable_duration_reads_as_no_measurement(raw: str | None) -> None:
     # a NaN budget compares False against both the floor and the cap, so it would come out of the
     # bounding untouched and every mutant would be ruled a hang the instant it started.
     assert suite_seconds(raw) == 0.0
+
+
+def test_an_unusable_duration_comes_back_as_a_positive_zero() -> None:
+    # The boundary is "greater than zero", not "at least zero", and the difference is visible on
+    # a negative zero: `float("-0.0")` is finite and compares equal to zero, so a rule that
+    # admitted it would let a signed zero through into the budget arithmetic. Nothing here should
+    # ever hand its caller a duration with a sign on it.
+    assert math.copysign(1.0, suite_seconds("-0.0")) == 1.0
+    assert math.copysign(1.0, suite_seconds("-3.0")) == 1.0
+    assert math.copysign(1.0, suite_seconds("0")) == 1.0
 
 
 def test_a_suite_carries_the_file_its_runner_says_it_belongs_to() -> None:

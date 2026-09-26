@@ -4,7 +4,7 @@ import inspect
 import os
 import stat
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -22,8 +22,11 @@ from gdmutant.engine.loop import (
     SourceWriteFailed,
     TimeBudget,
     Verdict,
+    _baseline_budget,
     _budget_note,
     _detect_eol,
+    _evaluate,
+    _Evaluation,
     _FileCoverage,
     _format_duration,
     _load_average_allows_more_workers,
@@ -31,6 +34,7 @@ from gdmutant.engine.loop import (
     _Progress,
     _progress_plan,
     _RunCoverage,
+    _Trust,
     _wait_for_load_capacity,
     _write_source,
 )
@@ -1897,3 +1901,174 @@ def test_the_budget_note_is_silent_with_no_coverage_analysis_or_no_progress() ->
     _budget_note(TimeBudget(overhead=5.0), None, lines.append)
     assert lines == []
     _budget_note(TimeBudget(overhead=5.0), _coverage_with_selection(("a.gd",)), None)
+
+
+# --- the budget read off a real baseline, and the flags that survive a second run ---------------
+# Everything below was added because a mutation run found the line it covers could be changed
+# with the whole suite staying green. A budget nothing pins is a budget that can be wrong.
+
+
+def _reported(*suites: ReportedSuite) -> SuiteResult:
+    return SuiteResult(tests=sum(s.tests for s in suites), failures=0, errors=0, suites=suites)
+
+
+def test_the_budget_carries_the_reports_per_file_times() -> None:
+    # Without this the whole per-file half of the budget is inert: every selected mutant falls
+    # back to the whole suite's time and the run looks exactly the same.
+    baseline = _reported(
+        ReportedSuite("a", tests=1, time=1.0, file="res://a.gd"),
+        ReportedSuite("b", tests=1, time=3.0, file="res://b.gd"),
+    )
+    budget = _baseline_budget(baseline, wall=10.0, timeout=None)
+
+    assert budget.per_file == {"res://a.gd": 1.0, "res://b.gd": 3.0}
+    # And the map is really used: this mutant is budgeted for a.gd alone, not for all 4 seconds.
+    assert budget.first(("res://a.gd",)) == 2.0 * 1.0 + 8.0 + 6.0  # 16.0
+    assert budget.first() == 2.0 * 4.0 + 8.0 + 6.0  # 22.0
+
+
+def test_the_startup_floors_at_zero_when_a_report_claims_more_time_than_the_run_took() -> None:
+    # A framework may report more test time than the wall-clock (tests that overlap). The startup
+    # is then zero, not some minimum: inventing one would add seconds to every budget on every
+    # project that does it, which is the kind of number nobody chose and nobody can defend.
+    budget = _baseline_budget(_reported(ReportedSuite("a", tests=1, time=9.0)), 5.0, timeout=None)
+
+    assert budget.net == 5.0  # clamped to the wall-clock it was measured against
+    assert budget.overhead == 0.0
+    assert budget.first() == 2.0 * 5.0 + 8.0 + 0.0  # 18.0
+
+
+def test_any_reported_time_at_all_counts_as_measured() -> None:
+    # The line between "this report said how long its tests took" and "it did not" is exactly
+    # zero, and both sides of it change the whole formula. A report saying nothing must fall back
+    # to multiplying the wall-clock. A report saying a fraction of a second must not: GUT really
+    # does report 0.0004 s for a small suite, so a threshold anywhere above zero would switch the
+    # decomposition off on a framework that supports it.
+    silent = _baseline_budget(_reported(ReportedSuite("a", tests=1)), 5.0, timeout=None)
+    assert silent.measured is False
+    assert silent.first() == 10.0 * 5.0  # the whole wall-clock, multiplied, as it always was
+
+    tiny = _baseline_budget(_reported(ReportedSuite("a", tests=1, time=0.5)), 5.0, timeout=None)
+    assert tiny.measured is True
+    assert tiny.first() == 2.0 * 0.5 + 8.0 + 4.5  # 13.5
+
+
+@dataclass
+class _SelectingSlow:
+    """A `FileSelecting` runner whose suite needs `cost` seconds: any smaller budget times out.
+
+    Records every (files, budget) pair it was handed, which is how a test can see *which* budget
+    reached the runner rather than only what verdict came back.
+    """
+
+    cost: float
+    failures: int = 0
+    budgets: list[tuple[tuple[str, ...] | None, float | None]] = field(default_factory=list)
+
+    def _answer(self, files: tuple[str, ...] | None, timeout: float | None) -> SuiteResult:
+        self.budgets.append((files, timeout))
+        if timeout is not None and timeout < self.cost:
+            raise SuiteTimeout(f"needed {self.cost:g}s")
+        return SuiteResult(tests=2, failures=self.failures, errors=0)
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        return self._answer(None, timeout)
+
+    def run_selected(
+        self, project_dir: str, files: Sequence[str], timeout: float | None = None
+    ) -> SuiteResult:
+        return self._answer(tuple(files), timeout)
+
+    # The rest of `FileSelecting`, never reached by these tests.
+    def install_windows(self, project_dir: str, recorder_dir: str) -> None: ...  # pragma: no cover
+    def run_markers_files(  # pragma: no cover
+        self, project_dir: str, files: Sequence[str], timeout: float | None = None
+    ) -> SuiteResult: ...
+
+
+@dataclass
+class _TrustSpy:
+    """Stands in for the runner a `_Trust` confirms against, and records the budget it was given.
+
+    Separate from the runner under test on purpose: in production they are one object, and a test
+    that shared them could not tell a confirmation run apart from a mutant's own run, which is the
+    one thing these tests are looking at.
+    """
+
+    clean: bool = True
+    budgets: list[float | None] = field(default_factory=list)
+
+    def run_selected(
+        self, project_dir: str, files: Sequence[str], timeout: float | None = None
+    ) -> SuiteResult:
+        self.budgets.append(timeout)
+        return SuiteResult(tests=2, failures=0 if self.clean else 1, errors=0)
+
+    def install_windows(self, project_dir: str, recorder_dir: str) -> None: ...  # pragma: no cover
+    def run_markers_files(  # pragma: no cover
+        self, project_dir: str, files: Sequence[str], timeout: float | None = None
+    ) -> SuiteResult: ...
+
+
+#: A budget where the two scopes are far apart, so a test can tell which one reached the runner.
+#: first(("a.gd",)) = 15.0, confirmation = 23.0; first(None) = 73.0, confirmation = 313.0.
+_SPLIT_BUDGET = TimeBudget(net=30.0, overhead=5.0, per_file={"a.gd": 1.0}, measured=True)
+
+
+def _selected_mutant(tmp_path: Path, runner: object, trust: object) -> _Evaluation:
+    src, path = _one_mutant(tmp_path)
+    return _Evaluation(str(tmp_path), path, src, runner, _SPLIT_BUDGET, trust)  # type: ignore[arg-type]
+
+
+_A_MUTANT = Mutant("f.gd", Span(2, 9, 2, 10), "comparison", ">", ">=")
+_MUTATED = "func f(a, b) -> bool:\n\treturn a >= b\n"
+
+
+def test_a_selected_kill_is_confirmed_on_its_own_files_budget(tmp_path: Path) -> None:
+    # The confirmation runs the same chosen test files, so it gets the budget those files earn,
+    # not the whole suite's. Handing it the whole suite's would let a set that really is too slow
+    # pass confirmation, and the mutant's kill would be believed off files that cannot be trusted.
+    assert _SPLIT_BUDGET.first(("a.gd",)) == 15.0
+    assert _SPLIT_BUDGET.first() == 73.0
+    runner = _SelectingSlow(cost=0.0, failures=1)  # a kill, which is what sends it to the trust
+    spy = _TrustSpy(clean=True)
+    ctx = _selected_mutant(tmp_path, runner, _Trust(spy))  # type: ignore[arg-type]
+
+    outcome = _evaluate(ctx, _A_MUTANT, _MUTATED, MutantPlan(files=("a.gd",)))
+
+    assert spy.budgets == [15.0]
+    assert outcome.verdict is Verdict.KILLED
+    assert outcome.order_coupled is False
+
+
+def test_running_past_the_budget_is_remembered_across_an_order_coupled_fallback(
+    tmp_path: Path,
+) -> None:
+    # The selected run goes over its budget and the confirmation pass rescues it, then the chosen
+    # files turn out not to pass unmutated so the whole suite decides instead. The second run was
+    # comfortably inside its budget, and the fact that the first one was not must survive: it is
+    # the count that says how close the tight budget came to being wrong.
+    runner = _SelectingSlow(cost=20.0, failures=1)
+    ctx = _selected_mutant(tmp_path, runner, _Trust(_TrustSpy(clean=False)))  # type: ignore[arg-type]
+
+    outcome = _evaluate(ctx, _A_MUTANT, _MUTATED, MutantPlan(files=("a.gd",)))
+
+    assert [b for _, b in runner.budgets] == [15.0, 23.0, 73.0]  # over, rescued, then everything
+    assert outcome.verdict is Verdict.KILLED
+    assert outcome.order_coupled is True
+    assert outcome.over_budget is True
+
+
+def test_running_past_the_budget_is_remembered_across_the_self_check(tmp_path: Path) -> None:
+    # Same fact on the other road to a verdict. A self-checked mutant runs the whole suite a
+    # second time, well inside its budget, and that must not erase the reprieve the first run
+    # earned.
+    runner = _SelectingSlow(cost=20.0, failures=0)
+    ctx = _selected_mutant(tmp_path, runner, None)
+
+    outcome = _evaluate(ctx, _A_MUTANT, _MUTATED, MutantPlan(files=("a.gd",), self_check=True))
+
+    assert [b for _, b in runner.budgets] == [15.0, 23.0, 73.0]  # over, rescued, then the check
+    assert outcome.verdict is Verdict.SURVIVED
+    assert outcome.self_checked is True
+    assert outcome.over_budget is True
