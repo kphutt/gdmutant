@@ -149,11 +149,11 @@ verdict is recorded. Only the mutants that ran long pay for this.
 
 The confirmation factor of 10.0 is the old whole-wall-clock factor, now applied only to the part a
 mutant can make slower. That choice is what keeps the arithmetic honest for a genuine infinite
-loop, which pays both budgets. On the real game project: the old budget was 59.7 s, the new first
-budget is 17.3 s and the confirmation budget 44.0 s, so a genuine hang costs 61.3 s against the old
-59.7 s serially, and 61.3 s against the old 238.8 s at `--jobs 4`. Serially a real hang is 2.7%
-more expensive. Everything else gets much cheaper, and the false kill stops being possible to
-begin with.
+loop, which pays both budgets. Measured on the real game project: the old budget was 64.1 s, the
+new first budget is 17.96 s and the confirmation budget 46.35 s, so a genuine hang costs 64.3 s
+against the old 64.1 s serially. At `--jobs 4` the old budget was 274.4 s and the new one is
+unchanged at 64.3 s. A real hang is a wash serially and four times cheaper in parallel, and the
+false kill stops being possible at all.
 
 There is no confirmation in three cases, each meaning a second run could say nothing the first did
 not: an explicit `--timeout` (the user named a number), a baseline whose report gave no durations
@@ -197,16 +197,62 @@ mutant that was `Survived` must not become `Timeout`, because that is the false 
 design is built to avoid. The old budget was reproduced exactly by passing it as an explicit
 `--timeout`, which fixes the budget and turns the confirmation off, which is what the old code did.
 
-PLACEHOLDER_EVIDENCE_TABLE
+Two fixtures. The bundled corpus (`turn_order.gd`, 18 mutants, no mutant hangs) on both
+frameworks, and one file of a private game project (41 mutants, of which 10 hang). Wall-clock is
+the whole `gdmutant run`, and `reprieved` is how many mutants ran past the first budget and then
+finished, which is how many false kills a tight budget without the confirmation pass would have
+produced.
+
+| Fixture | Runner | `--jobs` | Old wall | New wall | Verdicts changed | `Survived` to `Timeout` | Reprieved |
+|---|---|---|---|---|---|---|---|
+| corpus | GdUnit4 | 1 | 31.5 s | 34.4 s | 0 of 18 | 0 | 0 |
+| corpus | GUT | 1 | 25.5 s | 28.8 s | 0 of 18 | 0 | 0 |
+| corpus | GdUnit4 | 4 | 28.2 s | 34.6 s | 0 of 18 | 0 | 0 |
+| game project | GdUnit4 | 1 | 949.4 s | 1127.9 s | 1 of 41 | 0 | 6 |
+| game project | GdUnit4 | 4 | 915.6 s | 303.0 s | 0 of 41 | 0 | 4 |
+
+The gate holds: no mutant anywhere went from `Survived` to `Timeout`.
+
+One number carries the whole argument, and it is not a speedup. On the game project, six mutants
+ran past the first budget and then finished. Six of 41 mutants, 15%, would have been recorded as
+kills by a tight budget alone, and the run's score would have gone up for six survivors and kills
+it never actually observed. With the confirmation pass they all got their real verdicts, and the
+verdict diff is clean. That is the number to watch, and it is in the summary of every run.
+
+The corpus rows are not a slowdown. Each NEW figure carries one cold Godot asset import the OLD
+figure does not, because the harness prepared only its old copy before timing, and a cold import
+on this machine measured 6.55 s for the corpus under GdUnit4, 5.20 s under GUT and 4.94 s for the
+game project. Every corpus difference is inside that offset, which is the expected result: the
+corpus has no hanging mutants, so the budget never fires and there is nothing to make faster.
+ADR-0018 and ADR-0019 measured exactly this shape, which is why they concluded there was nothing
+here.
+
+Serially, on the project that does hang, the new run is 19% slower, and that is the honest cost of
+the confirmation pass. It is not the budget: a genuine hang costs 17.96 s plus a 46.35 s
+confirmation, 64.3 s against the old budget's 64.1 s, so the hangs are a wash. The 19% is the six
+reprieved mutants each paying a first budget they were always going to exceed. What that buys is
+six correct verdicts.
+
+At `--jobs 4` the picture inverts completely, because that is where the old worker multiplier did
+its damage: 915.6 s becomes 303.0 s, a 3.02x speedup, with every verdict identical. The old budget
+at four workers was 274.4 s per mutant, so ten hanging mutants across four workers cost most of
+that run no matter how many workers were thrown at them. The new budget does not move with the
+worker count, so they do not.
+
+Not measured: the GdUnit4 repository's own suite, which the dogfood test reads for parse coverage
+rather than driving a mutation run against. Its suite needs a Godot run per mutant like any other
+and nothing in this repository's tooling sets it up as a mutation target, so it would have been a
+new harness rather than an existing one, and the private game project already supplies what it
+would have: a real project, a real framework, and mutants that really hang.
 
 ## Consequences
 * On a project whose mutants do not hang, almost nothing changes: the budget never fires, so the
   verdicts and the wall-clock are the same. The corpus verdict diff confirms it exactly.
-* On a project whose mutants do hang, the run gets much shorter, and `--jobs N` starts paying off
-  on the mutants it never used to.
-* A genuine infinite loop costs slightly more serially, because it pays the first budget and then
-  the confirmation budget. That is the price of the false kill becoming impossible, and it is 2.7%
-  on the project measured.
+* On a project whose mutants do hang, `--jobs N` starts paying off on the mutants it never used
+  to: 915.6 s becomes 303.0 s at `--jobs 4` on the project measured.
+* Serially, that same project's run is 19% slower, because six mutants each paid a first budget
+  before the confirmation pass gave them their real verdict. Six correct verdicts is what the 19%
+  buys, and without the confirmation pass they would have been six false kills.
 * `--timeout` now means something stricter than it did: it fixes the budget and turns the
   confirmation off.
 * `ReportedSuite` gained `time` and `file`. `file` is filled by the runner, never the engine, so
