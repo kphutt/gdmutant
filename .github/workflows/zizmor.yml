@@ -39,7 +39,7 @@ jobs:
       # so a new zizmor release can't silently change the gate. setup-uv is SHA-pinned like every other
       # action here (Dependabot bumps it); the zizmor version string is bumped alongside our other tool
       # pins (uv, godot).
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.28"
           enable-cache: true # cache uv's global store — skips re-downloading the tool each run
