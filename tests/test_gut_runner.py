@@ -93,7 +93,8 @@ def test_run_invokes_subprocess_with_the_constructed_command(
     assert kwargs["timeout"] == 42.0
     assert kwargs["check"] is False
     assert kwargs["capture_output"] is True
-    assert kwargs["text"] is True
+    # The same explicit decode the GdUnit4 peer asserts (engine.runner.CAPTURE_ENCODING).
+    assert (kwargs["encoding"], kwargs["errors"]) == ("utf-8", "replace")
 
 
 def test_run_reflects_latest_report_on_repeated_calls(

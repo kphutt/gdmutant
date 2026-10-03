@@ -329,7 +329,12 @@ def _scratch_repo(tmp_path: Path) -> tuple[Path, str, str]:
         _git("commit", "-m", "on main", cwd=work)
         _git("push", "origin", "main", cwd=work)
         on_main = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True
+            ["git", "rev-parse", "HEAD"],
+            cwd=work,
+            check=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
         ).stdout.strip()
 
         # A commit that exists only on a side branch — exactly the shape of a tag pushed at an
@@ -338,7 +343,12 @@ def _scratch_repo(tmp_path: Path) -> tuple[Path, str, str]:
         (work / "f.txt").write_text("off main\n", encoding="utf-8")
         _git("commit", "-am", "off main", cwd=work)
         off_main = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True
+            ["git", "rev-parse", "HEAD"],
+            cwd=work,
+            check=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
         ).stdout.strip()
         return on_main, off_main
 
@@ -363,7 +373,8 @@ def _usable_bash() -> str | None:
         probe = subprocess.run(
             [bash, "--noprofile", "--norc", "-c", "printf ok"],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
         )
     except (OSError, subprocess.SubprocessError):  # pragma: no cover - platform-dependent
@@ -396,7 +407,8 @@ def _run_guard(workflow: str, work: Path, commit: str) -> subprocess.CompletedPr
         input=_guard_script(workflow),
         cwd=work,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         # A dummy value for whichever tag/ref var this workflow's guard names in its error message,
         # plus a placeholder GH_TOKEN: both guards' fetch now authenticates via an extraheader
         # scoped to exactly https://github.com/ (see release.yml/publish.yml's own comments), which

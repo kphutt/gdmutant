@@ -94,7 +94,8 @@ def test_collection_excludes_the_live_suites_even_with_their_env_vars_set() -> N
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr

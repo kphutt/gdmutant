@@ -44,6 +44,7 @@ from pathlib import Path
 from gdmutant.adapters.gdscript.markers import MARKER_AUTOLOAD, place_markers
 from gdmutant.engine.coverage import MarkedCopy
 from gdmutant.engine.mutants import Mutant
+from gdmutant.engine.runner import CAPTURE_ENCODING, CAPTURE_ERRORS
 
 #: The directory inside the copy that holds the recorder and the hits file.
 RECORDER_DIR = "_gdmutant"
@@ -198,7 +199,8 @@ class GDScriptMarker:
                 command,
                 cwd=copy,
                 capture_output=True,
-                text=True,
+                encoding=CAPTURE_ENCODING,
+                errors=CAPTURE_ERRORS,
                 timeout=_IMPORT_TIMEOUT,
                 check=False,
             )

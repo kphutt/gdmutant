@@ -12,7 +12,7 @@ import math
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 from xml.etree import ElementTree
 
 #: What a GDScript runtime error prints to stdout/stderr (verified live, Godot 4.7). GDScript has no
@@ -25,6 +25,30 @@ from xml.etree import ElementTree
 #: exception to staying language-neutral — see docs/decisions/0015 for why it lives here rather than
 #: behind a new adapter-level runner (the alternative considered and rejected).
 _SCRIPT_ERROR_MARKER = "SCRIPT ERROR"
+
+#: How every captured child-process stream in gdmutant is decoded, and what a byte that does not
+#: decode becomes. Both halves are passed explicitly at every `subprocess.run` that captures output,
+#: here and in the adapters, the CLI and `scripts/`.
+#:
+#: ``text=True`` on its own decodes with the machine's *system* code page and ``errors="strict"``.
+#: Godot emits UTF-8, and on Windows the code page is usually cp1252, where five byte values —
+#: 0x81, 0x8D, 0x8F, 0x90, 0x9D — have no character at all. One of them is enough to raise
+#: ``UnicodeDecodeError`` inside subprocess's own reader thread, and that exception does not
+#: propagate: ``subprocess.run`` returns normally with ``stdout`` set to **None**. The whole stream
+#: is gone, in silence, with a zero exit code.
+#:
+#: That silence reaches the verdict, which is why this is not cosmetic. A lost stream takes
+#: `_SCRIPT_ERROR_MARKER` with it, so a mutant whose GDScript runtime error only shows up in the
+#: output is scored off its exit code alone — the one failure this tool exists to catch. Reproduced
+#: on Python 3.12 and 3.13 on Windows; the same thing happens on a UTF-8 Linux locale, which also
+#: decodes strictly, for any byte that is not valid UTF-8.
+#:
+#: ``replace`` rather than ``strict``, because a mangled byte must never be able to end a run or
+#: cost the valid text around it: the marker check is a substring search, and it still finds
+#: ``SCRIPT ERROR`` with a U+FFFD further along the line. ``replace`` rather than ``ignore`` so the
+#: loss stays visible to whoever reads the captured output.
+CAPTURE_ENCODING: Final = "utf-8"
+CAPTURE_ERRORS: Final = "replace"
 
 
 def with_filename(error: FileNotFoundError, attempted: str) -> FileNotFoundError:
@@ -348,7 +372,8 @@ class CommandRunner:
                 list(self.command),
                 cwd=project_dir,
                 capture_output=True,
-                text=True,
+                encoding=CAPTURE_ENCODING,
+                errors=CAPTURE_ERRORS,
                 timeout=budget,
             )
         except subprocess.TimeoutExpired as expired:

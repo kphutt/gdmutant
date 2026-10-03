@@ -77,7 +77,8 @@ def test_gdunit4_whole_src_dry_run_completes_over_the_unparseable_file() -> None
     completed = subprocess.run(
         [sys.executable, "-m", "gdmutant.cli", "run", str(src), "--dry-run"],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=300,
         check=False,
     )

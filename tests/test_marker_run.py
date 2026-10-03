@@ -58,7 +58,9 @@ def _registers(calls: list[list[str]], *, register: bool = True, output: str = "
 
     def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         calls.append(command)
-        assert (kwargs["capture_output"], kwargs["text"], kwargs["check"]) == (True, True, False)
+        assert (kwargs["capture_output"], kwargs["check"]) == (True, False)
+        # Explicitly decoded, like both JUnit runners (engine.runner.CAPTURE_ENCODING).
+        assert (kwargs["encoding"], kwargs["errors"]) == ("utf-8", "replace")
         cache = Path(kwargs["cwd"]) / ".godot" / "global_script_class_cache.cfg"
         cache.parent.mkdir(exist_ok=True)
         name = MARKER_AUTOLOAD if register else "Other"

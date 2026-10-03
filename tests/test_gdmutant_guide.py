@@ -88,7 +88,8 @@ def test_no_tracked_agent_tool_config() -> None:
             ["git", "ls-files", "--", ".claude/", ".cursor/", ".aider*"],
             cwd=_REPO,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except OSError:  # pragma: no cover - git absent

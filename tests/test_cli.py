@@ -66,7 +66,15 @@ def _git(repo: Path, *args: str) -> None:
     # these repos, and a mutation sweep runs the whole suite once per surviving mutant. It also
     # means a machine with no global git identity can still build the fixtures.
     env.update(_GIT_IDENTITY)
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True, env=env)
+    subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
 
 
 def _leak_decoy_env(decoy_repo: Path) -> dict[str, str]:

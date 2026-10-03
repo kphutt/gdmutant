@@ -206,6 +206,7 @@ def observed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
         # Explicit, because the harness prints UTF-8 and Windows would otherwise decode its output
         # as cp1252 — the same legacy-code-page trap that has bitten this CLI's console output.
         encoding="utf-8",
+        errors="replace",
         check=True,
         env={
             "HARNESS_OPS": json.dumps(_OPS),
