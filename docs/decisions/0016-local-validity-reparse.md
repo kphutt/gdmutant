@@ -240,6 +240,7 @@ files thousands of lines long. Until then, the time is better spent on timeouts.
   climb across `--sizes`, and that is now a known, accepted cost rather than a bug.
 - `tests/test_validity_gate.py` stays as it is. It already guards the gate against any future
   speed work, and the fixture list above is ready for whoever picks this up.
+
 ## Correction (2026-10-03)
 
 A sweep of every number in the public docs found two of this ADR's figures stated without the
