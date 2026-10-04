@@ -10,14 +10,18 @@ runbook, and that a step which did not run can never add up to a pass.
 from __future__ import annotations
 
 import importlib.util
+import io
 import re
 import subprocess
 import sys
+import typing
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parent.parent
+PUBLISH_WORKFLOW = REPO / ".github" / "workflows" / "publish.yml"
 
 _spec = importlib.util.spec_from_file_location(
     "rehearse_release", REPO / "scripts" / "rehearse_release.py"
@@ -223,6 +227,19 @@ def test_pytest_failures_are_named_rather_than_the_coverage_table() -> None:
     )
 
 
+def test_a_failed_verify_job_names_which_of_its_steps_went_red() -> None:
+    """verify_local.py indents its per-step verdicts, so an unindented match reported only
+    `FAILED (1/6)` -- a count, with the one thing the reader needs left out of the report."""
+    out = (
+        "[5/6] Tests + coverage\n  ok\n\n[6/6] Supply-chain audit (pip-audit)\n"
+        "  FAILED: Supply-chain audit (pip-audit)\n\n"
+        "------\nFAILED (1/6):\n  - Supply-chain audit (pip-audit)"
+    )
+    shown = rehearse_release.evidence(_result(out))
+    assert "FAILED: Supply-chain audit (pip-audit)" in shown
+    assert "FAILED (1/6):" in shown
+
+
 def test_other_failures_show_the_end_of_the_output() -> None:
     out = "\n".join(f"line {n}" for n in range(30))
     shown = rehearse_release.evidence(_result(out, "boom")).splitlines()
@@ -301,8 +318,254 @@ def test_an_empty_rehearsal_is_not_a_pass() -> None:
     assert rehearse_release.Rehearsal().exit_code() == rehearse_release.NOT_RUN
 
 
+def test_the_exit_codes_are_the_numbers_the_workflow_and_the_runbook_promise() -> None:
+    """The one thing about this script that another program reads.
+
+    `.github/workflows/rehearse-release.yml` passes or fails the job on the process exit status,
+    and the module docstring and docs/releasing.md each tell a reader what the three numbers mean.
+    Every other test in this section compares a verdict against these constants, so all of them
+    would still pass with the values swapped or shifted. A mutation sweep found exactly that:
+    three surviving mutants, one on each of these three lines, and nothing else in the pure half.
+    Pinned to the literals here, because the literals are what the contract is.
+    """
+    assert (rehearse_release.OK, rehearse_release.FAILED, rehearse_release.NOT_RUN) == (0, 1, 2)
+    # The half CI acts on: exactly one of the three is a passing exit status.
+    assert [rehearse_release.OK, rehearse_release.FAILED, rehearse_release.NOT_RUN].count(0) == 1
+
+
 def test_a_missing_tool_stops_before_anything_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rehearse_release.shutil, "which", lambda tool: None)
     rehearsal = rehearse_release.rehearse(quick=True, keep=False)
     assert rehearsal.exit_code() == rehearse_release.NOT_RUN
     assert rehearsal.steps[0].detail == "`git` is not on PATH"
+
+
+def test_a_crash_deciding_what_to_rehearse_is_reported_not_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Working out the version used to happen outside the step machinery, so a tree it could not
+    read exited 1 with a traceback and no report at all -- the one exit code the docstring
+    reserves for "a step ran and found something wrong"."""
+
+    def boom(repo: Path = REPO) -> rehearse_release.Plan:
+        raise RuntimeError("pyproject.toml is unreadable")
+
+    monkeypatch.setattr(rehearse_release, "plan_rehearsal", boom)
+    rehearsal = rehearse_release.rehearse(quick=True, keep=False)
+    assert [step.name for step in rehearsal.steps] == ["preconditions"]
+    assert rehearsal.steps[0].state == "FAIL"
+    assert "RuntimeError" in rehearsal.steps[0].detail
+    assert rehearsal.exit_code() == rehearse_release.FAILED
+
+
+# --- Refusing to start, rather than rehearsing something that is not the release path -----------
+
+
+def _repo(path: Path, version: str = "0.1.3") -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "--quiet", "-b", "main"], cwd=path, check=True)
+    (path / "pyproject.toml").write_text(f'[project]\nversion = "{version}"\n', encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=path, check=True)
+    subprocess.run(
+        ["git", *rehearse_release.COMMITTER, "commit", "--quiet", "-m", "first"],
+        cwd=path,
+        check=True,
+    )
+    return path
+
+
+def test_a_checkout_with_tags_plans_the_next_release(tmp_path: Path) -> None:
+    # The positive control: the two refusals below mean nothing if the happy path never runs.
+    work = _repo(tmp_path / "ok")
+    subprocess.run(["git", "tag", "v0.1.3"], cwd=work, check=True)
+    plan = rehearse_release.plan_rehearsal(work)
+    assert (plan.version, plan.last, plan.tag) == ("0.1.4", "0.1.3", "v0.1.4")
+
+
+def test_a_tagless_checkout_refuses_rather_than_rehearsing_a_shipped_version(
+    tmp_path: Path,
+) -> None:
+    """A tagless fetch is indistinguishable from a repository before its first release, and the
+    guess it invites is the quiet one: every edit becomes a no-op and the rehearsal passes having
+    walked nothing at all."""
+    work = _repo(tmp_path / "tagless")
+    with pytest.raises(StepNotRun, match="fetch-depth: 0"):
+        rehearse_release.plan_rehearsal(work)
+
+
+def test_an_unpacked_copy_with_no_git_at_all_refuses_to_start(tmp_path: Path) -> None:
+    """An unpacked sdist is a tree with no `.git` anywhere above it. `git rev-parse HEAD` there
+    used to raise straight out of the rehearsal, past every step the report is made of."""
+    copy = tmp_path / "gdmutant-0.1.3"
+    copy.mkdir()
+    (copy / "pyproject.toml").write_text('[project]\nversion = "0.1.3"\n', encoding="utf-8")
+    with pytest.raises(StepNotRun, match="not the root of a git checkout"):
+        rehearse_release.plan_rehearsal(copy)
+
+
+def test_a_mutation_tools_copy_inside_the_checkout_refuses_too(tmp_path: Path) -> None:
+    """The case `--is-inside-work-tree` got wrong, and the reason this asks for the toplevel
+    instead: mutmut's `mutants/` and a poodle run's temp directory live INSIDE the repository, so
+    they are inside a work tree. They are still copies, with a `pyproject.toml` of their own and
+    no commit of their own, and a rehearsal there would rehearse the copy."""
+    checkout = _repo(tmp_path / "checkout")
+    subprocess.run(["git", "tag", "v0.1.3"], cwd=checkout, check=True)
+    copy = checkout / "mutants"
+    copy.mkdir()
+    (copy / "pyproject.toml").write_text('[project]\nversion = "0.1.3"\n', encoding="utf-8")
+    inside = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=copy,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert inside.stdout.strip() == "true", "the premise of this test: the copy IS inside the tree"
+    with pytest.raises(StepNotRun, match="not the root of a git checkout"):
+        rehearse_release.plan_rehearsal(copy)
+
+
+# --- The rehearsal's own commits ----------------------------------------------------------------
+
+
+def test_the_committer_is_passed_per_command_and_never_stored(tmp_path: Path) -> None:
+    """The bug this pins turned the suite step red on every single run.
+
+    tests/test_public_readiness.py scans every tracked file for the clone's LOCAL git identity,
+    and the rehearsal's own name is in the tree, so an identity written into the clone with
+    `git config` made that test find the rehearsal's own source. Reproduced on the branch that
+    added this script: four hits, one of them the `git config` line itself.
+    """
+    work = _repo(tmp_path / "work")
+    (work / "a.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=work, check=True)
+    subprocess.run(rehearse_release.commit_args("second"), cwd=work, check=True)
+    stored = subprocess.run(
+        ["git", "config", "--local", "--get", "user.name"],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert stored.stdout.strip() == "", (
+        "the rehearsal stored a git identity in the clone, which the suite it runs will find"
+    )
+    # Named, not merely non-empty: this machine has an ambient identity, so a `commit_args` that
+    # had dropped the per-command committer would still have produced a commit with an author.
+    author = subprocess.run(
+        ["git", "log", "-1", "--format=%an"], cwd=work, capture_output=True, text=True, check=True
+    )
+    wanted = rehearse_release.COMMITTER[1].removeprefix("user.name=")
+    assert author.stdout.strip() == wanted
+
+
+def test_a_clone_that_stored_an_identity_is_refused_with_the_reason() -> None:
+    rehearse_release.refuse_a_stored_identity("")  # the shape the clone must have
+    with pytest.raises(StepFailed, match="scans every tracked file"):
+        rehearse_release.refuse_a_stored_identity("a release dry run")
+
+
+@pytest.mark.parametrize(
+    ("dirty", "last"),
+    [(True, "0.1.3"), (True, None), (False, None)],
+    ids=["bumped", "bumped-mid-release", "release-in-progress"],
+)
+def test_an_unchanged_version_bump_is_fine_only_mid_release(dirty: bool, last: str | None) -> None:
+    rehearse_release.refuse_an_unchanged_version_bump(dirty, last, "v0.1.4")
+
+
+def test_a_version_bump_that_changed_nothing_when_it_had_to_fails() -> None:
+    with pytest.raises(StepFailed, match="changed nothing at all"):
+        rehearse_release.refuse_an_unchanged_version_bump(False, "0.1.3", "v0.1.4")
+
+
+def test_only_the_version_bump_commit_may_be_empty() -> None:
+    """A release already in progress has had every step 1-2 edit made by its release pull request,
+    so that commit is genuinely empty and `git commit` exits 1 on it. The step 10 pin bump gets no
+    such allowance: an empty commit there means bump_action_pins.py did nothing."""
+    assert "--allow-empty" in rehearse_release.commit_args("m", allow_empty=True)
+    assert "--allow-empty" not in rehearse_release.commit_args("m")
+
+
+# --- What the tagged commit is checked with, against what publish.yml checks it with ------------
+
+
+def _publish_run_steps(job: str) -> list[str]:
+    jobs = yaml.safe_load(PUBLISH_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    return [step["run"].strip() for step in jobs[job]["steps"] if "run" in step]
+
+
+@pytest.mark.parametrize(
+    ("job", "command"),
+    [("verify-ubuntu", rehearse_release.VERIFY), ("license-check", rehearse_release.LICENSE_CHECK)],
+    ids=["verify", "license-check"],
+)
+def test_the_tagged_commit_runs_what_publish_yml_gates_the_upload_on(
+    job: str, command: tuple[str, ...]
+) -> None:
+    """Recurring bug two, pinned: the rehearsal and the real gate are a pair, and the rehearsal is
+    the half that can quietly check less. It ran bare `pytest` while publish.yml ran the whole
+    `verify` job, so ruff, gdlint, mypy, pip-audit and the license gate were never rehearsed --
+    and pip-audit is the one a release can newly fail on its own, because a release regenerates
+    `uv.lock`. Both halves now go through scripts/verify_local.py, which reads ci.yml.
+    """
+    wanted = " ".join(command[command.index("python") :])
+    assert any(wanted in step for step in _publish_run_steps(job)), (
+        f"publish.yml's {job} job no longer runs `{wanted}`, so the rehearsal is now checking "
+        "something other than the gate it exists to rehearse"
+    )
+
+
+def test_the_quick_run_never_claims_the_gate_it_skipped() -> None:
+    quick = rehearse_release.gate_args(quick=True)
+    assert "scripts/verify_local.py" not in quick and "--no-cov" in quick
+
+
+def test_step_summary_names_how_many_verify_steps_ran() -> None:
+    out = "verify - Linux\n[1/6] Lint\n  ok\nAll 6 steps of jobs.verify passed on Linux.\nNote: CI"
+    assert (
+        rehearse_release.step_summary(_result(out)) == "All 6 steps of jobs.verify passed on Linux."
+    )
+
+
+def test_step_summary_falls_back_to_pytests_own_last_line() -> None:
+    assert rehearse_release.step_summary(_result("a\n5 passed\n")) == "5 passed"
+
+
+# --- Windows: a report that cannot be printed is not a report -----------------------------------
+
+
+def test_the_report_prints_on_a_console_that_cannot_encode_it() -> None:
+    """gdmutant already shipped a Windows bug where console output crashed under the legacy cp1252
+    code page. This is the far end of a chain that starts one function away: `run` decodes a child
+    with ``errors="replace"``, which turns a byte it cannot read into U+FFFD -- a character cp1252
+    cannot encode. Printing the report would then raise instead of printing the verdict.
+
+    An em dash is not the test for this. cp1252 encodes that one fine (0x97), which is why the
+    first version of this test passed against a `print` that would still have crashed.
+    """
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+    rehearse_release.say("a step said � this", console)
+    console.flush()
+    written = typing.cast(io.BytesIO, console.buffer).getvalue()
+    assert written.replace(b"\r\n", b"\n") == b"a step said ? this\n"
+
+
+def test_every_child_runs_in_utf8_and_without_the_machines_git_hooks() -> None:
+    """Two measured traps, both already fixed one script over in check_mutation_baseline.py: a
+    child writing cp1252 bytes that this script decodes as UTF-8, and a global `core.hooksPath`
+    firing the operator's own pre-commit gate on every throwaway commit the suite makes."""
+    assert rehearse_release.CHILD_ENV["PYTHONUTF8"] == "1"
+    assert rehearse_release.CHILD_ENV["PYTHONIOENCODING"] == "utf-8"
+    assert rehearse_release.CHILD_ENV["GIT_CONFIG_KEY_0"] == "core.hooksPath"
+    assert rehearse_release.CHILD_ENV["GIT_CONFIG_VALUE_0"] == ""
+    assert rehearse_release.CHILD_ENV["GIT_CONFIG_COUNT"] == "1"
+
+
+def test_a_child_whose_output_is_not_utf8_is_read_rather_than_raising(tmp_path: Path) -> None:
+    script = tmp_path / "noise.py"
+    script.write_text(
+        "import sys\nsys.stdout.buffer.write(b'before\\xff after')\n", encoding="utf-8"
+    )
+    result = rehearse_release.run([sys.executable, str(script)], tmp_path)
+    assert "before" in result.stdout and "after" in result.stdout

@@ -39,10 +39,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false # the rehearsal pushes only to a local bare repo, never to GitHub
 
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.28"
-          enable-cache: true # cache uv's global store: the rehearsal installs the locked deps twice
+          # Cache uv's global store: the rehearsal installs the locked deps three times over -- once
+          # for each of the two suite legs, and once more without the dev group for license-check.
+          enable-cache: true
 
       - name: Install deps (frozen lockfile)
         run: uv sync --frozen
