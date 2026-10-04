@@ -72,7 +72,8 @@ def tag_commit(version: str, root: Path) -> str | None:
         ["git", "ls-remote", "origin", tag, f"{tag}^{{}}"],
         cwd=root,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=True,
     ).stdout
     return commit_of_tag(version, parse_ls_remote(output))

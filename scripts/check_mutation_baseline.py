@@ -85,7 +85,9 @@ print(json.dumps(counts))
 
 
 def _git_lines(args: list[str]) -> list[str]:
-    result = subprocess.run(["git", *args], capture_output=True, text=True, check=True)
+    result = subprocess.run(
+        ["git", *args], capture_output=True, encoding="utf-8", errors="replace", check=True
+    )
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
@@ -152,7 +154,8 @@ def count_mutants_per_file(files: list[str], config_path: str = "poodle.toml") -
         [*_python_with_poodle(), "-c", _COUNT_MUTANTS_SCRIPT],
         input=json.dumps([config_path, files]),
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=True,
     )
     return json.loads(result.stdout)
@@ -297,7 +300,8 @@ def main(argv: list[str] | None = None) -> int:
         ["uv", "run", "poodle", "-c", "poodle.toml", *only_args],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
     )
     print(result.stdout)

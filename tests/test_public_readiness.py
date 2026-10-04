@@ -763,7 +763,8 @@ def _tracked_files() -> list[Path]:
             ["git", "ls-files", "-z"],
             cwd=REPO_ROOT,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as exc:
@@ -897,7 +898,8 @@ def test_no_tracked_file_repeats_the_local_git_identity() -> None:
         ["git", "config", "user.name"],
         cwd=REPO_ROOT,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     ).stdout.strip()
     if _is_too_generic(name):
@@ -1283,7 +1285,8 @@ def test_git_ignores_a_private_word_list_dropped_into_this_tree() -> None:
         ["git", "check-ignore", "private-terms.txt", "docs/my-private-terms.txt"],
         cwd=REPO_ROOT,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert ignored.stdout.split() == ["private-terms.txt", "docs/my-private-terms.txt"], (

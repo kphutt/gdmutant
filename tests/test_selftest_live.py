@@ -97,7 +97,8 @@ def _corpus_copy(tmp_path: Path) -> Path:
     subprocess.run(
         [_GODOT, "--headless", "--path", str(dst), "--import"],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=180,
         check=False,
     )
@@ -119,7 +120,9 @@ def _run_gdmutant(project: Path, extra: list[str], out: Path) -> dict:
         str(out),
         *extra,
     ]
-    completed = subprocess.run(cmd, capture_output=True, text=True, timeout=900, check=False)
+    completed = subprocess.run(
+        cmd, capture_output=True, encoding="utf-8", errors="replace", timeout=900, check=False
+    )
     assert completed.returncode == 0, (
         f"gdmutant exited {completed.returncode}\n--- stdout ---\n{completed.stdout}\n"
         f"--- stderr ---\n{completed.stderr}"
@@ -521,7 +524,8 @@ def test_statement_deletion_mutants_all_compile_in_godot(tmp_path: Path) -> None
         result = subprocess.run(
             [str(_GODOT), "--headless", "--check-only", "--script", str(script)],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
         )
         assert "Parse Error" not in result.stderr and "SCRIPT ERROR" not in result.stderr, (
@@ -580,7 +584,8 @@ def test_typed_lambda_return_deletion_is_guarded_and_emitted_deletions_compile(
         result = subprocess.run(
             [str(_GODOT), "--headless", "--check-only", "--script", str(script)],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
         )
         assert "Parse Error" not in result.stderr and "SCRIPT ERROR" not in result.stderr, (
@@ -597,14 +602,18 @@ def test_command_harness_fails_fast_on_an_uncompilable_target(tmp_path: Path) ->
     project = _corpus_copy(tmp_path)
     harness = ["--headless", "--path", str(project), "--script", "res://harness/run_tests.gd"]
 
-    healthy = subprocess.run([str(_GODOT), *harness], capture_output=True, text=True, timeout=60)
+    healthy = subprocess.run(
+        [str(_GODOT), *harness], capture_output=True, encoding="utf-8", errors="replace", timeout=60
+    )
     assert healthy.returncode == 0, f"the healthy harness should pass:\n{healthy.stderr[-600:]}"
 
     # Overwrite the target with a Godot compile error (a parse gdtoolkit accepts but Godot won't).
     (project / TARGET).write_text(
         "class_name TurnOrder\nextends RefCounted\nfunc broken( ->:\n", encoding="utf-8"
     )
-    broken = subprocess.run([str(_GODOT), *harness], capture_output=True, text=True, timeout=60)
+    broken = subprocess.run(
+        [str(_GODOT), *harness], capture_output=True, encoding="utf-8", errors="replace", timeout=60
+    )
     assert broken.returncode != 0, (
         "the harness exited 0 on an uncompilable target — a false PASS:\n"
         f"{(broken.stdout + broken.stderr)[-600:]}"
@@ -746,7 +755,8 @@ def _marker_project(tmp_path: Path, name: str, extra: dict[str, str], marked: bo
     subprocess.run(
         [_GODOT, "--headless", "--path", str(project), "--import"],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=300,
         check=False,
     )
@@ -765,7 +775,8 @@ def _run_scene(project: Path, script: str) -> str:
     done = subprocess.run(
         [_GODOT, "--headless", "--path", str(project), "--script", script],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=300,
         check=False,
     )
@@ -899,7 +910,8 @@ def _coverage_project(
     subprocess.run(
         [_GODOT_EXE, "--headless", "--path", str(project), "--import"],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=300,
         check=False,
     )
@@ -928,7 +940,9 @@ def _gdmutant(
     """Run the shipped CLI and return the process and the JSON report (None if none was written)."""
     cmd = [sys.executable, "-m", "gdmutant.cli", "run", str(project / target)]
     cmd += ["--project", str(project), "--json", str(out), *extra]
-    done = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=False)
+    done = subprocess.run(
+        cmd, capture_output=True, encoding="utf-8", errors="replace", timeout=1800, check=False
+    )
     report = json.loads(out.read_text(encoding="utf-8")) if out.is_file() else None
     return done, report
 
@@ -1694,3 +1708,94 @@ def test_a_map_that_drops_the_file_that_kills_a_mutant_is_caught_loudly(
     assert "running it against the whole suite gave 'killed'" in str(caught.value)
     # And the project was left exactly as it was.
     assert (project / "split.gd").read_text(encoding="utf-8") == _SPLIT
+
+
+# --- the per-mutant time budget, against a real framework --------------------------------------
+# Everything below this point exists because the budget's two inputs come from a real framework
+# and nothing in a unit test can prove a real framework supplies them. A report that carried no
+# durations, or filed them under names no selection asks for, would leave the whole decomposition
+# switched off while every test in tests/test_loop.py still passed. See docs/decisions/0020.
+
+
+@pytest.mark.parametrize("runner", ["gdunit4", "gut"])
+def test_a_real_baseline_report_says_how_long_its_tests_took(tmp_path: Path, runner: str) -> None:
+    """The measurement the per-mutant budget rests on, taken from a real run.
+
+    Without it `TimeBudget.measured` is False and gdmutant falls back to multiplying the whole
+    wall-clock, exactly as it did before the decomposition existed. That fallback is sound, which
+    is precisely why nothing else would notice it had taken over.
+    """
+    _skip_without(runner)
+    tests = _split_tests(runner)
+    test_dir = "res://" + next(iter(tests)).split("/")[0]
+    project = _coverage_project(tmp_path, f"budget-{runner}", {"split.gd": _SPLIT, **tests})
+    live = _live_runner(runner, test_dir)
+    live.prepare(str(project))
+
+    result = live.run(str(project))
+
+    assert result.tests > 0
+    assert result.reported_time > 0.0, "the report carried no durations at all"
+    # And the tests are a *part* of the run, not the whole of it: what is left over is the
+    # framework startup and the engine boot, which is the number the budget adds back
+    # unmultiplied. If this ever came out as zero, multiplying the test time alone would be
+    # multiplying the whole run again.
+    assert result.reported_time < 100.0
+
+
+@pytest.mark.parametrize("runner", ["gdunit4", "gut"])
+def test_a_real_report_names_its_files_the_way_a_selection_does(
+    tmp_path: Path, runner: str
+) -> None:
+    """The gate against a feature that is alive in tests and dead in the product.
+
+    A framework's reporter and its "a test file started" event are different halves of the same
+    tool and need not spell a file the same way. Selection uses the event's spelling; the per-file
+    durations are filed under the reporter's. When they disagree, every selected mutant silently
+    falls back to the whole suite's time and the run looks identical. So the two are pinned to the
+    real files on disk here, live, rather than to a fixture that would agree with itself.
+    """
+    _skip_without(runner)
+    tests = _split_tests(runner)
+    test_dir = "res://" + next(iter(tests)).split("/")[0]
+    project = _coverage_project(tmp_path, f"names-{runner}", {"split.gd": _SPLIT, **tests})
+    live = _live_runner(runner, test_dir)
+    live.prepare(str(project))
+
+    result = live.run(str(project))
+
+    assert set(result.file_times) == {f"res://{name}" for name in tests}
+    assert all(seconds >= 0.0 for seconds in result.file_times.values())
+
+
+@pytest.mark.parametrize("runner", ["gdunit4", "gut"])
+def test_a_real_per_file_run_budgets_each_mutant_for_its_own_files(
+    tmp_path: Path, runner: str
+) -> None:
+    """End to end: selection is on, and gdmutant does not report that budgeting fell back.
+
+    `_budget_note` is the engine saying out loud that per-file budgets could not be used. Its
+    absence here is what says they were, which is the only way a passing test can tell a live
+    feature from a dead one.
+    """
+    _skip_without(runner)
+    tests = _split_tests(runner)
+    test_dir = "res://" + next(iter(tests)).split("/")[0]
+    project = _coverage_project(tmp_path, f"perfile-{runner}", {"split.gd": _SPLIT, **tests})
+    source = (project / "split.gd").read_text(encoding="utf-8")
+    messages: list[str] = []
+
+    result = engine_run(
+        str(project),
+        str(project / "split.gd"),
+        source,
+        _live_runner(runner, test_dir),
+        ADAPTER,
+        coverage=CoverageAnalysis.PER_FILE,
+        marker=GDScriptMarker(godot=_GODOT_EXE),
+        self_check=0,
+        progress=messages.append,
+    )
+
+    assert result.selected > 0, "no mutant ran a chosen set of test files, so nothing was budgeted"
+    assert not [line for line in messages if line.startswith("budget:")], messages

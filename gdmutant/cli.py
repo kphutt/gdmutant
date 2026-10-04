@@ -56,7 +56,13 @@ from gdmutant.engine.report import (
     stryker_report,
     stryker_report_multi,
 )
-from gdmutant.engine.runner import CommandRunner, Runner, RunWarning
+from gdmutant.engine.runner import (
+    CAPTURE_ENCODING,
+    CAPTURE_ERRORS,
+    CommandRunner,
+    Runner,
+    RunWarning,
+)
 
 #: Where the Godot editor's own binary lives inside the macOS app bundle — the path a macOS user
 #: needs, whichever flag they end up putting it in.
@@ -263,7 +269,8 @@ def _git_backup(source_path: str) -> _GitBackup:
             ["git", "status", "--porcelain", "--ignored=matching", "--", path.name],
             cwd=path.parent,
             capture_output=True,
-            text=True,
+            encoding=CAPTURE_ENCODING,
+            errors=CAPTURE_ERRORS,
             env=_clean_git_env(),
         )
     except OSError:
@@ -272,8 +279,10 @@ def _git_backup(source_path: str) -> _GitBackup:
     if completed.returncode != 0:
         return _GitBackup(None, _git_failure_reason(judged, completed.stderr))
     # `--porcelain` prints one line per path and nothing at all when there is nothing to report.
-    # Comparing to "" (not bool()) also kills a `text=True`->False mutant: raw bytes never equal
-    # the str "".
+    # Comparing to "" (not bool()) is also the stricter check: only a decoded, genuinely empty
+    # stream reads as "git has a clean copy of this file". Neither raw bytes nor the None that a
+    # failed decode leaves behind (`engine.runner.CAPTURE_ENCODING`) can equal the str "", so a
+    # stream that never arrived cannot be mistaken here for one that came back empty.
     if completed.stdout == "":
         return _GitBackup(True)
     if completed.stdout.startswith("!!"):
@@ -648,7 +657,8 @@ def _changed_lines(ref: str, files: list[str]) -> dict[str, set[int]] | None:
                 ["git", "diff", "--unified=0", ref, "--", str(path)],
                 cwd=str(path.parent),
                 capture_output=True,
-                text=True,
+                encoding=CAPTURE_ENCODING,
+                errors=CAPTURE_ERRORS,
                 env=_clean_git_env(),
             )
         except OSError as error:
@@ -673,7 +683,8 @@ def _changed_lines(ref: str, files: list[str]) -> dict[str, set[int]] | None:
                 ["git", "ls-files", "--error-unmatch", str(path)],
                 cwd=str(path.parent),
                 capture_output=True,
-                text=True,
+                encoding=CAPTURE_ENCODING,
+                errors=CAPTURE_ERRORS,
                 env=_clean_git_env(),
             )
             if tracked.returncode != 0:  # untracked
@@ -1511,7 +1522,7 @@ def _scaffold_config_text(runner: str | None) -> str:
         "# Optional, and never trust-required:",
         "# timeout = 30  # per-mutant timeout in seconds; left unset, gdmutant derives one from "
         "the",
-        "# baseline run's own wall-clock (10x it) instead of a fixed number",
+        "# baseline run itself, multiplying the tests' own time and not the framework startup",
         "# require-clean = true  # refuse to run on an uncommitted source file "
         "(default: warn only)",
         '# exclude = ["*_generated.gd", "*/vendor/*"]  # globs to skip when expanding a directory',
@@ -1635,8 +1646,9 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "--timeout",
         type=float,
         default=None,
-        help="per-mutant test-run timeout, in seconds (default: derived from the baseline run: "
-        "10x its wall-clock, so a hanging mutant is caught in seconds, not minutes)",
+        help="per-mutant test-run timeout, in seconds (default: derived from the baseline, "
+        "multiplying only the time its tests took, and re-checking any mutant that runs past "
+        "it)",
     )
     run_parser.add_argument(
         "--json",
@@ -1696,8 +1708,9 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         metavar="N",
         default="1",
         help="evaluate N mutants in parallel, each on its own copy of the project (default: 1 = "
-        "serial), for a faster run with the same verdicts: process isolation, and the per-mutant "
-        "timeout is scaled by N so contention can't cause a false timeout. Bounded by your "
+        "serial), for a faster run with the same verdicts: process isolation, and a per-mutant "
+        "budget that does not depend on N, so N hanging mutants cost one budget between them "
+        "rather than N. Bounded by your "
         "cores/RAM; a plain per-worker copy is made per job. Pass 'auto' instead of a number to "
         "pick a worker count from your CPU count and hold off starting another worker while the "
         "system is already under load (POSIX only, via the load average make -l uses; always "

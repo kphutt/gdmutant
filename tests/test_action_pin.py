@@ -112,7 +112,8 @@ def _remote_tag_refs() -> dict[str, str]:
         ["git", "ls-remote", "--tags", "origin"],
         cwd=REPO,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=True,
     ).stdout
     return dict(bump_action_pins.parse_ls_remote(output))
@@ -145,7 +146,12 @@ def _head_commit() -> str | None:
     """The commit this checkout is on, or None when git cannot say."""
     try:
         return subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return None
@@ -404,7 +410,8 @@ def _tracked_files() -> list[Path]:
             ["git", "ls-files", "-z"],
             cwd=REPO,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as exc:

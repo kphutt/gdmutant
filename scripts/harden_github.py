@@ -141,7 +141,9 @@ def _gh(args: list[str], *, stdin: str | None = None) -> tuple[bool, str]:
     Never raises: a failed setting is reported (a warn), not fatal — matching the old script's
     ``set -uo pipefail`` (no ``-e``), which applied each setting independently.
     """
-    result = subprocess.run(["gh", *args], input=stdin, capture_output=True, text=True)
+    result = subprocess.run(
+        ["gh", *args], input=stdin, capture_output=True, encoding="utf-8", errors="replace"
+    )
     return result.returncode == 0, (result.stdout or result.stderr).strip()
 
 

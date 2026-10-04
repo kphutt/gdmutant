@@ -1114,3 +1114,44 @@ def test_the_aggregate_of_nothing_is_empty_rather_than_an_error() -> None:
     assert (merged.outcomes, merged.test_files, merged.order_coupled_sets) == ((), 0, ())
     assert merged.order_dependent == 0
     assert merged.coverage_analysis is False
+
+
+# --- the per-mutant time budget, from both entry points ----------------------------------------
+
+
+def _budget_lines(lines: list[str]) -> list[str]:
+    return [line for line in lines if line.startswith("budget:")]
+
+
+def test_a_run_says_when_the_baselines_report_gave_no_durations(tmp_path: Path) -> None:
+    """The budget's own "this did not work" line, from the one-file entry point.
+
+    `Lab`'s report carries no `time` attributes, which is exactly the case the note exists for:
+    nothing says how much of the baseline was tests, so the whole wall-clock is multiplied and
+    every per-file budget falls back. That is sound and completely invisible, which is why it is
+    said out loud instead."""
+    lines: list[str] = []
+    _run(Lab(), tmp_path, self_check=0, progress=lines.append)
+    assert _budget_lines(lines) == [
+        "budget: the baseline's report did not say how long its tests took, so the whole "
+        "baseline wall-clock sets each mutant's time budget rather than the test time alone."
+    ]
+
+
+def test_a_many_file_run_says_it_too(tmp_path: Path) -> None:
+    """The same line from `run_paths`. Two entry points, one helper, and this is what stops them
+    drifting: a note wired into one of them would leave the other silent about the same fact."""
+    lines: list[str] = []
+    _run_many(Lab(), tmp_path, self_check=0, progress=lines.append)
+    assert len(_budget_lines(lines)) == 1
+
+
+def test_a_many_file_run_hands_an_explicit_timeout_to_every_mutant(tmp_path: Path) -> None:
+    """`run_paths(timeout=...)` has to reach the runner, and it means more than it used to: an
+    explicit budget is also what turns the confirmation pass off, so a timeout that went missing
+    here would quietly give every mutant a derived budget and a second run the caller never
+    asked for."""
+    lab = Lab()
+    _run_many(lab, tmp_path, self_check=0, timeout=4.0)
+    assert lab.timeouts  # the selected runs, one per mutant that ran a chosen set of files
+    assert set(lab.timeouts) == {4.0}

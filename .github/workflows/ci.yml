@@ -5,8 +5,8 @@ name: CI
 # AUTO-TRIGGERED AGAIN as of 2026-08-04, ahead of gdmutant going public. It ran on every
 # `pull_request` + push to `main` until 2026-07-29, when it was switched to `workflow_dispatch`
 # only (ADR-0012): every one of gdmutant's five jobs billed at least its own 1-minute minimum, and
-# at ~12 runs/day that alone approached this account's whole 3,000-min/month included allowance on
-# a *private* repo, on a project that doesn't ship anything on merge (only a tag push + a human
+# at ~12 runs/day that added up fast against a private repo's limited included Actions allowance, on
+# a project that doesn't ship anything on merge (only a tag push + a human
 # "Publish" click ships, and that path is gated separately — see publish.yml). Merge-time checks
 # ran locally instead in between (.pre-commit-config.yaml, pre-push stage — same commands, not a
 # reimplementation, so local and this workflow can't drift from each other). That trade only made
@@ -218,7 +218,7 @@ jobs:
           node-version: "22.14.0"
 
       # uv installs the exact locked deps (hashes) — reproducible across machines.
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.28"
           enable-cache: true # cache uv's global store — skips re-downloading the locked deps each job
@@ -268,7 +268,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.28"
           enable-cache: true
@@ -346,7 +346,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.28"
           enable-cache: true # cache uv's global store — skips re-downloading the locked deps each job
@@ -458,7 +458,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.28"
           enable-cache: true # cache uv's global store — skips re-downloading the locked deps each job

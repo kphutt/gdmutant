@@ -103,7 +103,9 @@ def test_run_invokes_subprocess_with_the_constructed_command(
     assert kwargs["timeout"] == 42.0
     assert kwargs["check"] is False
     assert kwargs["capture_output"] is True  # per-mutant chatter is captured, not inherited
-    assert kwargs["text"] is True
+    # Decoded explicitly, never by the machine's code page: a Godot byte the code page has no
+    # character for silently loses the whole captured stream (engine.runner.CAPTURE_ENCODING).
+    assert (kwargs["encoding"], kwargs["errors"]) == ("utf-8", "replace")
 
 
 def test_run_reflects_latest_report_on_repeated_calls(
@@ -364,7 +366,7 @@ def test_run_warms_the_import_cache_once_before_the_first_suite_run(
     (_, import_kwargs) = import_calls[0]
     assert import_kwargs["check"] is False
     assert import_kwargs["capture_output"] is True
-    assert import_kwargs["text"] is True
+    assert (import_kwargs["encoding"], import_kwargs["errors"]) == ("utf-8", "replace")
 
 
 def test_run_survives_a_slow_import_warm_up(
@@ -576,3 +578,25 @@ def test_install_windows_writes_a_hook_that_listens_to_gdunit4s_own_events(tmp_p
     assert "GdUnitEvent.TESTSUITE_AFTER" in source
     assert "_GdmMarks.begin_file(event.resource_path())" in source
     assert "_GdmMarks.end_file()" in source
+
+
+@pytest.mark.parametrize(
+    ("name", "package", "file"),
+    [
+        ("test_x", "test", "res://test/test_x.gd"),
+        # Nested directories come through whole: GdUnit4 puts the full path below res:// in
+        # `package` (verified live against v6.1.3), which is what makes this the same string the
+        # TESTSUITE_BEFORE event reports as resource_path() just above.
+        ("test_nested", "test/deep/inner", "res://test/deep/inner/test_nested.gd"),
+        # No package, no guess. An empty answer keeps that suite out of the per-file durations and
+        # falls back to the whole suite's time, which is the safe direction. A path built from the
+        # name alone would look real, point nowhere, and no selection would ever ask for it, so
+        # the budget would be keyed on a file that does not exist and nothing would say so.
+        ("lonely", "", ""),
+    ],
+)
+def test_which_file_a_gdunit4_report_name_belongs_to(name: str, package: str, file: str) -> None:
+    """The half of the per-file time budget only the adapter can get right: the report's spelling
+    of a test file has to match the one a selection uses, or every selected mutant silently falls
+    back to the whole suite's time."""
+    assert runner_mod._gdunit4_reported_file(name, package) == file

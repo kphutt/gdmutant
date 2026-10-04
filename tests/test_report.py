@@ -539,3 +539,48 @@ def test_all_three_survivor_surfaces_render_the_same_posix_path(tmp_path: Path) 
     if str(path) != expected:
         assert str(path) not in markdown
         assert str(path) not in console
+
+
+def _budget_run(*outcomes: MutantOutcome) -> MutationRun:
+    return MutationRun(outcomes)
+
+
+def _mutant(column: int) -> Mutant:
+    return Mutant("f.gd", Span(2, column, 2, column + 1), "numeric", "1", "0")
+
+
+def test_a_reprieved_mutant_is_named_in_the_summary() -> None:
+    # The run's own honesty check, and the one fact no other mutation tester can report. This
+    # mutant ran past its first time budget and then finished under the larger confirmation
+    # budget, so it was never hanging. A tool that took the first budget's word for it would have
+    # recorded a kill here, silently, and the mutation score would have gone up for nothing.
+    run = _budget_run(
+        MutantOutcome(_mutant(9), Verdict.SURVIVED, over_budget=True),
+        MutantOutcome(_mutant(15), Verdict.KILLED),
+    )
+    assert run.reprieved == 1
+    assert "reprieved: 1  (ran past the first budget, then finished: not hangs)" in console_summary(
+        run
+    )
+
+
+def test_a_confirmed_timeout_says_it_was_confirmed() -> None:
+    run = _budget_run(MutantOutcome(_mutant(9), Verdict.TIMEOUT, over_budget=True))
+    assert run.confirmed_timeouts == 1
+    assert "of the timeouts, 1 confirmed by a second, longer run" in console_summary(run)
+
+
+def test_an_unconfirmed_timeout_says_so_rather_than_staying_quiet() -> None:
+    # An explicit --timeout, or a baseline whose report gave no durations, leaves a timeout
+    # unchecked. Saying nothing would read as confirmation, and the tally above would look like it
+    # meant more than it does. So the zero case is stated out loud.
+    run = _budget_run(MutantOutcome(_mutant(9), Verdict.TIMEOUT))
+    assert run.confirmed_timeouts == 0
+    assert "of the timeouts, 0 not confirmed by a second run" in console_summary(run)
+
+
+def test_a_run_with_no_timeouts_says_nothing_about_budgets() -> None:
+    # A run where none of this happened stays exactly as quiet as it always was.
+    summary = console_summary(_budget_run(MutantOutcome(_mutant(9), Verdict.SURVIVED)))
+    assert "reprieved" not in summary
+    assert "of the timeouts" not in summary
