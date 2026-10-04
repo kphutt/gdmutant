@@ -486,6 +486,64 @@ def test_a_version_bump_that_changed_nothing_when_it_had_to_fails() -> None:
         rehearse_release.refuse_an_unchanged_version_bump(False, "0.1.3", "v0.1.4")
 
 
+def test_the_edit_helper_keeps_line_endings_it_was_given(tmp_path: Path) -> None:
+    """Python on Windows turns each LF written by `write_text` into CRLF. The helper must not."""
+    lf = tmp_path / "lf.txt"
+    lf.write_bytes(b"a\nb\n")
+    rehearse_release.rewrite_text(lf, lambda text: text.replace("a", "x"))
+    assert lf.read_bytes() == b"x\nb\n"
+    crlf = tmp_path / "crlf.txt"
+    crlf.write_bytes(b"a\r\nb\r\n")
+    rehearse_release.rewrite_text(crlf, lambda text: text)
+    assert crlf.read_bytes() == b"a\r\nb\r\n"
+    utf8 = tmp_path / "utf8.txt"
+    utf8.write_bytes("café — a\n".encode())
+    rehearse_release.rewrite_text(utf8, lambda text: text.replace("a\n", "b\n"))
+    assert utf8.read_bytes() == "café — b\n".encode()
+
+
+def _repo_with_windows_checkout_settings(tmp_path: Path) -> Path:
+    """A committed LF file in a clone configured the way Git for Windows is: `autocrlf=true`."""
+    work = tmp_path / "work"
+    work.mkdir()
+    for args in (["init", "--quiet"], ["config", "core.autocrlf", "true"]):
+        rehearse_release.run(["git", *args], work)
+    (work / "f.txt").write_bytes(b"one\ntwo\n")
+    rehearse_release.run(["git", "add", "f.txt"], work)
+    rehearse_release.run(
+        ["git", *rehearse_release.COMMITTER, "commit", "--quiet", "-m", "base"], work
+    )
+    return work
+
+
+def test_a_rewrite_that_changes_nothing_leaves_the_tree_unchanged(tmp_path: Path) -> None:
+    """The release-in-progress state: every edit writes back what is already there. Both the
+    helper and the dirtiness check have to agree that nothing moved, and the guard has to fire."""
+    work = _repo_with_windows_checkout_settings(tmp_path)
+    rehearse_release.rewrite_text(work / "f.txt", lambda text: text)
+    assert rehearse_release.tree_has_changes(work) is False
+    with pytest.raises(StepFailed, match="changed nothing at all"):
+        rehearse_release.refuse_an_unchanged_version_bump(
+            rehearse_release.tree_has_changes(work), "0.1.3", "v0.1.4"
+        )
+
+
+def test_the_dirtiness_check_ignores_a_line_ending_only_rewrite(tmp_path: Path) -> None:
+    """Defence in depth: even if a future edit does rewrite line endings, `git status` would call
+    the file modified while `git commit --all` finds nothing. Content is what the commit sees."""
+    work = _repo_with_windows_checkout_settings(tmp_path)
+    (work / "f.txt").write_bytes(b"one\r\ntwo\r\n")
+    status = rehearse_release.run(["git", "status", "--porcelain"], work).stdout.strip()
+    assert status, "premise: git status reports the CRLF rewrite as a modification"
+    assert rehearse_release.tree_has_changes(work) is False
+
+
+def test_the_dirtiness_check_sees_a_real_edit(tmp_path: Path) -> None:
+    work = _repo_with_windows_checkout_settings(tmp_path)
+    rehearse_release.rewrite_text(work / "f.txt", lambda text: text.replace("two", "three"))
+    assert rehearse_release.tree_has_changes(work) is True
+
+
 def test_only_the_version_bump_commit_may_be_empty() -> None:
     """A release already in progress has had every step 1-2 edit made by its release pull request,
     so that commit is genuinely empty and `git commit` exits 1 on it. The step 10 pin bump gets no

@@ -342,6 +342,29 @@ def refuse_an_unchanged_version_bump(dirty: bool, last: str | None, tag: str) ->
     )
 
 
+def rewrite_text(path: Path, edit: typing.Callable[[str], str]) -> None:
+    """Rewrite a text file through `edit`, keeping every line ending it already has.
+
+    `Path.read_text` folds CRLF into LF and `Path.write_text` turns each LF into CRLF on Windows,
+    so a plain read-edit-write rewrote every line ending of a file the edit did not touch. Git
+    then listed the file as modified while `git commit --all` normalised the endings away and found
+    nothing to commit. `newline=""` switches both translations off."""
+    with path.open(encoding="utf-8", newline="") as handle:
+        text = handle.read()
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(edit(text))
+
+
+def tree_has_changes(work: Path) -> bool:
+    """Does the clone differ from HEAD in content? Not "does `git status` list a file".
+
+    `git status --porcelain` lists a file whose line endings were rewritten, which `git commit`
+    then calls empty. `git diff --quiet HEAD` compares what a commit would record (exit 1 means a
+    difference), so the answer matches what the commit will do. Staged and untracked files do not
+    count: the edits only modify tracked files, and `commit --all` only takes those too."""
+    return run(["git", "diff", "--quiet", "HEAD"], work, check=False).returncode != 0
+
+
 def say(text: str, stream: typing.TextIO | None = None) -> None:
     """Print `text` on a console that may not be able to encode it.
 
@@ -520,18 +543,20 @@ def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
     def edit() -> str:
         pin = load(work / "scripts" / "bump_action_pins.py", "rehearsal_bump_action_pins")
         pyproject = work / "pyproject.toml"
-        pyproject.write_text(set_pyproject_version(pyproject.read_text("utf-8"), version), "utf-8")
+        rewrite_text(pyproject, lambda text: set_pyproject_version(text, version))
         run(["uv", "lock", "--quiet"], work)
         for name in pin.PIN_FILES:
             path = work / name
-            text = path.read_text("utf-8")
-            path.write_text(
-                bump_pin_comments(text, pin.PIN, last or version, version, name), "utf-8"
+            rewrite_text(
+                path,
+                lambda text, name=name: bump_pin_comments(
+                    text, pin.PIN, last or version, version, name
+                ),
             )
         changelog = work / "CHANGELOG.md"
         today = datetime.date.today().isoformat()
-        changelog.write_text(date_changelog(changelog.read_text("utf-8"), version, today), "utf-8")
-        dirty = bool(run(["git", "status", "--porcelain"], work).stdout.strip())
+        rewrite_text(changelog, lambda text: date_changelog(text, version, today))
+        dirty = tree_has_changes(work)
         refuse_an_unchanged_version_bump(dirty, last, tag)
         run(commit_args(f"release: {tag} (rehearsal)", allow_empty=not dirty), work)
         run(["git", "push", "--quiet", "origin", "HEAD:main"], work)
