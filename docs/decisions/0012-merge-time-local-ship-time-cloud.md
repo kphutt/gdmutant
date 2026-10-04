@@ -70,7 +70,7 @@ job names to required checks, with no job logic changes, because none of it was 
 that point. It stays the authoritative check regardless of whether `ci.yml` also runs on every push.
 
 ## Consequences
-- Cost. `ci.yml`'s ~2,800 billed min/month (measured, July 2026) drops to whatever
+- Cost. `ci.yml`'s billed minutes per month (figure redacted, see the 2026-10-03 correction) drop to whatever
   `workflow_dispatch` is manually invoked, effectively $0 while private. `publish.yml`'s
   gate now runs seven jobs including two Godot runners and a Windows runner, but only at release
   time, which happens on the order of once every few weeks, not ~12 times/day.
@@ -131,3 +131,14 @@ this restoration adds contributor-facing visibility back, it does not change wha
 ship. The Decision section's reasoning for the original split (why merge-time and ship-time can
 tolerate different rigor) is historical record, not reversed by this correction — only the trigger
 configuration it produced changed, and for reasons this record didn't originally anticipate.
+
+## Correction (2026-10-03)
+
+This is a redaction, not a change of decision. The first Consequences bullet ("Cost") originally
+gave a measured monthly count of billed Actions minutes for `ci.yml`. That figure was account
+billing data, not a fact about gdmutant's code, and it should not have been published. An earlier
+scrub of this record (2026-07-30) removed the account-wide allowance figures but left this one, and
+the matching comment in `ci.yml`'s header kept the allowance figure, so both were removed now. The
+bullet is edited in place to drop the number. The argument does not depend on it: each job bills at
+least one minute whatever its real runtime, and a run on every pull request and push multiplies
+that. Everything else in this record stands as written.
