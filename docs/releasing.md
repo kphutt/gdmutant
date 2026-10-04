@@ -103,6 +103,40 @@ a release gate.
 
 ## Real release -> PyPI (push a tag, then press Publish)
 
+Every merge to `main` rehearses the steps below on a throwaway copy
+([`.github/workflows/rehearse-release.yml`](../.github/workflows/rehearse-release.yml), running
+[`scripts/rehearse_release.py`](../scripts/rehearse_release.py)). It makes the step 1 and 2 edits,
+runs the suite on the version-bump commit, tags it locally, and then on the tagged commit runs what
+`publish.yml` gates the upload on: the tag guard, the whole of `ci.yml`'s `verify` job through
+`scripts/verify_local.py`, the build, `twine check` and the image check. Then step 10's pin bump and
+the strict pin test, and `ci.yml`'s `license-check` job last. Its `origin` is a bare repo in a temp
+directory, so nothing it does can reach GitHub or an index. A red rehearsal means this runbook would
+fail today, found weeks before the release that would have hit it. Run it by hand before cutting a
+real release:
+
+```sh
+uv run python scripts/rehearse_release.py            # what CI runs
+uv run python scripts/rehearse_release.py --quick    # release-shaped tests only, under a minute
+```
+
+Four parts of the gate it cannot reach, so a green rehearsal does not clear them: the ancestry
+guard's authenticated fetch, `verify` on Windows and the two Godot self-tests, `secret-scan`'s
+full-history `gitleaks` pass, and the OIDC upload with the `verify-published` install that follows
+it. `ci.yml` does run the Windows and Godot legs on every pull request, just never on a tagged
+commit.
+
+Two states worth knowing before you read a report:
+
+- **It refuses to start rather than guess.** No `v*` tag in the checkout (a tagless fetch) means it
+  cannot tell which version a release would cut, and guessing would rehearse a version that already
+  shipped -- every edit a no-op, and a green run that walked nothing. It prints `NOTRUN` and exits
+  2. Same for a tree that is not a git checkout at all.
+- **Between a release PR merging and its tag being pushed, steps 1 and 2 have nothing left to do.**
+  The rehearsal says so (`nothing left to edit: a release of vX.Y.Z is already in progress`) and
+  carries on walking the rest of the path. It does not read that as a failure. If the packaged
+  version *is* tagged, though, those edits had real work to do, and a tree they left unchanged is a
+  failure: one of them no longer edits the file it names.
+
 1. Set the version in `pyproject.toml`. The tag must match it exactly.
    `scripts/check_release_tag.py` fails the release if it doesn't.
 
