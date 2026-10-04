@@ -204,6 +204,17 @@ def undecoded_calls(source: str, *, in_the_package: bool) -> list[str]:
         if ast.unparse(node.func) not in spellings:
             continue
         given = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+        splat = next((keyword for keyword in node.keywords if keyword.arg is None), None)
+        if splat is not None and not {"encoding", "errors"} <= set(given):
+            # `**opts` can carry `text=True` without naming it here, so reading this call
+            # cannot tell text mode from bytes mode. Say so rather than accept it: a check
+            # that cannot see its input must not pass quietly. Naming both arguments clears it.
+            found.append(
+                f"line {node.lineno}: `**{ast.unparse(splat.value)}` may carry a decode "
+                "argument, so reading this call cannot tell whether it decodes -- pass "
+                "`encoding=` and `errors=` here by name"
+            )
+            continue
         if not any(arg in given for arg in _TEXT_MODE_ARGS):
             continue  # bytes mode: nothing is decoded, so there is nothing to pin.
         for arg in ("encoding", "errors"):
@@ -293,6 +304,11 @@ def test_the_scan_reaches_all_three_places_it_is_meant_to_cover() -> None:
             "from subprocess import check_output as grab\ngrab(cmd, text=True)",
             "without an explicit `encoding=`",
         ),
+        # A splat hides what it carries, so the scan says it cannot tell instead of accepting.
+        (
+            "import subprocess" + chr(10) + "subprocess.run(cmd, capture_output=True, **opts)",
+            "may carry a decode argument",
+        ),
     ],
 )
 def test_the_scan_rejects_a_call_that_leaves_the_decode_implicit(
@@ -310,6 +326,9 @@ def test_the_scan_rejects_a_call_that_leaves_the_decode_implicit(
         'subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace")',
         "subprocess.run(cmd, capture_output=True)",  # bytes mode: nothing decodes
         "subprocess.check_call(cmd)",  # no captured output at all
+        # Naming both arguments clears a splat: Python itself rejects a duplicate keyword, so
+        # whatever `opts` holds, these two are what this call decodes with.
+        'subprocess.run(cmd, encoding="utf-8", errors="replace", **opts)',
     ],
 )
 def test_the_scan_accepts_a_call_that_cannot_lose_a_stream(call: str) -> None:
