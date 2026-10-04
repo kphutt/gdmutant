@@ -182,7 +182,7 @@ if the confirmation cost shows up as a real complaint, and it would need a way t
 reproducible.
 
 Watching the coverage markers to detect a hang instead of waiting it out. A mutant that is
-genuinely stuck stops firing markers, which is a live signal no production mutation tester has.
+genuinely stuck stops firing markers, which would be a live signal that it is stuck and not slow.
 Two things rule it out today, and neither is a guess. The recorder writes its hits file only at
 `NOTIFICATION_PREDELETE`, at process teardown, so a hung process writes nothing at all and there is
 no partial file to watch. And markers are only placed in the throwaway copy the coverage pass runs
@@ -285,3 +285,12 @@ numbers instead.
 The decision is unaffected. The worker multiplier cancelled the parallelism where it was needed, and
 the measured table still shows it: almost no gain at four workers under the old budget, and 3.02x
 under the new one.
+
+Separately, and on the same date: the paragraph in "What was considered and left out" about watching
+the coverage markers originally ended its first sentence with a claim about what other tools in the
+field do not have. Nothing here measured that, no survey of them is cited anywhere in this record,
+and a claim about every other tool in the field is not one this project can support. It is
+removed rather than narrowed, because a smaller version of it would need the same evidence. The
+sentence now stops at the mechanism it can show. The reasoning is unaffected: watching markers is
+ruled out by the two facts that follow it, that a hung recorder writes no file to watch and that a
+per-mutant run uses an unmarked copy, neither of which depends on what any other tool does.
