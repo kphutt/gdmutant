@@ -10,7 +10,7 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.4] - 2026-09-25
+## [0.1.4] - 2026-10-03
 
 ### Added
 
@@ -74,11 +74,10 @@ All notable changes to gdmutant are recorded here. The format follows
   times as long. If it finishes, it was never stuck and its real verdict is what gets reported.
   Only the mutants that ran long pay for this. The summary says what happened: `reprieved` counts
   the mutants that would have been false kills, and a run with timeouts always states how many of
-  them a second run confirmed, including when the answer is none. No other mutation tester checks
-  a timeout at all. `--timeout` still overrides everything, and now also turns the second run off:
-  you named a number, so gdmutant uses it. The measurement, the chosen numbers and the
-  verdict-by-verdict comparison against the old budget are in
-  [ADR-0020](docs/decisions/0020-a-measured-time-budget-and-a-confirmed-timeout.md).
+  them a second run confirmed, including when the answer is none. `--timeout` still overrides
+  everything, and now also turns the second run off: you named a number, so gdmutant uses it. The
+  measurement, the chosen numbers and the verdict-by-verdict comparison against the old budget are
+  in [ADR-0020](docs/decisions/0020-a-measured-time-budget-and-a-confirmed-timeout.md).
 - gdmutant's own work per mutant is faster. Every mutant is re-parsed to check it is still valid
   GDScript, and that check now skips gathering position data it never used. Over 54,677 mutants
   from three real GDScript projects, it gave the same valid or invalid answer every time. On the
@@ -87,6 +86,9 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ### Fixed
 
+- Captured child-process output is decoded as UTF-8, not the machine's code page. A whole stream
+  could vanish silently, `SCRIPT ERROR` line included, so a mutant could get the wrong verdict. My
+  stopgap was `PYTHONUTF8=1`, which no user of the published CLI should need.
 - The HTML report's "survived" filter no longer includes mutants no test reaches. A `no coverage`
   mutant shares the survivor's red color, but it is a different problem ("no test runs this line"
   rather than "a test ran and missed it"), and filtering to survivors now shows only the second

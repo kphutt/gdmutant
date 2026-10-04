@@ -365,7 +365,7 @@ for this. The summary says what happened:
 ```
 
 `reprieved` is the number of kills you would have been handed by a tool that took the first budget
-at its word. Every other mutation tester reports those as kills without checking.
+at its word.
 
 `--jobs N` does not change the budget. Multiplying it by the worker count, which gdmutant used to
 do, cancelled the parallelism on exactly the mutants that hang: N hanging mutants across N
