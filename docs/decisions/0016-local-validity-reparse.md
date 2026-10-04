@@ -240,3 +240,58 @@ files thousands of lines long. Until then, the time is better spent on timeouts.
   climb across `--sizes`, and that is now a known, accepted cost rather than a bug.
 - `tests/test_validity_gate.py` stays as it is. It already guards the gate against any future
   speed work, and the fixture list above is ready for whoever picks this up.
+## Correction (2026-10-03)
+
+A sweep of every number in the public docs found two of this ADR's figures stated without the
+measurement behind them, and a third that reads an example of console output as if it were a
+recorded run. The decision does not change. What follows is where each number actually comes from.
+
+### "about 92% of gdmutant's own engine time"
+
+The Context section opens with that share for the whole-file re-parse. No measurement is recorded
+for it anywhere in this repository, so it should not be read as one. What is recorded is the
+benchmark table in the pull request that landed the metadata change
+([#292](https://github.com/kphutt/gdmutant/pull/292)), run with
+`scripts/benchmark.py --sizes 2,8,16 --repeat 3`, before and after in the same session:
+
+| Scenario | Workload | Before (median) | After (median) | Change |
+|---|---|---|---|---|
+| `apply` | synthetic-8 | 4.7998 s | 3.0686 s | 36% faster |
+| `run` | synthetic-8 | 6.0103 s | 4.2455 s | 29% faster |
+| `apply` | synthetic-16 | 19.2645 s | 15.9288 s | 17% faster |
+| `run` | synthetic-16 | 22.2270 s | 17.4037 s | 22% faster |
+
+`apply` applies every mutant and re-parses the result, `run` is the full engine loop, so `apply`'s
+work is a subset of `run`'s: 19.2645 s of 22.2270 s, about 87%. The re-parse alone is less than
+that, because `apply` also writes and restores files. So the figure this ADR can support is that
+the re-parse is most of the engine loop, bounded above by about 87% on that workload, rather than
+exactly 92%.
+
+### "about 22% faster (see `CHANGELOG.md`)"
+
+`CHANGELOG.md` states that same claim, so citing it is a loop rather than evidence. The
+measurement is the table above: the `run` scenario on the 16-function synthetic file went from
+22.2270 s to 17.4037 s median, which is the 22%. Two things belong with that number wherever it is
+quoted. It is `scripts/benchmark.py`'s synthetic workload driven by a fake test runner, not a real
+project, and it covers gdmutant's own engine time only. The evidence that the faster check still
+gives the same answer is separate, and that part is real code: every mutant of every `.gd` file
+across 712 files in three GDScript projects, 54,677 mutants in all, and the validity answer never
+differed with the metadata off.
+
+### "The one real run recorded in `CHANGELOG.md` ... 6m 32s"
+
+"What it is worth in a real run" reads `Done in 6m 32s, 18 mutants, 8 timed out (4m 0s of that)`
+out of `CHANGELOG.md`. That line is an example of the format the closing line prints, not a record
+of a run, so `6m 32s` and the `4m 0s` inside it are not measured totals. The measurements the
+section's argument actually needs are these:
+
+- A real run whose mutants hang is in
+  [ADR-0020](0020-a-measured-time-budget-and-a-confirmed-timeout.md): eight timeouts accounted for
+  four minutes of one six-minute-twenty-four run.
+- The bundled corpus's baseline suite takes 1.455 s under GdUnit4, of which GdUnit4 reports 32 ms
+  as test time ([ADR-0019](0019-one-godot-per-mutant-stays.md)), and 1.378 s with 0.031 s of test
+  time in ADR-0020's own baseline table.
+
+The conclusion holds, because it turns on an order of magnitude rather than on a total: a few
+milliseconds of parsing per mutant against well over a second of Godot per mutant, so removing all
+of the parsing saves under 1% of a corpus run.
