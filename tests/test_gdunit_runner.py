@@ -103,7 +103,9 @@ def test_run_invokes_subprocess_with_the_constructed_command(
     assert kwargs["timeout"] == 42.0
     assert kwargs["check"] is False
     assert kwargs["capture_output"] is True  # per-mutant chatter is captured, not inherited
-    assert kwargs["text"] is True
+    # Decoded explicitly, never by the machine's code page: a Godot byte the code page has no
+    # character for silently loses the whole captured stream (engine.runner.CAPTURE_ENCODING).
+    assert (kwargs["encoding"], kwargs["errors"]) == ("utf-8", "replace")
 
 
 def test_run_reflects_latest_report_on_repeated_calls(
@@ -364,7 +366,7 @@ def test_run_warms_the_import_cache_once_before_the_first_suite_run(
     (_, import_kwargs) = import_calls[0]
     assert import_kwargs["check"] is False
     assert import_kwargs["capture_output"] is True
-    assert import_kwargs["text"] is True
+    assert (import_kwargs["encoding"], import_kwargs["errors"]) == ("utf-8", "replace")
 
 
 def test_run_survives_a_slow_import_warm_up(

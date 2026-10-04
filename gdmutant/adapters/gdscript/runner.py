@@ -34,6 +34,8 @@ from gdmutant.adapters.gdscript.marker_run import WINDOW_HOOK_NAME
 from gdmutant.adapters.gdscript.markers import MARKER_AUTOLOAD
 from gdmutant.engine.loop import SourceOutsideProject
 from gdmutant.engine.runner import (
+    CAPTURE_ENCODING,
+    CAPTURE_ERRORS,
     ReportedSuite,
     SuiteResult,
     SuiteTimeout,
@@ -218,7 +220,8 @@ class _GodotJUnitRunner:
                     timeout=_IMPORT_TIMEOUT,
                     check=False,
                     capture_output=True,
-                    text=True,
+                    encoding=CAPTURE_ENCODING,
+                    errors=CAPTURE_ERRORS,
                 )
             except FileNotFoundError as error:
                 raise with_filename(error, self.godot) from error
@@ -383,7 +386,8 @@ class _GodotJUnitRunner:
                 timeout=budget,
                 check=False,
                 capture_output=True,
-                text=True,
+                encoding=CAPTURE_ENCODING,
+                errors=CAPTURE_ERRORS,
             )
         except subprocess.TimeoutExpired as expired:
             # A mutation that makes the suite hang is a detection — surface it as a timeout so the

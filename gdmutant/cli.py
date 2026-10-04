@@ -56,7 +56,13 @@ from gdmutant.engine.report import (
     stryker_report,
     stryker_report_multi,
 )
-from gdmutant.engine.runner import CommandRunner, Runner, RunWarning
+from gdmutant.engine.runner import (
+    CAPTURE_ENCODING,
+    CAPTURE_ERRORS,
+    CommandRunner,
+    Runner,
+    RunWarning,
+)
 
 #: Where the Godot editor's own binary lives inside the macOS app bundle — the path a macOS user
 #: needs, whichever flag they end up putting it in.
@@ -263,7 +269,8 @@ def _git_backup(source_path: str) -> _GitBackup:
             ["git", "status", "--porcelain", "--ignored=matching", "--", path.name],
             cwd=path.parent,
             capture_output=True,
-            text=True,
+            encoding=CAPTURE_ENCODING,
+            errors=CAPTURE_ERRORS,
             env=_clean_git_env(),
         )
     except OSError:
@@ -272,8 +279,10 @@ def _git_backup(source_path: str) -> _GitBackup:
     if completed.returncode != 0:
         return _GitBackup(None, _git_failure_reason(judged, completed.stderr))
     # `--porcelain` prints one line per path and nothing at all when there is nothing to report.
-    # Comparing to "" (not bool()) also kills a `text=True`->False mutant: raw bytes never equal
-    # the str "".
+    # Comparing to "" (not bool()) is also the stricter check: only a decoded, genuinely empty
+    # stream reads as "git has a clean copy of this file". Neither raw bytes nor the None that a
+    # failed decode leaves behind (`engine.runner.CAPTURE_ENCODING`) can equal the str "", so a
+    # stream that never arrived cannot be mistaken here for one that came back empty.
     if completed.stdout == "":
         return _GitBackup(True)
     if completed.stdout.startswith("!!"):
@@ -648,7 +657,8 @@ def _changed_lines(ref: str, files: list[str]) -> dict[str, set[int]] | None:
                 ["git", "diff", "--unified=0", ref, "--", str(path)],
                 cwd=str(path.parent),
                 capture_output=True,
-                text=True,
+                encoding=CAPTURE_ENCODING,
+                errors=CAPTURE_ERRORS,
                 env=_clean_git_env(),
             )
         except OSError as error:
@@ -673,7 +683,8 @@ def _changed_lines(ref: str, files: list[str]) -> dict[str, set[int]] | None:
                 ["git", "ls-files", "--error-unmatch", str(path)],
                 cwd=str(path.parent),
                 capture_output=True,
-                text=True,
+                encoding=CAPTURE_ENCODING,
+                errors=CAPTURE_ERRORS,
                 env=_clean_git_env(),
             )
             if tracked.returncode != 0:  # untracked

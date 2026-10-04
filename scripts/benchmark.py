@@ -314,7 +314,12 @@ def measure_godot_corpus(godot: str, repeat: int) -> Result:
 def _git(*args: str) -> str | None:
     try:
         return subprocess.run(
-            ["git", *args], cwd=REPO, capture_output=True, text=True, check=True
+            ["git", *args],
+            cwd=REPO,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return None
