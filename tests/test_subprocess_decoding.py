@@ -31,12 +31,14 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from gdmutant import cli
 from gdmutant.engine.runner import CAPTURE_ENCODING, CAPTURE_ERRORS, CommandRunner
 
 REPO = Path(__file__).resolve().parent.parent
@@ -99,6 +101,41 @@ def test_output_with_no_undecodable_byte_is_unchanged(tmp_path: Path) -> None:
     # console whose code page cannot encode either of those characters (AGENTS.md).
     assert ascii(result.runtime_error) == ascii(message)
     assert "�" not in result.runtime_error
+
+
+def test_the_clis_git_calls_pass_the_decode_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The three git calls in `cli` are asserted at the seam, like the runners' calls already are.
+
+    Not a style choice. For these three, dropping the policy is invisible to every behavioural
+    test that can be written: `git status --porcelain` quotes a non-ASCII path, so its output is
+    ASCII whatever git's locale, and `git ls-files` is read for its exit code alone. `encoding=None`
+    there also behaves identically to `"utf-8"` on any UTF-8 machine, so a content-based test would
+    pass on Linux and fail on Windows, or the reverse. Checked at the call instead, which is the
+    same answer everywhere -- and it makes these three agree with the GdUnit4, GUT and marker-run
+    calls, which are pinned exactly this way (`test_gdunit_runner.py`, `test_gut_runner.py`,
+    `test_marker_run.py`).
+    """
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def record(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs))
+        # `ls-files --error-unmatch` exits non-zero for an untracked file, which is the branch that
+        # reaches it at all. The other two are read for their output, which is empty here.
+        return subprocess.CompletedProcess(command, 1 if "ls-files" in command else 0, "", "")
+
+    monkeypatch.setattr(cli.subprocess, "run", record)
+    source = tmp_path / "f.gd"
+    source.write_text("func f():\n\tpass\n", encoding="utf-8")
+
+    cli._git_backup(str(source))
+    cli._changed_lines("HEAD", [str(source)])
+
+    # All three were reached, so this cannot pass by checking nothing.
+    assert [command[1] for command, _ in calls] == ["status", "diff", "ls-files"]
+    for command, kwargs in calls:
+        assert (kwargs["encoding"], kwargs["errors"]) == ("utf-8", "replace"), command
 
 
 def _modules() -> list[Path]:

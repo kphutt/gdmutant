@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from conftest import MarkerRunner, copy_of_template
+from test_subprocess_decoding import UNDECODABLE
 
 import gdmutant.cli as cli
 from gdmutant.adapters.gdscript.runner import GutRunner
@@ -2652,6 +2653,31 @@ def test_changed_lines_maps_the_modified_line(tmp_path: Path) -> None:
     Path(path).write_text(_TWO_LINE_SRC.replace("x > 0", "x > 1"), encoding="utf-8")
     changed = cli._changed_lines("HEAD", [path])
     assert changed == {str(Path(path).resolve()): {2}}  # the +side of the diff, line 2 only
+
+
+def test_changed_lines_reads_a_diff_whose_content_the_code_page_cannot_decode(
+    tmp_path: Path,
+) -> None:
+    """``git diff`` prints the file's content, so --since has to survive a byte in it that the
+    machine's code page cannot decode.
+
+    0x8F is that byte everywhere this suite runs: cp1252 has no character for it, and it is not
+    valid UTF-8 either, so a strict decode fails on Windows and on Linux alike. Letting subprocess
+    pick the encoding means the failure happens inside its reader thread, where it does not
+    propagate -- `subprocess.run` returns with stdout set to None, and the line below raises
+    TypeError from inside the regex instead of reporting the changed line. The decode policy is in
+    `engine.runner.CAPTURE_ENCODING`; `test_subprocess_decoding.py` holds the rest of this story.
+    """
+    path = _repo_with_committed(tmp_path, "f.gd", _TWO_LINE_SRC)
+    # Line 2 only, as in the test above, but holding a raw byte rather than text. Edited through
+    # the file's own bytes so the line endings git committed are kept and the diff stays one line
+    # wide on every platform. The byte itself is defined once, in the module that owns this rule.
+    source = Path(path)
+    source.write_bytes(source.read_bytes().replace(b"x > 0", b"x > " + UNDECODABLE))
+
+    changed = cli._changed_lines("HEAD", [path])
+
+    assert changed == {str(Path(path).resolve()): {2}}
 
 
 def test_changed_lines_ignores_leaked_hook_git_env(
