@@ -417,7 +417,8 @@ def test_a_mutation_tools_copy_inside_the_checkout_refuses_too(tmp_path: Path) -
         ["git", "rev-parse", "--is-inside-work-tree"],
         cwd=copy,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=True,
     )
     assert inside.stdout.strip() == "true", "the premise of this test: the copy IS inside the tree"
@@ -444,7 +445,8 @@ def test_the_committer_is_passed_per_command_and_never_stored(tmp_path: Path) ->
         ["git", "config", "--local", "--get", "user.name"],
         cwd=work,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert stored.stdout.strip() == "", (
@@ -453,7 +455,12 @@ def test_the_committer_is_passed_per_command_and_never_stored(tmp_path: Path) ->
     # Named, not merely non-empty: this machine has an ambient identity, so a `commit_args` that
     # had dropped the per-command committer would still have produced a commit with an author.
     author = subprocess.run(
-        ["git", "log", "-1", "--format=%an"], cwd=work, capture_output=True, text=True, check=True
+        ["git", "log", "-1", "--format=%an"],
+        cwd=work,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
     )
     wanted = rehearse_release.COMMITTER[1].removeprefix("user.name=")
     assert author.stdout.strip() == wanted
