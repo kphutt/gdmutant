@@ -1749,7 +1749,7 @@ def test_a_mutant_that_runs_long_is_re_run_before_it_is_called_a_hang(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The mutant needs more time than the first budget allows and less than the confirmation
-    # budget. Without re-running it would be recorded as a kill. gdmutant runs it again and finds
+    # budget. Without re-running, it would be recorded as a kill. gdmutant runs it again and finds
     # out it was never hanging, so the verdict is the real one: SURVIVED.
     src, path = _one_mutant(tmp_path)
     budget = TimeBudget(net=40.0, overhead=10.0, measured=True)  # a 50s baseline, 40s of it tests
