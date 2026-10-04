@@ -38,8 +38,9 @@ needs six.
 
 The worker multiplier cancelled the parallelism exactly where it was needed. N hanging mutants
 spread across W workers, each allowed W times the budget, take the same wall-clock as running them
-one after another. That is why `--jobs 4` bought only 9.5% on a project where 13 to 24% of mutants
-time out: the mutants that dominate the run were the ones the multiplier slowed back down.
+one after another. That is why `--jobs 4` bought almost nothing on the project measured below (949.4 s
+serially against 915.6 s at four workers, 3.6%) where 10 of 41 mutants time out: the mutants that
+dominate the run were the ones the multiplier slowed back down.
 
 The multiplier existed for a real reason, which was never measured: W workers contend for CPU and
 RAM, so a genuinely passing suite could cross a serial budget under load and be recorded as a hang.
@@ -267,3 +268,20 @@ would have: a real project, a real framework, and mutants that really hang.
   constant is too small for that shape of project, and the number to raise is the constant.
 * If the recorder ever writes incrementally, or a second channel appears that a running mutant can
   be watched on, the marker-based hang detection above becomes worth measuring.
+
+## Correction (2026-10-03)
+
+The sentence in Context that explains why `--jobs 4` gained little originally read: "`--jobs 4` bought
+only 9.5% on a project where 13 to 24% of mutants time out." Neither figure came from a recorded run.
+The 9.5% contradicts this document's own table, where the game project ran 949.4 s serially and
+915.6 s at `--jobs 4`, a 3.6% gain. The 13 to 24% range matches no measurement: the table's own
+count is 10 of 41 mutants hanging, which is 24%, and the 6 of 41 reprieved is 15%.
+
+A search found no record of either figure. It covered every git ref and patch, the pull request that
+shipped this ADR, every tracker issue and comment, and the scratch benchmark data. The figures appear
+only in the patch that added them to this file. The sentence above now quotes the table's committed
+numbers instead.
+
+The decision is unaffected. The worker multiplier cancelled the parallelism where it was needed, and
+the measured table still shows it: almost no gain at four workers under the old budget, and 3.02x
+under the new one.
