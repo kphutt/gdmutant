@@ -538,6 +538,29 @@ def test_the_dirtiness_check_ignores_a_line_ending_only_rewrite(tmp_path: Path) 
     assert rehearse_release.tree_has_changes(work) is False
 
 
+def test_the_dirtiness_check_sees_a_staged_edit(tmp_path: Path) -> None:
+    """Without `HEAD`, `git diff --quiet` compares the index and misses a staged change."""
+    work = _repo_with_windows_checkout_settings(tmp_path)
+    rehearse_release.rewrite_text(work / "f.txt", lambda text: text.replace("two", "three"))
+    rehearse_release.run(["git", "add", "f.txt"], work)
+    assert rehearse_release.tree_has_changes(work) is True
+
+
+def test_the_dirtiness_check_refuses_to_answer_outside_a_repository(tmp_path: Path) -> None:
+    """git exits 129 here. Reading any non-zero exit as "changes" made the guard fail open."""
+    with pytest.raises(StepFailed, match="could not be inspected"):
+        rehearse_release.tree_has_changes(tmp_path)
+
+
+def test_the_dirtiness_check_refuses_to_answer_in_a_repository_with_no_head(
+    tmp_path: Path,
+) -> None:
+    """git exits 128 here, the state a fresh clone of an empty origin is in."""
+    rehearse_release.run(["git", "init", "--quiet"], tmp_path)
+    with pytest.raises(StepFailed, match="could not be inspected"):
+        rehearse_release.tree_has_changes(tmp_path)
+
+
 def test_the_dirtiness_check_sees_a_real_edit(tmp_path: Path) -> None:
     work = _repo_with_windows_checkout_settings(tmp_path)
     rehearse_release.rewrite_text(work / "f.txt", lambda text: text.replace("two", "three"))

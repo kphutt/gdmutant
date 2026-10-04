@@ -361,8 +361,18 @@ def tree_has_changes(work: Path) -> bool:
     `git status --porcelain` lists a file whose line endings were rewritten, which `git commit`
     then calls empty. `git diff --quiet HEAD` compares what a commit would record (exit 1 means a
     difference), so the answer matches what the commit will do. Staged and untracked files do not
-    count: the edits only modify tracked files, and `commit --all` only takes those too."""
-    return run(["git", "diff", "--quiet", "HEAD"], work, check=False).returncode != 0
+    count: the edits only modify tracked files, and `commit --all` only takes those too.
+
+    Three outcomes, not two. Exit 0 is "no changes" and exit 1 is "changes". Anything else is git
+    failing to look (129 outside a repository, 128 in one with no HEAD), and reading that as
+    "changes" would silence `refuse_an_unchanged_version_bump` by another route. It raises."""
+    result = run(["git", "diff", "--quiet", "HEAD"], work, check=False)
+    if result.returncode not in (0, 1):
+        raise StepFailed(
+            f"`git diff --quiet HEAD` exited {result.returncode}, which is neither 'no changes' "
+            "(0) nor 'changes' (1), so the clone could not be inspected:\n" + evidence(result)
+        )
+    return result.returncode == 1
 
 
 def say(text: str, stream: typing.TextIO | None = None) -> None:
