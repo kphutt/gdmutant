@@ -254,8 +254,8 @@ def _budget_lines(run: MutationRun) -> list[str]:
     Two facts, and both are about trust rather than about the score. A **reprieved** mutant ran
     past its first budget and then finished under the larger confirmation budget: it was never
     hanging, and a run that took the first budget's word for it would have recorded a kill that
-    was not one. Every other mutation tester records exactly that kill, silently. A **confirmed**
-    timeout is the opposite: a hang that a second, much longer run agreed was a hang.
+    was not one. A **confirmed** timeout is the opposite: a hang that a second, much longer run
+    agreed was a hang.
 
     Nothing is printed when neither happened, so a run with no timeouts stays as quiet as it
     always was. But a run that *had* timeouts always says how many of them were checked, including

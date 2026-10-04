@@ -146,12 +146,11 @@ class TimeBudget:
     def confirmation(self, files: tuple[str, ...] | None = None) -> float | None:
         """The larger budget a mutant gets when it runs past `first`, or ``None`` for no second try.
 
-        This is what makes a tight first budget safe. Every other mutation tester — Stryker, PIT,
-        Infection, mutant — waits out one wall-clock budget and records a kill, with nothing
-        checking that the suite was really stuck. A loose budget does not fix that; it just hides
-        the same guess behind a bigger number. Re-running only the mutants that ran long, under a
-        budget that allows the tests to take ten times as long, turns the guess into an answer: a
-        mutant that finishes was never hanging, and its real verdict is recorded instead.
+        This is what makes a tight first budget safe. A single wall-clock budget cannot tell a true
+        hang from a slow run. A loose budget does not fix that; it just hides the same guess behind
+        a bigger number. Re-running only the mutants that ran long, under a budget that allows the
+        tests to take ten times as long, turns the guess into an answer: a mutant that finishes was
+        never hanging, and its real verdict is recorded instead.
 
         ``None`` in three cases, each meaning "a second run could not say anything the first did
         not". An explicit ``--timeout`` is the user's own number and is honoured exactly. An
@@ -351,9 +350,8 @@ class MutationRun:
     def reprieved(self) -> int:
         """Count of mutants that ran past the first time budget and then finished under the
         confirmation budget. Every one of them would have been recorded as a hang, and scored as
-        killed, by a run that took the first budget's word for it — which is what every other
-        mutation tester does. A nonzero count here is the tight budget being caught out, and a zero
-        one is the only honest way to say it was not."""
+        killed, by a run that took the first budget's word for it. A nonzero count here is the
+        tight budget being caught out, and a zero one is the only honest way to say it was not."""
         return sum(1 for o in self.outcomes if o.over_budget and o.verdict is not Verdict.TIMEOUT)
 
     @property
@@ -507,9 +505,7 @@ def _wait_for_load_capacity(threshold: float) -> None:
 def _progress_plan(runnable: int, total: int, jobs: int, uncovered: int = 0) -> str:
     """The pre-run line: **what the run is**, with no prediction of how long it will take.
 
-    gdmutant used to print ``estimated ≈ 24s`` here, from mutant count × baseline time. No other
-    mutation tester forecasts an absolute duration before the work starts, and the one that
-    forecasts at all (Stryker) derives it from *measured* throughput and still misses badly. The
+    gdmutant used to print ``estimated ≈ 24s`` here, from mutant count × baseline time. The
     figure was wrong in both directions at once: too low by 1.7–3.4× on a real project (it counted
     neither gdmutant's own per-mutant work nor the timeouts, which were four minutes of one 6m24s
     run), and — because it never took `jobs` — roughly N× too high under ``--jobs N``. An estimate

@@ -587,8 +587,8 @@ def test_progress_plan_is_singular_for_one_mutant() -> None:
 
 
 def test_progress_plan_never_predicts_a_finish_time() -> None:
-    # The whole point of the change. Nine surveyed mutation testers forecast an absolute duration
-    # before the work starts; none of them do. Pin the absence so it cannot creep back.
+    # The core design choice: no duration forecast before the work starts. Pin the absence so it
+    # cannot creep back.
     line = _progress_plan(runnable=99, total=99, jobs=1)
     for forecast in ("estimated", "≈", "at least", "left", "ETA"):
         assert forecast not in line
@@ -1692,8 +1692,8 @@ class SlowRunner:
     `wall`, so the engine measures a real-looking wall-clock to decompose.
 
     This is the whole question a wall-clock budget cannot answer on its own. A suite that needs 40s
-    and a suite that needs forever both look identical to a 20s budget, and every other mutation
-    tester records the same kill for both."""
+    and a suite that needs forever both look identical to a 20s budget — indistinguishable without
+    a second, longer run."""
 
     cost: float
     baseline: SuiteResult
@@ -1749,7 +1749,7 @@ def test_a_mutant_that_runs_long_is_re_run_before_it_is_called_a_hang(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The mutant needs more time than the first budget allows and less than the confirmation
-    # budget. Every other mutation tester records that as a kill. gdmutant runs it again and finds
+    # budget. Without re-running it would be recorded as a kill. gdmutant runs it again and finds
     # out it was never hanging, so the verdict is the real one: SURVIVED.
     src, path = _one_mutant(tmp_path)
     budget = TimeBudget(net=40.0, overhead=10.0, measured=True)  # a 50s baseline, 40s of it tests

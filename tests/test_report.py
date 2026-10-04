@@ -550,7 +550,7 @@ def _mutant(column: int) -> Mutant:
 
 
 def test_a_reprieved_mutant_is_named_in_the_summary() -> None:
-    # The run's own honesty check, and the one fact no other mutation tester can report. This
+    # The run's own honesty check: tracking mutants that were almost mislabeled as hangs. This
     # mutant ran past its first time budget and then finished under the larger confirmation
     # budget, so it was never hanging. A tool that took the first budget's word for it would have
     # recorded a kill here, silently, and the mutation score would have gone up for nothing.
