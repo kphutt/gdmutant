@@ -109,11 +109,14 @@ def isolate_user_dir(copy_dir: str, token: str) -> None:
       not be.
 
     One consequence to know about: a worker's ``user://`` starts **empty**. A suite whose tests read
-    data there that no test in the run created would fail in every worker, and consistently failing
-    tests kill every mutant, so a run like that scores 100% off a baseline that was green in the
-    project's own directory. Such a suite depends on state it does not set up, which is the same
-    fault this isolation exists to stop one worker inflicting on another, so the answer is to make
-    the suite create what it reads rather than to go back to sharing.
+    data there that no test in the run created fails in every worker, and consistently failing tests
+    kill every mutant, so such a run once came back at 100% with no survivors off a baseline that
+    was green in the project's own directory. That is no longer reachable: under ``--jobs N`` the
+    engine runs the baseline in an isolated copy too (`engine.loop._baseline_project`), so the
+    baseline is red as well and the run stops with a message instead of a score. Such a suite
+    depends on state it does not set up, which is the same fault this isolation exists to stop one
+    worker inflicting on another, so the answer is to make the suite create what it reads rather
+    than to go back to sharing.
 
     A copy with no ``project.godot`` is left alone, and that is a decision rather than an oversight:
     without one there is no Godot project to run, so the baseline run fails long before any worker
