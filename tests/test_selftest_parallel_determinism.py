@@ -217,8 +217,8 @@ def probe_project(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempP
             pytest.fail(said)
         pytest.skip(said)
     project = tmp_path_factory.mktemp("parallel-gate") / "project"
-    # `.godot` and `reports` from an earlier local run are left behind so the copy starts cold and
-    # the import scan below is the one that fills the cache.
+    # `.godot` and `reports` from an earlier local run are left out of the copy, so it starts cold
+    # and the import scan below is the one that fills the cache.
     shutil.copytree(CORPUS, project, ignore=shutil.ignore_patterns(".godot", "reports"))
     (project / _PROBE_TARGET).write_text(_PROBE_SOURCE, encoding="utf-8", newline="\n")
     (project / "test" / _PROBE_SUITE).write_text(_SUITE_SOURCE, encoding="utf-8", newline="\n")
@@ -340,10 +340,13 @@ def test_parallel_runs_agree_with_the_serial_verdicts(probe_project: Path, tmp_p
     )
     for attempt in range(1, _PARALLEL_RUNS + 1):
         parallel = _verdicts(probe_project, tmp_path / f"parallel-{attempt}.json", jobs=_JOBS)
+        # Over the union of both key sets, not just the serial one: a parallel run that invented a
+        # mutant the serial run never produced is also a disagreement, and iterating one side would
+        # read it as agreement.
         differing = {
-            key: (status, parallel.get(key))
-            for key, status in serial.items()
-            if parallel.get(key) != status
+            key: (serial.get(key), parallel.get(key))
+            for key in serial.keys() | parallel.keys()
+            if serial.get(key) != parallel.get(key)
         }
         assert not differing, (
             f"--jobs {_JOBS} run {attempt} of {_PARALLEL_RUNS} disagreed with the serial run on "
@@ -352,10 +355,10 @@ def test_parallel_runs_agree_with_the_serial_verdicts(probe_project: Path, tmp_p
         )
     # The isolation moved `user://` somewhere, and both halves of "somewhere" have to hold. The
     # directory exists, so the path gdmutant computes for its own cleanup is the one Godot really
-    # used -- without this leg the leftover check below would pass most loudly when the path was
-    # wrong, because nothing would ever be created there to leave behind. And nothing new is in it,
-    # so every worker's directory was released. An entry that was already there is left alone: it
-    # belongs to an interrupted earlier run, or to another gdmutant running right now.
+    # used -- without this leg, a wrong path would make the leftover check below pass *because* it
+    # was wrong: nothing is ever created there, so nothing can be left behind. And nothing new is
+    # in it, so every worker's directory was released. An entry that was already there is left
+    # alone: it belongs to an interrupted earlier run, or to another gdmutant running right now.
     assert root.is_dir(), (
         f"no worker user:// directory turned up at {root}, so gdmutant and Godot disagree about "
         "where user:// goes; the isolation may be a no-op and its cleanup certainly is"

@@ -108,6 +108,13 @@ def isolate_user_dir(copy_dir: str, token: str) -> None:
       the machine (verified against Godot 4.7). A nameless project would therefore look isolated and
       not be.
 
+    One consequence to know about: a worker's ``user://`` starts **empty**. A suite whose tests read
+    data there that no test in the run created would fail in every worker, and consistently failing
+    tests kill every mutant, so a run like that scores 100% off a baseline that was green in the
+    project's own directory. Such a suite depends on state it does not set up, which is the same
+    fault this isolation exists to stop one worker inflicting on another, so the answer is to make
+    the suite create what it reads rather than to go back to sharing.
+
     A copy with no ``project.godot`` is left alone, and that is a decision rather than an oversight:
     without one there is no Godot project to run, so the baseline run fails long before any worker
     starts, and there is no ``user://`` for anything to share. That is what lets the

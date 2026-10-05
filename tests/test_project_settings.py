@@ -60,6 +60,21 @@ def test_two_tokens_never_land_in_the_same_user_dir() -> None:
     )
 
 
+def test_the_user_dir_name_nests_the_token_under_the_directory_cleanup_watches() -> None:
+    # The value written into project.godot and the path `release_user_dir` deletes have to agree,
+    # or a run isolates one directory and cleans up another. One shape, two readers: the token
+    # directly inside the root, and nothing else in between.
+    assert Path(worker_user_dir_name("run-w0")).parts == (worker_user_dirs_root().name, "run-w0")
+
+
+def test_the_leftovers_of_an_interrupted_run_are_named_after_the_tool() -> None:
+    # A run killed before it can release leaves this directory behind, in the same place the user's
+    # own Godot projects keep their data. Whoever finds it has to be able to tell what put it there
+    # and that deleting it is safe, so the name is part of the contract, not an implementation
+    # detail.
+    assert worker_user_dirs_root().name == "gdmutant"
+
+
 def test_a_project_that_already_set_these_keys_is_overruled(tmp_path: Path) -> None:
     # The dangerous shape: a project that explicitly turns the custom user directory OFF, or names
     # one of its own. Adding the keys only when they are absent would leave every worker of such a
@@ -139,10 +154,15 @@ def test_releasing_a_copy_that_left_nothing_behind_is_quiet(
     release_user_dir("run-w0")
 
 
-def test_the_data_path_on_windows_is_the_roaming_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_data_path_on_windows_is_the_roaming_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A stand-in directory rather than a written-out user profile: this repository refuses an
+    # absolute home path in a tracked file, and the mapping under test only joins what it is given.
+    roaming = tmp_path / "roaming"
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setenv("APPDATA", r"C:\Users\somebody\AppData\Roaming")
-    assert godot_data_path() == Path(r"C:\Users\somebody\AppData\Roaming")
+    monkeypatch.setenv("APPDATA", str(roaming))
+    assert godot_data_path() == roaming
 
 
 def test_the_data_path_on_windows_without_a_profile_falls_back_like_godot(
@@ -155,30 +175,37 @@ def test_the_data_path_on_windows_without_a_profile_falls_back_like_godot(
     assert godot_data_path() == Path(".")
 
 
-def test_the_data_path_on_macos_is_application_support(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_data_path_on_macos_is_application_support(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "somebodys-home"
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/Users/somebody")))
-    assert godot_data_path() == Path("/Users/somebody/Library/Application Support")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    assert godot_data_path() == home / "Library" / "Application Support"
 
 
 def test_the_data_path_on_linux_follows_an_absolute_xdg_data_home(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # A POSIX-absolute literal, not tmp_path: Godot takes XDG_DATA_HOME only when it begins with
+    # "/", and on a Windows machine tmp_path begins with a drive letter, so the case under test
+    # would never be the case running.
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setenv("XDG_DATA_HOME", "/elsewhere/share")
-    assert godot_data_path() == Path("/elsewhere/share")
+    monkeypatch.setenv("XDG_DATA_HOME", "/srv/elsewhere/share")
+    assert godot_data_path() == Path("/srv/elsewhere/share")
 
 
 @pytest.mark.parametrize("xdg", ["", "relative/share"], ids=["unset", "relative"])
 def test_the_data_path_on_linux_ignores_an_xdg_data_home_godot_would_ignore(
-    monkeypatch: pytest.MonkeyPatch, xdg: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, xdg: str
 ) -> None:
     # Godot uses XDG_DATA_HOME only when it is an absolute path and warns otherwise, so a relative
     # one has to fall back here too or the cleanup looks for the directory in the wrong place.
+    home = tmp_path / "somebodys-home"
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("XDG_DATA_HOME", xdg)
-    monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/home/somebody")))
-    assert godot_data_path() == Path("/home/somebody/.local/share")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    assert godot_data_path() == home / ".local" / "share"
 
 
 def test_a_setting_is_replaced_where_it_stands(tmp_path: Path) -> None:
