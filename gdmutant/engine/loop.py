@@ -1768,6 +1768,15 @@ def _run_mutants_parallel(
     workers; each passes its own copy's dir. The Godot import cache (`.godot/`) is copied along with
     the project, so a worker doesn't pay a cold re-scan.
 
+    **A copy is not isolation on its own**, which is why every worker's copy is handed to
+    `Adapter.isolate_copy` with a token unique to that worker before its thread starts. Copying the
+    project separates everything *inside* the project directory and nothing outside it, and a test
+    run reaches outside: for Godot, ``user://`` is resolved from the project's name settings rather
+    than its path, so N copies of one project share one directory on the machine. Two workers
+    writing to the same fixed-name file there make the suite red, a red suite is a kill, and the run
+    reports fewer survivors than exist. `release_copy` undoes it per worker in the `finally` below,
+    because the engine deletes the copies and only the adapter knows what it put anywhere else.
+
     **Every worker uses the same `TimeBudget` the serial path uses.** The budget used to be
     multiplied by the worker count, on the reasoning that W workers contend and each suite runs
     up to ~Wx slower. Measured, that reasoning was wrong by an order of magnitude: on a real game
@@ -1851,17 +1860,35 @@ def _run_mutants_parallel(
 
     load_threshold = float(jobs)
     with tempfile.TemporaryDirectory(prefix="gdmutant-jobs-") as tmp:
+        # Unique per run on this machine (mkdtemp picked it), so two gdmutant runs going at once
+        # cannot hand their workers the same isolation token.
+        run_id = Path(tmp).name
         threads: list[threading.Thread] = []
-        for w in range(worker_count):
-            if jobs_auto and w > 0:
-                _wait_for_load_capacity(load_threshold)
-            worker_dir = str(Path(tmp) / f"w{w}")
-            shutil.copytree(project_dir, worker_dir)
-            thread = threading.Thread(target=worker, args=(worker_dir,))
-            thread.start()
-            threads.append(thread)
-        for thread in threads:
-            thread.join()
+        isolated: list[str] = []
+        try:
+            for w in range(worker_count):
+                if jobs_auto and w > 0:
+                    _wait_for_load_capacity(load_threshold)
+                worker_dir = str(Path(tmp) / f"w{w}")
+                shutil.copytree(project_dir, worker_dir)
+                # Before the thread starts, never after: the copy is only isolated once this
+                # returns, and a suite run against a copy that is not yet isolated is exactly the
+                # collision this prevents.
+                token = f"{run_id}-w{w}"
+                adapter.isolate_copy(worker_dir, token)
+                isolated.append(token)
+                thread = threading.Thread(target=worker, args=(worker_dir,))
+                thread.start()
+                threads.append(thread)
+        finally:
+            # Join inside the `finally`, so a failure part way through starting the workers still
+            # waits for the ones already running. Leaving this to the normal path meant an
+            # exception here (a copy that would not copy) fell straight out of the `with`, which
+            # then deleted the tree the running workers were reading from.
+            for thread in threads:
+                thread.join()
+            for token in isolated:
+                adapter.release_copy(token)
     if errors:
         raise errors[0]
     return [outcomes[index] for index in range(total)]

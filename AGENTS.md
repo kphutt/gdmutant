@@ -53,8 +53,8 @@ uv run python scripts/dev.py build   # uv build
 It is not a replacement for `scripts/verify_local.py` below, which is the one command that mirrors
 the full CI `verify` job and is what you run before opening a pull request.
 
-Two suites are env-gated and auto-skip in a plain `uv run pytest` (so `verify` stays
-Godot-free). Run them when touching the adapter, runners, or CLI file-handling:
+Three suites are env-gated and stay out of a plain `uv run pytest` (so `verify` stays
+Godot-free). Run them when touching the adapter, runners, parallelism, or CLI file-handling:
 
 ```sh
 # Live self-test: drive the shipped CLI against a real Godot on the corpus.
@@ -64,6 +64,12 @@ Godot-free). Run them when touching the adapter, runners, or CLI file-handling:
 # scripts/install_gut.py before trusting a run of this file to mean anything more than "Godot
 # itself starts".
 GDMUTANT_GODOT=$(mise which godot) uv run pytest tests/test_selftest_live.py
+# `--jobs N` soundness: drive gdmutant against a probe suite built to collide on `user://`, and
+# compare several parallel runs with a serial one. Unlike the two suites around it, this one FAILS
+# rather than skips when GDMUTANT_GODOT is unset or the GdUnit4 addon is missing, as long as you
+# named the file (which is how you run it). It is the one gate for the bug class where a parallel
+# run reports fewer survivors than exist, so a green run that checked nothing is the worst outcome.
+GDMUTANT_GODOT=$(mise which godot) uv run pytest tests/test_selftest_parallel_determinism.py
 # Dogfood harness: run gdmutant against a real GdUnit4 checkout. Two checks: parse coverage,
 # and the whole-directory regression guard (Godot-free, ~5s). Point it at any GdUnit4 clone:
 GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dogfood_gdunit4.py

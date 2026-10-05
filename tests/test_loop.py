@@ -5,13 +5,14 @@ import os
 import stat
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import MarkerRunner
+from conftest import MarkerRunner, releases_nothing, shares_nothing
 
+import gdmutant.engine.loop as loop_mod
 from gdmutant.adapters.gdscript import ADAPTER
 from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.loop import (
@@ -902,7 +903,12 @@ def test_run_drives_a_custom_non_gdscript_adapter(tmp_path: Path) -> None:
     def fake_apply(mutant: Mutant, s: str) -> tuple[str, bool]:
         raise AssertionError("apply_mutant must not run when there are no mutants")
 
-    fake = Adapter(generate_mutants=fake_generate, apply_mutant=fake_apply)
+    fake = Adapter(
+        generate_mutants=fake_generate,
+        apply_mutant=fake_apply,
+        isolate_copy=shares_nothing,
+        release_copy=releases_nothing,
+    )
     result = _run(
         str(tmp_path), path, src, MarkerRunner(target=path, kill_marker="ZZZ"), adapter=fake
     )
@@ -980,6 +986,119 @@ def test_parallel_matches_serial_verdicts_and_order(tmp_path: Path) -> None:
     assert any(line.startswith("Done in ") for line in lines)  # parallel still reaches the close
     # The original project file is NEVER mutated in the parallel path — only the worker copies are.
     assert Path(parallel_path).read_text(encoding="utf-8") == src
+
+
+#: Two mutants are runnable here, so `jobs=2` really starts two workers.
+_TWO_RUNNABLE = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"
+
+
+@dataclass
+class RefusesAnUnisolatedCopy:
+    """A runner that will not score a project copy the adapter has not isolated yet.
+
+    The ordering is the whole point: `Adapter.isolate_copy` has to finish before the first suite
+    runs in that copy, because a suite that runs against a copy still sharing the machine's state
+    is the collision `--jobs` has to be free of. A fake that merely *counted* isolate calls could
+    not tell "isolated first" from "isolated afterwards, with one suite already poisoned", so this
+    reads the sentinel the fake isolation leaves behind and raises when it is missing. A raising
+    runner is an ERROR verdict rather than an exception out of the run (FG-4.1), which is exactly
+    what the caller asserts on: no mutant may come back ERROR.
+
+    `project_dir` is the original project, which is exempt: the baseline runs there, once, before
+    any worker exists, so there is nothing for it to collide with and nothing to isolate it from.
+    """
+
+    project_dir: str
+    kill_marker: str
+    sentinel: str
+    tests: int = 3
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        copy = Path(project_dir) != Path(self.project_dir)
+        if copy and not (Path(project_dir) / self.sentinel).is_file():
+            raise AssertionError(f"{project_dir} ran a suite before it was isolated")
+        content = (Path(project_dir) / "f.gd").read_text(encoding="utf-8")
+        return SuiteResult(tests=self.tests, failures=int(self.kill_marker in content), errors=0)
+
+
+def _recording_isolation(sentinel: str) -> tuple[Adapter, list[tuple[str, str]], list[str]]:
+    """An adapter whose isolation writes `sentinel` into each copy, plus the call logs.
+
+    Both logs are appended from the main thread only — the engine isolates each copy before it
+    starts that worker's thread, and releases after every thread has joined — so neither needs a
+    lock to be read back here."""
+    isolated: list[tuple[str, str]] = []
+    released: list[str] = []
+
+    def isolate(copy_dir: str, token: str) -> None:
+        isolated.append((copy_dir, token))
+        (Path(copy_dir) / sentinel).write_text(token, encoding="utf-8")
+
+    def release(token: str) -> None:
+        released.append(token)
+
+    adapter = replace(ADAPTER, isolate_copy=isolate, release_copy=release)
+    return adapter, isolated, released
+
+
+def test_each_parallel_worker_copy_is_isolated_before_use_and_released_after(
+    tmp_path: Path,
+) -> None:
+    # A copy of the project is not isolation on its own: a Godot suite writes to `user://`, which
+    # every copy of one project resolves to the same directory, and two workers colliding there
+    # turn a survivor into a kill. So each worker copy goes through the adapter's isolation, with a
+    # token of its own, before anything runs in it — and is released afterwards, because the engine
+    # deletes the copies and only the adapter knows what it put outside them.
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    adapter, isolated, released = _recording_isolation("ISOLATED")
+    result = _run(
+        str(tmp_path),
+        path,
+        _TWO_RUNNABLE,
+        RefusesAnUnisolatedCopy(str(tmp_path), kill_marker=">=", sentinel="ISOLATED"),
+        adapter=adapter,
+        jobs=2,
+    )
+    assert {v for *_, v in _outcome_key(result)} == {Verdict.KILLED, Verdict.SURVIVED}
+    directories = [copy_dir for copy_dir, _ in isolated]
+    tokens = [token for _, token in isolated]
+    assert len(isolated) == 2, f"one isolated copy per worker, got {isolated}"
+    assert len(set(directories)) == 2, f"two workers shared a copy: {directories}"
+    assert len(set(tokens)) == 2, f"two workers shared an isolation token: {tokens}"
+    assert sorted(released) == sorted(tokens), f"isolated {tokens}, released {released}"
+
+
+def test_a_copy_that_cannot_be_made_waits_for_the_workers_already_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Starting the workers is a loop, and it can fail part way through: a disk that fills up, a
+    # file the copy cannot read. Everything that cleans up after a parallel run used to sit after
+    # that loop, so an exception in it fell straight out of the `with` block that deletes the
+    # temporary tree — out from under the workers already reading from it, with their isolation
+    # never released. Both now happen in a `finally`.
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    adapter, isolated, released = _recording_isolation("ISOLATED")
+    real_copytree = loop_mod.shutil.copytree
+    calls: list[int] = []
+
+    def copytree_that_fails_on_the_second(*args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        if len(calls) == 2:
+            raise OSError("no space left on device")
+        return real_copytree(*args, **kwargs)
+
+    monkeypatch.setattr(loop_mod.shutil, "copytree", copytree_that_fails_on_the_second)
+    with pytest.raises(OSError, match="no space left on device"):
+        _run(
+            str(tmp_path),
+            path,
+            _TWO_RUNNABLE,
+            RefusesAnUnisolatedCopy(str(tmp_path), kill_marker=">=", sentinel="ISOLATED"),
+            adapter=adapter,
+            jobs=2,
+        )
+    assert len(isolated) == 1, f"the second copy never happened, so nothing isolated it: {isolated}"
+    assert released == [isolated[0][1]], f"the first worker was left unreleased: {released}"
 
 
 def test_parallel_gives_every_worker_the_unscaled_budget(tmp_path: Path) -> None:
@@ -1149,7 +1268,12 @@ def test_parallel_apply_error_propagates(tmp_path: Path) -> None:
     def fake_apply(_mutant: Mutant, _source: str) -> tuple[str, bool]:
         raise RuntimeError("apply boom")
 
-    adapter = Adapter(generate_mutants=fake_generate, apply_mutant=fake_apply)
+    adapter = Adapter(
+        generate_mutants=fake_generate,
+        apply_mutant=fake_apply,
+        isolate_copy=shares_nothing,
+        release_copy=releases_nothing,
+    )
     with pytest.raises(RuntimeError, match="apply boom"):
         _run(
             str(tmp_path),

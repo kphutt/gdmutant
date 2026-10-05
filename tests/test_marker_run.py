@@ -22,9 +22,9 @@ from gdmutant.adapters.gdscript.marker_run import (
     WRITER_AUTOLOAD,
     GDScriptMarker,
     _prepared_settings,
-    _with_setting,
 )
 from gdmutant.adapters.gdscript.markers import MARKER_AUTOLOAD
+from gdmutant.adapters.gdscript.project_settings import with_setting
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner, GutRunner
 from gdmutant.engine.runner import (
     CommandRunner,
@@ -124,7 +124,7 @@ def _writer_entry() -> str:
 
 def test_the_writer_is_registered_first_in_an_existing_autoload_section() -> None:
     settings = '[autoload]\n\nGame="*res://game.gd"\n'
-    placed = _with_setting(
+    placed = with_setting(
         settings, "autoload", WRITER_AUTOLOAD, f'"*res://{RECORDER_DIR}/writer.gd"'
     )
     assert placed == f'[autoload]\n{_writer_entry()}\n\nGame="*res://game.gd"\n'

@@ -12,6 +12,20 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `--jobs N` no longer reports a survivor as killed when your tests write to `user://`. Each worker
+  already got its own copy of the project, but Godot works out where `user://` is from the
+  project's name settings rather than from its path, so every copy resolved it to the same
+  directory on your machine. Two workers writing to one fixed-name file there made the suite fail
+  for a reason that had nothing to do with the mutant, and a failing suite is a kill, so the run
+  came back with fewer survivors than it should have and a score that looked better than the truth.
+  Every worker copy is now given a `user://` of its own, inside one `gdmutant/` directory that is
+  cleaned up when the run ends. `--jobs` defaults to `1`, which was never affected.
+
+  A new live check runs gdmutant against a suite built to collide this way, and compares several
+  `--jobs 4` runs against a serial one: `tests/test_selftest_parallel_determinism.py`.
+
 ## [0.1.4] - 2026-10-03
 
 ### Added

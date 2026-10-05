@@ -23,7 +23,16 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POODLE_TOML = REPO_ROOT / "poodle.toml"
-LIVE_GODOT_TEST_FILES = ("tests/test_selftest_live.py", "tests/test_dogfood_gdunit4.py")
+LIVE_GODOT_TEST_FILES = (
+    "tests/test_selftest_live.py",
+    "tests/test_dogfood_gdunit4.py",
+    "tests/test_selftest_parallel_determinism.py",
+)
+
+#: How a module says "I need a real Godot (or a real gdUnit4 checkout) to do anything": it
+#: reads the environment variable that names one. `_discovered_live_suites` looks for exactly
+#: this, so the list above cannot quietly fall behind the tests/ directory.
+_READS_A_LIVE_ENV_VAR = re.compile(r'os\.environ\.get\(\s*"GDMUTANT_(?:GODOT|GDUNIT4_CLONE)"')
 
 
 def _command_line() -> str:
@@ -58,12 +67,43 @@ def test_command_line_ignores_both_live_godot_suites() -> None:
         )
 
 
+def _discovered_live_suites() -> set[str]:
+    """Every test module that reads a live-Godot environment variable, found by reading tests/.
+
+    The list above is a pin, and a pin is only as good as something noticing when reality moves
+    past it. A third live suite added later is invisible to a pin: it simply is not in it, and the
+    sweep starts booting Godot once per mutant with nothing failing. So the directory is asked.
+    """
+    found = set()
+    for module in sorted((REPO_ROOT / "tests").glob("test_*.py")):
+        if _READS_A_LIVE_ENV_VAR.search(module.read_text(encoding="utf-8")):
+            found.add(f"tests/{module.name}")
+    return found
+
+
+def test_the_pin_names_every_live_suite_in_the_tests_directory() -> None:
+    discovered = _discovered_live_suites()
+    assert discovered == set(LIVE_GODOT_TEST_FILES), (
+        "the live-Godot suites in tests/ and poodle.toml's --ignore list have drifted apart. "
+        f"found in tests/: {sorted(discovered)}; pinned here: {sorted(LIVE_GODOT_TEST_FILES)}. "
+        "Add the new suite to both, or a mutation sweep on a machine with GDMUTANT_GODOT set "
+        "will invoke real Godot once per mutant."
+    )
+
+
 def test_the_ignored_files_are_exactly_the_env_gated_live_suites() -> None:
-    # If a third live-Godot suite is ever added, or one of these two stops being env-gated, this
-    # pin needs to move with it -- fail loudly rather than silently under- or over-excluding.
+    # The other direction from the test above: everything pinned here still has to BE a live suite.
+    # One that stops being env-gated belongs back in the ordinary sweep, and leaving it ignored
+    # would quietly take real tests out of every mutation run.
+    #
+    # Two spellings count as gated, because the two kinds of live suite need different ones. A
+    # module-level `skipif` skips the file wherever it is collected. A gate whose whole job is to
+    # measure a defect cannot do that: asked for by name with its environment unset, it has to
+    # fail, so it decides in a fixture (`pytest.skip`/`pytest.fail`) instead of a mark.
     for rel in LIVE_GODOT_TEST_FILES:
         src = (REPO_ROOT / rel).read_text(encoding="utf-8")
-        assert "skipif" in src and ("GDMUTANT_GODOT" in src or "GDMUTANT_GDUNIT4_CLONE" in src), (
+        gated = "skipif" in src or "pytest.skip(" in src
+        assert gated and ("GDMUTANT_GODOT" in src or "GDMUTANT_GDUNIT4_CLONE" in src), (
             f"{rel} no longer looks env-gated by GDMUTANT_GODOT/GDMUTANT_GDUNIT4_CLONE -- "
             "poodle.toml's --ignore list (and this test) needs to be reconsidered alongside it."
         )

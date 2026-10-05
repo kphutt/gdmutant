@@ -20,6 +20,7 @@ from gdtoolkit.parser import parser as _gdparser
 from lark import Token, Tree
 from lark.exceptions import LarkError
 
+from gdmutant.adapters.gdscript.project_settings import isolate_user_dir, release_user_dir
 from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.mutants import Mutant, MutationSite, generate
 from gdmutant.engine.operators import CATALOG, Operator, all_replacements
@@ -555,5 +556,11 @@ def apply_mutant(mutant: Mutant, source: str) -> tuple[str, bool]:
     return mutated, is_valid_gdscript(mutated)
 
 
-#: The GDScript `Adapter` the engine injects (NF-3) — the two callables above, bundled.
-ADAPTER = Adapter(generate_mutants=generate_mutants, apply_mutant=apply_mutant)
+#: The GDScript `Adapter` the engine injects (NF-3) — the callables above, bundled with the
+#: ``user://`` isolation a parallel run needs (`project_settings`, and the field docs on `Adapter`).
+ADAPTER = Adapter(
+    generate_mutants=generate_mutants,
+    apply_mutant=apply_mutant,
+    isolate_copy=isolate_user_dir,
+    release_copy=release_user_dir,
+)

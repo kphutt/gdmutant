@@ -47,8 +47,8 @@ def copy_of_template(dest: Path, key: str, build: Callable[[Path], Any]) -> Any:
 
 
 def pytest_report_header() -> str:
-    """Say, before the first test runs, whether the private-vocabulary half of the public-readiness
-    guard is going to run at all.
+    """Say, before the first test runs, which of this suite's env-gated guards are going to run at
+    all: the private-vocabulary half of the public-readiness guard, and the live parallel gate.
 
     This is the loud half of `tests/test_public_readiness.py`'s three-state contract. That guard has
     two halves: shape rules, which name nothing and run on every machine, and a vocabulary rule,
@@ -62,13 +62,22 @@ def pytest_report_header() -> str:
 
     Deliberately not a failure: making CI fail for lacking a file it must never be given would just
     get the guard deleted. Announced, not enforced.
+
+    The second line is the same idea for a different check. The parallel-determinism gate needs a
+    real Godot and the GdUnit4 addon, and without them it skips -- legitimately, on a CI runner and
+    on a fresh clone. What it must never do is let a run that never checked ``--jobs`` look like a
+    run that did, because the defect that gate exists to catch reports *fewer* survivors than exist.
+    So the state goes on screen either way, next to the other one.
     """
-    # Imported here rather than at module scope: a collection-time error in the guard should be
+    # Imported here rather than at module scope: a collection-time error in a guard should be
     # reported as that test module failing to import, not as conftest taking the whole run down.
     from tests.test_public_readiness import vocabulary_state
+    from tests.test_selftest_parallel_determinism import GDUNIT4_ADDON, missing_preconditions
 
     state, said = vocabulary_state()
-    return f"public-readiness vocabulary [{state}]: {said}"
+    missing = missing_preconditions(os.environ.get("GDMUTANT_GODOT"), GDUNIT4_ADDON)
+    gate = f"WILL NOT RUN: {'; '.join(missing)}" if missing else "ready"
+    return f"public-readiness vocabulary [{state}]: {said}\nparallel-determinism gate: {gate}"
 
 
 # Location vars git exports into a hook's environment (e.g. pre-push). If pytest is spawned from
@@ -94,6 +103,20 @@ def _isolate_git_env(monkeypatch: pytest.MonkeyPatch) -> None:
     code included) acts on its own tmp repo, never the repo of a hook that spawned pytest."""
     for var in _GIT_ENV_LEAKS:
         monkeypatch.delenv(var, raising=False)
+
+
+def shares_nothing(_copy_dir: str, _token: str) -> None:
+    """`Adapter.isolate_copy` for a fake adapter: a language whose test run touches nothing outside
+    the project directory, so a copy of the project already is an isolated copy.
+
+    A deliberate no-op rather than an unset field, which is the distinction that field asks for. The
+    fakes here drive the engine with a `MarkerRunner` that reads a file and returns a verdict -- it
+    starts no process, writes nothing to the machine, and so has nothing for two workers to collide
+    over."""
+
+
+def releases_nothing(_token: str) -> None:
+    """`Adapter.release_copy` for a fake adapter: `shares_nothing` created nothing to clean up."""
 
 
 @dataclass

@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from gdmutant.adapters.gdscript.markers import MARKER_AUTOLOAD, place_markers
+from gdmutant.adapters.gdscript.project_settings import with_setting
 from gdmutant.engine.coverage import MarkedCopy
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.runner import CAPTURE_ENCODING, CAPTURE_ERRORS
@@ -271,30 +272,7 @@ def _prepared_settings(settings: str) -> str:
     cannot load still fails the run, and a project whose own code trips a warning-as-error has a red
     baseline long before coverage analysis is asked for.
     """
-    with_writer = _with_setting(
+    with_writer = with_setting(
         settings, "autoload", WRITER_AUTOLOAD, f'"*res://{RECORDER_DIR}/writer.gd"'
     )
-    return _with_setting(with_writer, _WARNINGS_SECTION, _WARNINGS_KEY, "false")
-
-
-def _with_setting(settings: str, section: str, key: str, value: str) -> str:
-    """`settings` (a project.godot) with ``key=value`` set first in ``[section]``.
-
-    First in the section, because the one caller that cares about position needs it: an autoload
-    registered first is freed last. A key already in that section is replaced where it stands, and a
-    section that is not there at all is added at the end.
-    """
-    entry = f"{key}={value}"
-    lines = settings.split("\n")
-    header = f"[{section}]"
-    start = next((index for index, line in enumerate(lines) if line.strip() == header), None)
-    if start is None:
-        return settings.rstrip("\n") + f"\n\n{header}\n\n{entry}\n"
-    for index in range(start + 1, len(lines)):
-        if lines[index].startswith("["):
-            break
-        if lines[index].split("=", 1)[0].strip() == key:
-            lines[index] = entry
-            return "\n".join(lines)
-    lines.insert(start + 1, entry)
-    return "\n".join(lines)
+    return with_setting(with_writer, _WARNINGS_SECTION, _WARNINGS_KEY, "false")
