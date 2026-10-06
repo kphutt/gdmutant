@@ -67,7 +67,11 @@ def pytest_report_header() -> str:
     real Godot and the GdUnit4 addon, and without them it skips -- legitimately, on a CI runner and
     on a fresh clone. What it must never do is let a run that never checked ``--jobs`` look like a
     run that did, because the defect that gate exists to catch reports *fewer* survivors than exist.
-    So the state goes on screen either way, next to the other one.
+    So the state goes on screen either way, next to the other one. pytest hides report headers
+    under ``-q``, which is the mode a quick local run and `poodle.toml` use, so the header is not
+    the only voice: the vocabulary guard also raises a ``UserWarning`` when it skips, and the
+    parallel gate does the same in `_require_preconditions`, so in that mode both states still
+    reach the warnings summary.
     """
     # Imported here rather than at module scope: a collection-time error in a guard should be
     # reported as that test module failing to import, not as conftest taking the whole run down.

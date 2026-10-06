@@ -66,6 +66,7 @@ import os
 import shutil
 import subprocess
 import sys
+import warnings
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
@@ -108,8 +109,9 @@ _PARALLEL_RUNS = 3
 _PROBE_TOKENS = ("GdmutantParallelProbe", "gdmutant_probe_")
 
 #: Nine mutants, none of them killable: nothing in the project calls any of these functions, so no
-#: mutation of them can change what any test observes. Every mutant is also a token swap that still
-#: compiles (no deleted statement, no retyped value), so none of them lands as INVALID either --
+#: mutation of them can change what any test observes. Every mutant still compiles (a token
+#: swapped, or the `not` operator dropped; no statement deleted, no value retyped), so none of them
+#: lands as INVALID either --
 #: an INVALID mutant never runs the suite and would quietly drop out of the comparison.
 _PROBE_SOURCE = """class_name GdmutantParallelProbe
 
@@ -276,6 +278,9 @@ def _require_preconditions(request: pytest.FixtureRequest) -> None:
     said = "this gate cannot check anything: " + "; ".join(problems)
     if _GODOT or named_on_command_line(request.config.invocation_params.args, MODULE_FILE_NAME):
         pytest.fail(said)
+    # A warning as well as a skip, like the vocabulary guard's skip. pytest hides the report header
+    # under `-q`, so without it this skip would be the one silent half of the pair in that mode.
+    warnings.warn(said, stacklevel=2)
     pytest.skip(said)
 
 
@@ -368,13 +373,28 @@ def _unreferenced_probe(project: Path) -> None:
     """
     offenders: dict[str, list[str]] = {}
     skipped = {".png", ".svg", ".ttf", ".webp", ".jpg", ".import", ".uid"}
+    scanned = 0
     for path in sorted(project.rglob("*")):
-        if not path.is_file() or path.suffix in skipped or path.name == _PROBE_TARGET:
+        if not path.is_file() or path.suffix in skipped:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         hits = [token for token in _PROBE_TOKENS if token in text]
+        if path.name == _PROBE_TARGET:
+            # The positive control: the probe is the one file that must name itself, so a search
+            # that cannot see both tokens here (an emptied `_PROBE_TOKENS`) could not have seen a
+            # reference anywhere else either.
+            assert sorted(hits) == sorted(_PROBE_TOKENS) and hits, (
+                f"the search's control failed: {_PROBE_TARGET} should contain every one of "
+                f"{_PROBE_TOKENS}, but only {hits} were found, so a clean scan would prove nothing"
+            )
+            continue
+        scanned += 1
         if hits:
             offenders[path.relative_to(project).as_posix()] = hits
+    assert scanned, (
+        f"the inertness proof scanned nothing: no file besides {_PROBE_TARGET} was readable text, "
+        "so 'no file names the probe' is empty rather than true"
+    )
     assert not offenders, (
         "the mutation target is supposed to be unreferenced, so that every mutant of it must "
         f"survive, but these files name it: {offenders}"
