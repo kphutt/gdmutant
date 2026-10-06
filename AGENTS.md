@@ -59,16 +59,19 @@ Godot-free). Run them when touching the adapter, runners, parallelism, or CLI fi
 ```sh
 # Live self-test: drive the shipped CLI against a real Godot on the corpus.
 # Run `mise install` first: an unset or empty GDMUTANT_GODOT skips this whole file silently.
-# Even with GDMUTANT_GODOT set, 30 of its 43 tests skip just as silently unless the GdUnit4 and
-# GUT addons are installed into the corpus first: run scripts/install_gdunit4.py and
-# scripts/install_gut.py before trusting a run of this file to mean anything more than "Godot
+# Even with GDMUTANT_GODOT set, 36 of its 49 tests skip just as silently unless the GdUnit4 and
+# GUT addons are installed into the corpus first (19 skip with only GdUnit4 missing, 17 with only
+# GUT missing): run scripts/install_gdunit4.py and scripts/install_gut.py before trusting a run of this file to mean anything more than "Godot
 # itself starts".
 GDMUTANT_GODOT=$(mise which godot) uv run pytest tests/test_selftest_live.py
 # `--jobs N` soundness: drive gdmutant against a probe suite built to collide on `user://`, and
 # compare several parallel runs with a serial one. Unlike the two suites around it, this one FAILS
-# rather than skips when GDMUTANT_GODOT is unset or the GdUnit4 addon is missing, as long as you
-# named the file (which is how you run it). It is the one gate for the bug class where a parallel
-# run reports fewer survivors than exist, so a green run that checked nothing is the worst outcome.
+# rather than skips when the GdUnit4 addon is missing or GDMUTANT_GODOT is unset: with
+# GDMUTANT_GODOT set and the addon missing it fails whether or not you named the file, and with it
+# unset it fails when you named the file (which is how you run it). Only the unset-GDMUTANT_GODOT
+# whole-suite run skips, and that skip raises a warning so it shows under -q. It is the one gate
+# for the bug class where a parallel run reports fewer survivors than exist, so a green run that
+# checked nothing is the worst outcome.
 GDMUTANT_GODOT=$(mise which godot) uv run pytest tests/test_selftest_parallel_determinism.py
 # Dogfood harness: run gdmutant against a real GdUnit4 checkout. Two checks: parse coverage,
 # and the whole-directory regression guard (Godot-free, ~5s). Point it at any GdUnit4 clone:
