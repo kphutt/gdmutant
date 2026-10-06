@@ -119,10 +119,11 @@ def isolate_user_dir(copy_dir: str, token: str) -> None:
     than to go back to sharing.
 
     A copy with no ``project.godot`` is left alone, and that is a decision rather than an oversight:
-    without one there is no Godot project to run, so the baseline run fails long before any worker
-    starts, and there is no ``user://`` for anything to share. That is what lets the
-    framework-neutral command runner (ADR-0005) reach this code harmlessly on a project that is not
-    a Godot project at all.
+    without one there is no Godot project, so there is no ``user://`` for anything to share and
+    nothing here to isolate. It is reachable: the framework-neutral command runner (ADR-0005) can
+    drive a project that is not a Godot project at all, its baseline runs fine, and every worker
+    then runs unisolated. That is correct for ``user://`` and is the whole of what this function
+    is responsible for. Anything else such a command shares across workers is outside it.
     """
     settings = Path(copy_dir) / "project.godot"
     if not settings.is_file():

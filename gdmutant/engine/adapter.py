@@ -53,5 +53,7 @@ class Adapter:
     #: *outside* it, which the engine has no way to name. Called exactly once per isolated copy,
     #: after that worker's last suite run, including when the run is failing. It must not raise: the
     #: mutants are already scored by then, and a leftover temporary directory is not a reason to
-    #: turn a finished run into a failed one.
+    #: turn a finished run into a failed one. That is a contract the engine relies on and does not
+    #: check: it calls this from a `finally` and does not catch what comes out. (If `isolate_copy`
+    #: itself raises, this is not called, on either path that isolates.)
     release_copy: Callable[[str], None]
