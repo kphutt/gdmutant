@@ -60,6 +60,13 @@ def test_an_isolated_copy_is_written_with_one_line_ending(tmp_path: Path) -> Non
     the opposite (that the file's own endings survived), so this pins which one is true. What
     matters either way is that a Windows run cannot produce a copy whose every line changed:
     without `newline=""`, `write_text` would turn each line feed into CRLF.
+
+    Which half of that a run checks depends on the platform, so a green run here is not the same
+    claim everywhere. The read side holds anywhere: make the read verbatim and the fixture's CRLF
+    survives, which fails this test on any platform. The write side only bites where `write_text`
+    translates, so deleting `newline=""` fails this on Windows and passes on Linux and macOS,
+    where the translation is already a line feed. `Verify (windows-2025)` in CI is what keeps the
+    write side honest; a Linux-only run cannot prove it.
     """
     crlf = _PLAIN.replace("\n", "\r\n")
     settings = _settings(tmp_path, crlf)
