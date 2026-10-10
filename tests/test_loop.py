@@ -6,7 +6,7 @@ import shutil
 import stat
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import FrozenInstanceError, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -924,6 +924,31 @@ def test_run_drives_a_custom_non_gdscript_adapter(tmp_path: Path) -> None:
     )
     assert seen == [(path, src)]  # the engine used the injected adapter, not gdscript
     assert result.outcomes == ()
+
+
+def test_the_adapter_seam_cannot_be_rebound_mid_run() -> None:
+    """`Adapter` is frozen on purpose. The engine builds one and hands the same object to every
+    worker for a whole run, so nothing may swap a callable on it halfway through: a worker that
+    isolated its copy with one `isolate_copy` and released it with another would leak the
+    directory the first one made. Without this test, `frozen=True` is a decorator argument no
+    test would notice losing."""
+
+    def generate(p: str, s: str, catalog: object) -> list[Mutant]:
+        return []
+
+    def apply(mutant: Mutant, s: str) -> tuple[str, bool]:
+        return s, True
+
+    adapter = Adapter(
+        generate_mutants=generate,
+        apply_mutant=apply,
+        isolate_copy=shares_nothing,
+        release_copy=releases_nothing,
+    )
+    with pytest.raises(FrozenInstanceError):
+        adapter.release_copy = releases_nothing  # type: ignore[misc]
+    # `replace` is still how a caller derives a variant: frozen forbids mutation, not derivation.
+    assert replace(adapter, release_copy=releases_nothing) is not adapter
 
 
 @dataclass
