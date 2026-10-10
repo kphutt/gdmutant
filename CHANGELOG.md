@@ -12,6 +12,39 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `--jobs N` now refuses a suite that only passes with files in your real `user://` that no test
+  creates. If you already use `--jobs` with such a suite, it used to finish and report a score,
+  and now it stops with a message that names the isolated copy. Make the suite create what it
+  reads, or pass `--jobs 1`. Under `--jobs auto`, a source file outside `--project` still runs
+  serially in your project folder, and its baseline runs there too, so nothing changes for it.
+  The baseline copy is made and removed before the workers start, so peak disk use is the same.
+  The live check for this runs GdUnit4. GUT and the exit-code command runner get the same
+  isolation from the same code, but no live run proves GUT's.
+
+### Fixed
+
+- `--jobs N` no longer reports a survivor as killed when your tests write to `user://`. Each worker
+  already got its own copy of the project, but Godot works out where `user://` is from the
+  project's name settings rather than from its path, so every copy resolved it to the same
+  directory on your machine. Two workers writing to one fixed-name file there made the suite fail
+  for a reason that had nothing to do with the mutant, and a failing suite is a kill, so the run
+  came back with fewer survivors than it should have and a score that looked better than the truth.
+  Every worker copy is now given a `user://` of its own, inside one `gdmutant/` directory that is
+  cleaned up when the run ends. `--jobs` defaults to `1`, which was never affected.
+
+  A new live check runs gdmutant against a suite built to collide this way, and compares several
+  `--jobs 4` runs against a serial one: `tests/test_selftest_parallel_determinism.py`.
+
+- `--jobs N` no longer scores a suite as better than it is when the suite needs `user://` data
+  that no test creates. The baseline run (the check that your suite passes before any mutant
+  runs) used to happen in your own project folder, with your machine's real `user://`, while
+  every worker ran in an empty copy. A suite that read a file there passed the baseline and then
+  failed in every worker, and a failing suite counts as a kill. On one real Godot project,
+  `--jobs 1` reported 2 survivors and `--jobs 4` reported none, with no warning. The baseline now
+  runs in the same kind of isolated copy the workers get.
+
 ## [0.1.4] - 2026-10-03
 
 ### Added

@@ -336,7 +336,13 @@ jobs:
     needs: secret-scan
     if: needs.secret-scan.outputs.godot == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # 15 while this job ran one live suite. The parallel-determinism step added below runs the
+    # probe fixture five more times, a Godot boot per mutant each: one serial and three at
+    # `--jobs 4` for the suite that collides on `user://`, plus one serial for the suite that
+    # reads `user://` data no test creates. That second case's parallel run stops at the baseline,
+    # so it costs one boot rather than nine. Measured about two minutes for the whole file on the
+    # maintainer's machine. Still a ceiling: a hung Godot has to end the job.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -376,6 +382,17 @@ jobs:
       # JSON this run already wrote, instead of booting Godot to regenerate the identical report.
       - name: Live self-test (real Godot)
         run: GDMUTANT_GODOT=godot uv run pytest tests/test_selftest_live.py -v --no-cov --basetemp=.live-tmp
+
+      # `--jobs N` soundness, which needs the same real Godot and the same addon this job already
+      # installed. It is a separate step rather than another file in the line above so its minutes
+      # are visible on their own, and because it fails (never skips) when GDMUTANT_GODOT or the
+      # addon is missing — which is only safe where both are known to be present, as they are here.
+      # It drives gdmutant against two suites written to break a parallel run through `user://`,
+      # one that writes a colliding file and one that reads data no test creates, and measures each
+      # against a serial run. Either way round, the failure it is looking for is a parallel run
+      # that reported fewer survivors than exist.
+      - name: Live self-test (parallel determinism)
+        run: GDMUTANT_GODOT=godot uv run pytest tests/test_selftest_parallel_determinism.py -v --no-cov
 
       # A downloadable Stryker report of the corpus — the "run the real thing" demo artifact.
       # Reuse the JSON the live self-test already wrote (--basetemp=.live-tmp) instead of booting

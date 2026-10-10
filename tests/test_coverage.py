@@ -629,6 +629,11 @@ def test_the_parallel_path_keeps_an_uncovered_invalid_mutant_invalid(tmp_path: P
     @dataclass
     class Invalid:
         generate_mutants = staticmethod(ADAPTER.generate_mutants)
+        # The real pair, not a no-op: this test drives the parallel path, which isolates every
+        # worker copy it makes, so a fake that could not be isolated would be testing a shape the
+        # engine never runs.
+        isolate_copy = staticmethod(ADAPTER.isolate_copy)
+        release_copy = staticmethod(ADAPTER.release_copy)
 
         @staticmethod
         def apply_mutant(mutant: Mutant, source: str) -> tuple[str, bool]:

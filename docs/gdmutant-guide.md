@@ -115,6 +115,20 @@ exit-code fallback).
 touched (see [How gdmutant writes to your files](#how-gdmutant-writes-to-your-files)). One
 restriction on an explicit `N`: every file to mutate must sit inside `--project`, or the run exits 2.
 
+The baseline run, the one that checks your suite passes before any mutant runs, happens in a
+copy of the project too, the same kind of copy each worker gets. A copy holds everything inside
+your project folder and none of the state a run keeps outside it. For Godot that state is
+`user://`, the folder Godot keeps a game's saved data in. So a suite that passes only because
+some file already sits in your real `user://`, and that no test creates, now stops the run with a
+message that names the isolated copy. Before, it passed the baseline and then failed in every
+worker, which counts as a kill, so the run reported a better score than a serial run would. To
+fix it, make the suite create what it reads, or pass `--jobs 1`, which runs the baseline and
+every mutant in your own project folder. The baseline copy is made and removed before the
+workers start, so it adds copy time but no extra disk at the peak.
+
+The live test for this runs GdUnit4. GUT and the exit-code command runner get the same isolation
+from the same code, but no live run proves GUT's.
+
 `--jobs auto` picks a worker ceiling from your CPU count instead of a fixed number, the same
 default mutmut uses (poodle reserves one core instead). Before starting each worker past the
 first, it checks the system's 1-minute load average and holds off starting it while the system is
@@ -125,7 +139,8 @@ There's no load signal on Windows, so `auto` there just starts the CPU-based wor
 immediately, no throttling to get wrong. `auto` never errors on a file outside `--project`, it
 falls back to running that file serially instead, unlike an explicit `--jobs N` above 1, which
 still exits 2 there: `auto` picks its own count, so it shouldn't turn a working default into an
-error over a layout an explicit N was allowed to reject.
+error over a layout an explicit N was allowed to reject. For that same file, `auto` runs the
+baseline in your own project folder as well, because those mutants run there too.
 
 The default stays `1` (serial) even though `auto` is available: the load-average throttle only
 watches CPU/IO contention, never disk, and disk (a full project copy per worker) is this tool's

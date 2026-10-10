@@ -29,7 +29,8 @@ import shutil
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -678,8 +679,11 @@ def run(
     `adapter` supplies the two language-specific operations (generation + application), so the
     engine stays language-neutral (NF-3) — the caller injects it, e.g. `adapters.gdscript.ADAPTER`.
 
-    Raises `BaselineFailed` if the unmutated suite doesn't pass first (FG-3.3). The file at `path`
-    must hold `source` when this is called; it is restored to `source` before returning.
+    Raises `BaselineFailed` if the unmutated suite doesn't pass first (FG-3.3). Under ``jobs > 1``
+    that baseline runs in an isolated copy of the project, the same kind of copy the workers get
+    (see `_baseline_needs_isolation`), so a suite that is green in the project's own directory but
+    red there is refused rather than scored. The file at `path` must hold `source` when this is
+    called; it is restored to `source` before returning.
 
     `timeout` is the per-mutant time budget in seconds. When ``None`` (the default), it is
     *derived from the baseline run itself* (`TimeBudget`): the tests' own reported time is
@@ -690,9 +694,14 @@ def run(
     `jobs` is the number of mutants to evaluate concurrently (default 1 = serial). With ``jobs > 1``
     the loop gives each worker its own copy of the project so in-place mutation can't collide, then
     reassembles the outcomes in generation order (ADR-0003). Process isolation makes the pass/fail
-    verdict of each mutant identical to a serial run; the *timeout* verdict stays identical because
-    every worker gets the same budget a serial run would give, with the contention allowance in its
-    constant and the confirmation pass behind it (see `_run_mutants_parallel`).
+    verdict of each mutant identical to a serial run, but only because the baseline ran in that same
+    kind of copy first: a baseline run in the project's own directory would have passed for suites
+    whose every worker is red, and a red suite is a kill. The *timeout* verdict stays identical
+    because every worker gets the same budget a serial run would give, with the contention allowance
+    in its constant and the confirmation pass behind it (see `_run_mutants_parallel`).
+    Exception: under `jobs_auto`, a run whose sources all sit outside `project_dir` drops to serial
+    in the project's own directory, and the baseline then runs there too
+    (`_baseline_needs_isolation`).
 
     `jobs_auto` holds off starting a worker beyond the first while the system's already under
     load, checked live via the system load average (POSIX only; a no-op elsewhere) each time the
@@ -715,7 +724,14 @@ def run(
     run against the whole suite as a standing check (``None`` runs them all). Raises
     `CoverageRunFailed` when that cannot be trusted. See `_coverage_pass`.
     """
-    budget, baseline_tests = _run_baseline(project_dir, runner, timeout, progress)
+    budget, baseline_tests = _run_baseline(
+        project_dir,
+        runner,
+        timeout,
+        progress,
+        adapter,
+        isolated=_baseline_needs_isolation(project_dir, (path,), jobs, jobs_auto),
+    )
     mutants, plans = _coverage_plans(
         project_dir,
         {path: source},
@@ -755,16 +771,114 @@ def run(
     return result
 
 
+def _baseline_needs_isolation(
+    project_dir: str, paths: Iterable[str], jobs: int, jobs_auto: bool
+) -> bool:
+    """Whether the baseline has to run in an isolated copy instead of in the project directory.
+
+    True exactly when some file's mutants will be evaluated in parallel, because the isolated copy
+    is where those mutants run and a baseline measured anywhere else is a baseline for a different
+    project (`_baseline_project` says what that cost).
+
+    The one case that is not simply ``jobs > 1``: ``--jobs auto`` drops to serial, silently, for a
+    source that sits outside `project_dir` (`_mutate_file`), and those mutants then run in the
+    project's own directory — so an isolated baseline would refuse a run that works. An explicit
+    ``--jobs N`` raises for such a source rather than downgrading, so it keeps the isolated
+    baseline. Reading the condition off `_source_is_inside_project`, the same function
+    `_mutate_file` decides with, is what stops the two from drifting into disagreement.
+
+    A multi-file run where only *some* files downgrade gets the isolated baseline, and that
+    direction is deliberate: a baseline stricter than one path needs stops the run with a message
+    naming the reason, while a baseline laxer than another path needs hands back a 100% score for a
+    run whose every worker was red.
+    """
+    if jobs <= 1:
+        return False
+    if not jobs_auto:
+        return True
+    return any(_source_is_inside_project(path, project_dir) for path in paths)
+
+
+#: Appended to every `BaselineFailed` raised from a baseline that ran in an isolated copy. The
+#: isolation is the only thing that can make this baseline red where the project's own directory is
+#: green, so the message has to name it: without this, the user sees a suite that passes everywhere
+#: they try it and a tool that refuses to run, with nothing linking the two.
+#:
+#: One note for all three failures rather than a tailored sentence each, which is why it is phrased
+#: as a conditional ("if this suite is fine in..."). Three variants of one explanation is three
+#: places for it to go stale.
+_ISOLATED_BASELINE_NOTE = (
+    " The baseline ran in an isolated copy of the project, which is what every --jobs worker gets: "
+    "the project directory copied, and none of the state the run keeps outside it. If this suite "
+    "is fine in the project's own directory, then it reads something out there that no test in the "
+    "run creates. Make the suite create what it reads, or pass --jobs 1, which runs the baseline "
+    "and every mutant in the project's own directory."
+)
+
+
+@contextmanager
+def _baseline_project(project_dir: str, adapter: Adapter, isolated: bool) -> Iterator[str]:
+    """Yield the directory the baseline suite runs in: the project itself, or an isolated copy.
+
+    The baseline's job is to prove the suite is green **in the conditions the mutants will run in**
+    (FG-3.3), because a suite that is red for a reason unrelated to the mutant turns every mutant
+    into a false KILL. Under ``--jobs N`` those conditions are an isolated copy of the project
+    (`_run_mutants_parallel`), and an isolated copy is not the same place as the project directory:
+    it holds everything inside the project and none of the state the run keeps outside it. For
+    Godot that state is ``user://``.
+
+    Measured on this machine, before this existed: one project, one unreferenced mutation target,
+    and a suite that reads a file under ``user://`` that no test creates. ``--jobs 1`` scored 0.0%
+    and listed both survivors. ``--jobs 4`` scored 100.0% with no survivors, exit code 0, and not a
+    word of warning — the baseline passed in the project's directory while every worker's suite was
+    red, and a red suite is a KILL. That is the same one-directional under-reporting that giving
+    each worker its own ``user://`` was there to fix, reached through the baseline instead.
+
+    Running the baseline here makes the two agree by construction rather than by a check that has to
+    be remembered: there is one `_run_baseline`, and it runs wherever the mutants will.
+
+    Nothing is excluded from the copy, because the workers exclude nothing either — this copy exists
+    to be the same thing they get, and a cheaper copy would be a baseline for a project no worker
+    runs. It costs one `shutil.copytree` per run, against the N per file the parallel path already
+    pays.
+    """
+    if not isolated:
+        yield project_dir
+        return
+    with tempfile.TemporaryDirectory(prefix="gdmutant-baseline-") as tmp:
+        copy = str(Path(tmp) / "project")
+        shutil.copytree(project_dir, copy)
+        # `mkdtemp` picked `tmp`, so this token is unique on the machine and cannot collide with a
+        # concurrent gdmutant run's — the same way `_run_mutants_parallel` derives its workers'.
+        token = f"{Path(tmp).name}-baseline"
+        adapter.isolate_copy(copy, token)
+        try:
+            yield copy
+        finally:
+            # Released even when the baseline raised: the adapter put this outside the copy, and
+            # nothing else can name it. `Adapter.release_copy` promises not to raise.
+            adapter.release_copy(token)
+
+
 def _run_baseline(
     project_dir: str,
     runner: Runner,
     timeout: float | None,
     progress: Callable[[str], None] | None,
+    adapter: Adapter,
+    *,
+    isolated: bool,
 ) -> tuple[TimeBudget, int]:
     """Run the unmutated suite once. Returns ``(budget, baseline_tests)``: the per-mutant time
     budget (derived from this run unless `timeout` overrides) and the number of tests the baseline
     ran, which the coverage marker run must match.
-    Raises `BaselineFailed` if the suite can't run or is red (FG-3.3)."""
+    Raises `BaselineFailed` if the suite can't run or is red (FG-3.3).
+
+    `isolated` runs the suite in an isolated copy of the project rather than in the project
+    directory, because that is where the mutants will run — see `_baseline_project` for what the
+    two differ in and `_baseline_needs_isolation` for when. `adapter` is what isolates it, so the
+    engine never has to know what the isolation consists of (NF-3). The run is otherwise identical
+    either way, deliberately: one baseline, one set of guards below, one message per failure."""
     # One-time setup (e.g. a Godot import scan) runs BEFORE the clock starts, so its cost never
     # inflates the baseline wall-clock that derives per-mutant timeouts and the ETA. A
     # runner with nothing to prepare simply isn't Preparable — the engine stays language-neutral.
@@ -781,17 +895,24 @@ def _run_baseline(
             raise BaselineFailed(f"could not prepare {project_dir!r}: {error}") from error
     if progress is not None:
         progress("running the unmutated (baseline) suite ...")
-    started = time.monotonic()
-    try:
-        baseline = runner.run(project_dir)
-    except Exception as error:  # a runner that can't even run the unmutated suite is a setup error
-        raise BaselineFailed(
-            f"could not run the unmutated suite for {project_dir!r}: {error}"
-        ) from error
-    baseline_secs = time.monotonic() - started
+    # The note names the isolated copy in every failure below. Built once here so no branch can
+    # forget it, and the message keeps naming `project_dir` rather than the throwaway copy's path:
+    # the project is what the reader has to go and fix.
+    where = _ISOLATED_BASELINE_NOTE if isolated else ""
+    with _baseline_project(project_dir, adapter, isolated) as suite_dir:
+        # Inside the context and after the copy, so copying the project never lands in the
+        # wall-clock that derives every per-mutant timeout — the same rule `prepare` follows above.
+        started = time.monotonic()
+        try:
+            baseline = runner.run(suite_dir)
+        except Exception as error:  # a runner that can't run the unmutated suite is a setup error
+            raise BaselineFailed(
+                f"could not run the unmutated suite for {project_dir!r}: {error}{where}"
+            ) from error
+        baseline_secs = time.monotonic() - started
     if baseline.failed:
         detail = f":\n{baseline.detail}" if baseline.detail else ""
-        raise BaselineFailed(f"the unmutated test suite failed for {project_dir!r}{detail}")
+        raise BaselineFailed(f"the unmutated test suite failed for {project_dir!r}{detail}{where}")
     # A baseline that ran ZERO tests is not a green baseline — it is no baseline at all, and it is
     # the quietest way this tool can lie. `SuiteResult(0, 0, 0).failed` is False, so a suite nobody
     # ran reads exactly like a suite that passed, and then every single mutant comes back SURVIVED:
@@ -818,7 +939,7 @@ def _run_baseline(
             "ran, so nothing can be detected: every mutant would come back SURVIVED and the whole "
             "report would be false. This is a discovery or configuration problem, not a red suite: "
             "check that the runner is pointed at your tests (--tests, or --command for a "
-            "custom harness) and that the suite runs on its own."
+            f"custom harness) and that the suite runs on its own.{where}"
         )
     return _baseline_budget(baseline, baseline_secs, timeout), baseline.tests
 
@@ -1768,6 +1889,15 @@ def _run_mutants_parallel(
     workers; each passes its own copy's dir. The Godot import cache (`.godot/`) is copied along with
     the project, so a worker doesn't pay a cold re-scan.
 
+    **A copy is not isolation on its own**, which is why every worker's copy is handed to
+    `Adapter.isolate_copy` with a token unique to that worker before its thread starts. Copying the
+    project separates everything *inside* the project directory and nothing outside it, and a test
+    run reaches outside: for Godot, ``user://`` is resolved from the project's name settings rather
+    than its path, so N copies of one project share one directory on the machine. Two workers
+    writing to the same fixed-name file there make the suite red, a red suite is a kill, and the run
+    reports fewer survivors than exist. `release_copy` undoes it per worker in the `finally` below,
+    because the engine deletes the copies and only the adapter knows what it put anywhere else.
+
     **Every worker uses the same `TimeBudget` the serial path uses.** The budget used to be
     multiplied by the worker count, on the reasoning that W workers contend and each suite runs
     up to ~Wx slower. Measured, that reasoning was wrong by an order of magnitude: on a real game
@@ -1851,17 +1981,35 @@ def _run_mutants_parallel(
 
     load_threshold = float(jobs)
     with tempfile.TemporaryDirectory(prefix="gdmutant-jobs-") as tmp:
+        # Unique per run on this machine (mkdtemp picked it), so two gdmutant runs going at once
+        # cannot hand their workers the same isolation token.
+        run_id = Path(tmp).name
         threads: list[threading.Thread] = []
-        for w in range(worker_count):
-            if jobs_auto and w > 0:
-                _wait_for_load_capacity(load_threshold)
-            worker_dir = str(Path(tmp) / f"w{w}")
-            shutil.copytree(project_dir, worker_dir)
-            thread = threading.Thread(target=worker, args=(worker_dir,))
-            thread.start()
-            threads.append(thread)
-        for thread in threads:
-            thread.join()
+        isolated: list[str] = []
+        try:
+            for w in range(worker_count):
+                if jobs_auto and w > 0:
+                    _wait_for_load_capacity(load_threshold)
+                worker_dir = str(Path(tmp) / f"w{w}")
+                shutil.copytree(project_dir, worker_dir)
+                # Before the thread starts, never after: the copy is only isolated once this
+                # returns, and a suite run against a copy that is not yet isolated is exactly the
+                # collision this prevents.
+                token = f"{run_id}-w{w}"
+                adapter.isolate_copy(worker_dir, token)
+                isolated.append(token)
+                thread = threading.Thread(target=worker, args=(worker_dir,))
+                thread.start()
+                threads.append(thread)
+        finally:
+            # Join inside the `finally`, so a failure part way through starting the workers still
+            # waits for the ones already running. Leaving this to the normal path meant an
+            # exception here (a copy that would not copy) fell straight out of the `with`, which
+            # then deleted the tree the running workers were reading from.
+            for thread in threads:
+                thread.join()
+            for token in isolated:
+                adapter.release_copy(token)
     if errors:
         raise errors[0]
     return [outcomes[index] for index in range(total)]
@@ -1891,7 +2039,14 @@ def run_paths(
     with one marker run covering every file. Returns ``{path: MutationRun}`` in `sources` order.
     Raises `BaselineFailed` (like `run`) if the baseline can't run or is red.
     """
-    budget, baseline_tests = _run_baseline(project_dir, runner, timeout, progress)
+    budget, baseline_tests = _run_baseline(
+        project_dir,
+        runner,
+        timeout,
+        progress,
+        adapter,
+        isolated=_baseline_needs_isolation(project_dir, sources, jobs, jobs_auto),
+    )
     mutants, plans = _coverage_plans(
         project_dir,
         sources,

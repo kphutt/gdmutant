@@ -2,19 +2,22 @@
 
 import inspect
 import os
+import shutil
 import stat
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import FrozenInstanceError, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import MarkerRunner
+from conftest import MarkerRunner, releases_nothing, shares_nothing
 
+import gdmutant.engine.loop as loop_mod
 from gdmutant.adapters.gdscript import ADAPTER
 from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.loop import (
+    _ISOLATED_BASELINE_NOTE,
     BaselineFailed,
     MutantPlan,
     ProgressStyle,
@@ -23,6 +26,7 @@ from gdmutant.engine.loop import (
     TimeBudget,
     Verdict,
     _baseline_budget,
+    _baseline_needs_isolation,
     _budget_note,
     _detect_eol,
     _evaluate,
@@ -351,7 +355,14 @@ def test_baseline_runner_exception_becomes_baseline_failed(tmp_path: Path) -> No
     # BaselineFailed, not a raw traceback.
     src = "func f(a, b) -> bool:\n\treturn a > b\n"
     path = _write(tmp_path, "f.gd", src)
-    with pytest.raises(BaselineFailed, match=r"could not run the unmutated suite"):
+    # Pinned end to end, the way its sibling `test_a_zero_test_baseline_is_refused` is and for the
+    # same reason: matching the distinctive words alone left the clause around them untested, so a
+    # mutant that mangled the prefix or dropped the runner's own words survived. The `$` is load
+    # bearing too -- it is what says a serial run's failure carries no isolated-copy note, since
+    # a serial baseline runs in the project directory and the note would be a lie there.
+    with pytest.raises(
+        BaselineFailed, match=r"^could not run the unmutated suite for '.+': godot missing$"
+    ):
         run(str(tmp_path), path, src, ScriptedRunner([RuntimeError("godot missing")]))
 
 
@@ -902,12 +913,42 @@ def test_run_drives_a_custom_non_gdscript_adapter(tmp_path: Path) -> None:
     def fake_apply(mutant: Mutant, s: str) -> tuple[str, bool]:
         raise AssertionError("apply_mutant must not run when there are no mutants")
 
-    fake = Adapter(generate_mutants=fake_generate, apply_mutant=fake_apply)
+    fake = Adapter(
+        generate_mutants=fake_generate,
+        apply_mutant=fake_apply,
+        isolate_copy=shares_nothing,
+        release_copy=releases_nothing,
+    )
     result = _run(
         str(tmp_path), path, src, MarkerRunner(target=path, kill_marker="ZZZ"), adapter=fake
     )
     assert seen == [(path, src)]  # the engine used the injected adapter, not gdscript
     assert result.outcomes == ()
+
+
+def test_the_adapter_seam_cannot_be_rebound_mid_run() -> None:
+    """`Adapter` is frozen on purpose. The engine builds one and hands the same object to every
+    worker for a whole run, so nothing may swap a callable on it halfway through: a worker that
+    isolated its copy with one `isolate_copy` and released it with another would leak the
+    directory the first one made. Without this test, `frozen=True` is a decorator argument no
+    test would notice losing."""
+
+    def generate(p: str, s: str, catalog: object) -> list[Mutant]:
+        return []
+
+    def apply(mutant: Mutant, s: str) -> tuple[str, bool]:
+        return s, True
+
+    adapter = Adapter(
+        generate_mutants=generate,
+        apply_mutant=apply,
+        isolate_copy=shares_nothing,
+        release_copy=releases_nothing,
+    )
+    with pytest.raises(FrozenInstanceError):
+        adapter.release_copy = releases_nothing  # type: ignore[misc]
+    # `replace` is still how a caller derives a variant: frozen forbids mutation, not derivation.
+    assert replace(adapter, release_copy=releases_nothing) is not adapter
 
 
 @dataclass
@@ -980,6 +1021,325 @@ def test_parallel_matches_serial_verdicts_and_order(tmp_path: Path) -> None:
     assert any(line.startswith("Done in ") for line in lines)  # parallel still reaches the close
     # The original project file is NEVER mutated in the parallel path — only the worker copies are.
     assert Path(parallel_path).read_text(encoding="utf-8") == src
+
+
+#: Two mutants are runnable here, so `jobs=2` really starts two workers.
+_TWO_RUNNABLE = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"
+
+
+@dataclass
+class RefusesAnUnisolatedCopy:
+    """A runner that will not score a project copy the adapter has not isolated yet.
+
+    The ordering is the whole point: `Adapter.isolate_copy` has to finish before the first suite
+    runs in that copy, because a suite that runs against a copy still sharing the machine's state
+    is the collision `--jobs` has to be free of. A fake that merely *counted* isolate calls could
+    not tell "isolated first" from "isolated afterwards, with one suite already poisoned", so this
+    reads the sentinel the fake isolation leaves behind and raises when it is missing. A raising
+    runner is an ERROR verdict rather than an exception out of the run (FG-4.1), which is exactly
+    what the caller asserts on: no mutant may come back ERROR.
+
+    `project_dir` is the original project, which is exempt only because nothing runs there any
+    more under `jobs > 1`: the baseline gets an isolated copy of its own, so every suite this fake
+    sees is a copy that had to be isolated first. Keeping the exemption is what lets the same fake
+    drive a serial run, where the project directory *is* where the baseline and every mutant run.
+    """
+
+    project_dir: str
+    kill_marker: str
+    sentinel: str
+    tests: int = 3
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        copy = Path(project_dir) != Path(self.project_dir)
+        if copy and not (Path(project_dir) / self.sentinel).is_file():
+            raise AssertionError(f"{project_dir} ran a suite before it was isolated")
+        content = (Path(project_dir) / "f.gd").read_text(encoding="utf-8")
+        return SuiteResult(tests=self.tests, failures=int(self.kill_marker in content), errors=0)
+
+
+def _recording_isolation(sentinel: str) -> tuple[Adapter, list[tuple[str, str]], list[str]]:
+    """An adapter whose isolation writes `sentinel` into each copy, plus the call logs.
+
+    Both logs are appended from the main thread only — the engine isolates each copy before it
+    starts that worker's thread, and releases after every thread has joined — so neither needs a
+    lock to be read back here."""
+    isolated: list[tuple[str, str]] = []
+    released: list[str] = []
+
+    def isolate(copy_dir: str, token: str) -> None:
+        isolated.append((copy_dir, token))
+        (Path(copy_dir) / sentinel).write_text(token, encoding="utf-8")
+
+    def release(token: str) -> None:
+        released.append(token)
+
+    adapter = replace(ADAPTER, isolate_copy=isolate, release_copy=release)
+    return adapter, isolated, released
+
+
+def test_each_parallel_worker_copy_is_isolated_before_use_and_released_after(
+    tmp_path: Path,
+) -> None:
+    # A copy of the project is not isolation on its own: a Godot suite writes to `user://`, which
+    # every copy of one project resolves to the same directory, and two workers colliding there
+    # turn a survivor into a kill. So each worker copy goes through the adapter's isolation, with a
+    # token of its own, before anything runs in it — and is released afterwards, because the engine
+    # deletes the copies and only the adapter knows what it put outside them.
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    adapter, isolated, released = _recording_isolation("ISOLATED")
+    result = _run(
+        str(tmp_path),
+        path,
+        _TWO_RUNNABLE,
+        RefusesAnUnisolatedCopy(str(tmp_path), kill_marker=">=", sentinel="ISOLATED"),
+        adapter=adapter,
+        jobs=2,
+    )
+    assert {v for *_, v in _outcome_key(result)} == {Verdict.KILLED, Verdict.SURVIVED}
+    directories = [copy_dir for copy_dir, _ in isolated]
+    tokens = [token for _, token in isolated]
+    # Three, not two: the baseline runs in an isolated copy of its own under `jobs > 1`, because
+    # that is where the mutants run and a baseline measured in the project directory is a baseline
+    # for a project no worker sees (`_baseline_project`). The first one is it, since the baseline
+    # finishes before any worker starts.
+    assert len(isolated) == 3, f"one isolated copy per worker, plus the baseline, got {isolated}"
+    # The token's exact shape, not just that it says "baseline": `Adapter.release_copy` builds a
+    # filesystem path out of it, and it is the one thing naming a leftover directory after an
+    # interrupted run. The prefix is the temporary directory `mkdtemp` named, which is what makes
+    # the token unique on the machine; the suffix is what tells it apart from a worker's.
+    assert tokens[0].startswith("gdmutant-baseline-") and tokens[0].endswith("-baseline"), (
+        f"the baseline was not the first copy isolated, or its token changed shape: {tokens}"
+    )
+    assert len(set(directories)) == 3, f"two of the copies were the same directory: {directories}"
+    assert len(set(tokens)) == 3, f"two of the copies shared an isolation token: {tokens}"
+    assert sorted(released) == sorted(tokens), f"isolated {tokens}, released {released}"
+
+
+def test_a_copy_that_cannot_be_made_waits_for_the_workers_already_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Starting the workers is a loop, and it can fail part way through: a disk that fills up, a
+    # file the copy cannot read. Everything that cleans up after a parallel run used to sit after
+    # that loop, so an exception in it fell straight out of the `with` block that deletes the
+    # temporary tree — out from under the workers already reading from it, with their isolation
+    # never released. Both now happen in a `finally`.
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    adapter, isolated, released = _recording_isolation("ISOLATED")
+    real_copytree = loop_mod.shutil.copytree
+
+    def copytree_that_fails_on_the_second_worker(*args: Any, **kwargs: Any) -> Any:
+        # Keyed on the destination, not on a call count: the baseline takes an isolated copy of its
+        # own before the first worker does, so counting calls would now blow up the baseline's copy
+        # instead and this test would pass while checking nothing about the worker loop.
+        if Path(args[1]).name == "w1":
+            raise OSError("no space left on device")
+        return real_copytree(*args, **kwargs)
+
+    monkeypatch.setattr(loop_mod.shutil, "copytree", copytree_that_fails_on_the_second_worker)
+    with pytest.raises(OSError, match="no space left on device"):
+        _run(
+            str(tmp_path),
+            path,
+            _TWO_RUNNABLE,
+            RefusesAnUnisolatedCopy(str(tmp_path), kill_marker=">=", sentinel="ISOLATED"),
+            adapter=adapter,
+            jobs=2,
+        )
+    # The baseline's own isolated copy comes first and is released before the workers start, so
+    # what is left here is worker 0: the second worker's copy never happened, so nothing isolated
+    # it. Both of the two that did get isolated are released, which is the thing under test.
+    workers = [token for _, token in isolated if "baseline" not in token]
+    assert len(workers) == 1, f"the second copy never happened, so nothing isolated it: {isolated}"
+    assert released == [token for _, token in isolated], (
+        f"isolated {isolated}, released {released}: the first worker was left unreleased"
+    )
+
+
+#: The file an isolated copy carries in `_isolation_with_private_state`, naming that copy's own
+#: private stand-in for the state a test run keeps outside the project directory. A project the
+#: adapter never isolated has no such file, so it reads the shared one.
+_STATE_POINTER = "WHERE_MY_STATE_IS"
+
+
+@dataclass
+class NeedsStateOutsideTheProject:
+    """A runner whose suite is green only where the state it reads from *outside* the project is.
+
+    This is the engine-level model of what the live parallel gate drives with a real Godot: a suite
+    that reads a file under ``user://`` which no test in the run creates. ``user://`` sits outside
+    the project directory, so copying the project does not carry it, and a copy the adapter gave a
+    ``user://`` of its own gets a fresh and empty one.
+
+    Red here is red for a reason that has nothing to do with the mutant, which is exactly what
+    makes every mutant a false KILL if the run is allowed to carry on.
+    """
+
+    shared_state: Path
+    kill_marker: str
+    seen: list[str] = field(default_factory=list)
+    tests: int = 3
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        self.seen.append(project_dir)
+        pointer = Path(project_dir) / _STATE_POINTER
+        state = (
+            Path(pointer.read_text(encoding="utf-8")) if pointer.is_file() else self.shared_state
+        )
+        if not (state / "seed.txt").is_file():
+            return SuiteResult(tests=self.tests, failures=self.tests, errors=0)
+        content = (Path(project_dir) / "f.gd").read_text(encoding="utf-8")
+        return SuiteResult(tests=self.tests, failures=int(self.kill_marker in content), errors=0)
+
+
+def _isolation_with_private_state(root: Path) -> tuple[Adapter, list[str], list[str]]:
+    """An adapter whose isolation gives each copy a private, EMPTY stand-in for ``user://``.
+
+    What the GDScript adapter really does, with the two Godot settings swapped for a file naming a
+    directory, so this runs under `verify` with no Godot anywhere. Returns both token logs, because
+    a baseline that fails must still release what its isolation created.
+    """
+    isolated: list[str] = []
+    released: list[str] = []
+
+    def isolate(copy_dir: str, token: str) -> None:
+        isolated.append(token)
+        private = root / token
+        private.mkdir(parents=True, exist_ok=True)
+        (Path(copy_dir) / _STATE_POINTER).write_text(str(private), encoding="utf-8")
+
+    def release(token: str) -> None:
+        released.append(token)
+        shutil.rmtree(root / token, ignore_errors=True)
+
+    return replace(ADAPTER, isolate_copy=isolate, release_copy=release), isolated, released
+
+
+def test_a_serial_baseline_runs_where_a_serial_run_mutates(tmp_path: Path) -> None:
+    # `--jobs 1` evaluates every mutant in the project directory, so the baseline belongs there
+    # too: a suite that reads state outside the project is green, and the run reports the survivors
+    # it really has. Isolating this baseline would refuse a run that works.
+    project = tmp_path / "project"
+    project.mkdir()
+    shared = tmp_path / "shared-state"
+    shared.mkdir()
+    (shared / "seed.txt").write_text("written by hand, long before this run", encoding="utf-8")
+    path = _write(project, "f.gd", _TWO_RUNNABLE)
+    adapter, isolated, released = _isolation_with_private_state(tmp_path / "private")
+    runner = NeedsStateOutsideTheProject(shared, kill_marker=">=")
+    result = _run(str(project), path, _TWO_RUNNABLE, runner, adapter=adapter, jobs=1)
+    assert runner.seen[0] == str(project), f"the baseline did not run in the project: {runner.seen}"
+    assert isolated == [] and released == [], f"a serial run isolates nothing: {isolated}"
+    assert Verdict.SURVIVED in {v for *_, v in _outcome_key(result)}
+
+
+def test_a_parallel_baseline_refuses_a_suite_that_reads_state_no_test_creates(
+    tmp_path: Path,
+) -> None:
+    # The whole defect, in one test. `--jobs N` evaluates every mutant in an isolated copy, whose
+    # state outside the project starts empty. A suite that reads state it never created is green in
+    # the project directory and red in every worker, and a red suite is a KILL — so a baseline
+    # measured in the project directory let the run score 100% with no survivors while nothing was
+    # tested (measured with real Godot: `--jobs 1` 0.0% and two survivors, `--jobs 4` 100.0% and
+    # none). The baseline now runs where the mutants run, so it goes red and the run stops.
+    project = tmp_path / "project"
+    project.mkdir()
+    shared = tmp_path / "shared-state"
+    shared.mkdir()
+    (shared / "seed.txt").write_text("written by hand, long before this run", encoding="utf-8")
+    path = _write(project, "f.gd", _TWO_RUNNABLE)
+    adapter, isolated, released = _isolation_with_private_state(tmp_path / "private")
+    runner = NeedsStateOutsideTheProject(shared, kill_marker=">=")
+    with pytest.raises(BaselineFailed) as excinfo:
+        _run(str(project), path, _TWO_RUNNABLE, runner, adapter=adapter, jobs=4)
+    message = str(excinfo.value)
+    # `repr`, because the message builds the path with `!r` and a Windows path's backslashes come
+    # back doubled. Comparing the plain string is a check no correct implementation can satisfy on
+    # the platform this is developed on.
+    assert repr(str(project)) in message, f"the failure must name the project: {message}"
+    # The isolation is the only thing that makes this baseline red, so the message has to name it,
+    # and has to name the way out. A reader whose suite passes everywhere they try it has nothing
+    # to go on otherwise.
+    assert message.endswith(_ISOLATED_BASELINE_NOTE), (
+        f"the failure does not carry the isolated-copy note, whole: {message}"
+    )
+    # The note's opening spelled out here rather than compared against the constant: a check that
+    # reads the very constant it is checking cannot fail, however that constant gets rewritten.
+    # This sentence is the one the whole fix exists to say, so it is worth a literal.
+    assert _ISOLATED_BASELINE_NOTE.startswith(" The baseline ran in an isolated copy of the "), (
+        f"the note stopped naming the isolation: {_ISOLATED_BASELINE_NOTE}"
+    )
+    assert "--jobs 1" in _ISOLATED_BASELINE_NOTE, "the note stopped naming the way out"
+    assert len(runner.seen) == 1, f"the run went on past a red baseline: {runner.seen}"
+    assert runner.seen[0] != str(project), "the baseline ran in the project, not an isolated copy"
+    assert released == isolated, f"the failed baseline left its isolation behind: {isolated}"
+    assert len(isolated) == 1, f"only the baseline was isolated: {isolated}"
+    assert not (tmp_path / "private").is_dir() or not list((tmp_path / "private").iterdir()), (
+        "the failed baseline's private state was not cleaned up"
+    )
+
+
+def test_a_parallel_baseline_keeps_passing_a_suite_that_needs_nothing_outside(
+    tmp_path: Path,
+) -> None:
+    # The other half of the pair, and the one that stops the fix from being a refusal machine: a
+    # suite that depends on nothing outside the project is green in an isolated copy, so `--jobs`
+    # still runs and still reaches the serial verdicts.
+    project = tmp_path / "project"
+    project.mkdir()
+    path = _write(project, "f.gd", _TWO_RUNNABLE)
+    adapter, isolated, released = _isolation_with_private_state(tmp_path / "private")
+    runner = ProjectRelMarkerRunner("f.gd", ">=")
+    serial = _run(str(project), path, _TWO_RUNNABLE, runner, adapter=adapter)
+    parallel = _run(str(project), path, _TWO_RUNNABLE, runner, adapter=adapter, jobs=4)
+    assert _outcome_key(parallel) == _outcome_key(serial)
+    # Every copy that was isolated was released, and one of them was the baseline's: the serial
+    # run isolates nothing, so a parallel run's log is the baseline plus one token per worker.
+    assert released == isolated, f"isolated {isolated}, released {released}"
+    assert sum("baseline" in token for token in isolated) == 1, (
+        f"a parallel run isolates exactly one baseline copy: {isolated}"
+    )
+    assert len(isolated) > 1, f"no worker copy was isolated at all: {isolated}"
+
+
+@pytest.mark.parametrize(
+    ("jobs", "jobs_auto", "inside", "expected"),
+    [
+        # Serial: the mutants run in the project directory, so the baseline must as well.
+        (1, False, True, False),
+        (1, True, True, False),
+        # Parallel: the mutants run in isolated copies, so the baseline must too.
+        (2, False, True, True),
+        (8, True, True, True),
+        # `--jobs auto` drops to serial for a source outside the project and runs those mutants in
+        # the project directory, so an isolated baseline there would refuse a run that works.
+        (8, True, False, False),
+        # An explicit `--jobs N` raises for that source instead of downgrading, so it keeps the
+        # isolated baseline: the user asked for isolation by name.
+        (8, False, False, True),
+    ],
+)
+def test_baseline_isolation_follows_where_the_mutants_will_actually_run(
+    tmp_path: Path, jobs: int, jobs_auto: bool, inside: bool, expected: bool
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    path = str((project if inside else tmp_path) / "f.gd")
+    assert _baseline_needs_isolation(str(project), (path,), jobs, jobs_auto) is expected
+
+
+def test_a_mixed_multi_file_auto_run_isolates_the_baseline(tmp_path: Path) -> None:
+    # One file inside the project and one outside, under `--jobs auto`: the inside file's mutants
+    # run in isolated copies and the outside file's run in the project directory, so no single
+    # baseline matches both. It isolates, which is the safe direction of the two — a baseline
+    # stricter than one path needs stops the run and says why, while a laxer one hands back a score
+    # for a run whose every worker was red.
+    project = tmp_path / "project"
+    project.mkdir()
+    paths = (str(project / "inside.gd"), str(tmp_path / "outside.gd"))
+    assert _baseline_needs_isolation(str(project), paths, 8, True) is True
+    # Every path outside is the case that downgrades wholesale, and it must not isolate.
+    assert _baseline_needs_isolation(str(project), paths[1:], 8, True) is False
 
 
 def test_parallel_gives_every_worker_the_unscaled_budget(tmp_path: Path) -> None:
@@ -1149,7 +1509,12 @@ def test_parallel_apply_error_propagates(tmp_path: Path) -> None:
     def fake_apply(_mutant: Mutant, _source: str) -> tuple[str, bool]:
         raise RuntimeError("apply boom")
 
-    adapter = Adapter(generate_mutants=fake_generate, apply_mutant=fake_apply)
+    adapter = Adapter(
+        generate_mutants=fake_generate,
+        apply_mutant=fake_apply,
+        isolate_copy=shares_nothing,
+        release_copy=releases_nothing,
+    )
     with pytest.raises(RuntimeError, match="apply boom"):
         _run(
             str(tmp_path),
