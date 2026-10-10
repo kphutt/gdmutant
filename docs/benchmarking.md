@@ -91,6 +91,41 @@ default), so timer noise on a tiny number is not reported as a regression.
 - The table's `per mutant` column is the median divided by the mutant count. Watch it across
   `--sizes`: flat means the cost grows with the number of mutants, climbing means it grows faster.
 
+## Measurements a release note quotes
+
+The history `--record` writes is gitignored, because a timing belongs to the one machine that
+produced it. That is the right call for watching a trend, and the wrong one for a number the
+CHANGELOG states as fact, which a reader otherwise has no way to check. So a measurement a
+release note quotes is written down here, with the command behind it and what it does not cover.
+
+### 0.1.4: the validity check stopped gathering position data
+
+The per-mutant validity check (NF-5) asks only whether a mutant still parses. It was calling
+gdtoolkit with `gather_metadata=True`, which attaches position spans to every node in the tree and
+is most of the cost of the parse. Only that check changed. The site-finding parse still needs the
+tree, so it was left alone.
+
+`uv run python scripts/benchmark.py --sizes 2,8,16 --repeat 3`, run before and after the change:
+
+| scenario | workload | before (median) | after (median) | change |
+|---|---|---|---|---|
+| apply | synthetic-8 | 4.7998s | 3.0686s | 36% faster |
+| run | synthetic-8 | 6.0103s | 4.2455s | 29% faster |
+| apply | synthetic-16 | 19.2645s | 15.9288s | 17% faster |
+| run | synthetic-16 | 22.2270s | 17.4037s | 22% faster |
+
+The mutant, killed and invalid counts matched exactly on both sides, which is what `--compare`'s
+exit code checks: only the medians moved. The equivalence of the faster check itself is a separate
+question, answered by `tests/test_validity_gate.py` and by a sweep over 54,677 mutants from three
+real GDScript projects, where the answer differed on none of them.
+
+Two things this measurement does not carry, said out loud rather than left to be assumed. Both
+runs were made in one session on purpose, because an earlier comparison against a baseline
+recorded at a different time was too noisy to read: scenarios the change could not touch swung 20
+to 80%. And the run was never `--record`ed, so the machine and Python behind these numbers were
+never captured. A measurement meant for a release note should be recorded, so the next entry here
+can state them.
+
 ## What the tests check
 
 `tests/test_benchmark.py` checks the work, never the time, because a test that fails on a slow
