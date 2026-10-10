@@ -1714,8 +1714,11 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         help="evaluate N mutants in parallel, each on its own copy of the project (default: 1 = "
         "serial), for a faster run with the same verdicts: process isolation, and a per-mutant "
         "budget that does not depend on N, so N hanging mutants cost one budget between them "
-        "rather than N. Bounded by your "
-        "cores/RAM; a plain per-worker copy is made per job. Pass 'auto' instead of a number to "
+        "rather than N. The unmutated baseline runs in an isolated copy too, so a suite that "
+        "needs files in your real user:// that no test creates is refused with a message saying "
+        "so, instead of being scored wrongly: make the suite create them, or pass --jobs 1. "
+        "Bounded by your cores/RAM and disk: each worker gets a full copy of the project. Pass "
+        "'auto' instead of a number to "
         "pick a worker count from your CPU count and hold off starting another worker while the "
         "system is already under load (POSIX only, via the load average make -l uses; always "
         "starts the fixed count immediately on Windows, which has no such signal).",

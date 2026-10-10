@@ -679,8 +679,11 @@ def run(
     `adapter` supplies the two language-specific operations (generation + application), so the
     engine stays language-neutral (NF-3) — the caller injects it, e.g. `adapters.gdscript.ADAPTER`.
 
-    Raises `BaselineFailed` if the unmutated suite doesn't pass first (FG-3.3). The file at `path`
-    must hold `source` when this is called; it is restored to `source` before returning.
+    Raises `BaselineFailed` if the unmutated suite doesn't pass first (FG-3.3). Under ``jobs > 1``
+    that baseline runs in an isolated copy of the project, the same kind of copy the workers get
+    (see `_baseline_needs_isolation`), so a suite that is green in the project's own directory but
+    red there is refused rather than scored. The file at `path` must hold `source` when this is
+    called; it is restored to `source` before returning.
 
     `timeout` is the per-mutant time budget in seconds. When ``None`` (the default), it is
     *derived from the baseline run itself* (`TimeBudget`): the tests' own reported time is
@@ -691,9 +694,14 @@ def run(
     `jobs` is the number of mutants to evaluate concurrently (default 1 = serial). With ``jobs > 1``
     the loop gives each worker its own copy of the project so in-place mutation can't collide, then
     reassembles the outcomes in generation order (ADR-0003). Process isolation makes the pass/fail
-    verdict of each mutant identical to a serial run; the *timeout* verdict stays identical because
-    every worker gets the same budget a serial run would give, with the contention allowance in its
-    constant and the confirmation pass behind it (see `_run_mutants_parallel`).
+    verdict of each mutant identical to a serial run, but only because the baseline ran in that same
+    kind of copy first: a baseline run in the project's own directory would have passed for suites
+    whose every worker is red, and a red suite is a kill. The *timeout* verdict stays identical
+    because every worker gets the same budget a serial run would give, with the contention allowance
+    in its constant and the confirmation pass behind it (see `_run_mutants_parallel`).
+    Exception: under `jobs_auto`, a run whose sources all sit outside `project_dir` drops to serial
+    in the project's own directory, and the baseline then runs there too
+    (`_baseline_needs_isolation`).
 
     `jobs_auto` holds off starting a worker beyond the first while the system's already under
     load, checked live via the system load average (POSIX only; a no-op elsewhere) each time the
