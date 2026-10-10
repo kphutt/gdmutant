@@ -10,6 +10,7 @@ go on reporting success while running nothing.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,9 +18,29 @@ import pytest
 from tests import test_selftest_parallel_determinism as gate
 from tests.test_selftest_parallel_determinism import (
     MODULE_FILE_NAME,
+    godot_dir_name,
     missing_preconditions,
     named_on_command_line,
 )
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [("win32", "Godot"), ("darwin", "Godot"), ("linux", "godot"), ("freebsd14", "godot")],
+)
+def test_the_fixture_spells_godots_data_directory_the_way_godot_does(
+    monkeypatch: pytest.MonkeyPatch, platform: str, expected: str
+) -> None:
+    """Godot lowercases this everywhere but Windows and macOS (`OS::get_godot_dir_name`).
+
+    Checked here rather than only in the live gate because the live gate cannot see it on the one
+    platform it runs on locally: a case-insensitive filesystem makes both spellings the same
+    directory, so the capitalized name passed on Windows and failed on Linux CI, where the fixture
+    seeded a file Godot then could not find. This test runs in `verify`, on both runners, with no
+    Godot anywhere.
+    """
+    monkeypatch.setattr(sys, "platform", platform)
+    assert godot_dir_name() == expected
 
 
 def test_a_configured_machine_has_nothing_missing(tmp_path: Path) -> None:

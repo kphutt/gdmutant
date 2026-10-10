@@ -219,15 +219,32 @@ func test_reads_data_that_no_test_creates() -> void:
 """
 
 
+def godot_dir_name() -> str:
+    """The directory Godot keeps ``app_userdata/`` in, under the machine's data path.
+
+    Godot's own rule (``OS::get_godot_dir_name``) is the short name lowercased, overridden to
+    ``Godot`` on Windows and macOS. The case is the whole of it, which is why getting this wrong
+    hides: Windows and macOS filesystems are case-insensitive by default, so the capitalized
+    spelling this used everywhere worked on a Windows dev machine and sent the Linux CI job
+    looking in ``~/.local/share/Godot/app_userdata/...`` for a file seeded into
+    ``~/.local/share/godot/app_userdata/...``. Godot found nothing, the suite that reads it went
+    red, and the serial run this gate needs green failed instead.
+
+    `tests/test_parallel_gate_preconditions.py` pins it per platform, so the Godot-free `verify`
+    job on both runners covers it rather than only a live Godot on one of them.
+    """
+    return "Godot" if sys.platform in ("win32", "darwin") else "godot"
+
+
 def _reader_user_dir() -> Path:
     """Where Godot resolves ``user://`` for a project named `_READER_PROJECT_NAME`.
 
-    ``<data dir>/Godot/app_userdata/<project name>``, a second copy of a rule Godot owns, exactly
-    as `godot_data_path` is. It is checked the same way, too: the serial run below can only come
-    back green if Godot read the file the fixture wrote here, so a wrong path turns that run red and
-    fails this test. There is no reading of "wrong path" that passes quietly.
+    ``<data dir>/<godot dir>/app_userdata/<project name>``, a second copy of a rule Godot owns,
+    exactly as `godot_data_path` is. It is checked the same way, too: the serial run below can only
+    come back green if Godot read the file the fixture wrote here, so a wrong path turns that run
+    red and fails this test. There is no reading of "wrong path" that passes quietly.
     """
-    return godot_data_path() / "Godot" / "app_userdata" / _READER_PROJECT_NAME
+    return godot_data_path() / godot_dir_name() / "app_userdata" / _READER_PROJECT_NAME
 
 
 def missing_preconditions(godot: str | None, addon: Path) -> list[str]:
