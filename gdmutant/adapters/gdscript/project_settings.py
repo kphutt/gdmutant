@@ -128,8 +128,17 @@ def isolate_user_dir(copy_dir: str, token: str) -> None:
     settings = Path(copy_dir) / "project.godot"
     if not settings.is_file():
         return
-    # Written back with newline="" for the same reason the marked copy is: `write_text` would
-    # translate every "\n" to the platform's line ending and silently rewrite the whole file.
+    # What this pair of calls actually does, which an earlier version of this comment got
+    # wrong: `read_text` reads with universal newlines, so a CRLF `project.godot` arrives here
+    # as LF only, and `newline=""` on the write then puts exactly that back. The copy ends up
+    # LF-only whatever the original used. `newline=""` is still what makes that true: without
+    # it, `write_text` would translate every line feed to the platform's ending, which on
+    # Windows turns a file this function changed two lines of into a file with every line
+    # changed. Godot reads either ending and the copy is deleted when the worker finishes, so
+    # LF here is a safe answer rather than a preserved one -- `scripts/rehearse_release.py` is
+    # where preserving matters, because it edits the repository's own files. `marker_run.py`'s
+    # settings write is the other half of this pair and behaves identically, for the same
+    # reason. `tests/test_project_settings.py` pins it.
     text = settings.read_text(encoding="utf-8")
     text = with_setting(text, _APPLICATION, _USE_CUSTOM_USER_DIR, "true")
     text = with_setting(

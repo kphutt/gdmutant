@@ -51,6 +51,28 @@ def test_an_isolated_copy_points_user_dir_at_its_own_token(tmp_path: Path) -> No
     assert text.startswith("config_version=5")
 
 
+def test_an_isolated_copy_is_written_with_one_line_ending(tmp_path: Path) -> None:
+    """A CRLF `project.godot` comes back LF-only, and no CRLF survives anywhere in it.
+
+    `read_text` reads with universal newlines, so the CRLF is already gone before
+    `isolate_user_dir` edits anything, and `newline=""` on the write puts back exactly what it
+    holds. That is the behaviour, not an accident, and the comment beside that write used to claim
+    the opposite (that the file's own endings survived), so this pins which one is true. What
+    matters either way is that a Windows run cannot produce a copy whose every line changed:
+    without `newline=""`, `write_text` would turn each line feed into CRLF.
+    """
+    crlf = _PLAIN.replace("\n", "\r\n")
+    settings = _settings(tmp_path, crlf)
+    assert settings.read_bytes().count(b"\r\n") == _PLAIN.count("\n")  # the fixture really is CRLF
+
+    isolate_user_dir(str(settings.parent), "run-w0")
+
+    assert b"\r" not in settings.read_bytes()
+    text = _read(settings)
+    assert "config/use_custom_user_dir=true" in text
+    assert 'config/name="demo"' in text  # reading CRLF did not mangle what was already there
+
+
 def test_two_tokens_never_land_in_the_same_user_dir() -> None:
     assert worker_user_dir_name("run-w0") != worker_user_dir_name("run-w1")
     # Nested under one parent, so a run that is killed before it can clean up leaves its
