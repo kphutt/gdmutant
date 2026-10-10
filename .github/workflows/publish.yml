@@ -155,7 +155,7 @@ jobs:
         run: uv run --with twine twine check dist/*
 
       - name: Upload dist as an artifact for the publish jobs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
@@ -182,7 +182,7 @@ jobs:
       id-token: write # OIDC: mint the short-lived TestPyPI credential — the ONLY job that needs it
     steps:
       - name: Download the built distributions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
@@ -367,7 +367,7 @@ jobs:
       # structured, downloadable report to work from, not just the console log. Matches that here.
       - name: Upload gitleaks report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gitleaks-results.sarif
           path: results.sarif
@@ -396,7 +396,7 @@ jobs:
           python-version: "3.12"
 
       # Pinned for the same reason ci.yml's own matching step is — see its comment.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22.14.0"
 
@@ -425,7 +425,7 @@ jobs:
           python-version: "3.12"
 
       # Pinned for the same reason ci.yml's own matching step is — see its comment.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22.14.0"
 
@@ -494,7 +494,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Set up Godot
-        uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2.4.2
+        uses: chickensoft-games/setup-godot@ac93246ea68518a384c1c280a496e5989341f2f6 # v2.4.3
         with:
           version: 4.7.0
           use-dotnet: false
@@ -531,7 +531,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Set up Godot
-        uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2.4.2
+        uses: chickensoft-games/setup-godot@ac93246ea68518a384c1c280a496e5989341f2f6 # v2.4.3
         with:
           version: 4.7.0
           use-dotnet: false
@@ -592,7 +592,7 @@ jobs:
 
       # The exact artifact publish-pypi will upload -- not a rebuild, which could differ.
       - name: Download the built distributions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
@@ -633,7 +633,7 @@ jobs:
       id-token: write # OIDC: mint the short-lived PyPI credential — the ONLY job that needs it
     steps:
       - name: Download the built distributions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
