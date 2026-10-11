@@ -101,9 +101,11 @@ release note quotes is written down here, with the command behind it and what it
 ### 0.1.4: the validity check stopped gathering position data
 
 The per-mutant validity check (NF-5) asks only whether a mutant still parses. It was calling
-gdtoolkit with `gather_metadata=True`, which attaches position spans to every node in the tree and
-is most of the cost of the parse. Only that check changed. The site-finding parse still needs the
-tree, so it was left alone.
+gdtoolkit with `gather_metadata=True`, which attaches position spans to every node in the tree. Only
+that check changed. The site-finding parse still needs the tree, so it was left alone. The table
+below measures whole scenarios, not the parse alone: dropping the metadata made `apply` 17% to 36%
+faster and `run` 22% to 29% faster, so it is a measurable part of the cost, and the table does not
+say how large a share of the parse itself.
 
 `uv run python scripts/benchmark.py --sizes 2,8,16 --repeat 3`, run before and after the change:
 
