@@ -149,7 +149,7 @@ jobs:
       # and matches publish.yml's identical step.
       - name: Upload gitleaks report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gitleaks-results.sarif
           path: results.sarif
@@ -213,7 +213,7 @@ jobs:
       # migration can't silently change what these tests actually exercise). Same logic already
       # applies here: an unpinned Node was invisible while this job only ran on Linux, and started
       # mattering the moment Windows came back.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22.14.0"
 
@@ -361,7 +361,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Set up Godot
-        uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2.4.2
+        uses: chickensoft-games/setup-godot@ac93246ea68518a384c1c280a496e5989341f2f6 # v2.4.3
         with:
           version: 4.7.0
           use-dotnet: false
@@ -426,7 +426,7 @@ jobs:
 
       - name: Upload mutation report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: corpus-mutation-report
           path: report.json
@@ -484,7 +484,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Set up Godot
-        uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2.4.2
+        uses: chickensoft-games/setup-godot@ac93246ea68518a384c1c280a496e5989341f2f6 # v2.4.3
         with:
           version: 4.7.0
           use-dotnet: false
