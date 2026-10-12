@@ -137,6 +137,8 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   tree right now, because that has been true every time anyone checked.
   Ask of any gate: what happens when its input is missing, empty, or unreadable? Silence is the
   wrong answer. Make it fail, or make it say out loud that it did not run.
+- A gate must fail on empty, missing or errored input, and on any bypass switch left on; it never
+  passes by skipping. `tests/test_gates_fail_on_empty_input.py` holds the probe for each script.
 - **Recurring bug two: two paths that should agree, and one checks less.** A second entry point
   running fewer checks than the first. A message fixed in one place but not its twin. Two things
   writing to stdout at once. Coverage and mutation testing cannot catch these. Both ask "is this
