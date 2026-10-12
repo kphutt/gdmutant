@@ -11,9 +11,10 @@ asks "what does it do when there is nothing to check?". Gates that need the GitH
 scope here (`harden_github.py`'s live read and write paths); only its offline derivation and
 argument handling are exercised.
 
-Where a gate passes on empty input today, the case is a strict xfail with a one-line reason. The
-strictness is the point: the day the gate is fixed, the xfail turns into a failure that says to
-delete the marker.
+Where a gate passes on empty input, the case is either a declared allowed-empty exception (a normal
+test asserting the documented behaviour, with a comment naming where it is documented) or, if the
+pass is not documented as intended, a strict xfail with a one-line reason. The strictness is the
+point: the day such a gate is fixed, the xfail turns into a failure that says to delete the marker.
 """
 
 from __future__ import annotations
@@ -62,13 +63,11 @@ class _Done:
 # --- scripts/check_mutation_baseline.py (pre-commit manual hook, mutation.yml) -------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="passes on empty input today: no changed gdmutant/ files prints 'nothing to mutate', 0",
-)
-def test_baseline_gate_fails_when_there_is_nothing_to_mutate() -> None:
+# Declared allowed-empty: a clean diff has nothing to mutate. Documented by the existing
+# `test_no_files_changed_still_passes` in tests/test_check_mutation_baseline_cap.py.
+def test_baseline_gate_passes_when_there_is_nothing_to_mutate() -> None:
     with mock.patch.object(baseline, "changed_gdmutant_files", return_value=[]):
-        assert baseline.main([]) != 0
+        assert baseline.main([]) == 0
 
 
 def test_baseline_gate_fails_when_counting_mutants_errors() -> None:
@@ -413,16 +412,14 @@ def test_hardening_exits_nonzero_when_no_required_check_can_be_derived(
 # --- scripts/run_gitleaks.py (pre-commit hook) ---------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="passes on empty input today: no gitleaks on PATH warns on stderr and exits 0 "
-    "(deliberate, the ci.yml secret-scan job is the required gate)",
-)
-def test_gitleaks_hook_fails_when_gitleaks_is_not_installed(
-    monkeypatch: pytest.MonkeyPatch,
+# Declared allowed-empty: documented in the docstring of scripts/run_gitleaks.py (the required
+# `Secret scan (gitleaks)` job in ci.yml is the real gate).
+def test_gitleaks_hook_warns_and_passes_when_gitleaks_is_not_installed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(run_gitleaks.shutil, "which", lambda _name: None)
-    assert run_gitleaks.main() != 0
+    assert run_gitleaks.main() == 0
+    assert "NOT SCANNED" in capsys.readouterr().err
 
 
 def test_gitleaks_hook_propagates_a_failing_scan(monkeypatch: pytest.MonkeyPatch) -> None:
