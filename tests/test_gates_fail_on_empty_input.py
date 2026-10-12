@@ -176,6 +176,8 @@ def test_verify_local_command_line_fails_for_an_unknown_job() -> None:
         [sys.executable, str(_SCRIPTS / "verify_local.py"), "--job", "no-such-job"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
     )
     assert done.returncode != 0
