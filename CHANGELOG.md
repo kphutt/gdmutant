@@ -117,7 +117,9 @@ All notable changes to gdmutant are recorded here. The format follows
   GDScript, and that check now skips gathering position data it never used. Over 54,677 mutants
   from three real GDScript projects, it gave the same valid or invalid answer every time. On the
   largest benchmark workload, the engine loop went from 22.2 to 17.4 seconds (median), about 22%
-  faster. Time spent inside Godot running your tests is unchanged.
+  faster. The run behind that, and what it does not cover, is recorded in
+  [docs/benchmarking.md](docs/benchmarking.md#measurements-a-release-note-quotes). Time spent
+  inside Godot running your tests is unchanged.
 
 ### Fixed
 
