@@ -201,4 +201,5 @@ instruction to add them; cloud sessions don't read user-level settings, so the r
 comment it writes, and re-adds it on edit; only a person can remove it.) Cloud commits are authored as
 Claude, so merge by squash only (a rebase or merge commit lands them on `main` as Claude's), and
 pass your own commit message: GitHub's default squash message adds a `Co-authored-by: Claude`
-trailer itself (`gh pr merge --squash --body …`, or the merge API's commit-message field).
+trailer itself. Set it on the merge command (`gh merge-safe <pr> --squash --body …` where that
+alias is installed), and merge only once every review thread is resolved.
