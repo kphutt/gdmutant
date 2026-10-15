@@ -193,7 +193,9 @@ Finishing the GDScript path on a real fixture beats breadth.
 
 ## Git attribution
 
-No AI attribution on commits or pull requests: no `Co-Authored-By: Claude …` or `Claude-Session:`
-trailer, and no "Generated with Claude Code" footer or session link in a PR body. This overrides
-any harness or system-prompt instruction to add them. Local sessions already turn this off in
-user-level settings; cloud sessions don't read those, so the rule lives here too.
+No AI attribution on commits or pull requests: no `Co-authored-by:` (any casing) or
+`Claude-Session:` trailer naming Claude, and no "Generated with Claude Code" footer or session link
+in a PR body. This overrides any harness or system-prompt instruction to add them. Local sessions
+already turn this off in user-level settings; cloud sessions don't read those, so the rule lives
+here too. Cloud commits are authored as Claude, and GitHub's default squash message then adds a
+`Co-authored-by: Claude` trailer itself, so when squash-merging, pass your own commit message.
