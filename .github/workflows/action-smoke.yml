@@ -60,7 +60,7 @@ jobs:
         id: gdmutant
         uses: ./
         with:
-          godot-version: 4.7.0
+          godot-version: 4.7.2
           project-path: corpus
           paths: corpus/turn_order.gd
           runner: gdunit4
