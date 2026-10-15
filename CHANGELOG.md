@@ -14,6 +14,14 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ### Changed
 
+- `.gdmutant.toml` can set `project = "."` without `--trust-config`. A `project` naming the folder
+  the file sits in, which is the folder you ran gdmutant from, points gdmutant at nothing you had
+  not already chosen, so the refusal was only getting in the way. Any spelling of that folder
+  counts (`./`, its absolute path, a symlink to it), because gdmutant asks the operating system
+  whether the two are one folder rather than comparing the text. Every other `project` still needs
+  `--trust-config`: `..`, a neighbouring folder, a subfolder, and a symlink that leads anywhere
+  else. So do `command` and `godot`, always. When a `project` is refused, the message now says
+  which value would have gone through.
 - `--jobs N` now refuses a suite that only passes with files in your real `user://` that no test
   creates. If you already use `--jobs` with such a suite, it used to finish and report a score,
   and now it stops with a message that names the isolated copy. Make the suite create what it

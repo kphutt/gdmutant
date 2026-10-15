@@ -1386,6 +1386,13 @@ _CONFIG_FILENAME = ".gdmutant.toml"
 #: case still needs ``--trust-config`` every time either way, so the exception was one more thing
 #: to explain for no real benefit. `runner` is deliberately NOT here: it only picks *which*
 #: runner, and the program it would need still has to come from a trusted source.
+#:
+#: One value is let through without the flag: a `project` that names the very folder the file
+#: sits in (`project = "."`, in practice). The file is read from the working directory, so that
+#: folder is the one the user chose to run gdmutant in, and the file's author already supplied
+#: everything inside it. Pointing gdmutant there reaches nothing the user did not already choose,
+#: which is why it is not the "a tree they never chose" case above. See
+#: `_project_is_the_config_folder` for exactly which values count.
 _TRUST_REQUIRED_CONFIG_KEYS = ("command", "godot", "project")
 
 
@@ -1445,12 +1452,41 @@ def _load_config(path: Path | None = None) -> dict[str, object] | None:
     return settings
 
 
-def _untrusted_config_keys(settings: dict[str, object]) -> list[str]:
-    """The `_TRUST_REQUIRED_CONFIG_KEYS` this config actually sets, as the user wrote them."""
+def _project_is_the_config_folder(value: str, config_dir: Path, cwd: Path) -> bool:
+    """Whether a config `project` value names the same directory `.gdmutant.toml` sits in.
+
+    `value` is resolved the way the run will use it, against `cwd`; so is `config_dir`. "Same"
+    means the operating system says both are one directory (same device, same file id), not that
+    two strings match. That makes every spelling of the folder count (`.`, `./`, `sub/..`, the
+    absolute path, a symlink to it, a different letter case on a case-insensitive disk) and every
+    other directory fail (`..`, a sibling, a symlink pointing anywhere else). A value that cannot
+    be looked up at all (missing, a NUL byte) is not the folder, so it stays gated.
+
+    A file id of 0 means the filesystem reports none (some network and FAT volumes on Windows),
+    and there every directory on the volume would compare equal, so that never counts either.
+
+    An empty value never counts. `cwd / ""` is `cwd`, but the run reads `project = ""` as unset
+    and falls back to the source file's folder, so the two would disagree about what it names.
+    """
+    if not value:
+        return False
+    try:
+        named = os.stat(cwd / value)
+        folder = os.stat(cwd / config_dir)
+    except (OSError, ValueError):
+        return False
+    return named.st_ino != 0 and os.path.samestat(named, folder)
+
+
+def _untrusted_config_keys(settings: dict[str, object], config_dir: Path, cwd: Path) -> list[str]:
+    """The `_TRUST_REQUIRED_CONFIG_KEYS` this config actually sets, as the user wrote them,
+    leaving out a `project` that names the config file's own folder (see
+    `_project_is_the_config_folder`)."""
     return [
         key
         for key in _TRUST_REQUIRED_CONFIG_KEYS
-        if settings.get(_CONFIG_KEY_TO_DEST[key]) is not None
+        if (value := settings.get(_CONFIG_KEY_TO_DEST[key])) is not None
+        and not (key == "project" and _project_is_the_config_folder(str(value), config_dir, cwd))
     ]
 
 
@@ -1465,6 +1501,14 @@ def _untrusted_config_message(keys: list[str]) -> str:
     for the file."""
     named = " and ".join(f"'{key}'" for key in keys)
     flags = " / ".join(f"--{key}" for key in keys)
+    # Only worth saying when 'project' is what stopped the run: it tells the user the one value
+    # that would have gone through, so they can tell a wrong path from a gated one.
+    project_note = (
+        "  A 'project' naming the folder this file is in (project = \".\") needs no trust. "
+        "This one names somewhere else.\n"
+        if "project" in keys
+        else ""
+    )
     return (
         f"error: {_CONFIG_FILENAME} sets {named}, which gdmutant will not act on without your "
         "say-so, so gdmutant stopped instead of running.\n"
@@ -1474,6 +1518,7 @@ def _untrusted_config_message(keys: list[str]) -> str:
         "and copies (project),\n"
         "  so gdmutant will not act on them by itself, even if you also pass the same value "
         "yourself.\n"
+        f"{project_note}"
         "  If this project is yours, or you have read the file and trust it, add --trust-config.\n"
         f"  Otherwise remove {named} from {_CONFIG_FILENAME} and pass it as a flag instead "
         f"({flags}): with no matching key in the file, no trust is needed."
@@ -1532,7 +1577,8 @@ def _scaffold_config_text(runner: str | None) -> str:
         '# exclude = ["*_generated.gd", "*/vendor/*"]  # globs to skip when expanding a directory',
         "",
         "# These need --trust-config: they say what gdmutant reads (project) or runs (command,",
-        "# godot), and .gdmutant.toml may not be a file you wrote yourself.",
+        "# godot), and .gdmutant.toml may not be a file you wrote yourself. The one exception is",
+        "# a project naming this file's own folder, which needs no trust:",
         '# project = "."',
         '# command = "godot --headless --script res://tests/run_tests.gd"',
         '# godot = "/path/to/godot"',
@@ -1874,7 +1920,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Parse first with the trust-required keys withheld, so nothing the config file says can pick
     # what runs or what gdmutant reads/copies before the user has had a chance to vouch for it.
     # Only once --trust-config is seen on the command line are they parsed back in.
-    untrusted_keys = _untrusted_config_keys(config)
+    # The file is read from `_CONFIG_FILENAME`, a path relative to the working directory, so its
+    # folder is the working directory itself (tests point it at a temporary file instead).
+    untrusted_keys = _untrusted_config_keys(config, Path(_CONFIG_FILENAME).parent, Path.cwd())
     parser = build_parser(_without_untrusted_keys(config) if untrusted_keys else config)
     args = parser.parse_args(argv)
     if args.command == "example":
