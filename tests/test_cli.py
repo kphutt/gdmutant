@@ -3521,6 +3521,7 @@ def test_a_different_letter_case_of_the_config_folder_needs_no_trust(tmp_path: P
         "missing",  # nothing there at all
         "~",  # not expanded: a literal `~` folder, which does not exist
         "bad\0path",  # a NUL byte cannot name any path
+        "",  # the run reads an empty project as unset, so it does not name this folder either
     ],
 )
 def test_any_other_directory_still_needs_trust(tmp_path: Path, value: str) -> None:

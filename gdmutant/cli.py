@@ -1464,7 +1464,12 @@ def _project_is_the_config_folder(value: str, config_dir: Path, cwd: Path) -> bo
 
     A file id of 0 means the filesystem reports none (some network and FAT volumes on Windows),
     and there every directory on the volume would compare equal, so that never counts either.
+
+    An empty value never counts. `cwd / ""` is `cwd`, but the run reads `project = ""` as unset
+    and falls back to the source file's folder, so the two would disagree about what it names.
     """
+    if not value:
+        return False
     try:
         named = os.stat(cwd / value)
         folder = os.stat(cwd / config_dir)
