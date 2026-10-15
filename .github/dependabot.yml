@@ -1,5 +1,10 @@
 # Dependabot — the counterweight to SHA-pinning + hash-locking: keeps pinned
 # GitHub Actions and Python deps from silently rotting.
+#
+# cooldown: every release-age delay is 7 days. Dependabot won't propose a release until it has
+# been public for 7 days, so a compromised or yanked release is usually caught upstream first.
+# It equals pyproject.toml's [tool.uv] exclude-newer, so a proposed version is always one uv will
+# lock. Security updates skip the cooldown.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
@@ -9,18 +14,23 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "ci"
     labels: ["dependencies"]
 
-  # Python deps (reads pyproject.toml; updates the uv.lock ecosystem).
-  - package-ecosystem: "pip"
+  # Python deps: the "uv" ecosystem reads pyproject.toml and updates uv.lock with it. ("pip"
+  # does not understand uv.lock, so its PRs left the lockfile stale and broke `uv sync --frozen`.)
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
     groups:
       python:
         patterns: ["*"]
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "deps"
     labels: ["dependencies"]
