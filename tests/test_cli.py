@@ -3454,7 +3454,195 @@ def test_a_config_supplied_project_is_refused_alone_with_no_trust_flag(
     rc = cli.main(["run", source])
 
     assert rc == 2
+    err = capsys.readouterr().err
+    assert "sets 'project'" in err
+    # The refusal names the one `project` value that would have gone through, so a user can tell
+    # "this path is gated" from "this path is wrong".
+    assert (
+        "  A 'project' naming the folder this file is in (project = \".\") needs no trust. "
+        "This one names somewhere else.\n"
+    ) in err
+
+
+# --- ...except a `project` that names the folder the config file is in ----------------------
+#
+# That folder is the working directory: the one the user chose to run gdmutant in, holding a file
+# whose author supplied everything around it. Pointing gdmutant there reaches nothing new, so it
+# needs no --trust-config. Every other directory still does. "Same folder" is the operating
+# system's answer (same device, same file id), so every spelling of it counts and nothing else
+# does. These call the check directly with an explicit `cwd`, because chdir is banned in this
+# suite (see `_payload_config`).
+
+
+def _symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this platform or account cannot create symlinks")
+
+
+@pytest.mark.parametrize(
+    "spelling", [".", "./", ".//", "./.", "sub/..", "sub/../", "<abs>", "<abs>/"]
+)
+def test_every_spelling_of_the_config_folder_needs_no_trust(tmp_path: Path, spelling: str) -> None:
+    (tmp_path / "sub").mkdir()
+    value = spelling.replace("<abs>/", str(tmp_path) + os.sep).replace("<abs>", str(tmp_path))
+
+    # Production passes the config folder as `Path(".")` (the file's path is relative); a test
+    # pointing `_CONFIG_FILENAME` at an absolute file passes the absolute folder. Both must agree.
+    assert cli._project_is_the_config_folder(value, Path(), tmp_path)
+    assert cli._project_is_the_config_folder(value, tmp_path, tmp_path)
+
+
+def test_a_symlink_to_the_config_folder_needs_no_trust(tmp_path: Path) -> None:
+    _symlink_or_skip(tmp_path / "here", tmp_path)
+
+    assert cli._project_is_the_config_folder("here", Path(), tmp_path)
+
+
+def test_a_different_letter_case_of_the_config_folder_needs_no_trust(tmp_path: Path) -> None:
+    # macOS and Windows disks ignore letter case by default, so `/srv/Game` and `/srv/game` are
+    # one folder there, and a string comparison would wrongly gate it.
+    swapped = str(tmp_path).swapcase()
+    if not Path(swapped).exists():
+        pytest.skip("this filesystem is case-sensitive, so the swapped path is another folder")
+
+    assert cli._project_is_the_config_folder(swapped, Path(), tmp_path)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "..",  # the parent: the folder above the checkout, never chosen
+        "../sibling",  # a neighbouring checkout
+        "<sibling>",  # the same neighbour, spelled absolute
+        "sub",  # even a folder inside the checkout is a narrower, different project
+        "player.gd",  # a file, not the folder
+        "missing",  # nothing there at all
+        "~",  # not expanded: a literal `~` folder, which does not exist
+        "bad\0path",  # a NUL byte cannot name any path
+        "",  # the run reads an empty project as unset, so it does not name this folder either
+    ],
+)
+def test_any_other_directory_still_needs_trust(tmp_path: Path, value: str) -> None:
+    here = tmp_path / "checkout"
+    (here / "sub").mkdir(parents=True)
+    (here / "player.gd").write_text("", encoding="utf-8")
+    (tmp_path / "sibling").mkdir()
+    value = value.replace("<sibling>", str(tmp_path / "sibling"))
+
+    assert not cli._project_is_the_config_folder(value, Path(), here)
+
+
+def test_a_symlink_pointing_out_of_the_config_folder_still_needs_trust(tmp_path: Path) -> None:
+    # The link sits inside the folder, so its own path looks local. What it resolves to is not.
+    here = tmp_path / "checkout"
+    here.mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    _symlink_or_skip(here / "out", tmp_path / "elsewhere")
+
+    assert not cli._project_is_the_config_folder("out", Path(), here)
+
+
+def test_the_folder_compared_against_is_the_config_files_own(tmp_path: Path) -> None:
+    # `.` means the working directory. When the file sits somewhere else, `.` is not its folder.
+    (tmp_path / "sub").mkdir()
+
+    assert not cli._project_is_the_config_folder(".", Path("sub"), tmp_path)
+    assert cli._project_is_the_config_folder("sub", Path("sub"), tmp_path)
+
+
+def test_a_filesystem_with_no_file_ids_never_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Some Windows network and FAT volumes report a file id of 0 for everything, so every folder
+    # on them would look like the same folder. That must fail closed, not open.
+    def fake_stat(ino: int) -> os.stat_result:
+        return os.stat_result((0o40755, ino, 7, 1, 0, 0, 0, 0, 0, 0))
+
+    monkeypatch.setattr(cli.os, "stat", lambda path: fake_stat(0))
+    assert not cli._project_is_the_config_folder(".", Path(), tmp_path)
+
+    # The same stand-in with a real id does match, so the 0 is what made the difference.
+    monkeypatch.setattr(cli.os, "stat", lambda path: fake_stat(42))
+    assert cli._project_is_the_config_folder(".", Path(), tmp_path)
+
+
+def _record_run(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    captured: dict[str, object] = {}
+
+    def record(source: str, project: str, runner: object, **kw: object) -> int:
+        captured["project"] = project
+        return 0
+
+    monkeypatch.setattr(cli, "run_mutation", record)
+    return captured
+
+
+def test_a_config_project_naming_its_own_folder_runs_without_the_trust_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The case that prompted this: a repository whose `.gdmutant.toml` says the project is the
+    # folder the file is in. (Spelled absolute because this suite cannot chdir into tmp_path;
+    # the `.` spelling is pinned against the check itself above.)
+    source = _payload_config(tmp_path, monkeypatch, f"runner = 'gut'\nproject = '{tmp_path}'\n")
+    captured = _record_run(monkeypatch)
+
+    assert cli.main(["run", source]) == 0
+
+    assert captured["project"] == str(tmp_path)  # the config's value was used, not dropped
+
+
+def test_dot_means_the_working_directory_not_wherever_the_file_is(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `.` is resolved where the run will actually use it, against the working directory. Here the
+    # file sits in tmp_path but the process stands somewhere else, so `.` is NOT the file's folder
+    # and the gate must still fire. In real use the two are always the same directory.
+    source = _payload_config(tmp_path, monkeypatch, "runner = 'gut'\nproject = '.'\n")
+    launched = _record_launches(monkeypatch)
+
+    assert cli.main(["run", source]) == 2
+
+    assert launched == []
     assert "sets 'project'" in capsys.readouterr().err
+
+
+def test_a_trust_free_project_does_not_unlock_command_or_godot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The exemption is for `project` alone. A file that also names a program is refused exactly
+    # as before, and the refusal names only the key that still needs trust.
+    source = _payload_config(
+        tmp_path,
+        monkeypatch,
+        f"runner = 'command'\ncommand = 'touch pwned'\ngodot = './payload'\n"
+        f"project = '{tmp_path}'\n",
+    )
+    launched = _record_launches(monkeypatch)
+
+    rc = cli.main(["run", source])
+
+    assert launched == []
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "sets 'command' and 'godot'," in err
+    # The project note is only for a refused `project`: here the line before the advice is the
+    # usual one, with nothing in between.
+    assert "needs no trust" not in err
+    assert "yourself.\n  If this project is yours" in err
+
+
+def test_the_init_scaffold_says_which_project_needs_no_trust() -> None:
+    # `init` writes `# project = "."` under the trust-required heading, so the comment has to say
+    # that this one value is the exception, or a user reads it as needing the flag.
+    text = cli._scaffold_config_text(None)
+
+    assert (
+        "# godot), and .gdmutant.toml may not be a file you wrote yourself. The one exception is\n"
+        "# a project naming this file's own folder, which needs no trust:\n"
+        '# project = "."\n'
+    ) in text
 
 
 def test_the_refusal_names_every_program_key_the_file_set(

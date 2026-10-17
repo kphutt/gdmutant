@@ -30,7 +30,7 @@ binaries and the `uvx` / `uv run --with` invocations are listed alongside the de
 | Tool | Use | License |
 |---|---|---|
 | Godot Engine | Runs the GDScript test suites headlessly | MIT |
-| [GdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) (v6.1.3) | GDScript test framework. Its addon is downloaded (not vendored) into the corpus fixture for the live self-test (`scripts/install_gdunit4.py`) | MIT |
+| [GdUnit4](https://github.com/godot-gdunit-labs/gdUnit4) (v6.2.2) | GDScript test framework. Its addon is downloaded (not vendored) into the corpus fixture for the live self-test (`scripts/install_gdunit4.py`) | MIT |
 | [GUT](https://github.com/bitwes/Gut) (v9.7.1) | GDScript test framework (peer JUnit adapter). Its addon is downloaded, not vendored, into the corpus fixture for the live self-test (`scripts/install_gut.py`) | MIT |
 | Python | Runtime | PSF |
 | uv | Dependency + environment manager | Apache-2.0 / MIT |

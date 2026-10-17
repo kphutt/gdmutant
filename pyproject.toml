@@ -70,6 +70,10 @@ dev = [
 # Pin uv itself: the toolchain is uv-first, and Python is pinned via .python-version. Older uv
 # releases can resolve the lockfile differently, so require a floor.
 required-version = ">=0.11"
+# Never resolve a dependency version published in the last 7 days, so a compromised or yanked
+# release is usually caught upstream first. Equal to Dependabot's cooldown. Only affects
+# re-resolution (`uv lock`/`uv add`), never `uv sync --frozen`.
+exclude-newer = "7 days"
 
 [build-system]
 requires = ["hatchling", "hatch-fancy-pypi-readme>=24.1.0"]

@@ -363,7 +363,7 @@ jobs:
       - name: Set up Godot
         uses: chickensoft-games/setup-godot@ac93246ea68518a384c1c280a496e5989341f2f6 # v2.4.3
         with:
-          version: 4.7.0
+          version: 4.7.2
           use-dotnet: false
           # The action caches the Godot download itself (keyed on version + platform). Kept explicit
           # so it can't silently regress to a re-download; verified restoring from cache in CI.
@@ -486,7 +486,7 @@ jobs:
       - name: Set up Godot
         uses: chickensoft-games/setup-godot@ac93246ea68518a384c1c280a496e5989341f2f6 # v2.4.3
         with:
-          version: 4.7.0
+          version: 4.7.2
           use-dotnet: false
           cache: true
 

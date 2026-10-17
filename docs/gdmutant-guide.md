@@ -77,7 +77,7 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | `--coverage-analysis {off,all,per-file}` | `off` | `all` finds the mutants no test reaches before any mutant runs, and reports them as `no coverage` without running them. `per-file` does that and runs every other mutant against only the test files that reach it, which is the setting that saves real time. See [Coverage analysis](#coverage-analysis). |
 | `--coverage-self-check N\|all` | `3` | How many of coverage analysis's own decisions are re-run against the whole suite to confirm them. `all` checks every mutant both ways. |
 | `--require-clean` / `--no-require-clean` | warn only | Refuse to run on an uncommitted source file. |
-| `--trust-config` | off | Act on `.gdmutant.toml`'s `command`/`godot`/`project` keys. |
+| `--trust-config` | off | Act on `.gdmutant.toml`'s `command`/`godot`/`project` keys (a `project` naming the file's own folder needs no trust). |
 | `--progress {auto,plain,none}` | `auto` | How much the run narrates itself while it works. |
 | `--dry-run` | off | List the mutants without running any tests. |
 
@@ -279,7 +279,7 @@ gdmutant reads `.gdmutant.toml` from the directory it runs in. Its keys seed the
 flags of the same name (an explicit flag on the command line still wins):
 
 ```toml
-# project needs --trust-config too, see below
+# project = "." (this file's own folder) needs no trust; any other project does, see below
 project = "."
 runner = "command"
 # command and godot need --trust-config, see below
@@ -313,10 +313,18 @@ it is the exit-2 cause most likely to surprise an agent working in a directory i
 gdmutant run scripts --trust-config
 ```
 
-`--trust-config` acts on the file's `command`, `godot`, and `project`. Use it only where the
-checkout is trusted. Otherwise, remove those keys from `.gdmutant.toml` and pass them as flags
-instead. Every other key is read normally: none of them can decide what gets executed or read, so
-none of them ever need trust.
+`--trust-config` acts on the file's `command`, `godot`, and any other `project`. Use it only
+where the checkout is trusted. Otherwise, remove those keys from `.gdmutant.toml` and pass them as
+flags instead. Every other key is read normally: none of them can decide what gets executed or
+read, so none of them ever need trust.
+
+One `project` value needs no trust: the folder `.gdmutant.toml` itself sits in, which is the folder
+you ran gdmutant from. `project = "."` is the usual way to write it, and any other spelling of that
+same folder counts too (`./`, its absolute path, a symlink to it). gdmutant asks the operating
+system whether the two are one folder rather than comparing text. Pointing gdmutant at the folder
+you are already standing in reaches nothing you did not already choose. Every other `project`
+still needs `--trust-config`, including `..`, a neighbouring folder, a subfolder, and a symlink that
+leads anywhere else. `command` and `godot` always need it.
 
 ### Exit codes (the contract)
 
@@ -332,7 +340,8 @@ none of them ever need trust.
   - `--project` does not name an existing directory
   - `--require-clean` was set and gdmutant could not confirm git holds a copy of the source: a
     dirty tree, a file git ignores, a file outside any repository, or a machine with no git
-  - `.gdmutant.toml` sets `command`, `godot`, or `project` and `--trust-config` was not passed, or
+  - `.gdmutant.toml` sets `command`, `godot`, or a `project` other than its own folder, and
+    `--trust-config` was not passed, or
     that file cannot be read or holds a value of the wrong type
   - the test-runner executable was not found: `godot`, or the program named by `--command`
   - `--runner command` with no `--command`, or a `--command` string that cannot be split into words
@@ -752,8 +761,8 @@ not a second way to reach a shell.
 `fetch-depth: 0`. Its default fetches one commit, the base commit is not among them, and the
 gdmutant step then fails on a git error rather than mutating anything.
 
-If your project's `.gdmutant.toml` sets `command`, `godot`, or `project`, add `args:
---trust-config`. Without
+If your project's `.gdmutant.toml` sets `command`, `godot`, or a `project` other than `.`, add
+`args: --trust-config`. Without
 it gdmutant refuses to run at all and the step fails, for the reason given under [Project
 config](#project-config-gdmutanttoml) above.
 
