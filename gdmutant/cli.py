@@ -462,13 +462,13 @@ _GODOT_IMPORT_CACHE = ".godot"
 
 def _unmatched_exclusions(project_dir: str, tests: str, entries: Sequence[str]) -> list[str]:
     """The `entries` that match no ``.gd`` file under `tests`, by gdUnit4's ``-i`` rules: the entry,
-    or the suite before ``:`` in ``suite:test``, equals a file's name or is part of its path."""
+    or the suite before ``:`` in ``suite:test``, is part of the file's ``res://`` path."""
     root = Path(project_dir) / tests.removeprefix("res://")
     files = sorted(root.rglob("*.gd")) if root.is_dir() else []
-    named = [(f.stem, f"res://{f.relative_to(project_dir).as_posix()}") for f in files]
+    paths = [f"res://{f.relative_to(project_dir).as_posix()}" for f in files]
 
     def matches(part: str) -> bool:
-        return any(part == stem or part in path for stem, path in named)
+        return any(part in path for path in paths)
 
     return [
         e for e in entries if not matches(e) and not matches(e.removeprefix("res://").split(":")[0])
@@ -2136,7 +2136,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "can't leave tests out",
                 file=sys.stderr,
             )
-            exclude_tests = []
         if args.runner == "command":
             # Split OS-aware (see `_split_command`), then require a non-empty result: this rejects a
             # missing --command AND a whitespace-only one (which would otherwise become `[]` -> a
