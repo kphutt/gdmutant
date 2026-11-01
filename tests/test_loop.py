@@ -4,6 +4,7 @@ import inspect
 import os
 import shutil
 import stat
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import FrozenInstanceError, dataclass, field, replace
@@ -45,7 +46,7 @@ from gdmutant.engine.loop import (
 from gdmutant.engine.loop import run as _run
 from gdmutant.engine.loop import run_paths as _run_paths
 from gdmutant.engine.mutants import Mutant
-from gdmutant.engine.operators import TableOperator
+from gdmutant.engine.operators import CATALOG, TableOperator
 from gdmutant.engine.runner import ReportedSuite, SuiteResult, SuiteTimeout
 from gdmutant.engine.spans import Span
 
@@ -2437,3 +2438,122 @@ def test_running_past_the_budget_is_remembered_across_the_self_check(tmp_path: P
     assert outcome.verdict is Verdict.SURVIVED
     assert outcome.self_checked is True
     assert outcome.over_budget is True
+
+
+# --- --jobs shares one pool across every file of a run_paths call ----------------------------
+
+_POOL_SOURCES = {
+    "a.gd": "func f(a, b) -> bool:\n\treturn a > b\n",
+    "b.gd": "func g(a, b) -> bool:\n\treturn a < b and b > 0\n",
+    "c.gd": "func h(a) -> bool:\n\treturn a >= 0  # gdmutant: ignore[comparison]\n",
+}
+
+
+def _pool_project(root: Path) -> dict[str, str]:
+    root.mkdir()
+    return {_write(root, name, src): src for name, src in _POOL_SOURCES.items()}
+
+
+@dataclass
+class PeakRunner:
+    """All-pass, and each mutant run waits (up to 10s) until `target` runs are going at once, so a
+    pool that never reaches `target` workers shows up as `peak < target`, not as a timing flake."""
+
+    target: int
+    active: int = 0
+    peak: int = 0
+    calls: int = 0
+    lock: threading.Condition = field(default_factory=threading.Condition)
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        with self.lock:
+            self.calls += 1
+            if self.calls == 1:  # the baseline
+                return SuiteResult(tests=1, failures=0, errors=0)
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            self.lock.notify_all()
+            self.lock.wait_for(lambda: self.peak >= self.target, timeout=10)
+            self.active -= 1
+        return SuiteResult(tests=1, failures=0, errors=0)
+
+
+def test_jobs_runs_every_files_mutants_in_one_pool(tmp_path: Path) -> None:
+    sources = _pool_project(tmp_path / "p")
+    per_file = [
+        sum(1 for m in ADAPTER.generate_mutants(p, s, CATALOG) if m.ignore_reason is None)
+        for p, s in sources.items()
+    ]
+    target = sum(per_file)
+    assert max(per_file) < target <= 8  # more workers busy at once than any one file has mutants
+    runner = PeakRunner(target)
+    lines: list[str] = []
+    run_paths(str(tmp_path / "p"), sources, runner, jobs=8, progress=lines.append)
+    assert runner.peak == target
+    assert f"Running up to {target} at a time across 3 files." in lines
+    assert not any(line.endswith(" at a time.") and "across" not in line for line in lines)
+    assert sum(line.startswith("Done in ") for line in lines) == 1
+
+
+@dataclass
+class AnyFileMarkerRunner:
+    """Kills when any of `relnames`, read inside the `project_dir` it is handed, holds `marker`."""
+
+    relnames: tuple[str, ...]
+    marker: str
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        texts = [(Path(project_dir) / name).read_text(encoding="utf-8") for name in self.relnames]
+        return SuiteResult(tests=3, failures=int(any(self.marker in t for t in texts)), errors=0)
+
+
+def test_the_shared_pool_gives_every_file_the_verdicts_a_serial_run_gives(tmp_path: Path) -> None:
+    runner = AnyFileMarkerRunner(tuple(_POOL_SOURCES), "<=")
+    serial = run_paths(str(tmp_path / "s"), _pool_project(tmp_path / "s"), runner, jobs=1)
+    pooled_sources = _pool_project(tmp_path / "p")
+    pooled = run_paths(str(tmp_path / "p"), pooled_sources, runner, jobs=4)
+    assert [_outcome_key(r) for r in pooled.values()] == [_outcome_key(r) for r in serial.values()]
+    verdicts = {o.verdict for r in serial.values() for o in r.outcomes}
+    assert {Verdict.KILLED, Verdict.SURVIVED, Verdict.IGNORED} <= verdicts
+    assert [Path(p).name for p in pooled] == list(_POOL_SOURCES)  # `sources` order
+    for path, src in pooled_sources.items():  # the real files are never mutated in the pool
+        assert Path(path).read_text(encoding="utf-8") == src
+
+
+def test_explicit_jobs_refuses_a_file_outside_the_project_before_any_mutant_runs(
+    tmp_path: Path,
+) -> None:
+    project, outside = _project_and_outside_source(tmp_path)
+    inside = _write(project, "a.gd", _POOL_SOURCES["a.gd"])
+    sources = {inside: _POOL_SOURCES["a.gd"], str(outside): outside.read_text(encoding="utf-8")}
+    runner = ProjectDirRecordingRunner()
+    with pytest.raises(SourceOutsideProject):
+        run_paths(str(project), sources, runner, jobs=4)
+    assert len(runner.seen) == 1  # the baseline only
+    assert Path(inside).read_text(encoding="utf-8") == _POOL_SOURCES["a.gd"]
+
+
+def test_jobs_auto_runs_a_file_outside_the_project_serially_and_pools_the_rest(
+    tmp_path: Path,
+) -> None:
+    project, outside = _project_and_outside_source(tmp_path)
+    inside = {_write(project, n, _POOL_SOURCES[n]): _POOL_SOURCES[n] for n in ("a.gd", "b.gd")}
+    sources = {str(outside): outside.read_text(encoding="utf-8"), **inside}
+    runner = ProjectDirRecordingRunner()
+    lines: list[str] = []
+    runs = run_paths(str(project), sources, runner, jobs=2, jobs_auto=True, progress=lines.append)
+    assert list(runs) == list(sources)
+    assert all(r.outcomes for r in runs.values())
+    assert "Running up to 2 at a time across 2 files." in lines
+    # Only the outside file's mutants ran in the real project; the baseline ran in a copy.
+    assert runner.seen.count(str(project)) == len(runs[str(outside)].ran)
+
+
+def test_a_single_file_under_jobs_keeps_its_own_plan_line(tmp_path: Path) -> None:
+    src = _POOL_SOURCES["b.gd"]
+    path = _write(tmp_path, "b.gd", src)
+    lines: list[str] = []
+    run_paths(
+        str(tmp_path), {path: src}, ProjectDirRecordingRunner(), jobs=8, progress=lines.append
+    )
+    assert any(line.endswith(" at a time.") and "across" not in line for line in lines)
