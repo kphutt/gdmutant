@@ -385,11 +385,9 @@ class CommandRunner:
             # patch around.
             raise with_filename(error, self.command[0]) from error
         if out.excerpt is not None or err.excerpt is not None:
-            # Regardless of exit code: see _SCRIPT_ERROR_MARKER and the class docstring. `errors`,
-            # not `failures`: the run itself cannot be trusted, a different fault from a clean red
-            # test (and, unlike an ordinary failure, the string can appear on either exit code).
-            # A newline between the tails, so a last stdout line with no newline of its own cannot
-            # run into the first stderr line and hide where a SCRIPT ERROR starts.
+            # Regardless of exit code (see the class docstring), and `errors`, not `failures`: the
+            # run itself cannot be trusted. The newline keeps a last stdout line with no newline of
+            # its own from running into stderr's first line.
             output = f"{out.tail}\n{err.tail}"
             return SuiteResult(
                 tests=1,
@@ -433,31 +431,20 @@ def script_error_excerpt(output: str) -> str:
     return ""
 
 
-#: What `_StreamTail` keeps of a stream, so `CommandRunner`'s memory stays fixed however much a
-#: command prints (#331). The tail is twice the 2000 characters a message shows, so stripping
-#: trailing whitespace cannot leave it short. A line longer than `_LINE_CHARS` is looked at in
-#: pieces of that size.
+#: Bounds on what `_StreamTail` keeps. The tail is twice the 2000 characters a message shows, so
+#: stripping trailing whitespace cannot leave it short.
 _TAIL_CHARS: Final = 4000
 _LINE_CHARS: Final = 4000
 _EXCERPT_LINES: Final = 4
 _READ_BYTES: Final = 64 * 1024
-#: How long to wait, after killing a command, for its pipes to close. A grandchild that inherited
-#: them can hold them open for good, and the run must still end.
+#: How long to wait for the pipes after a kill: a grandchild can hold them open for good.
 _KILL_GRACE_SECS: Final = 5.0
 
 
 class _StreamTail:
-    """What `CommandRunner` keeps of one output stream, in a bounded amount of memory.
-
-    Before #331 the runner held the whole of both streams, and a mutant that flooded its output
-    until the timeout grew gdmutant by that much, and more again once decoded, until the process
-    ran out of memory and the run's report was lost. Everything `CommandRunner.run` reads from the
-    output is kept here instead, as the stream arrives: whether it said anything (`seen`), its
-    last `_TAIL_CHARS` characters (`tail`), and for the `_SCRIPT_ERROR_MARKER` check, the first
-    marker line and the lines after it (`excerpt`, ``None`` while no marker has been seen). `head`
-    holds the stream's first lines, because an excerpt that starts at the end of stdout carries on
-    into stderr. Lines are split the way `script_error_excerpt` splits them (`str.splitlines`).
-    """
+    """One output stream in bounded memory: whether it said anything, its tail, its first lines,
+    and its first `_SCRIPT_ERROR_MARKER` line with the lines after it (``None`` until one is seen).
+    Lines are split the way `script_error_excerpt` splits them."""
 
     def __init__(self) -> None:
         self.seen = False
@@ -511,12 +498,9 @@ class _StreamTail:
 
 
 def _joined_excerpt(out: _StreamTail, err: _StreamTail) -> str:
-    """What `script_error_excerpt` returned for stdout and stderr joined by a newline, from what
-    the two `_StreamTail`s kept. Stdout's marker comes first, as it did in the joined text.
-
-    An excerpt that starts near the end of stdout carries on into stderr's first lines. In the
-    joined text the newline between them made an empty line whenever stdout already ended in a line
-    break, except a bare ``\\r``, which the newline completed into one ``\\r\\n``."""
+    """`script_error_excerpt` of stdout and stderr joined by a newline, rebuilt from the two tails.
+    That newline adds an empty line after a stdout that ends in a line break, unless the break is a
+    bare ``\\r``, which it completes into ``\\r\\n``."""
     if out.excerpt is None:
         return "\n".join(err.excerpt or []).strip()
     last = out.tail[-1:]
@@ -527,14 +511,9 @@ def _joined_excerpt(out: _StreamTail, err: _StreamTail) -> str:
 def _run_keeping_tails(
     command: list[str], cwd: str, budget: float
 ) -> tuple[int, _StreamTail, _StreamTail]:
-    """Run `command` in `cwd` and return ``(exit code, stdout, stderr)``, each stream kept as a
-    `_StreamTail`, so memory stays bounded however much the command prints.
-
-    Times out the way ``subprocess.run(..., timeout=budget)`` does: by raising
-    ``subprocess.TimeoutExpired`` after killing the child, and also when the child exits but
-    something it started keeps its output open past the budget. Raises ``FileNotFoundError`` if
-    the command can't be started, and ``RuntimeError`` if a stream could not be read, because a
-    marker in the part that was lost would have changed the verdict."""
+    """Run `command` in `cwd` and return ``(exit code, stdout, stderr)``, each stream bounded.
+    Raises ``TimeoutExpired`` after killing the child, also when a grandchild holds the pipes past
+    the budget, and ``RuntimeError`` if a stream could not be read, since it could hide a marker."""
     process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     streams = (_StreamTail(), _StreamTail())
     readers = [
