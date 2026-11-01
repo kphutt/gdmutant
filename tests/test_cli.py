@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -1623,6 +1624,7 @@ def test_main_constructs_runner_with_test_path_and_godot(
         "test_path": "res://custom",
         "godot": "godot4",
         "timeout": 600.0,
+        "exclude_tests": (),
     }
 
 
@@ -4381,3 +4383,105 @@ def test_main_run_subcommand_is_unaffected_by_the_init_subparser(
     monkeypatch.setattr(cli, "GdUnit4Runner", lambda **kwargs: runner)
 
     assert main(["run", str(path), "--runner", "gdunit4"]) == 0
+
+
+def _runner_kwargs(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    seen: list[dict[str, object]] = []
+
+    def build(**kwargs: object) -> RecordingRunner:
+        seen.append(kwargs)
+        return RecordingRunner()
+
+    monkeypatch.setattr(cli, "GdUnit4Runner", build)
+    return seen
+
+
+def test_exclude_tests_combines_config_and_flags_for_gdunit4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _gd(tmp_path)
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text('exclude-tests = ["full_game_test"]\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
+    seen = _runner_kwargs(monkeypatch)
+    args = ["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4"]
+    assert main([*args, "--exclude-tests", "event_citation_test"]) == 0
+    assert seen[0]["exclude_tests"] == ("full_game_test", "event_citation_test")
+
+
+@pytest.mark.parametrize("runner", ["gut", "command"])
+def test_exclude_tests_is_refused_for_any_runner_but_gdunit4(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], runner: str
+) -> None:
+    path = _gd(tmp_path)
+    args = ["run", str(path), "--project", str(tmp_path), "--runner", runner, "--command", "x"]
+    assert main([*args, "--exclude-tests", "slow_test"]) == 2
+    assert f"--exclude-tests needs --runner gdunit4 (got {runner})" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("entry", ["", "  ", "-a", " -a", "slow_test "])
+def test_exclude_tests_refuses_an_entry_gdunit4_would_misread(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], entry: str
+) -> None:
+    path = _gd(tmp_path)
+    args = ["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4"]
+    assert main([*args, f"--exclude-tests={entry}"]) == 2
+    assert "is empty, has surrounding spaces, or starts with '-'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ['"slow_test"', "[1]"])
+def test_load_config_rejects_non_list_exclude_tests(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], value: str
+) -> None:
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text(f"exclude-tests = {value}\n", encoding="utf-8")
+    assert cli._load_config(cfg) is None
+    assert "'exclude-tests' must be a list of strings" in capsys.readouterr().err
+
+
+def test_dry_run_names_exclude_tests_as_ignored(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _gd(tmp_path)
+    assert main(["run", str(path), "--dry-run", "--exclude-tests", "slow_test"]) == 0
+    assert "--exclude-tests" in capsys.readouterr().err
+
+
+def test_a_config_exclude_tests_is_ignored_with_another_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A config list can't be cleared from the command line, so it must not block other runners.
+    path = _gd(tmp_path)
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text('exclude-tests = ["slow_test"]\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
+    command = [sys.executable, "-c", "pass"]
+    args = ["run", str(path), "--project", str(tmp_path), "--runner", "command"]
+    assert main([*args, "--command", subprocess.list2cmdline(command)]) == 0
+    assert "note: ignoring exclude-tests from" in capsys.readouterr().err
+
+
+def test_an_exclusion_that_matches_no_test_file_is_warned_about(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _gd(tmp_path)
+    suites = tmp_path / "test" / "full"
+    suites.mkdir(parents=True)
+    (suites / "full_game_test.gd").write_text("extends GdUnitTestSuite\n", encoding="utf-8")
+    seen = _runner_kwargs(monkeypatch)
+    entries = [
+        "full_game_test",  # the file's name
+        "res://test/full/",  # part of its path
+        "full_game_test:test_slow",  # one test in it
+        "full_gam_test",  # a typo
+        "other_test:test_slow",  # a test in a suite that isn't there
+    ]
+    args = ["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4"]
+    assert main([*args, *(f"--exclude-tests={e}" for e in entries)]) == 0
+    assert seen[0]["exclude_tests"] == tuple(entries)
+    warned = [line for line in capsys.readouterr().err.splitlines() if "matches no test" in line]
+    assert warned == [
+        f"warning: --exclude-tests entry {e!r} matches no test file under res://test, so it "
+        "leaves nothing out"
+        for e in ("full_gam_test", "other_test:test_slow")
+    ]

@@ -72,6 +72,7 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | `--report step-summary` | off | Also write survivors to the GitHub Actions job summary (or stdout, if that variable is unset). |
 | `--since <ref>` | mutate everything | Only mutate lines changed since a git ref: the per-PR mode. |
 | `--exclude <glob>` | *(none)* | Skip matching files when expanding a directory (repeatable). |
+| `--exclude-tests <entry>` | *(none)* | Leave a test out of every run, as gdUnit4's `-i` takes it: a suite name, any part of a suite's `res://` path, or `suite:test` for one test (repeatable; `--runner gdunit4` only). |
 | `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. `auto` picks a worker count from your CPU count and throttles under load instead of a fixed N. |
 | `--timeout <seconds>` | derived from the baseline | Per-mutant test timeout. See [How long a mutant gets](#how-long-a-mutant-gets). |
 | `--coverage-analysis {off,all,per-file}` | `off` | `all` finds the mutants no test reaches before any mutant runs, and reports them as `no coverage` without running them. `per-file` does that and runs every other mutant against only the test files that reach it, which is the setting that saves real time. See [Coverage analysis](#coverage-analysis). |
@@ -180,7 +181,10 @@ option off. The default, `off`, is what gdmutant has always done.
 
 `--coverage-analysis per-file` does all of that, and then runs each remaining mutant against only
 the test files that reach it. It needs `--runner gdunit4` or `--runner gut`: an exit code cannot say
-which tests ran, so a custom `--command` is refused rather than quietly run in full.
+which tests ran, so a custom `--command` is refused rather than quietly run in full. To leave slow
+suites out, use `--exclude-tests` with `--runner gdunit4`: an excluded suite never runs, so a line
+only it reaches is reported as no coverage. gdUnit4 matches an entry against any part of a suite's
+path, so `full_game_test` also leaves out `full_game_test_extra.gd`.
 
 - The marker run becomes two passes instead of one: the suite forwards, then the same test files in
   the opposite order. Every clean-run rule above applies to both, plus two more: at least one test
@@ -286,6 +290,7 @@ runner = "command"
 command = "godot --headless --script res://tests/run_tests.gd"
 # godot = "/Applications/Godot.app/Contents/MacOS/Godot"
 # exclude = ["*_generated.gd", "*/vendor/*"]
+# exclude-tests = ["full_game_test"]  # --runner gdunit4 only
 ```
 
 `gdmutant init` writes a starter version of that file for you, so the first one you ever see

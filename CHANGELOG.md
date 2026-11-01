@@ -12,6 +12,16 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `--exclude-tests <entry>` (and `exclude-tests` in `.gdmutant.toml`) leaves tests out of a
+  `--runner gdunit4` run. Each entry is passed to gdUnit4 as `-i`, so it can be a suite name, any
+  part of a suite's `res://` path, or `suite:test` for one test. Excluded tests run in no part of
+  the run: not the baseline, not the coverage marker runs, and not any mutant's test files. With
+  `--coverage-analysis per-file`, a line only an excluded suite reaches is reported as no
+  coverage. An entry that matches no test file is warned about. `--runner gut` and `--runner
+  command` refuse the flag, and ignore a config list with a note.
+
 ### Changed
 
 - `.gdmutant.toml` can set `project = "."` without `--trust-config`. A `project` naming the folder
