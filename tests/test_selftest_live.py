@@ -1843,3 +1843,32 @@ def test_a_mutant_only_an_excluded_suite_reaches_has_no_coverage(tmp_path: Path)
     assert by_line[14] == {Verdict.NO_COVERAGE}
     assert by_line[6] | by_line[10] <= {Verdict.KILLED, Verdict.INVALID}
     assert {o.selected for o in result.ran} == {1}
+
+
+def test_an_excluded_single_test_never_runs_in_a_per_file_run(tmp_path: Path) -> None:
+    """A ``suite:test`` entry leaves its suite in the report, so the reverse pass and every
+    selected run must carry the exclusion too. The excluded test fails, so running it anywhere
+    shows up as a refused marker run or a killed mutant that should have survived."""
+    _skip_without("gdunit4")
+    tests = _split_tests("gdunit4")
+    slow = "\n\nfunc test_slow() -> void:\n\tassert_bool(false).is_true()\n"
+    tests["split_test/test_tripled.gd"] += slow
+    project = _coverage_project(tmp_path, "excl-one", {"split.gd": _SPLIT, **tests})
+    source = (project / "split.gd").read_text(encoding="utf-8")
+    result = engine_run(
+        str(project),
+        str(project / "split.gd"),
+        source,
+        GdUnit4Runner(
+            test_path="res://split_test",
+            godot=_GODOT_EXE,
+            exclude_tests=("test_tripled:test_slow",),
+        ),
+        ADAPTER,
+        coverage=CoverageAnalysis.PER_FILE,
+        marker=GDScriptMarker(godot=_GODOT_EXE),
+        self_check=0,
+    )
+    assert result.test_files == 3
+    assert {o.selected for o in result.ran} == {1}
+    assert {o.verdict for o in result.ran} == {Verdict.KILLED}

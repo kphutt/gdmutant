@@ -460,6 +460,21 @@ def _gut_addon_hint(error: BaselineFailed, project_dir: str) -> str | None:
 _GODOT_IMPORT_CACHE = ".godot"
 
 
+def _unmatched_exclusions(project_dir: str, tests: str, entries: Sequence[str]) -> list[str]:
+    """The `entries` that match no ``.gd`` file under `tests`, by gdUnit4's ``-i`` rules: the entry,
+    or the suite before ``:`` in ``suite:test``, equals a file's name or is part of its path."""
+    root = Path(project_dir) / tests.removeprefix("res://")
+    files = sorted(root.rglob("*.gd")) if root.is_dir() else []
+    named = [(f.stem, f"res://{f.relative_to(project_dir).as_posix()}") for f in files]
+
+    def matches(part: str) -> bool:
+        return any(part == stem or part in path for stem, path in named)
+
+    return [
+        e for e in entries if not matches(e) and not matches(e.removeprefix("res://").split(":")[0])
+    ]
+
+
 def _cold_import_notice(project_dir: str) -> str | None:
     """A heads-up that `project_dir` has never been imported, or ``None`` when it has.
 
@@ -1976,15 +1991,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         files = _expand_sources(args.source, exclude)
         if files is None:
             return 2
-        # Additive like `exclude`. An entry becomes the argument after gdunit4's -i, so it can't
-        # be empty or look like a flag.
+        # Additive like `exclude`. An entry becomes the argument after gdunit4's -i, so it must be
+        # exactly what gdunit4 matches and must not look like a flag.
         config_tests = config.get("exclude_tests")
         exclude_tests = list(config_tests) if isinstance(config_tests, list) else []
         exclude_tests += args.exclude_tests or []
-        bad = next((e for e in exclude_tests if not e.strip() or e.startswith("-")), None)
+        bad = next((e for e in exclude_tests if not e or e != e.strip() or e[0] == "-"), None)
         if bad is not None:
             print(
-                f"error: --exclude-tests entry {bad!r} is empty or starts with '-'", file=sys.stderr
+                f"error: --exclude-tests entry {bad!r} is empty, has surrounding spaces, or "
+                "starts with '-'",
+                file=sys.stderr,
             )
             return 2
         # Resilience: a file discovered by expanding a *directory* that gdtoolkit can't
@@ -2106,12 +2123,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         # historical default so a legitimately slow baseline still completes.
         baseline_timeout = DEFAULT_TIMEOUT if args.timeout is None else args.timeout
         runner: Runner
-        if exclude_tests and args.runner != "gdunit4":
+        if args.exclude_tests and args.runner != "gdunit4":
             print(
                 f"error: --exclude-tests needs --runner gdunit4 (got {args.runner})",
                 file=sys.stderr,
             )
             return 2
+        if exclude_tests and args.runner != "gdunit4":
+            # Only the config's list is left here, and a config can't be cleared from the CLI.
+            print(
+                f"note: ignoring exclude-tests from {_CONFIG_FILENAME}: --runner {args.runner} "
+                "can't leave tests out",
+                file=sys.stderr,
+            )
+            exclude_tests = []
         if args.runner == "command":
             # Split OS-aware (see `_split_command`), then require a non-empty result: this rejects a
             # missing --command AND a whitespace-only one (which would otherwise become `[]` -> a
@@ -2153,6 +2178,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     timeout=baseline_timeout,
                     exclude_tests=tuple(exclude_tests),
                 )
+                for entry in _unmatched_exclusions(project_dir, args.tests, exclude_tests):
+                    print(
+                        f"warning: --exclude-tests entry {entry!r} matches no test file under "
+                        f"{args.tests}, so it leaves nothing out",
+                        file=sys.stderr,
+                    )
         common = {
             "timeout": args.timeout,
             "json_path": args.json_path,

@@ -19,7 +19,8 @@ All notable changes to gdmutant are recorded here. The format follows
   part of a suite's `res://` path, or `suite:test` for one test. Excluded tests run in no part of
   the run: not the baseline, not the coverage marker runs, and not any mutant's test files. With
   `--coverage-analysis per-file`, a line only an excluded suite reaches is reported as no
-  coverage. `--runner gut` and `--runner command` refuse the option.
+  coverage. An entry that matches no test file is warned about. `--runner gut` and `--runner
+  command` refuse the flag, and ignore a config list with a note.
 
 ### Changed
 

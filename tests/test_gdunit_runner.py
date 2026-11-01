@@ -616,8 +616,13 @@ def test_excluded_tests_are_left_out_of_every_whole_suite_run(tmp_path: Path) ->
         ]
 
 
-def test_a_chosen_file_list_carries_no_exclusions(tmp_path: Path) -> None:
-    # The list comes from a whole-suite report, which an excluded suite is never in.
-    runner = GdUnit4Runner(godot="godot4", exclude_tests=("slow_test",))
-    cmd = runner.command(str(tmp_path), files=["res://test/a.gd"])
-    assert "-i" not in cmd
+def test_a_chosen_file_list_carries_the_exclusions_too(tmp_path: Path) -> None:
+    # A `suite:test` entry leaves its suite in the report a chosen list is built from.
+    runner = GdUnit4Runner(godot="godot4", exclude_tests=("a_test:test_slow",))
+    cmd = runner.command(str(tmp_path), files=["res://test/a_test.gd"])
+    assert cmd[cmd.index("-a") : cmd.index("-rc")] == [
+        "-a",
+        "res://test/a_test.gd",
+        "-i",
+        "a_test:test_slow",
+    ]
