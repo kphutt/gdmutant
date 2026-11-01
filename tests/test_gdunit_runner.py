@@ -600,3 +600,24 @@ def test_which_file_a_gdunit4_report_name_belongs_to(name: str, package: str, fi
     of a test file has to match the one a selection uses, or every selected mutant silently falls
     back to the whole suite's time."""
     assert runner_mod._gdunit4_reported_file(name, package) == file
+
+
+def test_excluded_tests_are_left_out_of_every_whole_suite_run(tmp_path: Path) -> None:
+    runner = GdUnit4Runner(godot="godot4", exclude_tests=("slow_test", "res://test/full/"))
+    for markers in (False, True):
+        cmd = runner.command(str(tmp_path), markers=markers)
+        assert cmd[cmd.index("-a") : cmd.index("-rc")] == [
+            "-a",
+            "res://test",
+            "-i",
+            "slow_test",
+            "-i",
+            "res://test/full/",
+        ]
+
+
+def test_a_chosen_file_list_carries_no_exclusions(tmp_path: Path) -> None:
+    # The list comes from a whole-suite report, which an excluded suite is never in.
+    runner = GdUnit4Runner(godot="godot4", exclude_tests=("slow_test",))
+    cmd = runner.command(str(tmp_path), files=["res://test/a.gd"])
+    assert "-i" not in cmd

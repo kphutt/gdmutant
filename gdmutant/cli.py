@@ -1363,6 +1363,7 @@ _CONFIG_KEY_TO_DEST = {
     "timeout": "timeout",
     "require-clean": "require_clean",
     "exclude": "exclude",
+    "exclude-tests": "exclude_tests",
 }
 _CONFIG_FILENAME = ".gdmutant.toml"
 
@@ -1448,6 +1449,13 @@ def _load_config(path: Path | None = None) -> dict[str, object] | None:
         not isinstance(exclude, list) or not all(isinstance(item, str) for item in exclude)
     ):
         print(f"error: {path}: 'exclude' must be a list of glob strings", file=sys.stderr)
+        return None
+    exclude_tests = settings.get("exclude_tests")
+    if exclude_tests is not None and (
+        not isinstance(exclude_tests, list)
+        or not all(isinstance(item, str) for item in exclude_tests)
+    ):
+        print(f"error: {path}: 'exclude-tests' must be a list of strings", file=sys.stderr)
         return None
     return settings
 
@@ -1747,6 +1755,14 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "'exclude' list in .gdmutant.toml.",
     )
     run_parser.add_argument(
+        "--exclude-tests",
+        action="append",
+        metavar="entry",
+        help="a test to leave out of the run, as gdunit4's -i takes it: a suite name, part of a "
+        "suite's res:// path, or suite:test for one test (repeatable; --runner gdunit4 only). "
+        "Combines with any 'exclude-tests' list in .gdmutant.toml.",
+    )
+    run_parser.add_argument(
         "--since",
         metavar="ref",
         help="only mutate lines changed since this git ref (e.g. main, HEAD~1): the per-PR "
@@ -1811,7 +1827,9 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
     # is the exception: it's resolved in main() as config + CLI (additive, like every mutation
     # tool's exclude list), so it must NOT seed the append-action default here.
     if config:
-        run_parser.set_defaults(**{k: v for k, v in config.items() if k != "exclude"})
+        run_parser.set_defaults(
+            **{k: v for k, v in config.items() if k not in ("exclude", "exclude_tests")}
+        )
     example_parser = sub.add_parser(
         "example",
         help="write a small bundled .gd file to try --dry-run on, with no project of your own yet",
@@ -1958,6 +1976,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         files = _expand_sources(args.source, exclude)
         if files is None:
             return 2
+        # Additive like `exclude`. An entry becomes the argument after gdunit4's -i, so it can't
+        # be empty or look like a flag.
+        config_tests = config.get("exclude_tests")
+        exclude_tests = list(config_tests) if isinstance(config_tests, list) else []
+        exclude_tests += args.exclude_tests or []
+        bad = next((e for e in exclude_tests if not e.strip() or e.startswith("-")), None)
+        if bad is not None:
+            print(
+                f"error: --exclude-tests entry {bad!r} is empty or starts with '-'", file=sys.stderr
+            )
+            return 2
         # Resilience: a file discovered by expanding a *directory* that gdtoolkit can't
         # parse is skipped with a warning and the rest are mutated — one odd file (a grammar gap on
         # real GDScript) shouldn't zero out a whole directory run. A file named *explicitly* stays
@@ -2025,6 +2054,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--progress", args.progress_style, _PROGRESS_DEFAULT),
                     ("--coverage-analysis", args.coverage_analysis, _COVERAGE_ANALYSIS_DEFAULT),
                     ("--coverage-self-check", args.coverage_self_check, str(SELF_CHECK_SAMPLE)),
+                    ("--exclude-tests", exclude_tests, []),
                 )
                 if value != default
             ]
@@ -2076,6 +2106,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         # historical default so a legitimately slow baseline still completes.
         baseline_timeout = DEFAULT_TIMEOUT if args.timeout is None else args.timeout
         runner: Runner
+        if exclude_tests and args.runner != "gdunit4":
+            print(
+                f"error: --exclude-tests needs --runner gdunit4 (got {args.runner})",
+                file=sys.stderr,
+            )
+            return 2
         if args.runner == "command":
             # Split OS-aware (see `_split_command`), then require a non-empty result: this rejects a
             # missing --command AND a whitespace-only one (which would otherwise become `[]` -> a
@@ -2115,6 +2151,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     test_path=args.tests,
                     godot=args.godot,
                     timeout=baseline_timeout,
+                    exclude_tests=tuple(exclude_tests),
                 )
         common = {
             "timeout": args.timeout,
