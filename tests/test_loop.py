@@ -1,9 +1,11 @@
 """Tests for the mutation-run loop (no Godot — fake runners drive killed/survived)."""
 
 import inspect
+import itertools
 import os
 import shutil
 import stat
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import FrozenInstanceError, dataclass, field, replace
@@ -45,7 +47,7 @@ from gdmutant.engine.loop import (
 from gdmutant.engine.loop import run as _run
 from gdmutant.engine.loop import run_paths as _run_paths
 from gdmutant.engine.mutants import Mutant
-from gdmutant.engine.operators import TableOperator
+from gdmutant.engine.operators import CATALOG, TableOperator
 from gdmutant.engine.runner import ReportedSuite, SuiteResult, SuiteTimeout
 from gdmutant.engine.spans import Span
 
@@ -2437,3 +2439,272 @@ def test_running_past_the_budget_is_remembered_across_the_self_check(tmp_path: P
     assert outcome.verdict is Verdict.SURVIVED
     assert outcome.self_checked is True
     assert outcome.over_budget is True
+
+
+# --- --jobs shares one pool across every file of a run_paths call ----------------------------
+
+_POOL_SOURCES = {
+    "a.gd": "func f(a, b) -> bool:\n\treturn a > b\n",
+    "b.gd": "func g(a, b) -> bool:\n\treturn a < b and b > 0\n",
+    "c.gd": "func h(a) -> bool:\n\treturn a >= 0  # gdmutant: ignore[comparison]\n",
+}
+
+
+def _pool_project(root: Path) -> dict[str, str]:
+    root.mkdir()
+    return {_write(root, name, src): src for name, src in _POOL_SOURCES.items()}
+
+
+@dataclass
+class PeakRunner:
+    """All-pass, and each mutant run waits (up to 10s) until `target` runs are going at once, so a
+    pool that never reaches `target` workers shows up as `peak < target`, not as a timing flake."""
+
+    target: int
+    active: int = 0
+    peak: int = 0
+    calls: int = 0
+    lock: threading.Condition = field(default_factory=threading.Condition)
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        with self.lock:
+            self.calls += 1
+            if self.calls == 1:  # the baseline
+                return SuiteResult(tests=1, failures=0, errors=0)
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            self.lock.notify_all()
+            self.lock.wait_for(lambda: self.peak >= self.target, timeout=10)
+            self.active -= 1
+        return SuiteResult(tests=1, failures=0, errors=0)
+
+
+def test_jobs_runs_every_files_mutants_in_one_pool(tmp_path: Path) -> None:
+    sources = _pool_project(tmp_path / "p")
+    per_file = [
+        sum(1 for m in ADAPTER.generate_mutants(p, s, CATALOG) if m.ignore_reason is None)
+        for p, s in sources.items()
+    ]
+    target = sum(per_file)
+    assert max(per_file) < target <= 8  # more workers busy at once than any one file has mutants
+    runner = PeakRunner(target)
+    lines: list[str] = []
+    run_paths(str(tmp_path / "p"), sources, runner, jobs=8, progress=lines.append)
+    assert runner.peak == target
+    assert f"Running up to {target} at a time across 3 files." in lines
+    assert not any(line.endswith(" at a time.") and "across" not in line for line in lines)
+    assert sum(line.startswith("Done in ") for line in lines) == 1
+
+
+@dataclass
+class AnyFileMarkerRunner:
+    """Kills when any of `relnames`, read inside the `project_dir` it is handed, holds `marker`."""
+
+    relnames: tuple[str, ...]
+    marker: str
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        texts = [(Path(project_dir) / name).read_text(encoding="utf-8") for name in self.relnames]
+        return SuiteResult(tests=3, failures=int(any(self.marker in t for t in texts)), errors=0)
+
+
+def test_the_shared_pool_gives_every_file_the_verdicts_a_serial_run_gives(tmp_path: Path) -> None:
+    runner = AnyFileMarkerRunner(tuple(_POOL_SOURCES), "<=")
+    serial = run_paths(str(tmp_path / "s"), _pool_project(tmp_path / "s"), runner, jobs=1)
+    pooled_sources = _pool_project(tmp_path / "p")
+    pooled = run_paths(str(tmp_path / "p"), pooled_sources, runner, jobs=4)
+    assert [_outcome_key(r) for r in pooled.values()] == [_outcome_key(r) for r in serial.values()]
+    assert {(r.coverage_analysis, r.test_files, r.order_dependent) for r in pooled.values()} == {
+        (False, 0, 0)
+    }
+    verdicts = {o.verdict for r in serial.values() for o in r.outcomes}
+    assert {Verdict.KILLED, Verdict.SURVIVED, Verdict.IGNORED} <= verdicts
+    assert [Path(p).name for p in pooled] == list(_POOL_SOURCES)  # `sources` order
+    for path, src in pooled_sources.items():  # the real files are never mutated in the pool
+        assert Path(path).read_text(encoding="utf-8") == src
+
+
+def test_explicit_jobs_refuses_a_file_outside_the_project_before_the_baseline(
+    tmp_path: Path,
+) -> None:
+    project, outside = _project_and_outside_source(tmp_path)
+    inside = _write(project, "a.gd", _POOL_SOURCES["a.gd"])
+    sources = {inside: _POOL_SOURCES["a.gd"], str(outside): outside.read_text(encoding="utf-8")}
+    runner = ProjectDirRecordingRunner()
+    with pytest.raises(SourceOutsideProject):
+        run_paths(str(project), sources, runner, jobs=4)
+    assert runner.seen == []  # not even the baseline
+    assert Path(inside).read_text(encoding="utf-8") == _POOL_SOURCES["a.gd"]
+
+
+def test_jobs_auto_runs_a_file_outside_the_project_serially_and_pools_the_rest(
+    tmp_path: Path,
+) -> None:
+    project, outside = _project_and_outside_source(tmp_path)
+    inside = {_write(project, n, _POOL_SOURCES[n]): _POOL_SOURCES[n] for n in ("a.gd", "b.gd")}
+    sources = {str(outside): outside.read_text(encoding="utf-8"), **inside}
+    runner = ProjectDirRecordingRunner()
+    lines: list[str] = []
+    runs = run_paths(str(project), sources, runner, jobs=2, jobs_auto=True, progress=lines.append)
+    assert list(runs) == list(sources)
+    assert all(r.outcomes for r in runs.values())
+    assert "Running up to 2 at a time across 2 files." in lines
+    # Only the outside file's mutants ran in the real project; the baseline ran in a copy.
+    assert runner.seen.count(str(project)) == len(runs[str(outside)].ran)
+
+
+def test_a_single_file_under_jobs_keeps_its_own_plan_line(tmp_path: Path) -> None:
+    src = _POOL_SOURCES["b.gd"]
+    path = _write(tmp_path, "b.gd", src)
+    lines: list[str] = []
+    run_paths(
+        str(tmp_path), {path: src}, ProjectDirRecordingRunner(), jobs=8, progress=lines.append
+    )
+    assert any(line.endswith(" at a time.") and "across" not in line for line in lines)
+
+
+def test_a_pool_that_needs_one_worker_does_not_announce_one(tmp_path: Path) -> None:
+    sources = _pool_project(tmp_path / "p")
+    lines: list[str] = []
+    catalog = (TableOperator("only", {"and": ("or",)}),)  # one mutant, in b.gd alone
+    runs = run_paths(
+        str(tmp_path / "p"),
+        sources,
+        ProjectDirRecordingRunner(),
+        catalog=catalog,
+        jobs=8,
+        progress=lines.append,
+    )
+    assert sum(len(r.ran) for r in runs.values()) == 1
+    assert not any("at a time" in line for line in lines)
+
+
+def test_jobs_1_ends_every_file_but_the_last_on_a_full_heartbeat(tmp_path: Path) -> None:
+    sources = _pool_project(tmp_path / "p")
+    lines: list[str] = []
+    run_paths(
+        str(tmp_path / "p"),
+        sources,
+        ProjectDirRecordingRunner(),
+        progress=lines.append,
+        progress_style=ProgressStyle.PLAIN,
+    )
+    starts = [i for i, line in enumerate(lines) if line.startswith("mutating ")]
+    for start, nxt in itertools.pairwise(starts):
+        beats = [line for line in lines[start:nxt] if line.startswith("… ")]
+        done, total = beats[-1].split()[1].split("/")
+        assert done == total.rstrip(":")
+
+
+def test_the_first_error_stops_every_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An error the engine can't tally as a verdict (a source it can't write back, say) ends the
+    # run; the other workers must not go on through every remaining mutant first.
+    sources = _pool_project(tmp_path / "p")
+    total = sum(len(ADAPTER.generate_mutants(p, s, CATALOG)) for p, s in sources.items())
+    real_evaluate = loop_mod._evaluate
+    calls = 0
+    lock = threading.Lock()
+
+    def evaluate(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        with lock:
+            calls += 1
+            call = calls
+        if call == 1:
+            raise OSError("could not write the source back")
+        time.sleep(0.05)
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(loop_mod, "_evaluate", evaluate)
+    with pytest.raises(OSError, match="could not write the source back"):
+        run_paths(str(tmp_path / "p"), sources, ProjectDirRecordingRunner(), jobs=2)
+    assert total > 6
+    assert calls <= 3  # the failure, and at most one more per worker
+
+
+_MANY = "func f(a, b) -> bool:\n" + "".join(f"\tvar x{i} = a > b\n" for i in range(10))
+
+
+def test_the_feeder_stays_a_few_mutants_ahead_of_the_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Applied but not yet run is what memory holds; it must stay bounded by the worker count.
+    root = tmp_path / "p"
+    root.mkdir()
+    sources = {_write(root, name, _MANY): _MANY for name in ("a.gd", "b.gd")}
+    catalog = (TableOperator("gt", {">": (">=",)}),)
+    applied = 0
+    started = 0
+    ahead: list[int] = []
+    lock = threading.Lock()
+    real_apply = ADAPTER.apply_mutant
+
+    def apply(mutant: Mutant, source: str) -> tuple[str, bool]:
+        nonlocal applied
+        applied += 1
+        if applied == 1:
+            time.sleep(0.3)  # the workers wait on an empty queue first
+        return real_apply(mutant, source)
+
+    @dataclass
+    class Slow:
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            nonlocal started
+            with lock:
+                started += 1
+                ahead.append(applied - started)
+            time.sleep(0.15)  # slower than the feeder, so the queue fills and it waits
+            return SuiteResult(tests=1, failures=0, errors=0)
+
+    adapter = replace(ADAPTER, apply_mutant=apply)
+    _run_paths(str(root), sources, Slow(), adapter, catalog=catalog, jobs=2)
+    assert started == 21  # the baseline and all 20 mutants
+    assert max(ahead) <= 6  # the queue (2 per worker) plus one in each worker's hands
+
+
+def test_the_pool_line_counts_only_files_with_mutants_to_run(tmp_path: Path) -> None:
+    sources = _pool_project(tmp_path / "p")  # c.gd has no ">" for this catalog to change
+    lines: list[str] = []
+    catalog = (TableOperator("gt", {">": (">=",)}),)
+    run_paths(
+        str(tmp_path / "p"),
+        sources,
+        ProjectDirRecordingRunner(),
+        catalog=catalog,
+        jobs=8,
+        progress=lines.append,
+    )
+    assert "Running up to 2 at a time across 2 files." in lines
+
+
+@pytest.mark.parametrize("jobs", [1, 4])
+def test_the_heartbeat_reaches_its_total_when_some_mutants_are_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, jobs: int
+) -> None:
+    monkeypatch.setattr(loop_mod, "_HEARTBEAT_SECS", 0.0)  # a heartbeat after every mutant
+    sources = _pool_project(tmp_path / "p")
+    lines: list[str] = []
+    catalog = (TableOperator("gt", {">": (">=", "))")}),)  # one valid, one unparseable, per ">"
+    runs = run_paths(
+        str(tmp_path / "p"),
+        sources,
+        ProjectDirRecordingRunner(),
+        catalog=catalog,
+        jobs=jobs,
+        progress=lines.append,
+    )
+    assert any(o.verdict is Verdict.INVALID for r in runs.values() for o in r.outcomes)
+    last = [line for line in lines if line.startswith("… ")][-1]
+    done, total = last.split()[1].rstrip(":").split("/")
+    assert done == total
+
+
+def test_a_pool_with_nothing_to_run_decides_every_mutant_without_a_worker(tmp_path: Path) -> None:
+    src = _POOL_SOURCES["a.gd"].replace("a > b", "a > b  # gdmutant: ignore")
+    path = _write(tmp_path, "f.gd", src)
+    runner = ProjectDirRecordingRunner()
+    result = run(str(tmp_path), path, src, runner, jobs=4)
+    assert result.outcomes and {o.verdict for o in result.outcomes} == {Verdict.IGNORED}
+    assert len(runner.seen) == 1  # the baseline only

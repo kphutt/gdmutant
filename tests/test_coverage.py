@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import gdmutant.engine.loop as loop_mod
 from gdmutant.adapters.gdscript import ADAPTER
 from gdmutant.engine.coverage import (
     SELF_CHECK_SAMPLE,
@@ -963,3 +964,67 @@ def test_the_self_check_message_in_full() -> None:
         "whole suite gave 'killed'. The coverage map is wrong, so no 'no coverage' verdict in "
         f"this run can be trusted. {_TURN_OFF}"
     )
+
+
+@dataclass
+class CopyLab(Lab):
+    """A `Lab` whose mutant runs read the target inside the `project_dir` they are handed, so it
+    sees what a `--jobs` worker wrote to its own copy."""
+
+    rel: str = "t.gd"
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        if not self.runs:
+            self.runs.append("baseline")
+            return self.baseline
+        text = (Path(project_dir) / self.rel).read_text(encoding="utf-8")
+        self.runs.append(text)
+        return SuiteResult(3, int(self.kill in text), 0)
+
+
+def _two_file_coverage_run(
+    root: Path, monkeypatch: pytest.MonkeyPatch, jobs: int
+) -> tuple[dict[str, MutationRun], list[str]]:
+    monkeypatch.setattr(loop_mod, "_HEARTBEAT_SECS", 0.0)  # a heartbeat after every mutant
+    project, first = _project(root)
+    second = project / "u.gd"
+    second.write_text(_SOURCE, encoding="utf-8")
+    lab = CopyLab()
+    lines: list[str] = []
+    runs = run_paths(
+        str(project),
+        {str(first): _SOURCE, str(second): _SOURCE},
+        lab,
+        ADAPTER,
+        coverage=CoverageAnalysis.ALL,
+        marker=lab,
+        self_check=1,  # most uncovered mutants never run, so the plan lines must say so
+        jobs=jobs,
+        progress=lines.append,
+    )
+    return runs, [
+        line.replace(str(project), "<p>").replace(project.as_posix(), "<p>") for line in lines
+    ]
+
+
+def test_the_shared_jobs_pool_keeps_coverage_analysis_per_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serial, serial_lines = _two_file_coverage_run(tmp_path / "s", monkeypatch, jobs=1)
+    pooled, pooled_lines = _two_file_coverage_run(tmp_path / "p", monkeypatch, jobs=4)
+    for one, other in zip(serial.values(), pooled.values(), strict=True):
+        assert _verdicts(other) == _verdicts(one)
+        assert (other.coverage_analysis, other.test_files, other.order_dependent) == (
+            one.coverage_analysis,
+            one.test_files,
+            one.order_dependent,
+        )
+    assert Verdict.NO_COVERAGE in _verdicts(next(iter(pooled.values())))
+
+    def plan(lines: list[str]) -> list[str]:
+        return [line for line in lines if line.startswith("mutating ") or " to run" in line]
+
+    assert plan(pooled_lines) == plan(serial_lines)  # each file's own lines, as a serial run gives
+    planned = sum(int(line.split()[0]) for line in plan(serial_lines) if " to run" in line)
+    beats = [line for line in pooled_lines if line.startswith("… ")]
+    assert beats[-1].startswith(f"… {planned}/{planned} done")  # one count across the pool

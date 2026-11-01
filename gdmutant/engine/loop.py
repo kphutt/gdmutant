@@ -545,7 +545,8 @@ class _Progress:
 
     Two scopes, deliberately. The **heartbeat** counts one file's mutants, because that is the
     denominator that exists while the run is going (a directory run generates each file's mutants
-    only when it reaches it). The **closing line** covers the whole run, because that is the number
+    only when it reaches it), or under ``--jobs`` every file sharing the pool, all generated up
+    front. The **closing line** covers the whole run, because that is the number
     a user takes away. `begin_file` resets the first without disturbing the second.
 
     Nothing here predicts a finish time, deliberately and on evidence — the note above
@@ -583,6 +584,10 @@ class _Progress:
         self.file_timeouts = 0
         self.last_beat = time.monotonic()
         self.last_beat_done = 0
+
+    def drop(self) -> None:
+        """Take one mutant out of the count: it turned out invalid, so it never runs."""
+        self.total -= 1
 
     def record(self, verdict: Verdict, elapsed: float) -> None:
         """Tally one finished mutant and the wall-clock it cost, then heartbeat if it is due."""
@@ -784,19 +789,21 @@ def _baseline_needs_isolation(
     source that sits outside `project_dir` (`_mutate_file`), and those mutants then run in the
     project's own directory — so an isolated baseline would refuse a run that works. An explicit
     ``--jobs N`` raises for such a source rather than downgrading, so it keeps the isolated
-    baseline. Reading the condition off `_source_is_inside_project`, the same function
-    `_mutate_file` decides with, is what stops the two from drifting into disagreement.
+    baseline. Reading the condition off `_runs_in_parallel`, the same function `_mutate_file`
+    and `run_paths` decide with, is what stops them from drifting into disagreement.
 
     A multi-file run where only *some* files downgrade gets the isolated baseline, and that
     direction is deliberate: a baseline stricter than one path needs stops the run with a message
     naming the reason, while a baseline laxer than another path needs hands back a 100% score for a
     run whose every worker was red.
     """
-    if jobs <= 1:
-        return False
-    if not jobs_auto:
-        return True
-    return any(_source_is_inside_project(path, project_dir) for path in paths)
+    return any(_runs_in_parallel(path, project_dir, jobs, jobs_auto) for path in paths)
+
+
+def _runs_in_parallel(path: str, project_dir: str, jobs: int, jobs_auto: bool) -> bool:
+    """Whether `path`'s mutants run in worker copies. ``--jobs auto`` runs a source outside
+    `project_dir` serially instead; an explicit ``--jobs N`` refuses it (`_project_relative`)."""
+    return jobs > 1 and not (jobs_auto and not _source_is_inside_project(path, project_dir))
 
 
 #: Appended to every `BaselineFailed` raised from a baseline that ran in an isolated copy. The
@@ -1457,50 +1464,72 @@ def _mutate_file(
     what confirms such a mutant's kill, and belongs to the whole run rather than to one file, so
     a set of test files is confirmed once however many of the run's files send mutants to it.
     """
-    if mutants is None:
-        mutants = adapter.generate_mutants(path, source, catalog)
-    total = len(mutants)
-    runnable = sum(1 for m in mutants if m.ignore_reason is None)
-    plans: Callable[[int], MutantPlan] = (
-        (lambda index: WHOLE_SUITE) if coverage is None else coverage.plan
-    )
-    skip = frozenset() if coverage is None else coverage.skip
-    skipped = sum(1 for index in skip if mutants[index].ignore_reason is None)
-    clock.begin_file(runnable - skipped)
-    if jobs_auto and jobs > 1 and not _source_is_inside_project(path, project_dir):
+    setup = _file_setup(path, source, adapter, catalog, mutants, coverage)
+    clock.begin_file(setup.to_run)
+    if not _runs_in_parallel(path, project_dir, jobs, jobs_auto):
         jobs = 1
     if progress is not None:
-        progress(_progress_plan(runnable, total, jobs, skipped))
-    if jobs > 1 and total > 0:
+        progress(_progress_plan(setup.valid, len(setup.mutants), jobs, setup.skipped))
+    if jobs > 1 and setup.mutants:
         outcomes = _run_mutants_parallel(
-            project_dir,
-            path,
-            source,
-            runner,
-            adapter,
-            mutants,
-            budget,
-            jobs,
-            jobs_auto,
-            clock,
-            skip,
-            plans,
-            trust,
+            project_dir, path, source, runner, adapter, setup, budget, jobs, jobs_auto, clock, trust
         )
     else:
         outcomes = _run_mutants_serial(
-            project_dir,
-            path,
-            source,
-            runner,
-            adapter,
-            mutants,
-            budget,
-            clock,
-            skip,
-            plans,
-            trust,
+            project_dir, path, source, runner, adapter, setup, budget, clock, trust
         )
+    if not is_last_file:
+        clock.beat(force=True)  # a non-last file ends on a line that shows it reached n/n
+    return _file_run(outcomes, coverage, trust, test_files, order_dependent)
+
+
+@dataclass(frozen=True)
+class _FileSetup:
+    """One file's mutants and coverage analysis's decisions for them, before any of them runs.
+    `valid` counts the mutants not ignored, and `skipped` those of them no test reaches."""
+
+    mutants: Sequence[Mutant]
+    plans: Callable[[int], MutantPlan]
+    skip: frozenset[int]
+    valid: int
+    skipped: int
+
+    @property
+    def to_run(self) -> int:
+        return self.valid - self.skipped
+
+
+def _file_setup(
+    path: str,
+    source: str,
+    adapter: Adapter,
+    catalog: tuple[Operator, ...],
+    mutants: Sequence[Mutant] | None,
+    coverage: _FileCoverage | None,
+) -> _FileSetup:
+    """`path`'s `_FileSetup`, generating its mutants unless coverage analysis already did."""
+    generated = adapter.generate_mutants(path, source, catalog) if mutants is None else mutants
+    skip = frozenset() if coverage is None else coverage.skip
+    plans: Callable[[int], MutantPlan] = (
+        (lambda index: WHOLE_SUITE) if coverage is None else coverage.plan
+    )
+    return _FileSetup(
+        generated,
+        plans,
+        skip,
+        sum(1 for m in generated if m.ignore_reason is None),
+        sum(1 for index in skip if generated[index].ignore_reason is None),
+    )
+
+
+def _file_run(
+    outcomes: list[MutantOutcome],
+    coverage: _FileCoverage | None,
+    trust: _Trust | None,
+    test_files: int,
+    order_dependent: int,
+) -> MutationRun:
+    """One file's `MutationRun` from its outcomes in generation order, after the self-check."""
     if coverage is not None:
         outcomes = _self_check(
             outcomes,
@@ -1510,8 +1539,6 @@ def _mutate_file(
                 if plan.no_coverage and plan.self_check
             ),
         )
-    if not is_last_file:
-        clock.beat(force=True)  # a non-last file ends on a line that shows it reached n/n
     return MutationRun(
         tuple(outcomes),
         coverage_analysis=coverage is not None,
@@ -1519,6 +1546,54 @@ def _mutate_file(
         order_dependent=order_dependent,
         order_coupled_sets=() if trust is None else trust.coupled,
     )
+
+
+def _mutate_pooled(
+    project_dir: str,
+    sources: dict[str, str],
+    runner: Runner,
+    adapter: Adapter,
+    budget: TimeBudget,
+    catalog: tuple[Operator, ...],
+    progress: Callable[[str], None] | None,
+    jobs: int,
+    jobs_auto: bool,
+    clock: _Progress,
+    *,
+    mutants: dict[str, list[Mutant]] | None,
+    plans: _RunCoverage | None,
+    trust: _Trust | None,
+) -> dict[str, MutationRun]:
+    """Run every file's mutants through one shared `_run_pool`, so no worker sits idle while
+    another file's mutants are still waiting. Returns a `MutationRun` per file, in `sources` order.
+    Raises `SourceOutsideProject` before any mutant runs if a file has no place in the copies."""
+    files: list[_PoolFile] = []
+    for path, source in sources.items():
+        coverage = None if plans is None else plans.files[path]
+        given = None if mutants is None else mutants[path]
+        setup = _file_setup(path, source, adapter, catalog, given, coverage)
+        if progress is not None:
+            progress(f"mutating {Path(path).as_posix()} ...")
+            progress(_progress_plan(setup.valid, len(setup.mutants), 1, setup.skipped))
+        files.append(_PoolFile(_project_relative(path, project_dir), source, setup))
+    to_run = sum(share.setup.to_run for share in files)
+    workers = min(jobs, to_run)
+    if progress is not None and workers > 1:
+        busy = sum(1 for share in files if share.setup.to_run)
+        unit = "file" if busy == 1 else "files"
+        progress(f"Running up to {workers} at a time across {busy} {unit}.")
+    clock.begin_file(to_run)
+    outcomes = _run_pool(project_dir, runner, adapter, budget, jobs, jobs_auto, clock, trust, files)
+    return {
+        path: _file_run(
+            [outcomes[file, index] for index in range(len(files[file].setup.mutants))],
+            None if plans is None else plans.files[path],
+            trust,
+            0 if plans is None else plans.test_files,
+            0 if plans is None else plans.order_dependent,
+        )
+        for file, path in enumerate(sources)
+    }
 
 
 @dataclass
@@ -1749,11 +1824,9 @@ def _run_mutants_serial(
     source: str,
     runner: Runner,
     adapter: Adapter,
-    mutants: Sequence[Mutant],
+    setup: _FileSetup,
     budget: TimeBudget,
     clock: _Progress,
-    skip: frozenset[int],
-    plans: Callable[[int], MutantPlan],
     trust: _Trust | None,
 ) -> list[MutantOutcome]:
     """Evaluate every mutant one at a time against the real project file (the trusted default).
@@ -1775,29 +1848,33 @@ def _run_mutants_serial(
     """
     ctx = _Evaluation(project_dir, path, source, runner, budget, trust)
     outcomes: list[MutantOutcome] = []
-    for index, mutant in enumerate(mutants):
-        ran: float | None = None
-        outcome: MutantOutcome
-        if mutant.ignore_reason is not None:
-            # A `# gdmutant: ignore` annotation suppresses this mutant — generated for the report
-            # but never run (no validity check, no suite run): tallied IGNORED, excluded from score.
-            outcome = MutantOutcome(mutant, Verdict.IGNORED)
-        else:
-            mutated, valid = adapter.apply_mutant(mutant, source)
-            if valid and index in skip:
-                outcome = MutantOutcome(mutant, Verdict.NO_COVERAGE)
-            elif valid:
-                started = time.monotonic()
-                outcome = _evaluate(ctx, mutant, mutated, plans(index))
-                ran = time.monotonic() - started
-            else:
-                outcome = MutantOutcome(mutant, Verdict.INVALID)
+    for index, mutant in enumerate(setup.mutants):
+        outcome, mutated = _prepare(adapter, mutant, index, source, setup.skip)
+        if outcome is None:
+            started = time.monotonic()
+            outcome = _evaluate(ctx, mutant, mutated, setup.plans(index))
+            # Only a mutant that actually ran is a sample for the measured rate.
+            clock.record(outcome.verdict, time.monotonic() - started)
+        elif outcome.verdict is Verdict.INVALID:
+            clock.drop()
         outcomes.append(outcome)
-        if ran is not None:
-            # Only a mutant that actually ran is a sample: ignored and invalid ones never reached
-            # the suite, so counting them would make the measured rate a fiction.
-            clock.record(outcome.verdict, ran)
     return outcomes
+
+
+def _prepare(
+    adapter: Adapter, mutant: Mutant, index: int, source: str, skip: frozenset[int]
+) -> tuple[MutantOutcome | None, str]:
+    """A mutant's verdict if it needs no run (ignored, invalid, or in `skip`), else ``None`` and
+    its applied source. One thread at a time: gdtoolkit's re-parse in `apply_mutant` keeps shared
+    lexer state."""
+    if mutant.ignore_reason is not None:
+        return MutantOutcome(mutant, Verdict.IGNORED), ""
+    mutated, valid = adapter.apply_mutant(mutant, source)
+    if not valid:
+        return MutantOutcome(mutant, Verdict.INVALID), ""
+    if index in skip:
+        return MutantOutcome(mutant, Verdict.NO_COVERAGE), ""
+    return None, mutated
 
 
 def _project_relative(
@@ -1863,27 +1940,56 @@ def _run_mutants_parallel(
     source: str,
     runner: Runner,
     adapter: Adapter,
-    mutants: Sequence[Mutant],
+    setup: _FileSetup,
     budget: TimeBudget,
     jobs: int,
     jobs_auto: bool,
     clock: _Progress,
-    skip: frozenset[int],
-    plans: Callable[[int], MutantPlan],
     trust: _Trust | None,
 ) -> list[MutantOutcome]:
-    """Evaluate mutants concurrently, each worker on its OWN copy of the project so the in-place
-    file mutation (`_run_one`) can never collide. The pass/fail/timeout verdict of each mutant is
-    identical to the serial path — only the wall-clock changes — and results are reassembled in
-    generation order (NF-1). Bounded to one worker per runnable mutant.
+    """Evaluate one file's mutants in a pool of its own, in generation order (NF-1).
+    `_mutate_pooled` puts several files in one pool through the same `_run_pool`."""
+    share = _PoolFile(_project_relative(path, project_dir), source, setup)
+    outcomes = _run_pool(
+        project_dir, runner, adapter, budget, jobs, jobs_auto, clock, trust, [share]
+    )
+    return [outcomes[0, index] for index in range(len(setup.mutants))]
 
-    Two things stay SINGLE-THREADED, up front, because they aren't parallel-safe or need no Godot:
-    deciding `ignore`d/invalid mutants (no suite run), and **applying** each mutant — `apply_mutant`
-    re-parses via gdtoolkit, whose lexer/indenter keeps shared state and is NOT thread-safe (running
-    it from N workers corrupts it, e.g. a `paren_level` assertion deep in the parser). So the
-    parse/mutate/validate half runs here on the main thread; workers do only the process-isolated
-    test run, which touches no shared parser. Applying is cheap; booting Godot is the cost — so this
-    keeps the expensive half parallel while making the whole thing sound.
+
+@dataclass(frozen=True)
+class _PoolFile:
+    """One file in a `_run_pool`: its path inside each worker's copy, the source restored there
+    after each mutant, and its mutants with coverage analysis's decisions for them."""
+
+    rel: str
+    source: str
+    setup: _FileSetup
+
+
+#: How often a waiting worker or feeder looks again for work, or for the stop signal.
+_POLL_SECS = 0.1
+
+
+def _run_pool(
+    project_dir: str,
+    runner: Runner,
+    adapter: Adapter,
+    budget: TimeBudget,
+    jobs: int,
+    jobs_auto: bool,
+    clock: _Progress,
+    trust: _Trust | None,
+    files: Sequence[_PoolFile],
+) -> dict[tuple[int, int], MutantOutcome]:
+    """Evaluate every mutant of `files` concurrently, each worker on its OWN copy of the project so
+    the in-place file mutation (`_run_one`) can never collide. The pass/fail/timeout verdict of
+    each mutant is identical to the serial path — only the wall-clock changes. Results are keyed
+    by ``(file, index)``. A worker runs one mutant at a time and `_run_one` restores its file
+    afterwards, so mutants of different files can share a worker's copy.
+
+    A feeder thread applies each mutant (`_prepare`, the only caller of gdtoolkit here) into a
+    small queue while the workers' copies are made, so memory holds a few mutated sources, not
+    every one. The first error stops every worker after its current mutant.
 
     Runners are stateless (keyed on `project_dir` per call), so the one instance is shared across
     workers; each passes its own copy's dir. The Godot import cache (`.godot/`) is copied along with
@@ -1921,59 +2027,87 @@ def _run_mutants_parallel(
     ceiling up front, and the budget does not depend on it at all, so a worker delayed by load runs
     against exactly the same budget every other worker got.
 
-    `skip` is decided in the serial pre-pass exactly as `_run_mutants_serial` decides it: a valid
-    mutant in it is `NO_COVERAGE` and never reaches a worker. `plans` and `trust` are read inside
-    the worker by `_evaluate`, the same function the serial path calls, so a selected mutant is
-    decided identically either way. `trust` is shared across workers on purpose: a set of test
-    files confirmed by one worker never has to be confirmed again by another.
+    Which mutants reach a worker is `_prepare`'s decision, as it is on the serial path. `plans`
+    (each file's own) and `trust` are read inside the worker by `_evaluate`, the same function the
+    serial path calls, so a selected mutant is decided identically either way. `trust` is shared
+    across workers on purpose: a set of test files confirmed by one worker never has to be
+    confirmed again by another.
     """
-    total = len(mutants)
-    rel = _project_relative(path, project_dir)
-    outcomes: dict[int, MutantOutcome] = {}
-
-    # Serial pre-pass: resolve ignored/invalid without Godot, and apply (gdtoolkit) single-threaded.
-    # Runnable mutants carry their already-applied source into the parallel run.
-    runnable: list[tuple[int, Mutant, str]] = []
-    for index, mutant in enumerate(mutants):
-        if mutant.ignore_reason is not None:
-            outcome = MutantOutcome(mutant, Verdict.IGNORED)
-        else:
-            mutated, valid = adapter.apply_mutant(mutant, source)
-            if valid and index not in skip:
-                runnable.append((index, mutant, mutated))
-                continue
-            outcome = MutantOutcome(mutant, Verdict.NO_COVERAGE if valid else Verdict.INVALID)
-        outcomes[index] = outcome
-    if not runnable:  # every mutant was ignored/invalid/uncovered: no Godot run needed
-        return [outcomes[index] for index in range(total)]
-
-    worker_count = min(jobs, len(runnable))
-    work: queue.Queue[tuple[int, Mutant, str]] = queue.Queue()
-    for item in runnable:
-        work.put(item)
+    outcomes: dict[tuple[int, int], MutantOutcome] = {}
     errors: list[BaseException] = []
     lock = threading.Lock()
+    stop = threading.Event()
+
+    def produce(put: Callable[[tuple[int, int, Mutant, str]], bool]) -> None:
+        for file, share in enumerate(files):
+            for index, mutant in enumerate(share.setup.mutants):
+                outcome, mutated = _prepare(adapter, mutant, index, share.source, share.setup.skip)
+                if outcome is None:
+                    if not put((file, index, mutant, mutated)):
+                        return
+                    continue
+                with lock:
+                    outcomes[file, index] = outcome
+                    if outcome.verdict is Verdict.INVALID:
+                        clock.drop()
+
+    candidates = sum(share.setup.to_run for share in files)
+    if not candidates:  # every mutant is ignored or uncovered: no Godot run needed
+        produce(lambda item: True)
+        return outcomes
+
+    worker_count = min(jobs, candidates)
+    work: queue.Queue[tuple[int, int, Mutant, str] | None] = queue.Queue(maxsize=2 * worker_count)
+
+    def put(item: tuple[int, int, Mutant, str] | None) -> bool:
+        while not stop.is_set():
+            try:
+                work.put(item, timeout=_POLL_SECS)
+            except queue.Full:
+                continue
+            return True
+        return False
+
+    def feed() -> None:
+        try:
+            produce(put)
+        except BaseException as exc:  # noqa: BLE001 — capture + re-raise in the main thread
+            with lock:
+                errors.append(exc)
+            stop.set()
+        finally:
+            for _ in range(worker_count):  # one end-of-work marker per worker
+                put(None)
 
     def worker(worker_dir: str) -> None:
-        """Drain `work` against this worker's own project copy at `worker_dir`, recording each
-        mutant's outcome (or, on an exception, stashing it in `errors` for the main thread to
-        re-raise) until the queue is empty."""
-        ctx = _Evaluation(worker_dir, str(Path(worker_dir) / rel), source, runner, budget, trust)
-        while True:
+        """Run mutants from `work` against this worker's own project copy at `worker_dir` until
+        the end-of-work marker, or until any thread stops the pool with an error."""
+        contexts: dict[int, _Evaluation] = {}
+        while not stop.is_set():
             try:
-                index, mutant, mutated = work.get_nowait()
+                item = work.get(timeout=_POLL_SECS)
             except queue.Empty:
+                continue
+            if item is None:
                 return
+            file, index, mutant, mutated = item
+            share = files[file]
+            if file not in contexts:
+                target = str(Path(worker_dir) / share.rel)
+                contexts[file] = _Evaluation(
+                    worker_dir, target, share.source, runner, budget, trust
+                )
             started = time.monotonic()
             try:
-                outcome = _evaluate(ctx, mutant, mutated, plans(index))
+                outcome = _evaluate(contexts[file], mutant, mutated, share.setup.plans(index))
             except BaseException as exc:  # noqa: BLE001 — capture + re-raise in the main thread
                 with lock:
                     errors.append(exc)
+                stop.set()
                 return
             ran = time.monotonic() - started
             with lock:
-                outcomes[index] = outcome
+                outcomes[file, index] = outcome
                 # clock.record emits the rate-limited heartbeat itself; no per-mutant line here
                 # (see _run_mutants_serial's docstring). Inside the same lock so the counters and
                 # the last-beat marks are only ever touched by one worker at a time.
@@ -1984,10 +2118,14 @@ def _run_mutants_parallel(
         # Unique per run on this machine (mkdtemp picked it), so two gdmutant runs going at once
         # cannot hand their workers the same isolation token.
         run_id = Path(tmp).name
+        feeder = threading.Thread(target=feed)
+        feeder.start()
         threads: list[threading.Thread] = []
         isolated: list[str] = []
         try:
             for w in range(worker_count):
+                if stop.is_set():  # an error already: start no more workers
+                    break
                 if jobs_auto and w > 0:
                     _wait_for_load_capacity(load_threshold)
                 worker_dir = str(Path(tmp) / f"w{w}")
@@ -2001,6 +2139,9 @@ def _run_mutants_parallel(
                 thread = threading.Thread(target=worker, args=(worker_dir,))
                 thread.start()
                 threads.append(thread)
+        except BaseException:
+            stop.set()
+            raise
         finally:
             # Join inside the `finally`, so a failure part way through starting the workers still
             # waits for the ones already running. Leaving this to the normal path meant an
@@ -2008,11 +2149,13 @@ def _run_mutants_parallel(
             # then deleted the tree the running workers were reading from.
             for thread in threads:
                 thread.join()
+            stop.set()  # no worker is left to take what the feeder still holds
+            feeder.join()
             for token in isolated:
                 adapter.release_copy(token)
     if errors:
         raise errors[0]
-    return [outcomes[index] for index in range(total)]
+    return outcomes
 
 
 def run_paths(
@@ -2034,11 +2177,15 @@ def run_paths(
     """Mutate several files against one project — the baseline runs **once**, then each file's
     mutants run in turn. `sources` maps each file path to its contents (each held on entry,
     restored after its own mutants). `adapter` is the injected language adapter (NF-3, like `run`).
-    `jobs` (and `jobs_auto`) parallelize each file's mutants exactly as `run` does, and
-    `coverage`, `marker` and `self_check` turn on coverage analysis exactly as they do for `run`,
+    `jobs` (and `jobs_auto`) run every file's mutants through one shared pool
+    (`_mutate_pooled`), and `coverage`, `marker` and `self_check` turn on coverage analysis exactly
+    as they do for `run`,
     with one marker run covering every file. Returns ``{path: MutationRun}`` in `sources` order.
     Raises `BaselineFailed` (like `run`) if the baseline can't run or is red.
     """
+    parallel = [path for path in sources if _runs_in_parallel(path, project_dir, jobs, jobs_auto)]
+    for path in parallel:
+        _project_relative(path, project_dir)  # refuse a source with no place in the copies, now
     budget, baseline_tests = _run_baseline(
         project_dir,
         runner,
@@ -2064,16 +2211,19 @@ def run_paths(
     # One per run, not one per file: a set of test files confirmed while mutating one file is
     # still confirmed while mutating the next.
     trust = _Trust(runner) if plans is not None and isinstance(runner, FileSelecting) else None
+    pooled = {path: sources[path] for path in parallel}
+    if len(pooled) < 2:
+        pooled = {}
+    serial = [path for path in sources if path not in pooled]
     runs: dict[str, MutationRun] = {}
-    last_path = next(reversed(sources), None)
-    for path, source in sources.items():
+    for path in serial:
         if progress is not None:
             # POSIX-normalized like the per-file score lines and survivor blocks of the same run.
             progress(f"mutating {Path(path).as_posix()} ...")
         runs[path] = _mutate_file(
             project_dir,
             path,
-            source,
+            sources[path],
             runner,
             adapter,
             budget,
@@ -2082,17 +2232,33 @@ def run_paths(
             jobs,
             jobs_auto,
             clock,
-            is_last_file=path == last_path,
+            is_last_file=path == serial[-1] and not pooled,
             mutants=None if mutants is None else mutants[path],
             trust=trust,
             coverage=None if plans is None else plans.files[path],
             test_files=0 if plans is None else plans.test_files,
             order_dependent=0 if plans is None else plans.order_dependent,
         )
+    if pooled:
+        runs |= _mutate_pooled(
+            project_dir,
+            pooled,
+            runner,
+            adapter,
+            budget,
+            catalog,
+            progress,
+            jobs,
+            jobs_auto,
+            clock,
+            mutants=mutants,
+            plans=plans,
+            trust=trust,
+        )
     # One closing line for the whole run, not one per file: the wall-clock a user takes away is
     # "how long did that take", and every file's mutants are part of the same wait.
     clock.finish()
-    return runs
+    return {path: runs[path] for path in sources}
 
 
 def _detect_eol(target: Path) -> str:
