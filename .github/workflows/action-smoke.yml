@@ -5,7 +5,8 @@ name: Action smoke test
 # job summary. This is how the action is tested — no unit test can exercise the composite plumbing.
 #
 # This smoke run passes `ref:` explicitly (below) to force the action's git-install escape hatch,
-# so it exercises THIS PR's own code (the branch under test) rather than a published PyPI release.
+# so it exercises THIS PR's own code (the head commit under test) rather than a published PyPI
+# release, including on a pull request from a fork.
 on:
   pull_request:
     paths:
@@ -65,9 +66,14 @@ jobs:
           paths: corpus/turn_order.gd
           runner: gdunit4
           job-summary: true
-          # Install THIS PR's gdmutant (the branch head) through the action's git-install escape
-          # hatch, not a published PyPI release — see the note above.
-          ref: ${{ github.head_ref || github.ref_name }}
+          # Install THIS PR's gdmutant (the head commit) through the action's git-install escape
+          # hatch, not a published PyPI release — see the note above. A commit SHA, never a branch
+          # name: the action always installs from kphutt/gdmutant, and a fork PR's branch exists
+          # only on the fork, so `pip` could not check it out there. Its head commit can still be
+          # fetched from this repo, because GitHub keeps every PR's head under refs/pull/<n>/head.
+          # On a push to main there is no pull_request payload, so this falls back to the pushed
+          # commit. Both values are plain hex SHAs and reach the action's shell only through env.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       # End-to-end proof: the action produced a JSON report, and the real Godot run found survivors.
       - name: Assert the run produced a report with survivors
