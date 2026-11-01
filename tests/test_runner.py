@@ -2,6 +2,7 @@
 
 import math
 import sys
+import time
 import tracemalloc
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -326,6 +327,43 @@ def test_command_runner_keeps_the_first_script_error_through_a_runaway_error_loo
     assert result.runtime_error == "SCRIPT ERROR: first\n   at: a.gd:1\none\ntwo"
     assert result.detail.endswith("SCRIPT ERROR: again\nthe end")
     assert peak < 4 * 1024 * 1024, f"peak {peak} bytes for {_FLOOD_MB} MB of output"
+
+
+def test_command_runner_script_error_detail_shows_the_last_2000_characters(tmp_path: Path) -> None:
+    script = "import sys; sys.stdout.write('SCRIPT ERROR: x\\n' + 'y' * 5000 + 'end')"
+    detail = CommandRunner(_runs(script)).run(str(tmp_path)).detail
+    assert detail.split("Output:\n", 1)[1] == "y" * 1997 + "end"
+
+
+def test_command_runner_detail_falls_back_to_stdout_when_stderr_is_silent(tmp_path: Path) -> None:
+    script = "import sys; print('only on stdout'); sys.exit(1)"
+    assert CommandRunner(_runs(script)).run(str(tmp_path)).detail == "only on stdout"
+
+
+def test_command_runner_keeps_a_character_cut_off_by_the_end_of_the_stream(
+    tmp_path: Path,
+) -> None:
+    # The first two bytes of a three-byte UTF-8 character, and then the stream ends. The decoder
+    # holds them back waiting for the third, so they must still be flushed, as a replacement
+    # character, when the stream closes: dropped, a loss in the output would leave no trace.
+    script = "import sys; sys.stdout.buffer.write(b'abc\\xe2\\x82'); sys.exit(1)"
+    assert CommandRunner(_runs(script)).run(str(tmp_path)).detail == "abc�"
+
+
+def test_command_runner_waits_for_its_readers_within_the_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The child can exit before its output is read to the end. That is not a timeout: the runner
+    # waits for its readers, for whatever is left of the budget, and keeps what they read.
+    drain = runner_mod._StreamTail.drain
+
+    def slow_drain(self: runner_mod._StreamTail, pipe: object) -> None:
+        time.sleep(0.5)
+        drain(self, pipe)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runner_mod._StreamTail, "drain", slow_drain)
+    result = CommandRunner(_prints_then_exits("late", 1), timeout=10).run(str(tmp_path))
+    assert result.detail == "late"
 
 
 def test_command_runner_refuses_a_run_whose_output_could_not_be_read(
