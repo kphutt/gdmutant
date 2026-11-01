@@ -263,8 +263,10 @@ def test_the_scan_reaches_all_three_places_it_is_meant_to_cover() -> None:
                 keyword.arg in _TEXT_MODE_ARGS for keyword in node.keywords
             ):
                 reached.add(module.relative_to(REPO).as_posix())
+    # The exit-code runner (`gdmutant/engine/runner.py`) is not here: since #331 it reads bytes and
+    # decodes them itself, with the same two constants, so the scan has no call of its to reach.
+    # The behavioural test at the top of this file drives it with a real undecodable byte instead.
     assert {
-        "gdmutant/engine/runner.py",  # the exit-code runner: reads SCRIPT ERROR out of the output
         "gdmutant/adapters/gdscript/runner.py",  # GdUnit4/GUT: real Godot
         "gdmutant/cli.py",  # git, for --since and the backup check
         "scripts/check_mutation_baseline.py",  # mutmut's own output, read by a gate
