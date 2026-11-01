@@ -4428,11 +4428,12 @@ def test_exclude_tests_refuses_an_entry_gdunit4_would_misread(
     assert "is empty or starts with '-'" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("value", ['"slow_test"', "[1]"])
 def test_load_config_rejects_non_list_exclude_tests(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], value: str
 ) -> None:
     cfg = tmp_path / ".gdmutant.toml"
-    cfg.write_text('exclude-tests = "slow_test"\n', encoding="utf-8")
+    cfg.write_text(f"exclude-tests = {value}\n", encoding="utf-8")
     assert cli._load_config(cfg) is None
     assert "'exclude-tests' must be a list of strings" in capsys.readouterr().err
 
