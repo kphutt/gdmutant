@@ -1,6 +1,7 @@
 """Tests for the mutation-run loop (no Godot — fake runners drive killed/survived)."""
 
 import inspect
+import itertools
 import os
 import shutil
 import stat
@@ -2513,6 +2514,9 @@ def test_the_shared_pool_gives_every_file_the_verdicts_a_serial_run_gives(tmp_pa
     pooled_sources = _pool_project(tmp_path / "p")
     pooled = run_paths(str(tmp_path / "p"), pooled_sources, runner, jobs=4)
     assert [_outcome_key(r) for r in pooled.values()] == [_outcome_key(r) for r in serial.values()]
+    assert {(r.coverage_analysis, r.test_files, r.order_dependent) for r in pooled.values()} == {
+        (False, 0, 0)
+    }
     verdicts = {o.verdict for r in serial.values() for o in r.outcomes}
     assert {Verdict.KILLED, Verdict.SURVIVED, Verdict.IGNORED} <= verdicts
     assert [Path(p).name for p in pooled] == list(_POOL_SOURCES)  # `sources` order
@@ -2557,3 +2561,36 @@ def test_a_single_file_under_jobs_keeps_its_own_plan_line(tmp_path: Path) -> Non
         str(tmp_path), {path: src}, ProjectDirRecordingRunner(), jobs=8, progress=lines.append
     )
     assert any(line.endswith(" at a time.") and "across" not in line for line in lines)
+
+
+def test_a_pool_that_needs_one_worker_does_not_announce_one(tmp_path: Path) -> None:
+    sources = _pool_project(tmp_path / "p")
+    lines: list[str] = []
+    catalog = (TableOperator("only", {"and": ("or",)}),)  # one mutant, in b.gd alone
+    runs = run_paths(
+        str(tmp_path / "p"),
+        sources,
+        ProjectDirRecordingRunner(),
+        catalog=catalog,
+        jobs=8,
+        progress=lines.append,
+    )
+    assert sum(len(r.ran) for r in runs.values()) == 1
+    assert not any("at a time" in line for line in lines)
+
+
+def test_jobs_1_ends_every_file_but_the_last_on_a_full_heartbeat(tmp_path: Path) -> None:
+    sources = _pool_project(tmp_path / "p")
+    lines: list[str] = []
+    run_paths(
+        str(tmp_path / "p"),
+        sources,
+        ProjectDirRecordingRunner(),
+        progress=lines.append,
+        progress_style=ProgressStyle.PLAIN,
+    )
+    starts = [i for i, line in enumerate(lines) if line.startswith("mutating ")]
+    for start, nxt in itertools.pairwise(starts):
+        beats = [line for line in lines[start:nxt] if line.startswith("… ")]
+        done, total = beats[-1].split()[1].split("/")
+        assert done == total.rstrip(":")
