@@ -2524,7 +2524,7 @@ def test_the_shared_pool_gives_every_file_the_verdicts_a_serial_run_gives(tmp_pa
         assert Path(path).read_text(encoding="utf-8") == src
 
 
-def test_explicit_jobs_refuses_a_file_outside_the_project_before_any_mutant_runs(
+def test_explicit_jobs_refuses_a_file_outside_the_project_before_the_baseline(
     tmp_path: Path,
 ) -> None:
     project, outside = _project_and_outside_source(tmp_path)
@@ -2533,7 +2533,7 @@ def test_explicit_jobs_refuses_a_file_outside_the_project_before_any_mutant_runs
     runner = ProjectDirRecordingRunner()
     with pytest.raises(SourceOutsideProject):
         run_paths(str(project), sources, runner, jobs=4)
-    assert len(runner.seen) == 1  # the baseline only
+    assert runner.seen == []  # not even the baseline
     assert Path(inside).read_text(encoding="utf-8") == _POOL_SOURCES["a.gd"]
 
 
@@ -2594,3 +2594,117 @@ def test_jobs_1_ends_every_file_but_the_last_on_a_full_heartbeat(tmp_path: Path)
         beats = [line for line in lines[start:nxt] if line.startswith("… ")]
         done, total = beats[-1].split()[1].split("/")
         assert done == total.rstrip(":")
+
+
+def test_the_first_error_stops_every_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An error the engine can't tally as a verdict (a source it can't write back, say) ends the
+    # run; the other workers must not go on through every remaining mutant first.
+    sources = _pool_project(tmp_path / "p")
+    total = sum(len(ADAPTER.generate_mutants(p, s, CATALOG)) for p, s in sources.items())
+    real_evaluate = loop_mod._evaluate
+    calls = 0
+    lock = threading.Lock()
+
+    def evaluate(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        with lock:
+            calls += 1
+            call = calls
+        if call == 1:
+            raise OSError("could not write the source back")
+        time.sleep(0.05)
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(loop_mod, "_evaluate", evaluate)
+    with pytest.raises(OSError, match="could not write the source back"):
+        run_paths(str(tmp_path / "p"), sources, ProjectDirRecordingRunner(), jobs=2)
+    assert total > 6
+    assert calls <= 3  # the failure, and at most one more per worker
+
+
+_MANY = "func f(a, b) -> bool:\n" + "".join(f"\tvar x{i} = a > b\n" for i in range(10))
+
+
+def test_the_feeder_stays_a_few_mutants_ahead_of_the_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Applied but not yet run is what memory holds; it must stay bounded by the worker count.
+    root = tmp_path / "p"
+    root.mkdir()
+    sources = {_write(root, name, _MANY): _MANY for name in ("a.gd", "b.gd")}
+    catalog = (TableOperator("gt", {">": (">=",)}),)
+    applied = 0
+    started = 0
+    ahead: list[int] = []
+    lock = threading.Lock()
+    real_apply = ADAPTER.apply_mutant
+
+    def apply(mutant: Mutant, source: str) -> tuple[str, bool]:
+        nonlocal applied
+        applied += 1
+        if applied == 1:
+            time.sleep(0.3)  # the workers wait on an empty queue first
+        return real_apply(mutant, source)
+
+    @dataclass
+    class Slow:
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            nonlocal started
+            with lock:
+                started += 1
+                ahead.append(applied - started)
+            time.sleep(0.15)  # slower than the feeder, so the queue fills and it waits
+            return SuiteResult(tests=1, failures=0, errors=0)
+
+    adapter = replace(ADAPTER, apply_mutant=apply)
+    _run_paths(str(root), sources, Slow(), adapter, catalog=catalog, jobs=2)
+    assert started == 21  # the baseline and all 20 mutants
+    assert max(ahead) <= 6  # the queue (2 per worker) plus one in each worker's hands
+
+
+def test_the_pool_line_counts_only_files_with_mutants_to_run(tmp_path: Path) -> None:
+    sources = _pool_project(tmp_path / "p")  # c.gd has no ">" for this catalog to change
+    lines: list[str] = []
+    catalog = (TableOperator("gt", {">": (">=",)}),)
+    run_paths(
+        str(tmp_path / "p"),
+        sources,
+        ProjectDirRecordingRunner(),
+        catalog=catalog,
+        jobs=8,
+        progress=lines.append,
+    )
+    assert "Running up to 2 at a time across 2 files." in lines
+
+
+@pytest.mark.parametrize("jobs", [1, 4])
+def test_the_heartbeat_reaches_its_total_when_some_mutants_are_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, jobs: int
+) -> None:
+    monkeypatch.setattr(loop_mod, "_HEARTBEAT_SECS", 0.0)  # a heartbeat after every mutant
+    sources = _pool_project(tmp_path / "p")
+    lines: list[str] = []
+    catalog = (TableOperator("gt", {">": (">=", "))")}),)  # one valid, one unparseable, per ">"
+    runs = run_paths(
+        str(tmp_path / "p"),
+        sources,
+        ProjectDirRecordingRunner(),
+        catalog=catalog,
+        jobs=jobs,
+        progress=lines.append,
+    )
+    assert any(o.verdict is Verdict.INVALID for r in runs.values() for o in r.outcomes)
+    last = [line for line in lines if line.startswith("… ")][-1]
+    done, total = last.split()[1].rstrip(":").split("/")
+    assert done == total
+
+
+def test_a_pool_with_nothing_to_run_decides_every_mutant_without_a_worker(tmp_path: Path) -> None:
+    src = _POOL_SOURCES["a.gd"].replace("a > b", "a > b  # gdmutant: ignore")
+    path = _write(tmp_path, "f.gd", src)
+    runner = ProjectDirRecordingRunner()
+    result = run(str(tmp_path), path, src, runner, jobs=4)
+    assert result.outcomes and {o.verdict for o in result.outcomes} == {Verdict.IGNORED}
+    assert len(runner.seen) == 1  # the baseline only

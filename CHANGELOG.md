@@ -20,7 +20,7 @@ All notable changes to gdmutant are recorded here. The format follows
   still prints its own `mutating ...` and plan lines, then one `Running up to N at a time across
   M files.` line covers them all, and the progress line counts every file's mutants together.
   Verdicts and the per-file scores are unchanged. A file outside `--project` is now refused
-  before any mutant runs, rather than when the run reaches it.
+  before the baseline runs, rather than when the run reaches it.
 
 - `.gdmutant.toml` can set `project = "."` without `--trust-config`. A `project` naming the folder
   the file sits in, which is the folder you ran gdmutant from, points gdmutant at nothing you had
