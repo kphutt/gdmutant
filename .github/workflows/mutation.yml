@@ -89,7 +89,9 @@ jobs:
   mutation:
     name: Mutation testing (mutmut) — baseline must succeed, score is advisory
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Full sweeps have run 12 to 18.5 minutes; mutmut 3.8.0 (more mutants) hit a 20 minute limit on
+    # both attempts of one run, so this leaves real margin.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -165,8 +167,11 @@ jobs:
         # it just the same as a real advisory-only run. Keep the run non-fatal here, but re-raise the
         # one baseline-failure signature grep can catch cheaply.
         run: |
-          uv run mutmut run > mutmut-run.log 2>&1 || true
-          cat mutmut-run.log
+          # tee streams the output into the job log as it runs (a run killed by the timeout still
+          # shows its progress) and writes the same file the checks below read. `|| true` still
+          # neutralizes mutmut's exit code; pipefail keeps the pipe from hiding a failure of tee itself.
+          set -o pipefail
+          uv run mutmut run 2>&1 | tee mutmut-run.log || true
           # Verified against mutmut 3's own source (mutmut/__main__.py): a baseline that can't be
           # established prints one of several distinct messages depending on *how* it fails —
           # "failed to collect stats. runner returned ..." and "failed to collect stats, no active
