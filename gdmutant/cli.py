@@ -1294,7 +1294,7 @@ def run_mutation_paths(
     """Mutate several `.gd` files against one project in a single pass — the baseline runs **once**
     and the score is aggregated across every file, with one merged report. Same return
     codes as `run_mutation`. Every source is loaded/validated before anything runs (a bad file fails
-    fast). `jobs` parallelizes each file's mutants (see `run_mutation`)."""
+    fast). With `jobs`, every file's mutants share one pool of workers (see `run_mutation`)."""
     sources: dict[str, str] = {}
     for source_path in source_paths:
         source = _load_gdscript(source_path)
