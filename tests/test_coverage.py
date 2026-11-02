@@ -41,6 +41,7 @@ from gdmutant.engine.loop import (
     run_paths,
 )
 from gdmutant.engine.mutants import Mutant
+from gdmutant.engine.operators import TableOperator
 from gdmutant.engine.runner import MarkerRunnable, SuiteResult, SuiteTimeout
 from gdmutant.engine.spans import Span
 
@@ -1005,6 +1006,34 @@ def _two_file_coverage_run(
     return runs, [
         line.replace(str(project), "<p>").replace(project.as_posix(), "<p>") for line in lines
     ]
+
+
+@pytest.mark.parametrize("jobs", [1, 4])
+def test_an_invalid_mutant_no_test_reaches_leaves_the_heartbeat_total_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, jobs: int
+) -> None:
+    # Line 5 is uncovered and decided first, so a wrong total shows in line 9's heartbeats.
+    monkeypatch.setattr(loop_mod, "_HEARTBEAT_SECS", 0.0)  # a heartbeat after every mutant
+    project, first = _project(tmp_path)
+    second = project / "u.gd"
+    second.write_text(_SOURCE, encoding="utf-8")
+    lab = CopyLab(hits=[1])
+    lines: list[str] = []
+    run_paths(
+        str(project),
+        {str(first): _SOURCE, str(second): _SOURCE},
+        lab,
+        ADAPTER,
+        catalog=(TableOperator("cmp", {">": (">=", "))", "(("), "<": ("<=", "))", "((")}),),
+        coverage=CoverageAnalysis.ALL,
+        marker=lab,
+        self_check=0,
+        jobs=jobs,
+        progress=lines.append,
+    )
+    beats = [line.split()[1].rstrip(":").split("/") for line in lines if line.startswith("… ")]
+    assert beats
+    assert all(int(done) <= int(total) for done, total in beats), beats
 
 
 def test_the_shared_jobs_pool_keeps_coverage_analysis_per_file(

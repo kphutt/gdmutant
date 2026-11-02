@@ -1855,8 +1855,8 @@ def _run_mutants_serial(
             outcome = _evaluate(ctx, mutant, mutated, setup.plans(index))
             # Only a mutant that actually ran is a sample for the measured rate.
             clock.record(outcome.verdict, time.monotonic() - started)
-        elif outcome.verdict is Verdict.INVALID:
-            clock.drop()
+        elif outcome.verdict is Verdict.INVALID and index not in setup.skip:
+            clock.drop()  # a skipped one was never in the total
         outcomes.append(outcome)
     return outcomes
 
@@ -2048,8 +2048,8 @@ def _run_pool(
                     continue
                 with lock:
                     outcomes[file, index] = outcome
-                    if outcome.verdict is Verdict.INVALID:
-                        clock.drop()
+                    if outcome.verdict is Verdict.INVALID and index not in share.setup.skip:
+                        clock.drop()  # a skipped one was never in the total
 
     candidates = sum(share.setup.to_run for share in files)
     if not candidates:  # every mutant is ignored or uncovered: no Godot run needed
