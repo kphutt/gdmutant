@@ -442,6 +442,18 @@ _READ_BYTES: Final = 64 * 1024
 _KILL_GRACE_SECS: Final = 5.0
 
 
+def _ends_with_break(text: str) -> bool:
+    """Whether `text` ends on a line break `str.splitlines` recognises."""
+    parts = text.splitlines(keepends=True)
+    return bool(parts) and parts[-1].splitlines()[0] != parts[-1]
+
+
+def _after_last_break(text: str) -> str:
+    """The part of `text` after its last `str.splitlines` line break (all of it if it has none)."""
+    parts = text.splitlines(keepends=True)
+    return "" if not parts or _ends_with_break(text) else parts[-1]
+
+
 class _StreamTail:
     """One output stream in bounded memory: whether it said anything, its tail, its first lines,
     and its first `_SCRIPT_ERROR_MARKER` line with the lines after it (``None`` until one is seen).
@@ -498,9 +510,15 @@ class _StreamTail:
         # A line with no end in sight is taken a piece at a time, the pieces counting as one line.
         # Each overlaps the next by one character less than the marker, so a cut marker is found.
         while len(self._line) > _LINE_CHARS:
-            self._take(self._line[:_LINE_CHARS], self._continued)
-            self._continued = True
-            self._line = self._line[_LINE_CHARS - len(_SCRIPT_ERROR_MARKER) + 1 :]
+            piece = self._line[:_LINE_CHARS]
+            self._take(piece, self._continued)
+            # A piece that ends on a line break (one `splitlines` knows, not only "\n") leaves the
+            # next piece starting a new line, not going on with this one.
+            self._continued = not _ends_with_break(piece)
+            # The overlap stops at the last line break in it: a marker cannot span one, and the text
+            # before it was already counted with the piece above, so repeating it would count twice.
+            keep = _LINE_CHARS - len(_SCRIPT_ERROR_MARKER) + 1
+            self._line = _after_last_break(self._line[keep:_LINE_CHARS]) + self._line[_LINE_CHARS:]
 
     def _take(self, line: str, continued: bool) -> None:
         # `or [""]`: an empty line is still a line, as it is in `splitlines` of the whole stream.
