@@ -184,7 +184,7 @@ the test files that reach it. It needs `--runner gdunit4` or `--runner gut`: an 
 which tests ran, so a custom `--command` is refused rather than quietly run in full. To leave slow
 suites out, use `--exclude-tests` with `--runner gdunit4`: an excluded suite never runs, so a line
 only it reaches is reported as no coverage. gdUnit4 matches an entry against any part of a suite's
-path, so `full_game_test` also leaves out `full_game_test_extra.gd`.
+path, so `slow_test` also leaves out `slow_test_extra.gd`.
 
 - The marker run becomes two passes instead of one: the suite forwards, then the same test files in
   the opposite order. Every clean-run rule above applies to both, plus two more: at least one test
@@ -290,7 +290,7 @@ runner = "command"
 command = "godot --headless --script res://tests/run_tests.gd"
 # godot = "/Applications/Godot.app/Contents/MacOS/Godot"
 # exclude = ["*_generated.gd", "*/vendor/*"]
-# exclude-tests = ["full_game_test"]  # --runner gdunit4 only
+# exclude-tests = ["slow_test"]  # --runner gdunit4 only
 ```
 
 `gdmutant init` writes a starter version of that file for you, so the first one you ever see

@@ -4275,6 +4275,12 @@ def test_write_init_config_leaves_runner_unset_when_undetected(tmp_path: Path) -
     assert "runner" not in parsed  # nothing to guess from -- left commented, not invented
 
 
+def test_the_init_scaffold_names_every_config_key() -> None:
+    text = cli._scaffold_config_text(None)
+    missing = [key for key in _CONFIG_KEY_TO_DEST if f"\n# {key} = " not in text]
+    assert missing == ["tests"]  # set outright, not commented
+
+
 def test_write_init_config_scaffold_is_readable_by_load_config(tmp_path: Path) -> None:
     # The file init writes must be exactly what the loader accepts -- not just parseable TOML, but
     # a config _load_config validates cleanly, with nothing trust-required set (init never guesses
@@ -4401,12 +4407,12 @@ def test_exclude_tests_combines_config_and_flags_for_gdunit4(
 ) -> None:
     path = _gd(tmp_path)
     cfg = tmp_path / ".gdmutant.toml"
-    cfg.write_text('exclude-tests = ["full_game_test"]\n', encoding="utf-8")
+    cfg.write_text('exclude-tests = ["slow_test"]\n', encoding="utf-8")
     monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
     seen = _runner_kwargs(monkeypatch)
     args = ["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4"]
-    assert main([*args, "--exclude-tests", "event_citation_test"]) == 0
-    assert seen[0]["exclude_tests"] == ("full_game_test", "event_citation_test")
+    assert main([*args, "--exclude-tests", "flaky_test"]) == 0
+    assert seen[0]["exclude_tests"] == ("slow_test", "flaky_test")
 
 
 @pytest.mark.parametrize("runner", ["gut", "command"])
@@ -4439,6 +4445,24 @@ def test_load_config_rejects_non_list_exclude_tests(
     assert "'exclude-tests' must be a list of strings" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("runner", ["gdunit4", "command"])
+def test_a_bad_config_exclude_tests_entry_is_blamed_on_the_config_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    runner: str,
+) -> None:
+    path = _gd(tmp_path)
+    cfg = tmp_path / ".gdmutant.toml"
+    cfg.write_text('exclude-tests = ["ok_test", "-a"]\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "_CONFIG_FILENAME", str(cfg))
+    args = ["run", str(path), "--project", str(tmp_path), "--runner", runner, "--command", "x"]
+    assert main(args) == 2
+    err = capsys.readouterr().err
+    assert f"error: {cfg}: 'exclude-tests' entry '-a' is empty" in err
+    assert "--exclude-tests" not in err
+
+
 def test_dry_run_names_exclude_tests_as_ignored(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -4467,12 +4491,12 @@ def test_an_exclusion_that_matches_no_test_file_is_warned_about(
     path = _gd(tmp_path)
     suites = tmp_path / "test" / "full"
     suites.mkdir(parents=True)
-    (suites / "full_game_test.gd").write_text("extends GdUnitTestSuite\n", encoding="utf-8")
+    (suites / "slow_test.gd").write_text("extends GdUnitTestSuite\n", encoding="utf-8")
     seen = _runner_kwargs(monkeypatch)
     entries = [
-        "full_game_test",  # the file's name
+        "slow_test",  # the file's name
         "res://test/full/",  # part of its path
-        "full_game_test:test_slow",  # one test in it
+        "slow_test:test_slow",  # one test in it
         "full_gam_test",  # a typo
         "other_test:test_slow",  # a test in a suite that isn't there
     ]

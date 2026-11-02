@@ -1472,7 +1472,19 @@ def _load_config(path: Path | None = None) -> dict[str, object] | None:
     ):
         print(f"error: {path}: 'exclude-tests' must be a list of strings", file=sys.stderr)
         return None
+    if exclude_tests is not None and (bad := _misread_exclusion(exclude_tests)) is not None:
+        print(f"error: {path}: 'exclude-tests' entry {bad!r} {_MISREAD_EXCLUSION}", file=sys.stderr)
+        return None
     return settings
+
+
+_MISREAD_EXCLUSION = "is empty, has surrounding spaces, or starts with '-'"
+
+
+def _misread_exclusion(entries: list[str]) -> str | None:
+    """The first entry gdunit4 would misread after its -i, or None. An entry must be exactly what
+    gdunit4 matches and must not look like a flag."""
+    return next((e for e in entries if not e or e != e.strip() or e[0] == "-"), None)
 
 
 def _project_is_the_config_folder(value: str, config_dir: Path, cwd: Path) -> bool:
@@ -1570,7 +1582,7 @@ def _scaffold_config_text(runner: str | None) -> str:
     something; guessing a runner nobody confirmed would be worse than leaving it for the user to
     pick. That keeps the file non-empty and useful even in a fresh directory with no addon
     installed yet, which is the common case right after `gdmutant init`. Every other key
-    (`timeout`, `require-clean`, `exclude`, and the three trust-required keys
+    (`timeout`, `require-clean`, `exclude`, `exclude-tests`, and the three trust-required keys
     `project`/`command`/`godot`) is documented as a commented example instead of a guess: none of
     them has a value that's right for every project, and the trust-required three additionally need
     `--trust-config` before gdmutant will act on them at all (see `_TRUST_REQUIRED_CONFIG_KEYS`).
@@ -1598,6 +1610,7 @@ def _scaffold_config_text(runner: str | None) -> str:
         "# require-clean = true  # refuse to run on an uncommitted source file "
         "(default: warn only)",
         '# exclude = ["*_generated.gd", "*/vendor/*"]  # globs to skip when expanding a directory',
+        '# exclude-tests = ["slow_test"]  # tests to leave out of every run (gdunit4 only)',
         "",
         "# These need --trust-config: they say what gdmutant reads (project) or runs (command,",
         "# godot), and .gdmutant.toml may not be a file you wrote yourself. The one exception is",
@@ -1991,19 +2004,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         files = _expand_sources(args.source, exclude)
         if files is None:
             return 2
-        # Additive like `exclude`. An entry becomes the argument after gdunit4's -i, so it must be
-        # exactly what gdunit4 matches and must not look like a flag.
+        # Additive like `exclude`. `_load_config` has already checked the config's entries.
         config_tests = config.get("exclude_tests")
         exclude_tests = list(config_tests) if isinstance(config_tests, list) else []
-        exclude_tests += args.exclude_tests or []
-        bad = next((e for e in exclude_tests if not e or e != e.strip() or e[0] == "-"), None)
-        if bad is not None:
-            print(
-                f"error: --exclude-tests entry {bad!r} is empty, has surrounding spaces, or "
-                "starts with '-'",
-                file=sys.stderr,
-            )
+        if (bad := _misread_exclusion(args.exclude_tests or [])) is not None:
+            print(f"error: --exclude-tests entry {bad!r} {_MISREAD_EXCLUSION}", file=sys.stderr)
             return 2
+        exclude_tests += args.exclude_tests or []
         # Resilience: a file discovered by expanding a *directory* that gdtoolkit can't
         # parse is skipped with a warning and the rest are mutated — one odd file (a grammar gap on
         # real GDScript) shouldn't zero out a whole directory run. A file named *explicitly* stays
