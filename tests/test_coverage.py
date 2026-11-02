@@ -1036,6 +1036,44 @@ def test_an_invalid_mutant_no_test_reaches_leaves_the_heartbeat_total_alone(
     assert all(int(done) <= int(total) for done, total in beats), beats
 
 
+@pytest.mark.parametrize("jobs", [1, 4])
+def test_an_invalid_mutant_a_test_reaches_still_leaves_the_heartbeat_total(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, jobs: int
+) -> None:
+    # Coverage on, and every file keeps a skipped mutant: line 5 is uncovered and has two, and the
+    # self-check takes only one of the run's four. Line 9 is covered, and its unparseable mutant
+    # comes first, so the valid one after it is what reaches the final count.
+    monkeypatch.setattr(loop_mod, "_HEARTBEAT_SECS", 0.0)  # a heartbeat after every mutant
+    project, first = _project(tmp_path)
+    second = project / "u.gd"
+    second.write_text(_SOURCE, encoding="utf-8")
+    lab = CopyLab(hits=[1], kill="no mutant has this")
+    lines: list[str] = []
+    runs = run_paths(
+        str(project),
+        {str(first): _SOURCE, str(second): _SOURCE},
+        lab,
+        ADAPTER,
+        catalog=(TableOperator("cmp", {">": (">=", "<"), "<": ("))", "<=")}),),
+        coverage=CoverageAnalysis.ALL,
+        marker=lab,
+        self_check=0,
+        jobs=jobs,
+        progress=lines.append,
+    )
+    for result in runs.values():
+        assert [o.verdict for o in result.outcomes] == [
+            Verdict.NO_COVERAGE,
+            Verdict.NO_COVERAGE,
+            Verdict.INVALID,
+            Verdict.SURVIVED,
+        ]
+    beats = [line.split()[1].rstrip(":").split("/") for line in lines if line.startswith("… ")]
+    assert beats
+    done, total = beats[-1]
+    assert done == total, beats
+
+
 def test_the_shared_jobs_pool_keeps_coverage_analysis_per_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
