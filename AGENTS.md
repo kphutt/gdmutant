@@ -208,3 +208,11 @@ Claude, so merge by squash only (a rebase or merge commit lands them on `main` a
 pass your own commit message: GitHub's default squash message adds a `Co-authored-by: Claude`
 trailer itself. Set it on the merge command (`gh merge-safe <pr> --squash --body …` where that
 alias is installed), and merge only once every review thread is resolved.
+
+## Release notes
+
+Facts about this repo for the scripts that check release notes and CHANGELOG entries.
+`output-sources` is the code whose output a user sees, so a pull request that changes it and
+says users will notice nothing has to give its reason.
+
+- output-sources: gdmutant/
