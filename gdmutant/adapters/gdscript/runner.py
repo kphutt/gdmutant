@@ -414,6 +414,7 @@ class GdUnit4Runner(_GodotJUnitRunner):
 
     `test_path` is the GdUnit4 test directory (a ``res://`` path). `report_path` is where GdUnit4
     writes its JUnit XML, relative to the project dir. `godot` is the Godot executable.
+    `exclude_tests` are entries for GdUnit4's ``-i``, left out of every run.
 
     **Crash-safety (`engine.runner.Runner`) — and why it is shaped differently from GUT's.**
     GdUnit4 loads every suite in the scanned directory *up front*, during discovery, and a suite it
@@ -449,6 +450,7 @@ class GdUnit4Runner(_GodotJUnitRunner):
     report_path: str = DEFAULT_REPORT_PATH
     godot: str = "godot"
     timeout: float = DEFAULT_TIMEOUT
+    exclude_tests: tuple[str, ...] = ()
     _imported: bool = field(default=False, init=False, repr=False)
     _framework: ClassVar[str] = "GdUnit4"
 
@@ -464,6 +466,9 @@ class GdUnit4Runner(_GodotJUnitRunner):
         `files` replaces the single ``-a <test dir>`` with one ``-a`` per test file, in the order
         given, which is how GdUnit4 takes a chosen list (verified live against v6.1.3 + Godot 4.7:
         the suites run in exactly the order the flags appear, forwards and backwards).
+
+        Every run adds ``-i <entry>`` per `exclude_tests` entry, a chosen list too: a ``suite:test``
+        entry leaves its suite in the whole-suite report, and so in any list built from it.
 
         ``-rc 1`` (report-count = 1) is essential: GdUnit4's CI runner otherwise keeps a report
         history, writing each invocation to an incrementing ``reports/report_N/`` dir. Since the
@@ -491,6 +496,7 @@ class GdUnit4Runner(_GodotJUnitRunner):
             "-s",
             _GDUNIT_CMD_TOOL,
             *(flag for target in targets for flag in ("-a", target)),
+            *(flag for entry in self.exclude_tests for flag in ("-i", entry)),
             "-rc",
             "1",
             "--ignoreHeadlessMode",

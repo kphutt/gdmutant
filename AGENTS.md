@@ -59,8 +59,8 @@ Godot-free). Run them when touching the adapter, runners, parallelism, or CLI fi
 ```sh
 # Live self-test: drive the shipped CLI against a real Godot on the corpus.
 # Run `mise install` first: an unset or empty GDMUTANT_GODOT skips this whole file silently.
-# Even with GDMUTANT_GODOT set, 36 of its 49 tests skip just as silently unless the GdUnit4 and
-# GUT addons are installed into the corpus first (19 skip with only GdUnit4 missing, 17 with only
+# Even with GDMUTANT_GODOT set, 40 of its 53 tests skip just as silently unless the GdUnit4 and
+# GUT addons are installed into the corpus first (23 skip with only GdUnit4 missing, 17 with only
 # GUT missing): run scripts/install_gdunit4.py and scripts/install_gut.py before trusting a run of this file to mean anything more than "Godot
 # itself starts".
 GDMUTANT_GODOT=$(mise which godot) uv run pytest tests/test_selftest_live.py
