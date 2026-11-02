@@ -173,7 +173,9 @@ Two states worth knowing before you read a report:
    changelog is still `## [Unreleased]`, names a different version, or carries no date, and both
    `release.yml` and `publish.yml` run it. It still has to happen before the tag: the tag ships the
    commit it points at, so tagging first publishes a changelog that calls the shipped version
-   unreleased.
+   unreleased. Before you rename it, check that every entry for an outside contributor's pull
+   request names them by GitHub handle, after the issue or PR number the entry already cites:
+   "(#NNN, thanks @handle)".
 3. Merge both to `main` through the usual PR. A tag whose commit is not an ancestor of `main` is
    refused.
 4. Push the tag: `git tag vX.Y.Z <commit>` then `git push origin vX.Y.Z`. Get it right the first
@@ -190,7 +192,9 @@ Two states worth knowing before you read a report:
    that fails leaves no Release at all, so nothing has shipped.
 6. Review the draft on GitHub and press Publish. The generated notes are a raw commit list. Edit
    them into something worth reading, with this version's `CHANGELOG.md` entry as the source.
-   Publishing is what fires `publish.yml`, and only then does anything reach PyPI.
+   Keep the generated `New Contributors` section, which names anyone whose first merged pull
+   request is in this release. Publishing is what fires `publish.yml`, and only then does anything
+   reach PyPI.
 7. *Automatic.* `publish.yml` runs the release gate. Remember the structure rather than a list of
    job names: every job in `publish-pypi`'s `needs:` is a guard, each one is a hard dependency with
    no `if: always()` to soften it, and GitHub skips a job whose `needs:` failed or was itself

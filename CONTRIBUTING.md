@@ -116,6 +116,7 @@ GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-
   existing records for the format) and, where relevant, reflected in `docs/design/`.
 - Commits and PRs carry no AI co-author trailer.
 - Add any new third-party dependency to `docs/credits.md` with its license.
+- Note any change users will notice in `CHANGELOG.md`, under `[Unreleased]`.
 
 ## License
 
