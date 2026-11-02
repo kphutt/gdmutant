@@ -286,7 +286,7 @@ manual version becomes the way to reproduce a failure by hand.
    explanation.
 
    The in-repo smoke workflow cannot answer this. It consumes the action as `uses: ./` and installs
-   gdmutant from the branch under test, so it exercises the composite steps while proving nothing
+   gdmutant from the commit under test, so it exercises the composite steps while proving nothing
    about a published ref resolving for somebody else, or about what the published package renders.
 
    *Automated, and separate from "does it resolve":* `tests/test_action_pin.py` checks that every
