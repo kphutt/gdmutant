@@ -2701,6 +2701,115 @@ def test_the_heartbeat_reaches_its_total_when_some_mutants_are_invalid(
     assert done == total
 
 
+@pytest.mark.parametrize("jobs", [1, 4])
+def test_the_last_heartbeat_reaches_its_total_when_the_last_mutant_is_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, jobs: int
+) -> None:
+    # The file's last mutant is unparseable. Serially it is dropped after the last valid one
+    # records. The pool's feeder can drop it that late too, so it is made to wait for every
+    # mutant it already handed out to finish first.
+    monkeypatch.setattr(loop_mod, "_HEARTBEAT_SECS", 0.0)  # a heartbeat after every mutant
+    finished = threading.Condition()
+    handed_out = recorded = 0
+    real_prepare, real_record = loop_mod._prepare, loop_mod._Progress.record
+
+    def prepare(*args: Any) -> tuple[Any, str]:
+        nonlocal handed_out
+        outcome, mutated = real_prepare(*args)
+        if outcome is None:
+            handed_out += 1
+        elif outcome.verdict is Verdict.INVALID:
+            with finished:
+                assert finished.wait_for(lambda: recorded == handed_out, timeout=10)
+        return outcome, mutated
+
+    def record(self: Any, verdict: Verdict, elapsed: float) -> None:
+        nonlocal recorded
+        real_record(self, verdict, elapsed)
+        with finished:
+            recorded += 1
+            finished.notify_all()
+
+    monkeypatch.setattr(loop_mod, "_prepare", prepare)
+    monkeypatch.setattr(loop_mod._Progress, "record", record)
+    src = _POOL_SOURCES["b.gd"]
+    path = _write(tmp_path, "b.gd", src)
+    lines: list[str] = []
+    result = run(
+        str(tmp_path),
+        path,
+        src,
+        ProjectDirRecordingRunner(),
+        catalog=(TableOperator("gt", {">": (">=", "))")}),),  # valid, then unparseable
+        jobs=jobs,
+        progress=lines.append,
+    )
+    assert [o.verdict for o in result.outcomes] == [Verdict.SURVIVED, Verdict.INVALID]
+    beats = [line for line in lines if line.startswith("… ")]
+    assert beats and beats[-1].startswith("… 1/1 done"), beats
+
+
+@pytest.mark.parametrize(
+    ("heartbeat_secs", "steps", "want"),
+    [
+        (0.0, "rd", ["1/2", "1/1"]),  # the line printed at 1 named a total that just shrank
+        (0.0, "d", []),  # nothing has run: no line to correct
+        (0.0, "rdr", ["1/3", "2/2"]),  # a mutant is still to run, and its own line will be right
+        (3600.0, "rd", []),  # no line was printed at 1, so none is wrong
+    ],
+)
+def test_a_drop_reprints_only_a_final_line_it_made_wrong(
+    monkeypatch: pytest.MonkeyPatch, heartbeat_secs: float, steps: str, want: list[str]
+) -> None:
+    monkeypatch.setattr(loop_mod, "_HEARTBEAT_SECS", heartbeat_secs)
+    lines: list[str] = []
+    clock = _Progress(emit=lines.append, style=ProgressStyle.RICH)
+    clock.begin_file(len(steps))
+    for step in steps:
+        if step == "r":
+            clock.record(Verdict.SURVIVED, 0.0)
+        else:
+            clock.drop()
+    assert [line.split()[1].rstrip(":") for line in lines] == want
+
+
+@pytest.mark.parametrize(
+    "replacements",
+    [(">=", "))"), ("))", ">=")],
+    ids=["invalid-last", "valid-last"],
+)
+def test_a_serial_file_prints_its_final_count_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacements: tuple[str, str]
+) -> None:
+    # Each file but the last ends on a forced beat. When the file's own last line already reads
+    # n/n, from its last mutant or from a drop after it, that beat would only print it again.
+    monkeypatch.setattr(loop_mod, "_HEARTBEAT_SECS", 0.0)  # a heartbeat after every mutant
+    sources = _pool_project(tmp_path / "p")
+    lines: list[str] = []
+    run_paths(
+        str(tmp_path / "p"),
+        sources,
+        ProjectDirRecordingRunner(),
+        catalog=(TableOperator("gt", {">": replacements}),),
+        jobs=1,
+        progress=lines.append,
+    )
+    counts = [line.split()[1] if line.startswith("… ") else None for line in lines]
+    assert counts.count("1/1") == 2, lines  # a.gd and b.gd each reach their end
+    assert all(a is None or a != b for a, b in itertools.pairwise(counts)), lines
+
+
+def test_a_new_file_gets_its_own_final_line_even_with_the_same_count() -> None:
+    # Skipping a repeat is per file. Two files with nothing to run each still end on a line.
+    lines: list[str] = []
+    clock = _Progress(emit=lines.append, style=ProgressStyle.RICH)
+    for _ in range(2):
+        clock.begin_file(0)
+        clock.beat(force=True)
+        clock.beat(force=True)
+    assert [line.split()[1] for line in lines] == ["0/0", "0/0"]
+
+
 def test_a_pool_with_nothing_to_run_decides_every_mutant_without_a_worker(tmp_path: Path) -> None:
     src = _POOL_SOURCES["a.gd"].replace("a > b", "a > b  # gdmutant: ignore")
     path = _write(tmp_path, "f.gd", src)
