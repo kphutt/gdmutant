@@ -174,7 +174,7 @@ Two states worth knowing before you read a report:
    `release.yml` and `publish.yml` run it. It still has to happen before the tag: the tag ships the
    commit it points at, so tagging first publishes a changelog that calls the shipped version
    unreleased. Before you rename it, check that every entry for an outside contributor's pull
-   request names them by GitHub handle, after the number the entry already cites:
+   request names them by GitHub handle, after the issue or PR number the entry already cites:
    "(#NNN, thanks @handle)".
 3. Merge both to `main` through the usual PR. A tag whose commit is not an ancestor of `main` is
    refused.
