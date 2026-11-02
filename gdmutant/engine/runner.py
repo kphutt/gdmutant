@@ -8,11 +8,15 @@ GDScript-adapter concern that lands with the end-to-end slice (it needs real God
 
 from __future__ import annotations
 
+import codecs
 import math
+import os
 import subprocess
+import threading
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Final, Protocol, runtime_checkable
+from typing import IO, Final, Protocol, runtime_checkable
 from xml.etree import ElementTree
 
 #: What a GDScript runtime error prints to stdout/stderr (verified live, Godot 4.7). GDScript has no
@@ -368,18 +372,11 @@ class CommandRunner:
         """
         budget = self.timeout if timeout is None else timeout
         try:
-            completed = subprocess.run(
-                list(self.command),
-                cwd=project_dir,
-                capture_output=True,
-                encoding=CAPTURE_ENCODING,
-                errors=CAPTURE_ERRORS,
-                timeout=budget,
-            )
+            returncode, out, err = _run_keeping_tails(list(self.command), project_dir, budget)
         except subprocess.TimeoutExpired as expired:
             # A mutation-induced hang is a detection, not a crash — surface it distinctly so the
-            # engine tallies Timeout (killed), not error. subprocess.run has already killed the
-            # child process by the time it raises.
+            # engine tallies Timeout (killed), not error. `_run_keeping_tails` has already killed
+            # the child process by the time it raises.
             raise SuiteTimeout(f"test command exceeded {budget:g}s") from expired
         except FileNotFoundError as error:
             # On Windows this arrives with .filename == None (see `with_filename`), so the CLI's
@@ -387,32 +384,30 @@ class CommandRunner:
             # naming the actual bad command — the same Windows quirk the GdUnit4/GUT call sites
             # patch around.
             raise with_filename(error, self.command[0]) from error
-        # A newline between them, so a last stdout line with no newline of its own cannot run
-        # into the first stderr line and hide where a SCRIPT ERROR starts.
-        output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
-        if _SCRIPT_ERROR_MARKER in output:
-            # Regardless of exit code: see _SCRIPT_ERROR_MARKER and the class docstring. `errors`,
-            # not `failures`: the run itself cannot be trusted, a different fault from a clean red
-            # test (and, unlike an ordinary failure, the string can appear on either exit code).
+        if out.excerpt is not None or err.excerpt is not None:
+            # Regardless of exit code (see the class docstring), and `errors`, not `failures`: the
+            # run itself cannot be trusted. The newline keeps a last stdout line with no newline of
+            # its own from running into stderr's first line.
+            output = f"{out.tail}\n{err.tail}"
             return SuiteResult(
                 tests=1,
                 failures=0,
                 errors=1,
                 detail=(
                     f"the command's output contains a Godot {_SCRIPT_ERROR_MARKER!r} "
-                    f"(exit code {completed.returncode}). GDScript has no exceptions, so a "
+                    f"(exit code {returncode}). GDScript has no exceptions, so a "
                     "runtime error aborts only the current function call at that statement: a "
                     "test harness that only checks its own recorded assertion failures can read "
                     f"a half-executed test as a pass. Output:\n{output.strip()[-2000:]}"
                 ),
-                runtime_error=script_error_excerpt(output),
+                runtime_error=_joined_excerpt(out, err),
             )
-        if completed.returncode == 0:
+        if returncode == 0:
             return SuiteResult(tests=1, failures=0, errors=0)
         # One suite as a single pass/fail unit — per-test counts aren't available without a report.
         # Keep the command's own output so a *baseline* failure (a first-run misconfiguration, the
-        # common case) can be diagnosed instead of vanishing; tail it to stay bounded.
-        detail = (completed.stderr or completed.stdout or "").strip()
+        # common case) can be diagnosed instead of vanishing. Stderr if it said anything at all.
+        detail = (err if err.seen else out).tail.strip()
         return SuiteResult(tests=1, failures=1, errors=0, detail=detail[-2000:])
 
     def run_markers(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
@@ -432,8 +427,121 @@ def script_error_excerpt(output: str) -> str:
     lines = output.splitlines()
     for index, line in enumerate(lines):
         if _SCRIPT_ERROR_MARKER in line:
-            return "\n".join(lines[index : index + 4]).strip()
+            return "\n".join(lines[index : index + _EXCERPT_LINES]).strip()
     return ""
+
+
+#: Bounds on what `_StreamTail` keeps. The tail is twice the 2000 characters a message shows, so
+#: stripping trailing whitespace cannot leave it short.
+_TAIL_CHARS: Final = 4000
+_LINE_CHARS: Final = 4000
+_EXCERPT_LINES: Final = 4
+_READ_BYTES: Final = 64 * 1024
+#: How long to wait for the pipes after a kill: a grandchild can hold them open for good.
+_KILL_GRACE_SECS: Final = 5.0
+
+
+class _StreamTail:
+    """One output stream in bounded memory: whether it said anything, its tail, its first lines,
+    and its first `_SCRIPT_ERROR_MARKER` line with the lines after it (``None`` until one is seen).
+    Lines are split the way `script_error_excerpt` splits them."""
+
+    def __init__(self) -> None:
+        self.seen = False
+        self.tail = ""
+        self.head: list[str] = []
+        self.excerpt: list[str] | None = None
+        #: Set if reading the stream failed, so the run can refuse to trust what was kept.
+        self.error: Exception | None = None
+        self._line = ""
+
+    def drain(self, pipe: IO[bytes]) -> None:
+        """Read `pipe` to its end, then close it. Run on a thread of its own, one per stream."""
+        decoder = codecs.getincrementaldecoder(CAPTURE_ENCODING)(errors=CAPTURE_ERRORS)
+        try:
+            with pipe:
+                fd = pipe.fileno()
+                while chunk := os.read(fd, _READ_BYTES):
+                    self._feed(decoder.decode(chunk))
+            self._feed(decoder.decode(b"", final=True))
+            if self._line:
+                self._take(self._line)
+        except Exception as error:  # kept for the caller: a thread's exception would only print
+            self.error = error
+
+    def _feed(self, text: str) -> None:
+        if not text:
+            return
+        self.seen = True
+        self.tail = (self.tail + text)[-_TAIL_CHARS:]
+        if self.excerpt is not None and len(self.excerpt) == _EXCERPT_LINES:
+            return  # the excerpt is complete, and so is `head`: from here only the tail changes
+        *lines, self._line = (self._line + text).split("\n")
+        for line in lines:
+            self._take(line)
+        # A line with no end in sight is taken a piece at a time. Each piece overlaps the next by
+        # one character less than the marker, so a marker cut in two is still found whole.
+        while len(self._line) > _LINE_CHARS:
+            self._take(self._line[:_LINE_CHARS])
+            self._line = self._line[_LINE_CHARS - len(_SCRIPT_ERROR_MARKER) + 1 :]
+
+    def _take(self, line: str) -> None:
+        # `or [""]`: an empty line is still a line, as it is in `splitlines` of the whole stream.
+        for piece in line.splitlines() or [""]:
+            if len(self.head) < _EXCERPT_LINES - 1:
+                self.head.append(piece)
+            if self.excerpt is None:
+                if _SCRIPT_ERROR_MARKER in piece:
+                    self.excerpt = [piece]
+            elif len(self.excerpt) < _EXCERPT_LINES:
+                self.excerpt.append(piece)
+
+
+def _joined_excerpt(out: _StreamTail, err: _StreamTail) -> str:
+    """`script_error_excerpt` of stdout and stderr joined by a newline, rebuilt from the two tails.
+    That newline adds an empty line after a stdout that ends in a line break, unless the break is a
+    bare ``\\r``, which it completes into ``\\r\\n``."""
+    if out.excerpt is None:
+        return "\n".join(err.excerpt or []).strip()
+    last = out.tail[-1:]
+    bridge = [""] if last != "\r" and last.splitlines() == [""] else []
+    return "\n".join([*out.excerpt, *bridge, *err.head][:_EXCERPT_LINES]).strip()
+
+
+def _run_keeping_tails(
+    command: list[str], cwd: str, budget: float
+) -> tuple[int, _StreamTail, _StreamTail]:
+    """Run `command` in `cwd` and return ``(exit code, stdout, stderr)``, each stream bounded.
+    Raises ``TimeoutExpired`` after killing the child, also when a grandchild holds the pipes past
+    the budget, and ``RuntimeError`` if a stream could not be read, since it could hide a marker."""
+    process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    streams = (_StreamTail(), _StreamTail())
+    readers = [
+        threading.Thread(target=stream.drain, args=(pipe,), daemon=True)
+        for stream, pipe in zip(streams, (process.stdout, process.stderr), strict=True)
+    ]
+    for reader in readers:
+        reader.start()
+    deadline = time.monotonic() + budget
+    try:
+        process.wait(timeout=budget)
+        for reader in readers:
+            reader.join(max(0.0, deadline - time.monotonic()))
+        if any(reader.is_alive() for reader in readers):
+            raise subprocess.TimeoutExpired(command, budget)
+    except BaseException:
+        # A timeout, or Ctrl-C: never leave the child running, as `subprocess.run` never does.
+        process.kill()
+        process.wait()
+        for reader in readers:
+            reader.join(_KILL_GRACE_SECS)
+        raise
+    for stream in streams:
+        if stream.error is not None:
+            raise RuntimeError(
+                f"could not read the test command's output: {stream.error}"
+            ) from stream.error
+    return process.returncode, *streams
 
 
 def suite_seconds(raw: str | None) -> float:

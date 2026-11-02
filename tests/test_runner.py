@@ -2,18 +2,23 @@
 
 import math
 import sys
+import time
+import tracemalloc
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree.ElementTree import ParseError
 
 import pytest
 
+import gdmutant.engine.runner as runner_mod
 from gdmutant.engine.runner import (
     CommandRunner,
     Runner,
     SuiteResult,
     SuiteTimeout,
     parse_junit_xml,
+    script_error_excerpt,
     suite_seconds,
     with_filename,
 )
@@ -235,10 +240,201 @@ def test_command_runner_names_the_attempted_command_when_the_os_omits_the_filena
     def boom(*args: object, **kwargs: object) -> None:
         raise FileNotFoundError(2, "The system cannot find the file specified")
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", boom)
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", boom)
     with pytest.raises(FileNotFoundError) as excinfo:
         CommandRunner(["/nonexistent/bad-runner", "--flag"]).run(str(tmp_path))
     assert excinfo.value.filename == "/nonexistent/bad-runner"
+
+
+def _runs(script: str) -> list[str]:
+    return [sys.executable, "-c", script]
+
+
+#: How much each flood test prints: far more than the runner may hold, so a regression to holding
+#: the whole output shows up as a peak many times the bound below.
+_FLOOD_MB = 64
+
+
+def _peak_traced_bytes(run: Callable[[], SuiteResult]) -> tuple[SuiteResult, int]:
+    # tracemalloc sees every Python allocation, the reader threads' included, which is where
+    # holding the whole output would show up.
+    tracemalloc.start()
+    try:
+        result = run()
+        return result, tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_command_runner_holds_a_bounded_tail_of_a_flooded_output(tmp_path: Path) -> None:
+    # A flooded output costs a fixed amount of memory, and the verdict and the end of the output
+    # survive.
+    script = (
+        "import sys\n"
+        f"for _ in range({_FLOOD_MB}):\n"
+        "    sys.stdout.buffer.write(b'stdout flood line\\n' * 58255)\n"
+        "    sys.stderr.buffer.write(b'stderr flood line\\n' * 58255)\n"
+        "sys.stderr.write('the real reason\\n')\n"
+        "sys.exit(1)\n"
+    )
+    runner = CommandRunner(_runs(script))
+    result, peak = _peak_traced_bytes(lambda: runner.run(str(tmp_path)))
+    assert (result.failures, result.errors) == (1, 0)
+    assert result.detail.endswith("stderr flood line\nthe real reason")
+    assert len(result.detail) == 2000
+    assert peak < 4 * 1024 * 1024, f"peak {peak} bytes for {2 * _FLOOD_MB} MB of output"
+
+
+def test_command_runner_still_finds_a_script_error_after_a_flood(tmp_path: Path) -> None:
+    # The marker can come after the flood, and the excerpt is still the marker line and the three
+    # after it, exactly as `script_error_excerpt` gives it for the whole output.
+    script = (
+        "import sys\n"
+        f"for _ in range({_FLOOD_MB}):\n"
+        "    sys.stdout.buffer.write(b'x' * 1048576 + b'\\n')\n"
+        "print('SCRIPT ERROR: Nonexistent function')\n"
+        "print('   at: f (res://a.gd:3)')\n"
+        "print('one')\n"
+        "print('two')\n"
+        "print('three')\n"
+    )
+    runner = CommandRunner(_runs(script))
+    result, peak = _peak_traced_bytes(lambda: runner.run(str(tmp_path)))
+    assert (result.failures, result.errors) == (0, 1)
+    assert (
+        result.runtime_error
+        == "SCRIPT ERROR: Nonexistent function\n   at: f (res://a.gd:3)\none\ntwo"
+    )
+    assert peak < 4 * 1024 * 1024, f"peak {peak} bytes for {_FLOOD_MB} MB of output"
+
+
+def test_command_runner_keeps_the_first_script_error_through_a_runaway_error_loop(
+    tmp_path: Path,
+) -> None:
+    # An error loop printing SCRIPT ERROR until the timeout: the excerpt is the first one, and the
+    # detail still shows how the run ended.
+    script = (
+        "import sys\n"
+        "sys.stdout.buffer.write(b'SCRIPT ERROR: first\\n   at: a.gd:1\\none\\ntwo\\n')\n"
+        f"for _ in range({_FLOOD_MB}):\n"
+        "    sys.stdout.buffer.write(b'SCRIPT ERROR: again\\n' * 52429)\n"
+        "sys.stdout.buffer.write(b'the end')\n"
+    )
+    runner = CommandRunner(_runs(script))
+    result, peak = _peak_traced_bytes(lambda: runner.run(str(tmp_path)))
+    assert (result.failures, result.errors) == (0, 1)
+    assert result.runtime_error == "SCRIPT ERROR: first\n   at: a.gd:1\none\ntwo"
+    assert result.detail.endswith("SCRIPT ERROR: again\nthe end")
+    assert peak < 4 * 1024 * 1024, f"peak {peak} bytes for {_FLOOD_MB} MB of output"
+
+
+def test_command_runner_script_error_detail_shows_the_last_2000_characters(tmp_path: Path) -> None:
+    script = "import sys; sys.stdout.write('SCRIPT ERROR: x\\n' + 'y' * 5000 + 'end')"
+    detail = CommandRunner(_runs(script)).run(str(tmp_path)).detail
+    assert detail.split("Output:\n", 1)[1] == "y" * 1997 + "end"
+
+
+def test_command_runner_detail_falls_back_to_stdout_when_stderr_is_silent(tmp_path: Path) -> None:
+    script = "import sys; print('only on stdout'); sys.exit(1)"
+    assert CommandRunner(_runs(script)).run(str(tmp_path)).detail == "only on stdout"
+
+
+def test_command_runner_keeps_a_character_cut_off_by_the_end_of_the_stream(
+    tmp_path: Path,
+) -> None:
+    # The first two bytes of a three-byte UTF-8 character, and then the stream ends. The decoder
+    # holds them back waiting for the third, so they must still be flushed, as a replacement
+    # character, when the stream closes: dropped, a loss in the output would leave no trace.
+    script = "import sys; sys.stdout.buffer.write(b'abc\\xe2\\x82'); sys.exit(1)"
+    assert CommandRunner(_runs(script)).run(str(tmp_path)).detail == "abc�"
+
+
+def test_command_runner_waits_for_its_readers_within_the_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The child can exit before its output is read to the end. That is not a timeout: the runner
+    # waits for its readers, for whatever is left of the budget, and keeps what they read.
+    drain = runner_mod._StreamTail.drain
+
+    def slow_drain(self: runner_mod._StreamTail, pipe: object) -> None:
+        time.sleep(0.5)
+        drain(self, pipe)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runner_mod._StreamTail, "drain", slow_drain)
+    result = CommandRunner(_prints_then_exits("late", 1), timeout=10).run(str(tmp_path))
+    assert result.detail == "late"
+
+
+def test_command_runner_refuses_a_run_whose_output_could_not_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A stream lost part way could have held the SCRIPT ERROR that decides the verdict, so the run
+    # raises (the engine tallies `error`) rather than being scored off what was read.
+    def boom(self: object, text: str) -> None:
+        raise OSError("pipe broke")
+
+    monkeypatch.setattr(runner_mod._StreamTail, "_feed", boom)
+    with pytest.raises(
+        RuntimeError, match=r"^could not read the test command's output: pipe broke$"
+    ):
+        CommandRunner(_runs("print('x')")).run(str(tmp_path))
+
+
+@pytest.mark.parametrize("offset", range(-12, 2))
+def test_command_runner_finds_a_marker_cut_by_a_long_line_piece(
+    tmp_path: Path, offset: int
+) -> None:
+    # A line longer than the runner keeps is looked at in pieces; a marker straddling a cut must
+    # still be found, wherever the cut falls in it.
+    start = runner_mod._LINE_CHARS + offset
+    script = f"import sys; sys.stdout.write('x' * {start} + 'SCRIPT ERROR' + 'y' * 9000)"
+    result = CommandRunner(_runs(script)).run(str(tmp_path))
+    assert result.errors == 1
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr"),
+    [
+        ("a\nSCRIPT ERROR: x\n", "e1\ne2\ne3\n"),
+        ("a\nSCRIPT ERROR: x", "e1\ne2\ne3\n"),
+        ("SCRIPT ERROR: x\r", "e1\ne2\n"),
+        ("SCRIPT ERROR: x\r\n", "e1\ne2\n"),
+        ("SCRIPT ERROR: x\r\n\r\nlast\n", ""),
+        ("plain\n", "w\nSCRIPT ERROR: y\r\nz\n"),
+        ("", "SCRIPT ERROR: only\n\n\nafter\nmore\n"),
+    ],
+)
+def test_command_runner_excerpt_matches_the_whole_output_one(
+    tmp_path: Path, stdout: str, stderr: str
+) -> None:
+    # The excerpt rebuilt from both tails must equal `script_error_excerpt` of the joined output,
+    # including where stdout's excerpt carries on into stderr.
+    script = (
+        "import sys\n"
+        f"sys.stdout.buffer.write({stdout.encode()!r})\n"
+        f"sys.stderr.buffer.write({stderr.encode()!r})\n"
+    )
+    result = CommandRunner(_runs(script)).run(str(tmp_path))
+    assert result.runtime_error == script_error_excerpt(f"{stdout}\n{stderr}")
+
+
+def test_command_runner_detail_prefers_stderr_even_when_it_is_only_whitespace(
+    tmp_path: Path,
+) -> None:
+    # Stderr is preferred whenever it said anything at all.
+    script = "import sys; print('on stdout'); sys.stderr.write('  \\n'); sys.exit(1)"
+    assert CommandRunner(_runs(script)).run(str(tmp_path)).detail == ""
+
+
+def test_command_runner_a_child_holding_its_output_open_times_out(tmp_path: Path) -> None:
+    # The command exits at once, but a grandchild it started keeps the pipes open past the
+    # budget: that is a timeout.
+    script = (
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(3)'])\n"
+    )
+    with pytest.raises(SuiteTimeout):
+        CommandRunner(_runs(script), timeout=0.5).run(str(tmp_path))
 
 
 def test_with_filename_leaves_an_already_named_error_alone() -> None:
