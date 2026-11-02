@@ -7,6 +7,7 @@ Godot itself is faked here (subprocess mocked). The same paths against real Godo
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -263,20 +264,19 @@ def test_every_runner_can_do_the_marker_run() -> None:
         assert isinstance(runner, MarkerRunnable)
 
 
-def _completed(stdout: str, code: int = 0) -> Any:
-    return lambda *a, **k: subprocess.CompletedProcess([], code, stdout, "")
+def _prints(stdout: str) -> list[str]:
+    return [sys.executable, "-c", f"import sys; sys.stdout.write({stdout!r})"]
 
 
-def test_the_command_runner_marks_a_script_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(engine_runner.subprocess, "run", _completed("SCRIPT ERROR: x\n at y"))
-    result = CommandRunner(["h"]).run_markers(".")
+def test_the_command_runner_marks_a_script_error(tmp_path: Path) -> None:
+    result = CommandRunner(_prints("SCRIPT ERROR: x\n at y")).run_markers(str(tmp_path))
     assert result.runtime_error == "SCRIPT ERROR: x\n at y"
     assert result.errors == 1
 
 
-def test_the_command_runner_marker_run_is_its_normal_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(engine_runner.subprocess, "run", _completed("fine"))
-    assert CommandRunner(["h"]).run_markers(".", timeout=5) == SuiteResult(1, 0, 0)
+def test_the_command_runner_marker_run_is_its_normal_run(tmp_path: Path) -> None:
+    result = CommandRunner(_prints("fine")).run_markers(str(tmp_path), timeout=5)
+    assert result == SuiteResult(1, 0, 0)
 
 
 def test_gdunit4_keeps_going_after_a_failure_only_in_the_marker_run() -> None:
@@ -359,11 +359,11 @@ def test_the_command_runner_marker_run_gets_the_runners_own_budget(
 ) -> None:
     seen: list[object] = []
 
-    def fake(*a: Any, **k: Any) -> Any:
-        seen.append(k["timeout"])
-        return subprocess.CompletedProcess([], 0, "", "")
+    def fake(command: list[str], cwd: str, budget: float) -> Any:
+        seen.append(budget)
+        return 0, engine_runner._StreamTail(), engine_runner._StreamTail()
 
-    monkeypatch.setattr(engine_runner.subprocess, "run", fake)
+    monkeypatch.setattr(engine_runner, "_run_keeping_tails", fake)
     CommandRunner(["h"], timeout=77.0).run_markers(".")
     assert seen == [77.0]
 

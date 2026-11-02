@@ -33,6 +33,13 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ### Fixed
 
+- `--runner command` no longer runs out of memory when a mutant floods its test output (#331).
+  gdmutant used to hold all of a run's output, though it only ever showed the last 2000
+  characters, so a mutant stuck printing errors until its timeout could grow gdmutant past
+  a memory cap, end the run, and lose its report. It now keeps only the end of the output, plus
+  the first `SCRIPT ERROR` and the three lines after it, so memory stays fixed however much a
+  test prints. Verdicts and messages are unchanged. The GdUnit4 and GUT runners still hold their
+  whole output.
 - `--jobs N` no longer reports a survivor as killed when your tests write to `user://`. Each worker
   already got its own copy of the project, but Godot works out where `user://` is from the
   project's name settings rather than from its path, so every copy resolved it to the same
