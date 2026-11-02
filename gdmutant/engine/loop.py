@@ -729,6 +729,8 @@ def run(
     run against the whole suite as a standing check (``None`` runs them all). Raises
     `CoverageRunFailed` when that cannot be trusted. See `_coverage_pass`.
     """
+    if _runs_in_parallel(path, project_dir, jobs, jobs_auto):
+        _project_relative(path, project_dir)  # refuse a source with no place in the copies, now
     budget, baseline_tests = _run_baseline(
         project_dir,
         runner,
