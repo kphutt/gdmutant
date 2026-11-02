@@ -505,7 +505,7 @@ class _StreamTail:
             return  # the excerpt is complete, and so is `head`: from here only the tail changes
         *lines, self._line = (self._line + text).split("\n")
         for line in lines:
-            self._take(line, self._continued)
+            self._take(line, self._continued, terminated=True)
             self._continued = False
         # A line with no end in sight is taken a piece at a time, the pieces counting as one line.
         # Each overlaps the next by one character less than the marker, so a cut marker is found.
@@ -520,9 +520,13 @@ class _StreamTail:
             keep = _LINE_CHARS - len(_SCRIPT_ERROR_MARKER) + 1
             self._line = _after_last_break(self._line[keep:_LINE_CHARS]) + self._line[_LINE_CHARS:]
 
-    def _take(self, line: str, continued: bool) -> None:
+    def _take(self, line: str, continued: bool, terminated: bool = False) -> None:
         # `or [""]`: an empty line is still a line, as it is in `splitlines` of the whole stream.
-        for piece in line.splitlines() or [""]:
+        pieces = line.splitlines() or [""]
+        # A newline straight after another break ends an empty line of its own in `splitlines`.
+        if terminated and _ends_with_break(line):
+            pieces.append("")
+        for piece in pieces:
             if continued:  # more of a line already kept, so it can only start the excerpt
                 continued = False
                 if self.excerpt is None and _SCRIPT_ERROR_MARKER in piece:

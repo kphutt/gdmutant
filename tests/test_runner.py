@@ -406,6 +406,10 @@ def test_command_runner_finds_a_marker_cut_by_a_long_line_piece(
         ("SCRIPT ERROR: x\r\n\r\nlast\n", ""),
         ("plain\n", "w\nSCRIPT ERROR: y\r\nz\n"),
         ("", "SCRIPT ERROR: only\n\n\nafter\nmore\n"),
+        # A newline straight after a break only `splitlines` knows ends an empty line of its own.
+        ("SCRIPT ERROR: boom\x0b\n   at: res://a.gd:1\none\n", ""),
+        ("SCRIPT ERROR: boom\n\x0c\n   at: res://a.gd:1\n", ""),
+        ("", "SCRIPT ERROR: boom\u2028\n\u2029\n   at: res://a.gd:1\n"),
     ],
 )
 def test_command_runner_excerpt_matches_the_whole_output_one(
