@@ -57,7 +57,7 @@ the run) for real. See `.github/workflows/mutation.yml`'s header comment for why
 and why the job deliberately has no job-level `continue-on-error`. It complements the coverage gate:
 coverage says a line *ran*, mutation says a bug there would be *caught*.
 
-mutmut has no incremental mode, so a full sweep costs the same ~15-20 minutes regardless of how
+mutmut has no incremental mode, so a full sweep costs the same ~35-40 minutes regardless of how
 small the change is. A pull request never gets one, even when the diff touches `gdmutant/` or
 `tests/`: a PR is pushed to repeatedly during review, and paying that cost on every push for a
 number that mostly doesn't move isn't worth it. Only a push to `main` (a change that already
