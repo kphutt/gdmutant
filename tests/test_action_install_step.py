@@ -8,10 +8,11 @@ cross-platform subprocess/argv fragility entirely -- there is no shell boundary 
 
 What this does NOT exercise: GitHub's own `${{ }}` composite-action expression evaluation --
 env: values here are plain env vars, not resolved through the Actions runner. `action-smoke.yml`
-consumes the real action end to end, but it always sets `ref:` explicitly (it has to, since it's
-testing this branch's own unreleased code), so it only ever exercises the pre-existing
-escape-hatch path -- never this PR's new tag-derivation or SHA/branch-fallback logic through a
-genuine Actions-runner evaluation. That gap is real and untracked as of this writing.
+consumes the real action end to end, but it always sets `ref:` explicitly to the commit under test
+(it has to, since it's testing unreleased code, sometimes from a fork), so it only ever exercises
+the pre-existing escape-hatch path -- never this PR's new tag-derivation or SHA/branch-fallback
+logic through a genuine Actions-runner evaluation. That gap is real and untracked as of this
+writing.
 """
 
 from __future__ import annotations
@@ -128,6 +129,30 @@ def test_a_branch_ref_falls_back_to_git_install(monkeypatch: pytest.MonkeyPatch)
     cmd, code = _resolve(monkeypatch, GDMUTANT_ACTION_REF="main")
     assert code == 0
     assert cmd == ["python", "-m", "pip", "install", "git+https://github.com/kphutt/gdmutant@main"]
+
+
+def _smoke_action_ref() -> str:
+    """The `ref:` that action-smoke.yml passes to its `uses: ./` step."""
+    workflow = yaml.safe_load(
+        (REPO / ".github" / "workflows" / "action-smoke.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["smoke"]["steps"]
+    action_steps = [step for step in steps if step.get("uses") == "./"]
+    assert len(action_steps) == 1, "action-smoke.yml should consume the action exactly once"
+    ref = action_steps[0]["with"]["ref"]
+    assert isinstance(ref, str)
+    return ref
+
+
+def test_smoke_workflow_installs_a_commit_sha_not_a_branch_name() -> None:
+    # The install step always clones kphutt/gdmutant, so the smoke test must hand it something
+    # that exists THERE. A fork PR's branch name exists only on the fork (pull request 333's smoke
+    # run died on `git checkout -q fix/331-bounded-output-tail`). Its head SHA is fetchable from
+    # this repo through refs/pull/<n>/head, and a push to main falls back to the pushed commit.
+    ref = _smoke_action_ref()
+    assert re.sub(r"\s+", " ", ref) == "${{ github.event.pull_request.head.sha || github.sha }}"
+    for branch_name in ("head_ref", "ref_name"):
+        assert branch_name not in ref
 
 
 def test_no_ref_at_all_errors_clearly_without_ever_calling_pip_install(
