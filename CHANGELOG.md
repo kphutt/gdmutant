@@ -12,7 +12,26 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `--exclude-tests <entry>` (and `exclude-tests` in `.gdmutant.toml`) leaves tests out of a
+  `--runner gdunit4` run. Each entry is passed to gdUnit4 as `-i`, so it can be a suite name, any
+  part of a suite's `res://` path, or `suite:test` for one test. Excluded tests run in no part of
+  the run: not the baseline, not the coverage marker runs, and not any mutant's test files. With
+  `--coverage-analysis per-file`, a line only an excluded suite reaches is reported as no
+  coverage. An entry that matches no test file is warned about. `--runner gut` and `--runner
+  command` refuse the flag, and ignore a config list with a note.
+
 ### Changed
+
+- `--jobs N` with several source files now runs every file's mutants through one shared set of
+  workers (#332). Before, each file got its own set, and the next file waited for the last
+  worker of the one before it, so a diff made of small files kept most workers idle. Each file
+  still prints its own `mutating ...` and plan lines, then one `Running up to N at a time across
+  M files.` line covers them all, and the progress line counts every file's mutants together.
+  Verdicts and the per-file scores are unchanged. A file outside `--project` is now refused
+  before the baseline runs, rather than when the run reaches it. Under `--jobs auto`, such a file
+  can't use the shared workers, so it now runs on its own before the other files.
 
 - `.gdmutant.toml` can set `project = "."` without `--trust-config`. A `project` naming the folder
   the file sits in, which is the folder you ran gdmutant from, points gdmutant at nothing you had
@@ -33,6 +52,13 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ### Fixed
 
+- `--runner command` no longer runs out of memory when a mutant floods its test output (#331).
+  gdmutant used to hold all of a run's output, though it only ever showed the last 2000
+  characters, so a mutant stuck printing errors until its timeout could grow gdmutant past
+  a memory cap, end the run, and lose its report. It now keeps only the end of the output, plus
+  the first `SCRIPT ERROR` and the three lines after it, so memory stays fixed however much a
+  test prints. Verdicts and messages are unchanged. The GdUnit4 and GUT runners still hold their
+  whole output.
 - `--jobs N` no longer reports a survivor as killed when your tests write to `user://`. Each worker
   already got its own copy of the project, but Godot works out where `user://` is from the
   project's name settings rather than from its path, so every copy resolved it to the same
