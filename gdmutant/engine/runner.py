@@ -9,6 +9,7 @@ GDScript-adapter concern that lands with the end-to-end slice (it needs real God
 from __future__ import annotations
 
 import codecs
+import io
 import math
 import os
 import subprocess
@@ -431,8 +432,8 @@ def script_error_excerpt(output: str) -> str:
     return ""
 
 
-#: Bounds on what `_StreamTail` keeps. The tail is twice the 2000 characters a message shows, so
-#: stripping trailing whitespace cannot leave it short.
+#: Bounds on what `_StreamTail` keeps. Text and the whitespace after it are bounded apart, so
+#: trailing whitespace cannot push out the text a message shows.
 _TAIL_CHARS: Final = 4000
 _LINE_CHARS: Final = 4000
 _EXCERPT_LINES: Final = 4
@@ -448,16 +449,26 @@ class _StreamTail:
 
     def __init__(self) -> None:
         self.seen = False
-        self.tail = ""
+        self._text = ""
+        self._trailing = ""
         self.head: list[str] = []
         self.excerpt: list[str] | None = None
         #: Set if reading the stream failed, so the run can refuse to trust what was kept.
         self.error: Exception | None = None
         self._line = ""
+        #: Whether `_line` goes on with a line already taken in part.
+        self._continued = False
+
+    @property
+    def tail(self) -> str:
+        return self._text + self._trailing
 
     def drain(self, pipe: IO[bytes]) -> None:
         """Read `pipe` to its end, then close it. Run on a thread of its own, one per stream."""
-        decoder = codecs.getincrementaldecoder(CAPTURE_ENCODING)(errors=CAPTURE_ERRORS)
+        # Newlines become ``\n`` as in text-mode `subprocess.run`, also a ``\r\n`` split by a read.
+        decoder = io.IncrementalNewlineDecoder(
+            codecs.getincrementaldecoder(CAPTURE_ENCODING)(errors=CAPTURE_ERRORS), translate=True
+        )
         try:
             with pipe:
                 fd = pipe.fileno()
@@ -465,7 +476,7 @@ class _StreamTail:
                     self._feed(decoder.decode(chunk))
             self._feed(decoder.decode(b"", final=True))
             if self._line:
-                self._take(self._line)
+                self._take(self._line, self._continued)
         except Exception as error:  # kept for the caller: a thread's exception would only print
             self.error = error
 
@@ -473,21 +484,32 @@ class _StreamTail:
         if not text:
             return
         self.seen = True
-        self.tail = (self.tail + text)[-_TAIL_CHARS:]
+        if stripped := text.rstrip():
+            self._text = (self._text + self._trailing + stripped)[-_TAIL_CHARS:]
+            self._trailing = text[len(stripped) :]
+        else:
+            self._trailing = (self._trailing + text)[-_TAIL_CHARS:]
         if self.excerpt is not None and len(self.excerpt) == _EXCERPT_LINES:
             return  # the excerpt is complete, and so is `head`: from here only the tail changes
         *lines, self._line = (self._line + text).split("\n")
         for line in lines:
-            self._take(line)
-        # A line with no end in sight is taken a piece at a time. Each piece overlaps the next by
-        # one character less than the marker, so a marker cut in two is still found whole.
+            self._take(line, self._continued)
+            self._continued = False
+        # A line with no end in sight is taken a piece at a time, the pieces counting as one line.
+        # Each overlaps the next by one character less than the marker, so a cut marker is found.
         while len(self._line) > _LINE_CHARS:
-            self._take(self._line[:_LINE_CHARS])
+            self._take(self._line[:_LINE_CHARS], self._continued)
+            self._continued = True
             self._line = self._line[_LINE_CHARS - len(_SCRIPT_ERROR_MARKER) + 1 :]
 
-    def _take(self, line: str) -> None:
+    def _take(self, line: str, continued: bool) -> None:
         # `or [""]`: an empty line is still a line, as it is in `splitlines` of the whole stream.
         for piece in line.splitlines() or [""]:
+            if continued:  # more of a line already kept, so it can only start the excerpt
+                continued = False
+                if self.excerpt is None and _SCRIPT_ERROR_MARKER in piece:
+                    self.excerpt = [piece]
+                continue
             if len(self.head) < _EXCERPT_LINES - 1:
                 self.head.append(piece)
             if self.excerpt is None:
@@ -499,12 +521,10 @@ class _StreamTail:
 
 def _joined_excerpt(out: _StreamTail, err: _StreamTail) -> str:
     """`script_error_excerpt` of stdout and stderr joined by a newline, rebuilt from the two tails.
-    That newline adds an empty line after a stdout that ends in a line break, unless the break is a
-    bare ``\\r``, which it completes into ``\\r\\n``."""
+    That newline adds an empty line after a stdout that ends in a line break."""
     if out.excerpt is None:
         return "\n".join(err.excerpt or []).strip()
-    last = out.tail[-1:]
-    bridge = [""] if last != "\r" and last.splitlines() == [""] else []
+    bridge = [""] if out.tail[-1:].splitlines() == [""] else []
     return "\n".join([*out.excerpt, *bridge, *err.head][:_EXCERPT_LINES]).strip()
 
 
@@ -516,14 +536,13 @@ def _run_keeping_tails(
     the budget, and ``RuntimeError`` if a stream could not be read, since it could hide a marker."""
     process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     streams = (_StreamTail(), _StreamTail())
-    readers = [
-        threading.Thread(target=stream.drain, args=(pipe,), daemon=True)
-        for stream, pipe in zip(streams, (process.stdout, process.stderr), strict=True)
-    ]
-    for reader in readers:
-        reader.start()
+    readers: list[threading.Thread] = []
     deadline = time.monotonic() + budget
     try:
+        for stream, pipe in zip(streams, (process.stdout, process.stderr), strict=True):
+            reader = threading.Thread(target=stream.drain, args=(pipe,), daemon=True)
+            reader.start()
+            readers.append(reader)
         process.wait(timeout=budget)
         for reader in readers:
             reader.join(max(0.0, deadline - time.monotonic()))

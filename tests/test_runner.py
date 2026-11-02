@@ -1,12 +1,16 @@
 """Tests for the runner interface + JUnit-XML parsing."""
 
 import math
+import subprocess
 import sys
+import threading
 import time
 import tracemalloc
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 from xml.etree.ElementTree import ParseError
 
 import pytest
@@ -408,14 +412,92 @@ def test_command_runner_excerpt_matches_the_whole_output_one(
     tmp_path: Path, stdout: str, stderr: str
 ) -> None:
     # The excerpt rebuilt from both tails must equal `script_error_excerpt` of the joined output,
-    # including where stdout's excerpt carries on into stderr.
+    # with newlines translated, including where stdout's excerpt carries on into stderr.
     script = (
         "import sys\n"
         f"sys.stdout.buffer.write({stdout.encode()!r})\n"
         f"sys.stderr.buffer.write({stderr.encode()!r})\n"
     )
     result = CommandRunner(_runs(script)).run(str(tmp_path))
-    assert result.runtime_error == script_error_excerpt(f"{stdout}\n{stderr}")
+    out, err = (s.replace("\r\n", "\n").replace("\r", "\n") for s in (stdout, stderr))
+    assert result.runtime_error == script_error_excerpt(f"{out}\n{err}")
+
+
+def test_command_runner_trailing_whitespace_does_not_push_out_the_detail(tmp_path: Path) -> None:
+    script = "import sys; sys.stderr.write('X' * 3000 + ' ' * 3500); sys.exit(1)"
+    assert CommandRunner(_runs(script)).run(str(tmp_path)).detail == "X" * 2000
+
+
+@pytest.mark.parametrize("brk", ["\\n", "\\x0b"])
+def test_command_runner_keeps_the_at_line_after_a_long_script_error_line(
+    tmp_path: Path, brk: str
+) -> None:
+    # The long line arrives over several reads, so it is taken in pieces; they count as one line.
+    # "\x0b" is a line break to `splitlines` only, so it ends the line inside its last piece.
+    script = (
+        "import sys, time\n"
+        "sys.stdout.write('SCRIPT ERROR: ' + 'x' * 20000)\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(0.3)\n"
+        f"sys.stdout.write('{brk}   at: res://player.gd:42\\n')\n"
+    )
+    result = CommandRunner(_runs(script)).run(str(tmp_path))
+    assert result.runtime_error is not None
+    assert result.runtime_error.splitlines()[1:] == ["   at: res://player.gd:42"]
+
+
+def test_command_runner_finds_a_marker_late_in_a_long_line(tmp_path: Path) -> None:
+    script = (
+        "import sys, time\n"
+        "sys.stdout.write('x' * 20000)\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(0.3)\n"
+        "sys.stdout.write('SCRIPT ERROR: late\\n   at: res://a.gd:1\\n')\n"
+    )
+    result = CommandRunner(_runs(script)).run(str(tmp_path))
+    assert result.runtime_error is not None
+    assert result.runtime_error.endswith("SCRIPT ERROR: late\n   at: res://a.gd:1")
+
+
+def test_command_runner_translates_windows_line_endings(tmp_path: Path) -> None:
+    # Also a "\r\n" split across two reads, which must not turn into two line breaks.
+    script = (
+        "import sys, time\n"
+        "sys.stderr.buffer.write(b'a\\r\\nb\\rc\\r')\n"
+        "sys.stderr.flush()\n"
+        "time.sleep(0.3)\n"
+        "sys.stderr.buffer.write(b'\\nd')\n"
+        "sys.exit(1)\n"
+    )
+    assert CommandRunner(_runs(script)).run(str(tmp_path)).detail == "a\nb\nc\nd"
+
+
+def test_command_runner_kills_the_command_when_a_reader_cannot_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: list[subprocess.Popen[bytes]] = []
+    popen = subprocess.Popen
+
+    def recording_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        started.append(popen(*args, **kwargs))
+        return started[-1]
+
+    class SecondFails(threading.Thread):
+        count = 0
+
+        def start(self) -> None:
+            SecondFails.count += 1
+            if SecondFails.count == 2:
+                raise RuntimeError("can't start new thread")
+            super().start()
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(runner_mod, "threading", SimpleNamespace(Thread=SecondFails))
+    began = time.monotonic()
+    with pytest.raises(RuntimeError, match="can't start new thread"):
+        CommandRunner(_runs("import time; time.sleep(30)")).run(str(tmp_path))
+    assert started[0].poll() is not None
+    assert time.monotonic() - began < 15  # killed, not waited out
 
 
 def test_command_runner_detail_prefers_stderr_even_when_it_is_only_whitespace(
