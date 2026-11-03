@@ -4497,7 +4497,7 @@ def test_an_exclusion_that_matches_no_test_file_is_warned_about(
         "slow_test",  # the file's name
         "res://test/full/",  # part of its path
         "slow_test:test_slow",  # one test in it
-        "full_gam_test",  # a typo
+        "full_gam_test",  # names no suite file, so it warns
         "other_test:test_slow",  # a test in a suite that isn't there
     ]
     args = ["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4"]
