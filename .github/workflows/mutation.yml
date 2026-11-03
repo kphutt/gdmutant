@@ -89,9 +89,11 @@ jobs:
   mutation:
     name: Mutation testing (mutmut) — baseline must succeed, score is advisory
     runs-on: ubuntu-24.04
-    # A full sweep should take about 37 minutes: on 2026-11-02 it reached 6257 of 7684 mutants when a
-    # 30 minute limit stopped it. An hour leaves room for the mutant count to keep growing.
-    timeout-minutes: 60
+    # A full sweep took 73 minutes 17 seconds on 2026-11-03: about 48 seconds to generate the mutants,
+    # 13 minutes to collect stats, and 59 minutes to test them, the last 558 of 7730 taking 35. An
+    # earlier 37 minute guess left out the stats phase and that slow tail. 90 minutes leaves room
+    # for the mutant count to keep growing.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
