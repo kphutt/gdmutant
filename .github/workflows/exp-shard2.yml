@@ -121,7 +121,6 @@ jobs:
           name: baseline2
           path: baseline
       - name: Merge per-file meta files
-        env:
         run: |
           for d in shards/meta-${{ inputs.label }}-*; do n=${d##*-}; mv "$d" "shards/meta-$n"; done
           python3 .github/exp/merge2.py shards

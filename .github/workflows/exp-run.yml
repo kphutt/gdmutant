@@ -1,9 +1,7 @@
 name: Experiment - sweep
 # Throwaway. Runs on pushes to exp/mutmut-cache that touch this file.
 on:
-  push:
-    branches: [exp/mutmut-cache]
-    paths: [.github/workflows/exp-run.yml, ".github/exp/**"]
+  workflow_dispatch:
 
 permissions:
   contents: read
