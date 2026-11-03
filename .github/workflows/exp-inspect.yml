@@ -1,0 +1,42 @@
+name: Experiment - inspect baseline cache
+on:
+  push:
+    branches: [exp/mutmut-cache]
+    paths: [.github/workflows/exp-inspect.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        key: [mutmut-cache-Linux-41665692646, exp2-full-deselect-41692220508]
+    steps:
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: mutants
+          key: ${{ matrix.key }}
+          fail-on-cache-miss: true
+      - name: Inventory
+        run: |
+          du -sh mutants
+          find mutants -type f -newer mutants/pyproject.toml | grep -v '\.meta$' | head -100
+          echo ---top-level
+          ls -la mutants
+          echo ---non-source-files
+          find mutants -type f | grep -v -E '^mutants/(gdmutant|tests|corpus|docs|scripts|\.github)/' | head -50
+          echo ---git
+          find mutants -name '.git' -o -name '*.lock' | head
+          echo ---counts
+          for d in gdmutant tests corpus docs scripts .github; do echo "$d $(find mutants/$d -type f | wc -l)"; done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: inspect-${{ matrix.key }}
+          path: |
+            mutants/**/*.meta
+            mutants/mutmut-stats.json
+          retention-days: 3
