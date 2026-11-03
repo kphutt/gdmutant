@@ -3,7 +3,7 @@ name: Experiment - sweep
 on:
   push:
     branches: [exp/mutmut-cache]
-    paths: [.github/workflows/exp-run.yml]
+    paths: [.github/workflows/exp-run.yml, ".github/exp/**"]
 
 permissions:
   contents: read
