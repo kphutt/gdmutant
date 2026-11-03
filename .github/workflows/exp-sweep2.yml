@@ -1,5 +1,5 @@
 name: Experiment - sweep 2
-# Throwaway. Per-function shards planned from the unsharded run's per-mutant durations.
+# Throwaway (rev 2). Per-function shards planned from the unsharded run's per-mutant durations.
 on:
   push:
     branches: [exp/mutmut-cache]
