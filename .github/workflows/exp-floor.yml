@@ -92,3 +92,17 @@ jobs:
           python3 .github/exp/backdate.py
           uv run python .github/exp/timed.py uv run mutmut run "gdmutant.engine.coverage.x_uncovered__mutmut_*"
           uv run mutmut tests-for-mutant gdmutant.engine.coverage.x_uncovered__mutmut_1 | wc -l | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: 7. same function edited again, glob without the mutant suffix so the clean run is limited to its tests
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path("gdmutant/engine/coverage.py")
+          s = p.read_text()
+          old = "if (spot is not None) and spot not in hits"
+          assert old in s
+          p.write_text(s.replace(old, "if ((spot is not None)) and spot not in hits"))
+          PY
+          python3 .github/exp/backdate.py
+          uv run python .github/exp/timed.py uv run mutmut run "gdmutant.engine.coverage.x_uncovered*"
