@@ -33,6 +33,13 @@ jobs:
           find mutants -name '.git' -o -name '*.lock' | head
           echo ---counts
           for d in gdmutant tests corpus docs scripts .github; do echo "$d $(find mutants/$d -type f | wc -l)"; done
+      - name: Leaked files
+        run: |
+          cd mutants
+          ls -laR reports
+          for f in .gdmutant.toml None gdmutant-hello-world.gd "func f(a, b) -> bool:"*; do echo "=== $f"; cat "$f"; echo; done
+          echo "=== - (head)"; head -c 1500 -- -
+          find reports -type f -exec sh -c 'echo "=== {}"; head -c 1500 "{}"; echo' \;
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: inspect-${{ matrix.key }}
