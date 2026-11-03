@@ -1,0 +1,76 @@
+name: Experiment - baseline replay
+
+# Throwaway experiment: does restoring mutmut's mutants/ directory make a rerun test only the
+# changed functions? Runs only on pushes to exp/mutmut-cache.
+on:
+  push:
+    branches: [exp/mutmut-cache]
+    paths: [.github/workflows/exp-replay.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # mutmut diffs against the commit recorded in its cache
+          ref: c6362c60c16c21b5c43ce9375298510e415c584d
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.14.0"
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install deps (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Run mutmut
+        env:
+          PYTHONUNBUFFERED: "1"
+          CACHE_HIT: none
+        run: |
+          start=$(date +%s)
+          uv run mutmut run 2>&1 | tee mutmut-run.log || true
+          end=$(date +%s)
+          uv run mutmut export-cicd-stats || true
+          {
+            echo "## mutmut cache experiment"
+            echo
+            echo "- Restored cache key: \`${CACHE_HIT:-none}\`"
+            echo "- mutmut run wall time: $((end - start)) s"
+            echo "- Generation line: $(grep -m1 'files mutated' mutmut-run.log || echo n/a)"
+            echo "- Warnings about changed files: $(grep -c 'non-Python file' mutmut-run.log || true)"
+            echo
+            echo '```json'
+            cat mutants/mutmut-cicd-stats.json 2>/dev/null || echo '{}'
+            echo
+            echo '```'
+            echo
+            echo "Last progress line (tested/total):"
+            echo '```'
+            tr '\r' '\n' < mutmut-run.log | grep -E '^[0-9]+/[0-9]+ ' | tail -1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: replay-meta
+          path: |
+            mutants/**/*.meta
+            mutants/mutmut-stats.json
+            mutmut-run.log
+          retention-days: 3
