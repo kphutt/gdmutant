@@ -1,5 +1,8 @@
+# ruff: noqa
 """merge.py PLAN_N_JSON SHARDS_DIR : overlay each shard's own .meta files onto mutants/ (already holds shard 0 tree)."""
+
 import json, shutil, sys, pathlib
+
 inc = json.loads(sys.argv[1])["include"]
 root = pathlib.Path(sys.argv[2])
 for s in inc:
