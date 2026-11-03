@@ -12,13 +12,16 @@ for m in sorted(pathlib.Path("mutants").rglob("*.meta")):
     src = str(m.relative_to("mutants"))[:-5].replace("\\", "/")
     dur = sum(v for v in meta["durations_by_key"].values() if v)
     glob = keys[0].rsplit(".", 1)[0] + ".*"
-    files[src] = dict(n=len(keys), dur=dur, glob=glob, keys=keys)
+    globs = [glob]
+    if src.endswith("/__init__.py"):
+        globs = sorted({k.rsplit("__mutmut_", 1)[0] + "__mutmut_*" for k in keys})
+    files[src] = dict(n=len(keys), dur=dur, glob=glob, globs=globs, keys=keys)
 allkeys = [k for f in files.values() for k in f["keys"]]
 for f in files.values():
     for k in f["keys"]:
-        assert fnmatch.fnmatch(k, f["glob"]), (k, f["glob"])
+        assert any(fnmatch.fnmatch(k, g) for g in f["globs"]), (k, f["globs"])
 for k in allkeys:
-    hits = [s for s, f in files.items() if fnmatch.fnmatch(k, f["glob"])]
+    hits = [s for s, f in files.items() if any(fnmatch.fnmatch(k, g) for g in f["globs"])]
     assert len(hits) == 1, (k, hits)
 print(
     "files",
@@ -38,7 +41,7 @@ def pack(n):
         b = min(bins, key=lambda b: b["dur"])
         b["dur"] += f["dur"]
         b["cnt"] += f["n"]
-        b["globs"].append(f["glob"])
+        b["globs"].extend(f["globs"])
         b["files"].append(s)
     return bins
 
@@ -71,10 +74,10 @@ for m in pathlib.Path("mutants").rglob("*.meta"):
     base.update(json.loads(m.read_text())["exit_code_by_key"])
 pathlib.Path("baseline-verdicts.json").write_text(json.dumps(base))
 smallest = min(files.values(), key=lambda f: f["n"])
-pathlib.Path("prep-glob.txt").write_text(smallest["glob"])
+pathlib.Path("prep-glob.txt").write_text(smallest["globs"][0])
 go = os.environ["GITHUB_OUTPUT"]
 with open(go, "a") as fh:
     fh.write("m4=" + json.dumps(res["4"]) + "\n")
     fh.write("m8=" + json.dumps(res["8"]) + "\n")
     fh.write("m16=" + json.dumps(res["16"]) + chr(10))
-    fh.write("prep=" + smallest["glob"] + "\n")
+    fh.write("prep=" + smallest["globs"][0] + "\n")
