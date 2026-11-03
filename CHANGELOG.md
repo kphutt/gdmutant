@@ -81,12 +81,12 @@ All notable changes to gdmutant are recorded here. The format follows
   `--jobs 1` reported 2 survivors and `--jobs 4` reported none, with no warning. The baseline now
   runs in the same kind of isolated copy the workers get.
 
-- A file's progress now ends on its true final count, printed once (#NNN). When the file's last
+- A file's progress now ends on its true final count, printed once (#345). When the file's last
   mutant did not parse, the progress line could end on `1/2` instead of `1/1`, and a file's final
   count could print twice in a row.
 
 - `--jobs N` with one source file outside `--project` is now refused before the baseline runs,
-  the same as with several files (#NNN). Before, it was refused only after the baseline had run,
+  the same as with several files (#346). Before, it was refused only after the baseline had run,
   and not at all when the file had no mutants.
 
 ## [0.1.4] - 2026-10-03
