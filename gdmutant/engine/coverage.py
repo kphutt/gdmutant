@@ -273,7 +273,7 @@ def uncovered(placements: Sequence[int | None], hits: frozenset[int]) -> frozens
     A ``None`` placement is never "no coverage": no marker could say whether it runs, so it
     always runs the whole suite."""
     return frozenset(
-        index for index, spot in enumerate(placements) if spot is not None and spot not in hits
+        index for index, spot in enumerate(placements) if spot not in hits and spot is not None
     )
 
 
