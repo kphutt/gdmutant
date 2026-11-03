@@ -567,6 +567,19 @@ def test_format_duration_scales_seconds_minutes_hours() -> None:
     assert _format_duration(3780) == "1h 3m"
 
 
+def test_format_duration_switches_to_hours_exactly_at_one_hour() -> None:
+    # Pins the `minutes < 60` switch from both sides, so a shifted or loosened comparison
+    # (`< 59`, `<= 58`, `<= 60`) changes an answer here.
+    assert _format_duration(3539) == "58m 59s"
+    assert _format_duration(3540) == "59m 0s"
+    assert _format_duration(3599) == "59m 59s"
+    assert _format_duration(3599.4) == "59m 59s"
+    assert _format_duration(3599.6) == "1h 0m"  # rounds up across the boundary
+    assert _format_duration(3600) == "1h 0m"
+    assert _format_duration(3601) == "1h 0m"  # seconds drop out once hours show
+    assert _format_duration(3660) == "1h 1m"
+
+
 def test_progress_plan_states_the_work_without_forecasting() -> None:
     # The pre-run line is facts only: what will run, nothing about how long it will take. It used to
     # also state the baseline wall-clock and the per-mutant timeout cap, as the fact that paced the
