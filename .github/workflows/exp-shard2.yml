@@ -1,0 +1,142 @@
+name: Experiment - shard, per-function split (reusable)
+on:
+  workflow_call:
+    inputs:
+      matrix:
+        type: string
+        required: true
+      label:
+        type: string
+        required: true
+      prep_glob:
+        type: string
+        default: ""
+      shared_stats:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  prep:
+    if: ${{ inputs.shared_stats }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/exp-setup
+        with:
+          deselect: "yes"
+      - name: Prep (generation + stats once, tiny glob)
+        env:
+          PYTHONUNBUFFERED: "1"
+          GLOB: ${{ inputs.prep_glob }}
+        run: uv run python .github/exp/timed.py uv run mutmut run "$GLOB"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: prep-${{ inputs.label }}
+          path: mutants
+          include-hidden-files: true
+          retention-days: 3
+
+  shard:
+    needs: [prep]
+    if: ${{ !cancelled() && (needs.prep.result == 'success' || needs.prep.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/exp-setup
+        with:
+          deselect: "yes"
+      - name: Log cpu
+        run: lscpu | grep -E "Model name|^CPU\(s\)|Thread|Core|Socket" || true
+      - name: Restore shared stats
+        if: ${{ inputs.shared_stats }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: prep-${{ inputs.label }}
+          path: mutants
+      - name: Run shard
+        env:
+          PYTHONUNBUFFERED: "1"
+          GLOBS: ${{ matrix.globs }}
+        run: |
+          eval "set -- $GLOBS"
+          echo "shard ${{ matrix.shard }} globs: $#"
+          uv run python .github/exp/timed.py uv run mutmut run "$@"
+      - name: Collect meta files
+        if: always()
+        run: |
+          mkdir -p out
+          (cd mutants && find . -name '*.meta' -exec cp --parents {} ../out \;) || true
+          python3 .github/exp/verdicts.py out/verdicts.json || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: meta-${{ inputs.label }}-${{ matrix.shard }}
+          path: out
+          retention-days: 3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ matrix.shard == 0 }}
+        with:
+          name: tree-${{ inputs.label }}
+          path: mutants
+          include-hidden-files: true
+          retention-days: 3
+
+  merge:
+    needs: [shard]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/exp-setup
+        with:
+          deselect: "yes"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tree-${{ inputs.label }}
+          path: mutants
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: meta-${{ inputs.label }}-*
+          path: shards
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: baseline2
+          path: baseline
+      - name: Merge per-file meta files
+        env:
+        run: |
+          for d in shards/meta-${{ inputs.label }}-*; do n=${d##*-}; mv "$d" "shards/meta-$n"; done
+          python3 .github/exp/merge2.py shards
+      - name: Totals and comparison
+        run: |
+          uv run mutmut export-cicd-stats
+          { echo '```json'; cat mutants/mutmut-cicd-stats.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          python3 .github/exp/verdicts.py merged.json | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 .github/exp/compare.py baseline/baseline-verdicts.json merged.json
+      - name: Save merged cache
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: mutants
+          key: exp2-${{ inputs.label }}-${{ github.run_id }}
+      - name: Cached rerun of the merged cache (no changes)
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: uv run python .github/exp/timed.py uv run mutmut run

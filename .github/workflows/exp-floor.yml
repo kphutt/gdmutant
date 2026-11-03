@@ -1,0 +1,79 @@
+name: Experiment - cached rerun floor
+on:
+  push:
+    branches: [exp/mutmut-cache]
+    paths: [.github/workflows/exp-floor.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  floor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/exp-setup
+        with:
+          deselect: "yes"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: mutants
+          key: none-never-matches
+          restore-keys: |
+            exp2-full-deselect-
+      - name: 1. restored cache, nothing changed, plain run
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: uv run python .github/exp/timed.py uv run mutmut run
+      - name: 2. same, after backdating unchanged sources (git diff against the cached commit)
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python3 .github/exp/backdate.py
+          uv run python .github/exp/timed.py uv run mutmut run
+      - name: 3. one low-fan-in function edited (as in the earlier run), backdated
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path("gdmutant/engine/coverage.py")
+          s = p.read_text()
+          old = "if spot is not None and spot not in hits"
+          assert old in s
+          p.write_text(s.replace(old, "if spot not in hits and spot is not None"))
+          PY
+          python3 .github/exp/backdate.py
+          uv run python .github/exp/timed.py uv run mutmut run
+      - name: 4. one high-fan-in function edited (text_at), backdated
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path("gdmutant/engine/spans.py")
+          s = p.read_text()
+          old = "    return lines[index][start:end]\n"
+          assert old in s
+          p.write_text(s.replace(old, "    return (lines[index])[start:end]\n", 1))
+          PY
+          python3 .github/exp/backdate.py
+          uv run python .github/exp/timed.py uv run mutmut run
+      - name: 5. another edit, limited to that function with a mutant-name glob
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path("gdmutant/engine/spans.py")
+          s = p.read_text()
+          old = "    return (lines[index])[start:end]\n"
+          assert old in s
+          p.write_text(s.replace(old, "    return ((lines[index]))[start:end]\n", 1))
+          PY
+          python3 .github/exp/backdate.py
+          uv run python .github/exp/timed.py uv run mutmut run "gdmutant.engine.spans.x_text_at__mutmut_*"

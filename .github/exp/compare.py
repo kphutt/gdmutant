@@ -5,6 +5,8 @@ import json, sys, os
 
 a = json.load(open(sys.argv[1]))
 b = json.load(open(sys.argv[2]))
+if "--ran-only" in sys.argv:
+    b = {k: v for k, v in b.items() if v is not None}
 common = a.keys() & b.keys()
 diff = sorted(k for k in common if a[k] != b[k])
 msg = [

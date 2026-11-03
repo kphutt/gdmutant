@@ -1,0 +1,77 @@
+name: Experiment - sweep 2
+# Throwaway. Per-function shards planned from the unsharded run's per-mutant durations.
+on:
+  push:
+    branches: [exp/mutmut-cache]
+    paths: [.github/workflows/exp-sweep2.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      m8: ${{ steps.p.outputs.m8 }}
+      m12: ${{ steps.p.outputs.m12 }}
+      m16: ${{ steps.p.outputs.m16 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: mutants
+          key: none-never-matches
+          restore-keys: |
+            exp2-full-deselect-
+      - id: p
+        run: python3 .github/exp/plan2.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: baseline2
+          path: baseline2
+          retention-days: 3
+
+  shard8:
+    needs: [plan]
+    uses: ./.github/workflows/exp-shard2.yml
+    with: { matrix: "${{ needs.plan.outputs.m8 }}", label: f8 }
+
+  shard12:
+    needs: [plan]
+    uses: ./.github/workflows/exp-shard2.yml
+    with: { matrix: "${{ needs.plan.outputs.m12 }}", label: f12 }
+
+  shard16:
+    needs: [plan]
+    uses: ./.github/workflows/exp-shard2.yml
+    with: { matrix: "${{ needs.plan.outputs.m16 }}", label: f16 }
+
+  children:
+    needs: [plan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        children: [2, 3, 4, 6]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/exp-setup
+        with:
+          deselect: "yes"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: baseline2
+          path: baseline
+      - name: Same subset at different max-children
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          uv run python .github/exp/timed.py uv run mutmut run --max-children ${{ matrix.children }} "gdmutant.engine.report.*" "gdmutant.engine.htmlreport.*" "gdmutant.engine.explain.*"
+          python3 .github/exp/verdicts.py sub.json | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 .github/exp/compare.py baseline/baseline-verdicts.json sub.json --ran-only
