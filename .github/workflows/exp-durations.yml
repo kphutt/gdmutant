@@ -1,0 +1,25 @@
+name: Experiment - durations
+on:
+  push:
+    branches: [exp/mutmut-cache]
+    paths: [.github/workflows/exp-durations.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  durations:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/exp-setup
+      - name: Log cpu
+        run: lscpu | grep -E "Model name|^CPU\(s\)|Thread|Core|Socket" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Whole suite, shrunk flood test, top durations
+        run: |
+          start=$(date +%s)
+          uv run pytest --no-cov -p no:cacheprovider -q --durations=15 -x 2>&1 | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "suite wall: $(( $(date +%s) - start )) s" | tee -a "$GITHUB_STEP_SUMMARY"
