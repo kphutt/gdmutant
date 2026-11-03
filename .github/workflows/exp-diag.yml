@@ -1,0 +1,33 @@
+name: Experiment - diagnose verdict drift
+on:
+  push:
+    branches: [exp/mutmut-cache]
+    paths: [.github/workflows/exp-diag.yml, .github/exp/diag.py]
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [shrunk, original]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/exp-setup
+      - name: Use the pre-shrink flood test
+        if: ${{ matrix.variant == 'original' }}
+        run: git checkout 43cf423 -- tests/test_runner.py
+      - name: Run three drifting function families
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          uv run python .github/exp/timed.py uv run mutmut run "gdmutant.cli.x__changed_lines__mutmut_*" "gdmutant.adapters.gdscript.x_is_valid_gdscript__mutmut_*" "gdmutant.adapters.gdscript.x__span_of__mutmut_*"
+          { echo '```'; python3 .github/exp/diag.py _changed_lines is_valid_gdscript _span_of; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+          { echo tests-for-mutant; uv run mutmut tests-for-mutant gdmutant.cli.x__changed_lines__mutmut_33 | head -30; } | tee -a "$GITHUB_STEP_SUMMARY"
