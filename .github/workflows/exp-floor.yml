@@ -43,9 +43,9 @@ jobs:
           import pathlib
           p = pathlib.Path("gdmutant/engine/coverage.py")
           s = p.read_text()
-          old = "if spot is not None and spot not in hits"
+          old = "if spot not in hits and spot is not None"
           assert old in s
-          p.write_text(s.replace(old, "if spot not in hits and spot is not None"))
+          p.write_text(s.replace(old, "if spot is not None and spot not in hits"))
           PY
           python3 .github/exp/backdate.py
           uv run python .github/exp/timed.py uv run mutmut run
