@@ -1,0 +1,57 @@
+name: Experiment - unsharded full run (reusable)
+on:
+  workflow_call:
+    inputs:
+      label:
+        type: string
+        required: true
+      deselect:
+        type: string
+        default: "no"
+      max_children:
+        type: string
+        default: ""
+      save_cache:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  full:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/exp-setup
+        with:
+          deselect: ${{ inputs.deselect }}
+      - name: Log cpu
+        run: lscpu | grep -E "Model name|^CPU\(s\)|Thread|Core|Socket" || true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: baseline
+          path: baseline
+      - name: Run mutmut (fresh, no cache)
+        env:
+          PYTHONUNBUFFERED: "1"
+          MC: ${{ inputs.max_children }}
+        run: |
+          if [ -n "$MC" ]; then uv run python .github/exp/timed.py uv run mutmut run --max-children "$MC"
+          else uv run python .github/exp/timed.py uv run mutmut run; fi
+      - name: Totals and comparison
+        run: |
+          uv run mutmut export-cicd-stats
+          { echo '```json'; cat mutants/mutmut-cicd-stats.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          python3 .github/exp/verdicts.py full.json | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 .github/exp/compare.py baseline/baseline-verdicts.json full.json
+      - name: Save cache
+        if: ${{ inputs.save_cache }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: mutants
+          key: exp2-${{ inputs.label }}-${{ github.run_id }}

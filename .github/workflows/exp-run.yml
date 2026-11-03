@@ -1,0 +1,67 @@
+name: Experiment - sweep
+# Throwaway. Runs on pushes to exp/mutmut-cache that touch this file.
+on:
+  push:
+    branches: [exp/mutmut-cache]
+    paths: [.github/workflows/exp-run.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      m4: ${{ steps.p.outputs.m4 }}
+      m8: ${{ steps.p.outputs.m8 }}
+      m16: ${{ steps.p.outputs.m16 }}
+      prep: ${{ steps.p.outputs.prep }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: mutants
+          key: none-never-matches
+          restore-keys: |
+            mutmut-cache-Linux-
+      - id: p
+        run: |
+          python3 .github/exp/plan.py | tee -a "$GITHUB_STEP_SUMMARY"
+          mkdir -p baseline && cp baseline-verdicts.json plan.json baseline/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: baseline
+          path: baseline
+          retention-days: 3
+
+  full-shrink:
+    needs: [plan]
+    uses: ./.github/workflows/exp-full.yml
+    with: { label: full-shrink }
+
+  full-shrink-deselect:
+    needs: [plan]
+    uses: ./.github/workflows/exp-full.yml
+    with: { label: full-deselect, deselect: "yes", save_cache: true }
+
+  shard4:
+    needs: [plan]
+    uses: ./.github/workflows/exp-shard.yml
+    with: { matrix: "${{ needs.plan.outputs.m4 }}", label: s4 }
+
+  shard4-shared-stats:
+    needs: [plan]
+    uses: ./.github/workflows/exp-shard.yml
+    with: { matrix: "${{ needs.plan.outputs.m4 }}", label: s4ss, shared_stats: true, prep_glob: "${{ needs.plan.outputs.prep }}" }
+
+  shard8:
+    needs: [plan]
+    uses: ./.github/workflows/exp-shard.yml
+    with: { matrix: "${{ needs.plan.outputs.m8 }}", label: s8 }
+
+  shard16:
+    needs: [plan]
+    uses: ./.github/workflows/exp-shard.yml
+    with: { matrix: "${{ needs.plan.outputs.m16 }}", label: s16 }

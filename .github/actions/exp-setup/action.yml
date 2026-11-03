@@ -1,0 +1,43 @@
+name: exp-setup
+description: Experiment setup (python, uv, deps, optional config variant)
+inputs:
+  deselect:
+    description: "yes to deselect the four zero-mutant tests via pytest_add_cli_args_test_selection"
+    default: "no"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: "3.12"
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: "22.14.0"
+    - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      with:
+        version: "0.11.28"
+        enable-cache: true
+    - name: Install deps
+      shell: bash
+      run: uv sync --frozen
+    - name: Config variant
+      shell: bash
+      env:
+        DESELECT: ${{ inputs.deselect }}
+      run: |
+        echo "nproc=$(nproc)"; echo "nproc: $(nproc)" >> "$GITHUB_STEP_SUMMARY"
+        if [ "$DESELECT" = "yes" ]; then
+          python3 - <<'PY'
+        import re, pathlib
+        p = pathlib.Path("pyproject.toml")
+        s = p.read_text()
+        sel = ['"--deselect", "tests/test_no_em_dashes_in_source.py::test_no_em_dash_in_a_gdmutant_source_string"',
+               '"--deselect", "tests/test_subprocess_decoding.py::test_the_scan_reaches_the_files_that_read_external_tool_output"',
+               '"--deselect", "tests/test_subprocess_decoding.py::test_every_capturing_subprocess_call_decodes_explicitly"',
+               '"--deselect", "tests/test_check_mutation_baseline_cap.py::test_count_mutants_per_file_matches_a_real_poodle_generation_pass"']
+        s = s.replace('pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]',
+                      'pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]\npytest_add_cli_args_test_selection = [' + ", ".join(sel) + ']')
+        assert "test_selection" in s
+        p.write_text(s)
+        PY
+        fi
