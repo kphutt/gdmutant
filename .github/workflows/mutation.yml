@@ -90,9 +90,9 @@ jobs:
     name: Mutation testing (mutmut) — baseline must succeed, score is advisory
     runs-on: ubuntu-24.04
     # A full sweep took 73 minutes 17 seconds on 2026-11-03: about 48 seconds to generate the mutants,
-    # 13 minutes to collect stats, and 59 minutes to test them, the last 558 of 7730 taking 35. An
-    # earlier 37 minute guess left out the stats phase and that slow tail. 90 minutes leaves room
-    # for the mutant count to keep growing.
+    # 8 minutes to collect stats, 5 minutes for a clean test run, and 59 minutes to test the mutants,
+    # the last 558 of 7730 taking 39. An earlier 37 minute guess left out the stats phase and that
+    # slow tail. 90 minutes leaves room for the mutant count to keep growing.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
