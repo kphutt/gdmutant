@@ -250,7 +250,7 @@ def test_every_capturing_subprocess_call_decodes_explicitly() -> None:
     )
 
 
-def test_the_scan_reaches_all_three_places_it_is_meant_to_cover() -> None:
+def test_the_scan_reaches_the_files_that_read_external_tool_output() -> None:
     # Anti-vacuity. The check above passes just as happily when the scan has stopped matching
     # anything, so name the files that must be in its reach: one per directory, each a place where a
     # real external binary's output is read. If a rename empties the scan, this fails instead.
