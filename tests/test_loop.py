@@ -2550,6 +2550,17 @@ def test_explicit_jobs_refuses_a_file_outside_the_project_before_the_baseline(
     assert Path(inside).read_text(encoding="utf-8") == _POOL_SOURCES["a.gd"]
 
 
+def test_explicit_jobs_refuses_a_single_file_outside_the_project_before_the_baseline(
+    tmp_path: Path,
+) -> None:
+    # `run` and `run_paths` must refuse at the same point, before a baseline that can take minutes.
+    project, outside = _project_and_outside_source(tmp_path)
+    runner = ProjectDirRecordingRunner()
+    with pytest.raises(SourceOutsideProject):
+        run(str(project), str(outside), outside.read_text(encoding="utf-8"), runner, jobs=4)
+    assert runner.seen == []  # not even the baseline
+
+
 def test_jobs_auto_runs_a_file_outside_the_project_serially_and_pools_the_rest(
     tmp_path: Path,
 ) -> None:
