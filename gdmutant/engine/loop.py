@@ -575,6 +575,8 @@ class _Progress:
     file_timeouts: int = 0
     last_beat: float = 0.0
     last_beat_done: int = 0
+    #: The total the last line printed for this file named, or ``None`` before its first line.
+    last_beat_total: int | None = None
 
     def begin_file(self, total: int) -> None:
         """Start counting a new file's `total` runnable mutants."""
@@ -584,10 +586,18 @@ class _Progress:
         self.file_timeouts = 0
         self.last_beat = time.monotonic()
         self.last_beat_done = 0
+        self.last_beat_total = None
 
     def drop(self) -> None:
-        """Take one mutant out of the count: it turned out invalid, so it never runs."""
+        """Take one mutant out of the count: it turned out invalid, so it never runs.
+
+        A drop can come after the last mutant has run: serially when the file's last mutant is
+        the invalid one, and under ``--jobs`` whenever the feeder reaches it late. The line just
+        printed then reads n/(n+1), and no mutant is left to print a later one, so print it again.
+        """
         self.total -= 1
+        if self.done and self.done == self.total and self.last_beat_done == self.done:
+            self.beat(force=True)
 
     def record(self, verdict: Verdict, elapsed: float) -> None:
         """Tally one finished mutant and the wall-clock it cost, then heartbeat if it is due."""
@@ -609,9 +619,12 @@ class _Progress:
         The forced beat is not decoration. Under `ProgressStyle.PLAIN` a whole file can finish
         inside one interval and emit nothing at all, leaving a log that never shows the work
         reaching its end — stryker-js#5929 is that exact bug, still open. Forcing one guarantees a
-        line at n/n for every file.
+        line at n/n for every file. It is skipped when the file's last line already says exactly
+        that, so a file ends on its final count once, whichever path printed it first.
         """
         if self.emit is None or self.style is ProgressStyle.NONE:
+            return
+        if force and (self.done, self.total) == (self.last_beat_done, self.last_beat_total):
             return
         now = time.monotonic()
         if not force:
@@ -624,6 +637,7 @@ class _Progress:
                 return
         self.last_beat = now
         self.last_beat_done = self.done
+        self.last_beat_total = self.total
         self.emit(self._heartbeat_line(now - self.started))
 
     def _heartbeat_line(self, elapsed: float) -> str:
@@ -729,6 +743,8 @@ def run(
     run against the whole suite as a standing check (``None`` runs them all). Raises
     `CoverageRunFailed` when that cannot be trusted. See `_coverage_pass`.
     """
+    if _runs_in_parallel(path, project_dir, jobs, jobs_auto):
+        _project_relative(path, project_dir)  # refuse a source with no place in the copies, now
     budget, baseline_tests = _run_baseline(
         project_dir,
         runner,

@@ -254,8 +254,12 @@ def _runs(script: str) -> list[str]:
     return [sys.executable, "-c", script]
 
 
-#: How much each flood test prints: far more than the runner may hold, so a regression to holding
-#: the whole output shows up as a peak many times the bound below.
+#: The most traced memory a flood test lets a run reach. Holding a bounded tail peaks far below it
+#: (about 0.6 MiB), however big the flood.
+_PEAK_BOUND = 4 * 1024 * 1024
+
+#: How much the two script-error flood tests print. They stay fast at this size: one has 1 MiB
+#: lines, and the other's lines are not split once its excerpt is complete.
 _FLOOD_MB = 64
 
 
@@ -272,12 +276,14 @@ def _peak_traced_bytes(run: Callable[[], SuiteResult]) -> tuple[SuiteResult, int
 
 def test_command_runner_holds_a_bounded_tail_of_a_flooded_output(tmp_path: Path) -> None:
     # A flooded output costs a fixed amount of memory, and the verdict and the end of the output
-    # survive.
+    # survive. Each stream prints the whole bound in short lines, so a run that held all of it
+    # would peak at about four times the bound. Short lines are slow to read, so the flood is no
+    # bigger than that.
+    lines = _PEAK_BOUND // len(b"stdout flood line\n")
     script = (
         "import sys\n"
-        f"for _ in range({_FLOOD_MB}):\n"
-        "    sys.stdout.buffer.write(b'stdout flood line\\n' * 58255)\n"
-        "    sys.stderr.buffer.write(b'stderr flood line\\n' * 58255)\n"
+        f"sys.stdout.buffer.write(b'stdout flood line\\n' * {lines})\n"
+        f"sys.stderr.buffer.write(b'stderr flood line\\n' * {lines})\n"
         "sys.stderr.write('the real reason\\n')\n"
         "sys.exit(1)\n"
     )
@@ -286,7 +292,7 @@ def test_command_runner_holds_a_bounded_tail_of_a_flooded_output(tmp_path: Path)
     assert (result.failures, result.errors) == (1, 0)
     assert result.detail.endswith("stderr flood line\nthe real reason")
     assert len(result.detail) == 2000
-    assert peak < 4 * 1024 * 1024, f"peak {peak} bytes for {2 * _FLOOD_MB} MB of output"
+    assert peak < _PEAK_BOUND, f"peak {peak} bytes for {2 * _PEAK_BOUND} bytes of output"
 
 
 def test_command_runner_still_finds_a_script_error_after_a_flood(tmp_path: Path) -> None:
@@ -309,7 +315,7 @@ def test_command_runner_still_finds_a_script_error_after_a_flood(tmp_path: Path)
         result.runtime_error
         == "SCRIPT ERROR: Nonexistent function\n   at: f (res://a.gd:3)\none\ntwo"
     )
-    assert peak < 4 * 1024 * 1024, f"peak {peak} bytes for {_FLOOD_MB} MB of output"
+    assert peak < _PEAK_BOUND, f"peak {peak} bytes for {_FLOOD_MB} MB of output"
 
 
 def test_command_runner_keeps_the_first_script_error_through_a_runaway_error_loop(
@@ -329,7 +335,7 @@ def test_command_runner_keeps_the_first_script_error_through_a_runaway_error_loo
     assert (result.failures, result.errors) == (0, 1)
     assert result.runtime_error == "SCRIPT ERROR: first\n   at: a.gd:1\none\ntwo"
     assert result.detail.endswith("SCRIPT ERROR: again\nthe end")
-    assert peak < 4 * 1024 * 1024, f"peak {peak} bytes for {_FLOOD_MB} MB of output"
+    assert peak < _PEAK_BOUND, f"peak {peak} bytes for {_FLOOD_MB} MB of output"
 
 
 def test_command_runner_script_error_detail_shows_the_last_2000_characters(tmp_path: Path) -> None:
@@ -406,6 +412,10 @@ def test_command_runner_finds_a_marker_cut_by_a_long_line_piece(
         ("SCRIPT ERROR: x\r\n\r\nlast\n", ""),
         ("plain\n", "w\nSCRIPT ERROR: y\r\nz\n"),
         ("", "SCRIPT ERROR: only\n\n\nafter\nmore\n"),
+        # A newline straight after a break only `splitlines` knows ends an empty line of its own.
+        ("SCRIPT ERROR: boom\x0b\n   at: res://a.gd:1\none\n", ""),
+        ("SCRIPT ERROR: boom\n\x0c\n   at: res://a.gd:1\n", ""),
+        ("", "SCRIPT ERROR: boom\u2028\n\u2029\n   at: res://a.gd:1\n"),
     ],
 )
 def test_command_runner_excerpt_matches_the_whole_output_one(
@@ -645,3 +655,101 @@ def test_several_suites_in_one_file_have_their_times_added_not_overwritten() -> 
         file_of=lambda name, package: f"res://{package}/{name}.gd",
     )
     assert result.file_times == {"res://t/a.gd": 3.5, "res://t/b.gd": 0.5}
+
+
+# Every character `str.splitlines` breaks a line on, bar "\n" (the stream is cut on that) and "\r"
+# (the decoder turns it into "\n" before `_StreamTail` sees any text, so it cannot get there).
+_SPLITLINES_BREAKS = ["\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"]
+
+
+def _stream_tail(whole: str, cuts: tuple[int, ...]) -> runner_mod._StreamTail:
+    """A `_StreamTail` after `whole` is fed in, cut into reads at `cuts`."""
+    tail = runner_mod._StreamTail()
+    start = 0
+    for end in (*cuts, len(whole)):
+        tail._feed(whole[start:end])
+        start = end
+    return tail
+
+
+def _long_line_cases(brk: str) -> list[tuple[str, str]]:
+    """Long lines with breaks around the places where they are cut into pieces."""
+    size = runner_mod._LINE_CHARS
+    cases = [(f"break at {n}", "y" * n + brk + "q" * 5000) for n in range(size - 30, size + 5)]
+    # Two breaks in one overlap: the text between them is a line of its own, counted once.
+    cases += [
+        (f"two breaks at {n}", "y" * n + brk + "w" + brk + "q" * 5000)
+        for n in range(size - 16, size + 2)
+    ]
+    # A marker that starts in the overlap, after a break in it, must still be found.
+    cases += [
+        (f"marker after break at {n}", "y" * n + brk + "SCRIPT ERROR" + "y" * 6000)
+        for n in range(size - 22, size - 8)
+    ]
+    # A marker and a break both at the edge of the overlap, so one more or one fewer character of
+    # overlap changes what is kept. The overlap is `len(marker) - 1` characters wide.
+    marker = runner_mod._SCRIPT_ERROR_MARKER
+    edge = size - (len(marker) - 1)
+    for at_marker in range(edge - 3, edge + 3):
+        for at_break in range(edge - 4, edge + 4):
+            if at_break + 1 <= at_marker or at_break >= at_marker + len(marker):
+                line = ["y"] * (size + 200)
+                line[at_marker : at_marker + len(marker)] = marker
+                line[at_break] = brk
+                cases.append((f"marker at {at_marker}, break at {at_break}", "".join(line)))
+    cases.append(("all breaks", brk * 9000))
+    return cases
+
+
+@pytest.mark.parametrize("brk", _SPLITLINES_BREAKS)
+def test_stream_tail_excerpt_is_the_same_however_the_output_is_read(brk: str) -> None:
+    """A line break `splitlines` knows, anywhere near where a long line is cut into pieces, must not
+    change which lines the excerpt holds, wherever the reads happen to end. The cut keeps an
+    overlap so a split marker is found, and a break inside it used to be counted twice."""
+    size = runner_mod._LINE_CHARS
+    at = "   at: res://a.gd:1"
+    for name, long_line in _long_line_cases(brk):
+        whole = long_line + "\n" + at + "\nB\nC\n"
+        if "SCRIPT ERROR" not in long_line:
+            whole = "SCRIPT ERROR: boom\n" + whole
+        lines = whole.splitlines()
+        first = next(i for i, line in enumerate(lines) if "SCRIPT ERROR" in line)
+        wanted = lines[first : first + 4]
+        for cuts in (
+            (),
+            (len(whole) // 2,),
+            (size - 1, size, size + 1),
+            tuple(range(1, len(whole), 997)),
+        ):
+            tail = _stream_tail(whole, cuts)
+            excerpt = tail.excerpt
+            where = f"{name}, break {brk!r}, cuts {cuts[:3]}"
+            assert excerpt is not None, where  # the marker must be found
+            # Same lines as the whole output. A long one may be kept cut short, never changed.
+            assert len(excerpt) == len(wanted), where
+            for number, (kept, line_of_whole) in enumerate(zip(excerpt, wanted, strict=True)):
+                # The marker line may start in the overlap, so it can lose the start of its line.
+                assert (kept in line_of_whole) if number == 0 else line_of_whole.startswith(kept), (
+                    where
+                )
+            # The first lines are kept too, and count the same breaks.
+            assert len(tail.head) == len(lines[:3]), where
+            for kept, line_of_whole in zip(tail.head, lines[:3], strict=True):
+                assert line_of_whole.startswith(kept), where
+
+
+@pytest.mark.parametrize("brk", [None, *_SPLITLINES_BREAKS])
+def test_stream_tail_marker_line_starts_where_the_overlap_does(brk: str | None) -> None:
+    """A marker found after the first cut of a long line is kept from the start of the overlap (the
+    last `len(marker) - 1` characters of the piece before it), or from just after the last line
+    break in them. So the overlap's width shows in the kept line: a wider or narrower one fails."""
+    size = runner_mod._LINE_CHARS
+    marker = runner_mod._SCRIPT_ERROR_MARKER
+    overlap_start = size - (len(marker) - 1)
+    for pos in range(overlap_start - 3, size + 3):
+        line = "a" * pos + (brk or "a") + "a" * (size + 50 - pos - 1) + marker + " boom"
+        starts_at = pos + 1 if brk and pos >= overlap_start else overlap_start
+        for cuts in ((len(line),), (500, size - 1, size + 1, len(line))):
+            excerpt = _stream_tail(line + "\n", cuts).excerpt
+            where = f"break {brk!r} at {pos}, cuts {cuts}"
+            assert excerpt == [line[starts_at:]], where
