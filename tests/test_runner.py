@@ -254,8 +254,12 @@ def _runs(script: str) -> list[str]:
     return [sys.executable, "-c", script]
 
 
-#: How much each flood test prints: far more than the runner may hold, so a regression to holding
-#: the whole output shows up as a peak many times the bound below.
+#: The most traced memory a flood test lets a run reach. Holding a bounded tail peaks far below it
+#: (about 0.6 MiB), however big the flood.
+_PEAK_BOUND = 4 * 1024 * 1024
+
+#: How much the two script-error flood tests print. They stay fast at this size: one has 1 MiB
+#: lines, and the other's lines are not split once its excerpt is complete.
 _FLOOD_MB = 64
 
 
@@ -272,12 +276,14 @@ def _peak_traced_bytes(run: Callable[[], SuiteResult]) -> tuple[SuiteResult, int
 
 def test_command_runner_holds_a_bounded_tail_of_a_flooded_output(tmp_path: Path) -> None:
     # A flooded output costs a fixed amount of memory, and the verdict and the end of the output
-    # survive.
+    # survive. Each stream prints the whole bound in short lines, so a run that held all of it
+    # would peak at about four times the bound. Short lines are slow to read, so the flood is no
+    # bigger than that.
+    lines = _PEAK_BOUND // len(b"stdout flood line\n")
     script = (
         "import sys\n"
-        f"for _ in range({_FLOOD_MB}):\n"
-        "    sys.stdout.buffer.write(b'stdout flood line\\n' * 58255)\n"
-        "    sys.stderr.buffer.write(b'stderr flood line\\n' * 58255)\n"
+        f"sys.stdout.buffer.write(b'stdout flood line\\n' * {lines})\n"
+        f"sys.stderr.buffer.write(b'stderr flood line\\n' * {lines})\n"
         "sys.stderr.write('the real reason\\n')\n"
         "sys.exit(1)\n"
     )
@@ -286,7 +292,7 @@ def test_command_runner_holds_a_bounded_tail_of_a_flooded_output(tmp_path: Path)
     assert (result.failures, result.errors) == (1, 0)
     assert result.detail.endswith("stderr flood line\nthe real reason")
     assert len(result.detail) == 2000
-    assert peak < 4 * 1024 * 1024, f"peak {peak} bytes for {2 * _FLOOD_MB} MB of output"
+    assert peak < _PEAK_BOUND, f"peak {peak} bytes for {2 * _PEAK_BOUND} bytes of output"
 
 
 def test_command_runner_still_finds_a_script_error_after_a_flood(tmp_path: Path) -> None:
@@ -309,7 +315,7 @@ def test_command_runner_still_finds_a_script_error_after_a_flood(tmp_path: Path)
         result.runtime_error
         == "SCRIPT ERROR: Nonexistent function\n   at: f (res://a.gd:3)\none\ntwo"
     )
-    assert peak < 4 * 1024 * 1024, f"peak {peak} bytes for {_FLOOD_MB} MB of output"
+    assert peak < _PEAK_BOUND, f"peak {peak} bytes for {_FLOOD_MB} MB of output"
 
 
 def test_command_runner_keeps_the_first_script_error_through_a_runaway_error_loop(
@@ -329,7 +335,7 @@ def test_command_runner_keeps_the_first_script_error_through_a_runaway_error_loo
     assert (result.failures, result.errors) == (0, 1)
     assert result.runtime_error == "SCRIPT ERROR: first\n   at: a.gd:1\none\ntwo"
     assert result.detail.endswith("SCRIPT ERROR: again\nthe end")
-    assert peak < 4 * 1024 * 1024, f"peak {peak} bytes for {_FLOOD_MB} MB of output"
+    assert peak < _PEAK_BOUND, f"peak {peak} bytes for {_FLOOD_MB} MB of output"
 
 
 def test_command_runner_script_error_detail_shows_the_last_2000_characters(tmp_path: Path) -> None:
