@@ -252,7 +252,7 @@ def test_no_test_moves_the_process_to_another_directory() -> None:
 
 
 def test_the_mutation_sweep_timeout_covers_a_measured_full_run() -> None:
-    # A complete sweep on the same runner took 73 minutes 17 seconds (2026-11-03). A timeout under
+    # A complete sweep on the same runner took 64 minutes 25 seconds (2026-11-03). A timeout under
     # that cancels every full run before it reports a score, and a cancelled run looks like any
     # other cancelled run. 90 minutes leaves room for the mutant count to keep growing.
     workflow = yaml.safe_load(_MUTATION_WORKFLOW.read_text(encoding="utf-8"))
