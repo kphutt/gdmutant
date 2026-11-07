@@ -10,84 +10,40 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.5] - 2026-11-07
 
 ### Added
 
-- `--exclude-tests <entry>` (and `exclude-tests` in `.gdmutant.toml`) leaves tests out of a
-  `--runner gdunit4` run (#335, thanks @normanthesquid). Each entry is passed to gdUnit4 as `-i`, so
-  it can be a suite name, any part of a suite's `res://` path, or `suite:test` for one test.
-  Excluded tests run in no part of the run: not the baseline, not the coverage marker runs, and not
-  any mutant's test files. With `--coverage-analysis per-file`, a line only an excluded suite
-  reaches is reported as no coverage. An entry that matches no test file is warned about. `--runner
-  gut` and `--runner command` refuse the flag, and ignore a config list with a note.
+- `--exclude-tests <entry>` leaves tests out of a `--runner gdunit4` run (#335, thanks
+  @normanthesquid). An entry can be a suite name, part of a suite's `res://` path, or `suite:test`
+  for one test. Excluded tests run in no part of the run. You can also set it as `exclude-tests` in
+  `.gdmutant.toml`.
 
 ### Changed
 
-- `--jobs N` with several source files now runs every file's mutants through one shared set of
-  workers (#332, thanks @normanthesquid). Before, each file got its own set, and the next file
-  waited for the last worker of the one before it, so a diff made of small files kept most workers
-  idle. Each file still prints its own `mutating ...` and plan lines, then one `Running up to N at a
-  time across M files.` line covers them all, and the progress line counts every file's mutants
-  together. Verdicts and the per-file scores are unchanged. A file outside `--project` is now
-  refused before the baseline runs, rather than when the run reaches it. Under `--jobs auto`, such a
-  file can't use the shared workers. When two or more other files are inside the project, it runs on
-  its own before them. Otherwise nothing is shared and the files run in the order given.
-
-- `.gdmutant.toml` can set `project = "."` without `--trust-config`. A `project` naming the folder
-  the file sits in, which is the folder you ran gdmutant from, points gdmutant at nothing you had
-  not already chosen, so the refusal was only getting in the way. Any spelling of that folder
-  counts (`./`, its absolute path, a symlink to it), because gdmutant asks the operating system
-  whether the two are one folder rather than comparing the text. Every other `project` still needs
-  `--trust-config`: `..`, a neighbouring folder, a subfolder, and a symlink that leads anywhere
-  else. So do `command` and `godot`, always. When a `project` is refused, the message now says
-  which value would have gone through.
-- `--jobs N` now refuses a suite that only passes with files in your real `user://` that no test
-  creates. If you already use `--jobs` with such a suite, it used to finish and report a score,
-  and now it stops with a message that names the isolated copy. Make the suite create what it
-  reads, or pass `--jobs 1`. Under `--jobs auto`, a source file outside `--project` still runs
-  serially in your project folder, and its baseline runs there too, so nothing changes for it.
-  The baseline copy is made and removed before the workers start, so peak disk use is the same.
-  The live check for this runs GdUnit4. GUT and the exit-code command runner get the same
-  isolation from the same code, but no live run proves GUT's.
+- `--jobs N` with several source files shares one set of workers across every file (#334, thanks
+  @normanthesquid). Before, each file waited for the last worker of the one before it, so a diff
+  made of small files kept most workers idle. Each file still prints its own plan lines, then one
+  `Running up to N at a time across M files.` line covers them all, and the progress line counts
+  every file's mutants together. Verdicts and scores are unchanged.
+- `.gdmutant.toml` can set `project = "."` without `--trust-config` (#324). Every other `project`,
+  and every `command` and `godot`, still needs it.
+- `--jobs N` refuses a suite that only passes with files in your real `user://` that no test
+  creates (#318). Make the suite create what it reads, or pass `--jobs 1`.
 
 ### Fixed
 
-- `--runner command` no longer runs out of memory when a mutant floods its test output (#331, thanks
-  @normanthesquid). gdmutant used to hold all of a run's output, though it only ever showed the last
-  2000 characters, so a mutant stuck printing errors until its timeout could grow gdmutant past a
-  memory cap, end the run, and lose its report. It now keeps only the end of the output, plus the
-  first `SCRIPT ERROR` and the three lines after it, so memory stays fixed however much a test
-  prints. Verdicts are unchanged. One small difference: when `--coverage-analysis` reports that its
-  marker run hit a `SCRIPT ERROR`, a line over 4000 characters in the error it quotes can now be cut
-  to 4000. The GdUnit4 and GUT runners still hold their whole output.
-- `--jobs N` no longer reports a survivor as killed when your tests write to `user://`. Each worker
-  already got its own copy of the project, but Godot works out where `user://` is from the
-  project's name settings rather than from its path, so every copy resolved it to the same
-  directory on your machine. Two workers writing to one fixed-name file there made the suite fail
-  for a reason that had nothing to do with the mutant, and a failing suite is a kill, so the run
-  came back with fewer survivors than it should have and a score that looked better than the truth.
-  Every worker copy is now given a `user://` of its own, inside one `gdmutant/` directory that is
-  cleaned up when the run ends. `--jobs` defaults to `1`, which was never affected.
-
-  A new live check runs gdmutant against a suite built to collide this way, and compares several
-  `--jobs 4` runs against a serial one: `tests/test_selftest_parallel_determinism.py`.
-
-- `--jobs N` no longer scores a suite as better than it is when the suite needs `user://` data
-  that no test creates. The baseline run (the check that your suite passes before any mutant
-  runs) used to happen in your own project folder, with your machine's real `user://`, while
-  every worker ran in an empty copy. A suite that read a file there passed the baseline and then
-  failed in every worker, and a failing suite counts as a kill. On one real Godot project,
-  `--jobs 1` reported 2 survivors and `--jobs 4` reported none, with no warning. The baseline now
-  runs in the same kind of isolated copy the workers get.
-
-- A file's progress now ends on its true final count, printed once (#345). When the file's last
-  mutant did not parse, the progress line could end on `1/2` instead of `1/1`, and a file's final
-  count could print twice in a row.
-
-- `--jobs N` with one source file outside `--project` is now refused before the baseline runs,
-  the same as with several files (#346). Before, it was refused only after the baseline had run,
-  and not at all when the file had no mutants.
+- `--runner command` no longer runs out of memory when a mutant floods its test output (#333,
+  thanks @normanthesquid). It keeps only the end of the output and the first `SCRIPT ERROR`.
+- `--jobs N` no longer reports a survivor as killed when your tests write to `user://` (#318). Each
+  worker gets a `user://` of its own.
+- `--jobs N` no longer scores a suite as better than it is when the suite needs `user://` data that
+  no test creates (#318). The baseline runs in the same kind of isolated copy the workers get.
+- A file's progress line no longer ends on `1/2` instead of `1/1` when the file's last mutant did
+  not parse, and no longer prints a file's final count twice in a row (#345).
+- `--jobs N` with one source file outside `--project` is refused before the baseline runs, the same
+  as with several files (#346). A file with no mutants, which used to finish with exit 0, is
+  refused too.
 
 ## [0.1.4] - 2026-10-03
 
