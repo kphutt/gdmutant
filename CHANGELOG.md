@@ -12,33 +12,37 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [0.1.5] - 2026-11-08
 
-### Added
+This release makes parallel runs faster and more accurate, and lets you skip slow GdUnit4 tests.
+Three of these changes come from @normanthesquid. Thank you.
 
-- `--exclude-tests <entry>` skips tests in a `--runner gdunit4` run (#335, thanks @normanthesquid).
-  An entry is a suite name, part of a `res://` path, or `suite:test`. You can also set
-  `exclude-tests` in `.gdmutant.toml`. `--runner gut` and `--runner command` refuse the flag,
-  and ignore the setting with a note.
+### Before you upgrade
 
-### Changed
+If your tests read files from your real `user://` folder that they never create, `--jobs N` now
+stops instead of reporting a wrong score. Have the tests create those files, or use `--jobs 1`.
+(#318)
 
-- `--jobs N` now shares its workers across all source files, so a diff of many small files no longer
-  leaves workers idle (#334, thanks @normanthesquid). Scores are unchanged.
-- `.gdmutant.toml` can set `project = "."` without `--trust-config` (#324). Any other `project`
-  still needs it.
-- `--jobs N` now stops if your suite needs files in your real `user://` that no test creates (#318).
-  Have the suite create them, or use `--jobs 1`.
+### Parallel runs (`--jobs N`)
 
-### Fixed
+- Workers are now shared across all source files, so a diff of many small files keeps them all busy.
+  Scores are unchanged. (#334, thanks @normanthesquid)
+- Each worker now gets its own copy of `user://`, and so does the first test run. Before, tests that
+  wrote there could make a mutant they missed count as caught. Tests that read files they never
+  create could make the score too high. (#318)
+- A file outside `--project` is now refused before any tests run, even when it has no mutants. (#346)
 
-- `--runner command` no longer runs out of memory when a mutant floods its output (#333, thanks
-  @normanthesquid).
-- `--jobs N` no longer counts a survivor as killed when your tests write to `user://` (#318). Each
-  worker now gets its own.
-- `--jobs N` no longer overstates the score when your suite needs `user://` data that no test
-  creates (#318). The baseline now runs in an isolated copy, like the workers.
-- The progress line now ends on the right count, printed once (#345).
-- `--jobs N` now refuses a source file outside `--project` before the baseline runs, even when the
-  file has no mutants (#346).
+### Skipping slow tests (GdUnit4)
+
+- The new `--exclude-tests <entry>` flag leaves tests out of a run. An entry is a suite name, part
+  of a `res://` path, or `suite:test`. You can also set `exclude-tests` in `.gdmutant.toml`. GUT and
+  command runs refuse the flag, and ignore the setting with a note. (#335, thanks @normanthesquid)
+
+### Other changes
+
+- A test command that floods its output (`--runner command`) no longer runs gdmutant out of memory.
+  (#333, thanks @normanthesquid)
+- `.gdmutant.toml` can now set `project = "."` without `--trust-config`. Other values still need it.
+  (#324)
+- The progress line now ends on the right count, and prints it once. (#345)
 
 ## [0.1.4] - 2026-10-03
 
