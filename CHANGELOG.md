@@ -17,7 +17,7 @@ Three of these changes come from @normanthesquid. Thank you.
 
 ### Before you upgrade
 
-`--jobs N` now gives each test run an empty `user://` (the folder Godot keeps a game's saved data
+`--jobs N` now runs your tests in an empty `user://` (the folder Godot keeps a game's saved data
 in). If your tests rely on files already sitting in your real `user://`, the run now stops with a
 message. Have the tests create those files, or use `--jobs 1`. (#318)
 
@@ -25,8 +25,9 @@ message. Have the tests create those files, or use `--jobs 1`. (#318)
 
 - Workers are now shared across all source files, so they no longer wait between files. Scores are
   unchanged. (#334, thanks @normanthesquid)
-- Each worker now gets its own empty `user://`, and so does the first test run. Before, tests that
-  wrote there could make a mutant they missed count as caught. (#318)
+- Each worker now gets its own `user://`, so tests that write there no longer collide. Before, that
+  could make a mutant your tests missed count as caught, so the score could be too high. If you used
+  `--jobs N` and your tests write to `user://`, run again to get the right score. (#318)
 - A file outside `--project` is now refused before any tests run, even when it has no mutants.
   (#346)
 
@@ -40,8 +41,8 @@ message. Have the tests create those files, or use `--jobs 1`. (#318)
 
 - A test command that floods its output (`--runner command`) no longer runs gdmutant out of memory.
   (#333, thanks @normanthesquid)
-- `.gdmutant.toml` can now set `project = "."` without `--trust-config`. Other values still need it.
-  (#324)
+- `.gdmutant.toml` can now set `project` to its own folder, such as `project = "."`, without
+  `--trust-config`. Any other folder still needs it. (#324)
 - The progress line now ends on the right count, and prints it once. (#345)
 
 ## [0.1.4] - 2026-10-03
