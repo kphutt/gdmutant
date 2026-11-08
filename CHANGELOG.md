@@ -10,13 +10,14 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.5] - 2026-11-07
+## [0.1.5] - 2026-11-08
 
 ### Added
 
 - `--exclude-tests <entry>` skips tests in a `--runner gdunit4` run (#335, thanks @normanthesquid).
   An entry is a suite name, part of a `res://` path, or `suite:test`. You can also set
-  `exclude-tests` in `.gdmutant.toml`. `--runner gut` and `--runner command` refuse the flag.
+  `exclude-tests` in `.gdmutant.toml`. `--runner gut` and `--runner command` refuse the flag,
+  and ignore the setting with a note.
 
 ### Changed
 
