@@ -23,8 +23,8 @@ message. Have the tests create those files, or use `--jobs 1`. (#318)
 
 ### Parallel runs (`--jobs N`, which tests N mutants at a time)
 
-- Workers are now shared across all source files, so they no longer wait between files. Scores are
-  unchanged. (#334, thanks @normanthesquid)
+- Workers are now shared across all source files, so they no longer wait between files. This change
+  alone doesn't change any score. (#334, thanks @normanthesquid)
 - Each worker now gets its own `user://`, so tests that write there no longer collide. Before, that
   could make a mutant your tests missed count as caught, so the score could be too high. If you used
   `--jobs N` and your tests write to `user://`, run again to get the right score. (#318)
