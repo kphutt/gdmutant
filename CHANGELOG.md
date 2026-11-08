@@ -14,36 +14,30 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ### Added
 
-- `--exclude-tests <entry>` leaves tests out of a `--runner gdunit4` run (#335, thanks
-  @normanthesquid). An entry can be a suite name, part of a suite's `res://` path, or `suite:test`
-  for one test. Excluded tests run in no part of the run. You can also set it as `exclude-tests` in
-  `.gdmutant.toml`.
+- `--exclude-tests <entry>` skips tests in a `--runner gdunit4` run (#335, thanks @normanthesquid).
+  An entry is a suite name, part of a `res://` path, or `suite:test`. You can also set
+  `exclude-tests` in `.gdmutant.toml`. `--runner gut` and `--runner command` refuse the flag.
 
 ### Changed
 
-- `--jobs N` with several source files shares one set of workers across every file (#334, thanks
-  @normanthesquid). Before, each file waited for the last worker of the one before it, so a diff
-  made of small files kept most workers idle. Each file still prints its own plan lines, then one
-  `Running up to N at a time across M files.` line covers them all, and the progress line counts
-  every file's mutants together. Verdicts and scores are unchanged.
-- `.gdmutant.toml` can set `project = "."` without `--trust-config` (#324). Every other `project`,
-  and every `command` and `godot`, still needs it.
-- `--jobs N` refuses a suite that only passes with files in your real `user://` that no test
-  creates (#318). Make the suite create what it reads, or pass `--jobs 1`.
+- `--jobs N` now shares its workers across all source files, so a diff of many small files no longer
+  leaves workers idle (#334, thanks @normanthesquid). Scores are unchanged.
+- `.gdmutant.toml` can set `project = "."` without `--trust-config` (#324). Any other `project`
+  still needs it.
+- `--jobs N` now stops if your suite needs files in your real `user://` that no test creates (#318).
+  Have the suite create them, or use `--jobs 1`.
 
 ### Fixed
 
-- `--runner command` no longer runs out of memory when a mutant floods its test output (#333,
-  thanks @normanthesquid). It keeps only the end of the output and the first `SCRIPT ERROR`.
-- `--jobs N` no longer reports a survivor as killed when your tests write to `user://` (#318). Each
-  worker gets a `user://` of its own.
-- `--jobs N` no longer scores a suite as better than it is when the suite needs `user://` data that
-  no test creates (#318). The baseline runs in the same kind of isolated copy the workers get.
-- A file's progress line no longer ends on `1/2` instead of `1/1` when the file's last mutant did
-  not parse, and no longer prints a file's final count twice in a row (#345).
-- `--jobs N` with one source file outside `--project` is refused before the baseline runs, the same
-  as with several files (#346). A file with no mutants, which used to finish with exit 0, is
-  refused too.
+- `--runner command` no longer runs out of memory when a mutant floods its output (#333, thanks
+  @normanthesquid).
+- `--jobs N` no longer counts a survivor as killed when your tests write to `user://` (#318). Each
+  worker now gets its own.
+- `--jobs N` no longer overstates the score when your suite needs `user://` data that no test
+  creates (#318). The baseline now runs in an isolated copy, like the workers.
+- The progress line now ends on the right count, printed once (#345).
+- `--jobs N` now refuses a source file outside `--project` before the baseline runs, even when the
+  file has no mutants (#346).
 
 ## [0.1.4] - 2026-10-03
 
