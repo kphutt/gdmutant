@@ -17,10 +17,11 @@ Three of these changes come from @normanthesquid. Thank you.
 
 ### Before you upgrade
 
-If your tests read files from your real `user://` folder that they never create, `--jobs N` now
-stops with a message. Have the tests create those files, or use `--jobs 1`. (#318)
+If your tests read files from your real `user://` folder (the folder Godot keeps a game's saved data
+in) that they never create, `--jobs N` now stops with a message. Have the tests create those files,
+or use `--jobs 1`. (#318)
 
-### Parallel runs (`--jobs N`)
+### Parallel runs (`--jobs N`, which tests N mutants at a time)
 
 - Workers are now shared across all source files, so a diff of many small files keeps them all busy.
   Scores are unchanged. (#334, thanks @normanthesquid)
