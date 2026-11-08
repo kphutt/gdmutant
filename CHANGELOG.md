@@ -18,16 +18,14 @@ Three of these changes come from @normanthesquid. Thank you.
 ### Before you upgrade
 
 If your tests read files from your real `user://` folder that they never create, `--jobs N` now
-stops instead of reporting a wrong score. Have the tests create those files, or use `--jobs 1`.
-(#318)
+stops with a message. Have the tests create those files, or use `--jobs 1`. (#318)
 
 ### Parallel runs (`--jobs N`)
 
 - Workers are now shared across all source files, so a diff of many small files keeps them all busy.
   Scores are unchanged. (#334, thanks @normanthesquid)
-- Each worker now gets its own copy of `user://`, and so does the first test run. Before, tests that
-  wrote there could make a mutant they missed count as caught. Tests that read files they never
-  create could make the score too high. (#318)
+- Each worker now gets its own empty `user://`, and so does the first test run. Before, tests that
+  wrote there could make a mutant they missed count as caught. (#318)
 - A file outside `--project` is now refused before any tests run, even when it has no mutants.
   (#346)
 
