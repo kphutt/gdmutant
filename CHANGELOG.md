@@ -28,7 +28,8 @@ stops instead of reporting a wrong score. Have the tests create those files, or 
 - Each worker now gets its own copy of `user://`, and so does the first test run. Before, tests that
   wrote there could make a mutant they missed count as caught. Tests that read files they never
   create could make the score too high. (#318)
-- A file outside `--project` is now refused before any tests run, even when it has no mutants. (#346)
+- A file outside `--project` is now refused before any tests run, even when it has no mutants.
+  (#346)
 
 ### Skipping slow tests (GdUnit4)
 
