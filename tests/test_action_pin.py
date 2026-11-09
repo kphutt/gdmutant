@@ -171,6 +171,53 @@ def expected_pin(version: str, refs: dict[str, str], head_sha: str | None) -> tu
     return previous, previous_sha
 
 
+def accepted_pins(
+    version: str, refs: dict[str, str], head_sha: str | None, pins_dirty: bool
+) -> list[tuple[str, str]]:
+    """Every (version, commit) pair the pins may name here: `expected_pin`'s, and at most one more.
+
+    The one extra case is step 10 before its commit. A maintainer runs `bump_action_pins.py` on a
+    branch cut from the tagged commit, so HEAD is still that commit, and `expected_pin` asks for the
+    previous release. The working tree already pins the new tag, and the suite run on it went red
+    although nothing was wrong. So when HEAD is the tag's own commit and a pin file differs from
+    HEAD, the new tag's pins are accepted too. A clean tree on the tagged commit, which is what
+    `publish.yml`'s gate checks out, stays strict: only the previous release passes there."""
+    accepted = [expected_pin(version, refs, head_sha)]
+    tag_sha = bump_action_pins.commit_of_tag(version, refs)
+    if pins_dirty and tag_sha is not None and tag_sha == head_sha:
+        accepted.append((version, tag_sha))
+    return accepted
+
+
+def _pin_files_differ_from_head() -> bool:
+    """Does any pin file in the working tree differ from HEAD? Anything git cannot answer counts
+    as no, so a failed question keeps the check strict rather than loosening it."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", *bump_action_pins.PIN_FILES],
+            cwd=REPO,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 1
+
+
+def check_pins_name_one_of(text: str, label: str, accepted: list[tuple[str, str]]) -> None:
+    """Pass if every pin in `text` names one of the `accepted` pairs, the same pair throughout.
+    Otherwise raise the first pair's failure, since that pair is the strict expectation."""
+    failures: list[AssertionError] = []
+    for version, sha in accepted:
+        try:
+            check_pins_are_current(text, label, version, sha)
+        except AssertionError as failure:
+            failures.append(failure)
+        else:
+            return
+    raise failures[0]
+
+
 def check_pins_are_current(text: str, label: str, version: str, sha: str) -> None:
     """Assert every pin in `text` reads `@SHA # vVERSION`, both halves, or raise `AssertionError`.
 
@@ -207,10 +254,10 @@ def test_every_shipped_uses_line_pins_the_release_this_commit_should_name(path: 
     # `command` input, one shipped later. `test_no_shipped_uses_line_pins_a_floating_tag` above
     # only checks the ref isn't unsatisfiable, not that it's current -- this closes that gap.
     version = check_release_tag.packaged_version()
-    want_version, want_sha = expected_pin(version, _remote_tag_refs(), _head_commit())
-    check_pins_are_current(
-        path.read_text(encoding="utf-8"), str(path.relative_to(REPO)), want_version, want_sha
+    accepted = accepted_pins(
+        version, _remote_tag_refs(), _head_commit(), _pin_files_differ_from_head()
     )
+    check_pins_name_one_of(path.read_text(encoding="utf-8"), str(path.relative_to(REPO)), accepted)
 
 
 # --- the comment names the release its SHA belongs to, offline ----------------------------------
@@ -669,3 +716,75 @@ def test_a_tree_that_tracks_nothing_and_is_not_a_known_copy_fails(
     outcome, said = _outcome_of_scanning()
     assert outcome == "fail", f"an unexplained empty tree came back as {outcome!r}: {said}"
     assert "tracks no files" in said
+
+
+# --- step 10 before its commit ------------------------------------------------------------------
+
+
+def test_step_10_before_its_commit_accepts_the_new_tags_pins() -> None:
+    # HEAD is the tagged commit and the pin files are edited: the bump has run, not yet committed.
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    accepted = accepted_pins("0.1.3", refs, _FAKE_SHA, pins_dirty=True)
+    assert accepted == [("0.1.2", _PREV_SHA), ("0.1.3", _FAKE_SHA)]
+    check_pins_name_one_of(_pin("0.1.3", _FAKE_SHA), "fake.md", accepted)
+    check_pins_name_one_of(_pin("0.1.2", _PREV_SHA), "fake.md", accepted)
+
+
+def test_a_clean_tagged_commit_still_accepts_only_the_previous_release() -> None:
+    # The tree publish.yml's gate checks out. The new tag's pins cannot be there, so they must fail.
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    accepted = accepted_pins("0.1.3", refs, _FAKE_SHA, pins_dirty=False)
+    assert accepted == [("0.1.2", _PREV_SHA)]
+    with pytest.raises(AssertionError, match=r"must read `@b{40} # v0\.1\.2`"):
+        check_pins_name_one_of(_pin("0.1.3", _FAKE_SHA), "fake.md", accepted)
+
+
+def test_edited_pin_files_loosen_nothing_away_from_the_tagged_commit() -> None:
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    assert accepted_pins("0.1.3", refs, _LATER_SHA, pins_dirty=True) == [("0.1.3", _FAKE_SHA)]
+    assert accepted_pins("0.1.3", _refs(v0_1_2=_PREV_SHA), _LATER_SHA, pins_dirty=True) == [
+        ("0.1.2", _PREV_SHA)
+    ]
+
+
+def test_the_extra_pair_never_lets_a_file_mix_two_releases() -> None:
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    accepted = accepted_pins("0.1.3", refs, _FAKE_SHA, pins_dirty=True)
+    mixed = _pin("0.1.2", _PREV_SHA) + _pin("0.1.3", _FAKE_SHA)
+    # Both pairs fail, and the message is the strict pair's: the previous release.
+    with pytest.raises(AssertionError, match=r"must read `@b{40} # v0\.1\.2`"):
+        check_pins_name_one_of(mixed, "fake.md", accepted)
+
+
+def _repo_with_a_pin_file(root: Path) -> None:
+    _init_git_repo(root)
+    for name in bump_action_pins.PIN_FILES:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(_pin("0.1.2", _PREV_SHA), encoding="utf-8")
+    (root / "unrelated.txt").write_text("tracked, but not a pin file\n", encoding="utf-8")
+    _commit_all(root)
+
+
+def test_pin_files_differ_from_head_sees_an_edit_and_only_an_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _repo_with_a_pin_file(tmp_path)
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path)
+    assert _pin_files_differ_from_head() is False
+    # A tracked file that is not a pin file, edited: still no.
+    (tmp_path / "unrelated.txt").write_text("edited\n", encoding="utf-8")
+    assert _pin_files_differ_from_head() is False
+    (tmp_path / "README.md").write_text(_pin("0.1.3"), encoding="utf-8")
+    assert _pin_files_differ_from_head() is True
+
+
+def test_pin_files_differ_from_head_is_false_where_git_cannot_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Outside a repository git exits 128 or 129, and with no directory it cannot start at all.
+    # Either way the answer must be "no", which keeps the check strict.
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path)
+    assert _pin_files_differ_from_head() is False
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path / "does-not-exist")
+    assert _pin_files_differ_from_head() is False
