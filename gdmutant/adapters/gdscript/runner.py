@@ -278,9 +278,11 @@ class _GodotJUnitRunner:
         case GdUnit4 announces by name.
         """
         detail = (completed.stderr or completed.stdout or "").strip()
+        # Project-relative: the reason lands in a shareable report, and under --jobs `report` is
+        # in a temporary copy that is gone after the run.
         return RuntimeError(
-            f"{self._framework} wrote no report at {report}. Godot may have failed to run"
-            + (f":\n{detail[-1000:]}" if detail else "")
+            f"{self._framework} wrote no report at {Path(self.report_path).as_posix()}. "
+            "Godot may have failed to run" + (f":\n{detail[-1000:]}" if detail else "")
         )
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:

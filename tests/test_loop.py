@@ -379,6 +379,25 @@ def test_runner_exception_is_tallied_as_error_and_file_restored(tmp_path: Path) 
     assert Path(path).read_text(encoding="utf-8") == src  # restored despite the runner error
 
 
+def test_a_runner_error_in_a_jobs_worker_keeps_why(tmp_path: Path) -> None:
+    @dataclass
+    class FailsEveryMutant:
+        lock: threading.Lock = field(default_factory=threading.Lock)
+        calls: int = 0
+
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            with self.lock:
+                self.calls += 1
+                if self.calls == 1:
+                    return SuiteResult(tests=1, failures=0, errors=0)
+            raise RuntimeError("worker boom")
+
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    result = run(str(tmp_path), path, _TWO_RUNNABLE, FailsEveryMutant(), jobs=2)
+    assert len(result.outcomes) > 1
+    assert {(o.verdict, o.error) for o in result.outcomes} == {(Verdict.ERROR, "worker boom")}
+
+
 def test_suite_timeout_is_tallied_as_timeout_and_counts_as_detected(tmp_path: Path) -> None:
     # A mutation that hangs the suite (runner raises SuiteTimeout) is a DETECTION, not an error:
     # tallied TIMEOUT, distinct from ERROR, and counted toward the score like a kill.

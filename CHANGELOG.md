@@ -15,7 +15,9 @@ All notable changes to gdmutant are recorded here. The format follows
 ### Changed
 
 - A mutant scored `error` now says why its run failed. The `--json` report carries the reason as
-  the mutant's `statusReason`, and a coverage self-check that stops on an `error` quotes it. (#359)
+  the mutant's `statusReason`, and a coverage self-check that stops on an `error` quotes it. The
+  GdUnit4 and GUT "wrote no report" message now names the report's path inside the project, not
+  an absolute one. (#359)
 
 ## [0.1.5] - 2026-11-08
 

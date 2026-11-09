@@ -10,6 +10,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from gdmutant.engine.explain import DOC_BASE_URL
 from gdmutant.engine.htmlreport import (
     _FRANK_SILLY_SVG,
@@ -216,6 +218,40 @@ def test_the_narrative_comes_from_the_first_angle_that_has_one() -> None:
                     description="the gap",
                     statusReason="the risk\n\nthe start",
                 ),
+            ],
+        )
+    )
+    (finding,) = view.files[0].findings
+    assert (finding.gap, finding.risk, finding.start) == ("the gap", "the risk", "the start")
+
+
+@pytest.mark.parametrize("status", ["RuntimeError", "Ignored"])
+def test_a_reason_that_is_not_a_narrative_is_not_shown_as_one(status: str) -> None:
+    view = report_view(
+        _report(
+            "return 0\n",
+            [_mutant(1, 8, 9, "numeric", "1", status, statusReason="GdUnit4 wrote no report\n\nx")],
+        )
+    )
+    (finding,) = view.files[0].findings
+    assert (finding.gap, finding.risk, finding.start) == ("", "", "")
+
+
+def test_a_no_coverage_mutant_carries_its_narrative() -> None:
+    view = report_view(
+        _report(
+            "return 0\n",
+            [
+                _mutant(
+                    1,
+                    8,
+                    9,
+                    "numeric",
+                    "1",
+                    "NoCoverage",
+                    description="the gap",
+                    statusReason="the risk\n\nthe start",
+                )
             ],
         )
     )

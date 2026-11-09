@@ -144,8 +144,11 @@ def test_run_raises_when_no_report_is_written(
     monkeypatch.setattr(
         runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, "", "")
     )
-    with pytest.raises(RuntimeError, match="GUT wrote no report"):
+    with pytest.raises(RuntimeError, match="GUT wrote no report") as caught:
         GutRunner().run(str(tmp_path))
+    assert str(caught.value).startswith(
+        "GUT wrote no report at reports/gut_results.xml. Godot may have failed to run"
+    )
 
 
 def test_run_surfaces_godot_output_when_no_report(

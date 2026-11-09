@@ -157,8 +157,12 @@ def test_run_raises_when_no_report_is_written(
     monkeypatch.setattr(
         runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, "", "")
     )
-    with pytest.raises(RuntimeError, match="no report"):
+    with pytest.raises(RuntimeError, match="no report") as caught:
         GdUnit4Runner().run(str(tmp_path))
+    # Project-relative, so no home directory or --jobs temporary copy reaches a shared report.
+    assert str(caught.value).startswith(
+        "GdUnit4 wrote no report at reports/report_1/results.xml. Godot may have failed to run"
+    )
 
 
 def test_run_surfaces_godot_output_when_no_report(
