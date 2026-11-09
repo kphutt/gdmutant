@@ -10,7 +10,18 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.6] - 2026-11-09
+
+This release changes no code. It corrects the GitHub Action example on the PyPI project page.
+Apart from that and the version number, the package is the same as 0.1.5.
+
+### GitHub Action example
+
+- The 0.1.5 PyPI page shows 0.1.4's commit labeled as v0.1.5. PyPI keeps each version's page as
+  uploaded, so that page stays wrong. This release's page pins `bf611f7`, the real v0.1.5 commit,
+  with the matching label. That action runs the same code as 0.1.6. (#360)
+- From now on, each release's page pins the release before it, with that release's own commit. A
+  release cannot pin its own commit, because a commit cannot contain its own hash. (#360)
 
 ## [0.1.5] - 2026-11-08
 
