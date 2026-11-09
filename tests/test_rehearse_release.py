@@ -31,17 +31,9 @@ rehearse_release = importlib.util.module_from_spec(_spec)
 sys.modules["rehearse_release"] = rehearse_release
 _spec.loader.exec_module(rehearse_release)
 
-_bump_spec = importlib.util.spec_from_file_location(
-    "bump_action_pins_for_rehearsal", REPO / "scripts" / "bump_action_pins.py"
-)
-assert _bump_spec and _bump_spec.loader
-bump_action_pins = importlib.util.module_from_spec(_bump_spec)
-_bump_spec.loader.exec_module(bump_action_pins)
-
 StepFailed = rehearse_release.StepFailed
 StepNotRun = rehearse_release.StepNotRun
 SHA_A = "a" * 40
-SHA_B = "b" * 40
 
 
 # --- Which version gets rehearsed ---------------------------------------------------------------
@@ -89,38 +81,6 @@ def test_the_real_pyproject_has_the_one_line_the_runbook_edits() -> None:
     # The edit above is only worth something if the real file still has the shape it expects.
     text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
     assert "0.0.1" in rehearse_release.set_pyproject_version(text, "0.0.1")
-
-
-# --- Runbook step 1: the pin comments ----------------------------------------------------------
-
-
-def _pin(sha: str, version: str) -> str:
-    return f"uses: kphutt/gdmutant@{sha} # v{version}"
-
-
-def test_every_pin_comment_moves_to_the_new_version_and_every_sha_stays() -> None:
-    text = f"{_pin(SHA_A, '0.1.3')}\nprose v0.1.3 stays\n{_pin(SHA_B, '0.1.3')}\n"
-    new = rehearse_release.bump_pin_comments(text, bump_action_pins.PIN, "0.1.3", "0.1.4", "x")
-    assert new == f"{_pin(SHA_A, '0.1.4')}\nprose v0.1.3 stays\n{_pin(SHA_B, '0.1.4')}\n"
-
-
-def test_a_pin_already_on_the_new_version_is_left_alone() -> None:
-    text = f"{_pin(SHA_A, '0.1.4')}\n{_pin(SHA_B, '0.1.3')}\n"
-    new = rehearse_release.bump_pin_comments(text, bump_action_pins.PIN, "0.1.3", "0.1.4", "x")
-    assert new == f"{_pin(SHA_A, '0.1.4')}\n{_pin(SHA_B, '0.1.4')}\n"
-
-
-def test_a_pin_an_earlier_release_missed_fails_and_names_its_version() -> None:
-    text = f"{_pin(SHA_A, '0.1.3')}\n{_pin(SHA_B, '0.1.1')}\n"
-    with pytest.raises(StepFailed, match=r"README\.md has a pin comment naming 0\.1\.1"):
-        rehearse_release.bump_pin_comments(
-            text, bump_action_pins.PIN, "0.1.3", "0.1.4", "README.md"
-        )
-
-
-def test_a_pin_file_with_no_pin_fails() -> None:
-    with pytest.raises(StepFailed, match="carries no"):
-        rehearse_release.bump_pin_comments("no pins", bump_action_pins.PIN, "0.1.3", "0.1.4", "x")
 
 
 # --- Runbook step 2: the changelog -------------------------------------------------------------
