@@ -254,6 +254,8 @@ class MutantOutcome:
     **checked**, not one it assumed. Anything else that is `over_budget` is a mutant the first
     budget would have called a hang and which turned out to be merely slow — the count that says
     out loud how often the tight budget was about to be wrong.
+
+    `error` is why the run failed, for an `ERROR` verdict, and ``None`` for every other verdict.
     """
 
     mutant: Mutant
@@ -262,6 +264,7 @@ class MutantOutcome:
     selected: int | None = None
     order_coupled: bool = False
     over_budget: bool = False
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1666,10 +1669,12 @@ _DETECTED = (Verdict.KILLED, Verdict.TIMEOUT)
 
 @dataclass(frozen=True)
 class _Ran:
-    """One suite run's answer, plus whether the confirmation pass had to be used to get it."""
+    """One suite run's answer, why it failed if it is `ERROR`, and whether the confirmation pass
+    had to be used to get it."""
 
     verdict: Verdict
     over_budget: bool = False
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1702,7 +1707,7 @@ class _Evaluation:
         makes those roads agree. A confirmation wired into one of them would leave the others
         recording an unchecked hang, and no test comparing one road to itself would ever notice.
         """
-        verdict = _run_one(
+        verdict, error = _run_one(
             self.project_dir,
             self.path,
             self.source,
@@ -1712,22 +1717,20 @@ class _Evaluation:
             files,
         )
         if verdict is not Verdict.TIMEOUT:
-            return _Ran(verdict)
+            return _Ran(verdict, error=error)
         confirmation = self.budget.confirmation(files)
         if confirmation is None:
             return _Ran(verdict)
-        return _Ran(
-            _run_one(
-                self.project_dir,
-                self.path,
-                self.source,
-                mutated,
-                self.runner,
-                confirmation,
-                files,
-            ),
-            over_budget=True,
+        verdict, error = _run_one(
+            self.project_dir,
+            self.path,
+            self.source,
+            mutated,
+            self.runner,
+            confirmation,
+            files,
         )
+        return _Ran(verdict, over_budget=True, error=error)
 
 
 def _evaluate(ctx: _Evaluation, mutant: Mutant, mutated: str, plan: MutantPlan) -> MutantOutcome:
@@ -1746,6 +1749,7 @@ def _evaluate(ctx: _Evaluation, mutant: Mutant, mutated: str, plan: MutantPlan) 
     ran = ctx.once(mutated, files)
     verdict = ran.verdict
     over_budget = ran.over_budget
+    error = ran.error
     if (
         files is not None
         and verdict in _DETECTED
@@ -1756,16 +1760,17 @@ def _evaluate(ctx: _Evaluation, mutant: Mutant, mutated: str, plan: MutantPlan) 
         ran = ctx.once(mutated, None)
         verdict = ran.verdict
         over_budget = over_budget or ran.over_budget
+        error = ran.error
     # Read off what happened rather than tracked while it happened: order-coupled *is* "this
     # mutant had its own test files and does not have them any more", and a flag set in one branch
     # is a second place for that fact to live and disagree from.
     coupled = plan.files is not None and files is None
     if plan.self_check and not plan.no_coverage:
         if files is None:
-            whole = verdict
+            whole, whole_error = verdict, error
         else:
             whole_ran = ctx.once(mutated, None)
-            whole = whole_ran.verdict
+            whole, whole_error = whole_ran.verdict, whole_ran.error
             over_budget = over_budget or whole_ran.over_budget
         if not (whole is verdict or (whole in _DETECTED and verdict in _DETECTED)):
             raise CoverageSelfCheckFailed(
@@ -1777,6 +1782,8 @@ def _evaluate(ctx: _Evaluation, mutant: Mutant, mutated: str, plan: MutantPlan) 
                 f"'{whole.value}'. Some test that can tell the difference is not in the map, so "
                 "no selected verdict in this run can be trusted. Turn coverage analysis off "
                 "(--coverage-analysis off), or use --coverage-analysis all, to run without it."
+                + _failed_with("selected", error)
+                + _failed_with("whole-suite", whole_error)
             )
         return MutantOutcome(
             mutant,
@@ -1785,6 +1792,7 @@ def _evaluate(ctx: _Evaluation, mutant: Mutant, mutated: str, plan: MutantPlan) 
             selected=None if files is None else len(files),
             order_coupled=coupled,
             over_budget=over_budget,
+            error=error,
         )
     return MutantOutcome(
         mutant,
@@ -1792,7 +1800,13 @@ def _evaluate(ctx: _Evaluation, mutant: Mutant, mutated: str, plan: MutantPlan) 
         selected=None if files is None else len(files),
         order_coupled=coupled,
         over_budget=over_budget,
+        error=error,
     )
+
+
+def _failed_with(run: str, error: str | None) -> str:
+    """The self-check message's account of why one of its runs failed, if it did."""
+    return "" if error is None else f"\nThe {run} run failed with:\n{error}"
 
 
 class CoverageSelfCheckFailed(CoverageRunFailed):
@@ -1830,6 +1844,7 @@ def _self_check(outcomes: list[MutantOutcome], check: frozenset[int]) -> list[Mu
                 f"'{outcome.verdict.value}'. "
                 "The coverage map is wrong, so no 'no coverage' verdict in this run can be "
                 "trusted. Turn coverage analysis off (--coverage-analysis off) to run without it."
+                + _failed_with("whole-suite", outcome.error)
             )
     return checked
 
@@ -2442,8 +2457,9 @@ def _run_one(
     runner: Runner,
     timeout: float,
     files: tuple[str, ...] | None = None,
-) -> Verdict:
-    """One mutant's verdict: write it, run the suite, read the result, put the original back.
+) -> tuple[Verdict, str | None]:
+    """One mutant's verdict, and why the run failed if it is `ERROR`: write it, run the suite, read
+    the result, put the original back.
 
     `files` restricts the run to those test files (`engine.runner.FileSelecting.run_selected`); it
     is ``None`` for the whole suite, which is every run unless ``--coverage-analysis per-file``
@@ -2467,11 +2483,11 @@ def _run_one(
         except SuiteTimeout:
             # The mutation hung the suite — a detection, not a crash. Count it as killed
             # (Stryker's Timeout status), distinct from ERROR below.
-            return Verdict.TIMEOUT
-        except Exception:
+            return Verdict.TIMEOUT, None
+        except Exception as failure:
             # The runner failed to execute this mutant (e.g. a Godot crash). Tally it as ERROR and
             # carry on — one bad run must not discard the whole pass (FG-4.1).
-            return Verdict.ERROR
+            return Verdict.ERROR, str(failure) or type(failure).__name__
         if result.tests == 0 and not result.failed:
             # Zero tests, no failures — the same silent lie the baseline guard refuses, one mutant
             # at a time. The baseline already proved this project collects tests (`_run_baseline`
@@ -2490,7 +2506,7 @@ def _run_one(
             # any exit-0 run because an exit code carries no count. It is the backstop a fourth
             # runner inherits without having to know it exists — which is the whole reason the
             # check moved here instead of being copied into a third adapter.
-            return Verdict.ERROR
-        return Verdict.KILLED if result.failed else Verdict.SURVIVED
+            return Verdict.ERROR, "the run collected 0 tests and reported no failures"
+        return (Verdict.KILLED if result.failed else Verdict.SURVIVED), None
     finally:
         _write_source(target, source, eol)  # never leave the project mutated

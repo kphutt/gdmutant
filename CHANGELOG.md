@@ -12,6 +12,11 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A mutant scored `error` now says why its run failed. The `--json` report carries the reason as
+  the mutant's `statusReason`, and a coverage self-check that stops on an `error` quotes it. (#359)
+
 ## [0.1.5] - 2026-11-08
 
 This release makes parallel runs faster and more accurate, and lets you skip slow GdUnit4 tests.
