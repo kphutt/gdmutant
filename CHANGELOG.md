@@ -12,6 +12,11 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A test run that floods its output no longer runs gdmutant out of memory under `--runner gdunit4`
+  or `--runner gut` either. 0.1.5 fixed this for `--runner command` only.
+
 ## [0.1.5] - 2026-11-08
 
 This release makes parallel runs faster and more accurate, and lets you skip slow GdUnit4 tests.

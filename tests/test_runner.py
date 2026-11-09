@@ -518,6 +518,36 @@ def test_command_runner_detail_prefers_stderr_even_when_it_is_only_whitespace(
     assert CommandRunner(_runs(script)).run(str(tmp_path)).detail == ""
 
 
+@pytest.mark.parametrize(
+    ("parts", "found"),
+    [
+        (["x" * 10 + "No test ca", "ses found", "y" * 100], {"No test cases found"}),
+        (["No test", " cases", " found"], {"No test cases found"}),
+        (["No test cases foun", "d"], {"No test cases found"}),
+        (["No test cases", "\nfound"], set()),
+        (["a!", "b"], {"!"}),
+    ],
+)
+def test_a_watched_string_is_found_even_when_reads_cut_it(
+    parts: list[str], found: set[str]
+) -> None:
+    tail = runner_mod._StreamTail(["No test cases found", "!"])
+    for part in parts:
+        tail._feed(part)
+    assert tail.found == found
+
+
+def test_an_unwatched_stream_finds_nothing() -> None:
+    output = runner_mod.BoundedOutput.of(0, "No test cases found")
+    assert not output.saw("No test cases found")
+
+
+def test_bounded_output_of_text_reads_as_a_real_run_would() -> None:
+    assert runner_mod.BoundedOutput.of(1).detail() == ""
+    assert runner_mod.BoundedOutput.of(1, "a\r\nb\rc").detail() == "a\nb\nc"
+    assert runner_mod.BoundedOutput.of(1, "out", "a\r\nb\rc").detail() == "a\nb\nc"
+
+
 def test_command_runner_a_child_holding_its_output_open_times_out(tmp_path: Path) -> None:
     # The command exits at once, but a grandchild it started keeps the pipes open past the
     # budget: that is a timeout.

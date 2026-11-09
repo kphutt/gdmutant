@@ -34,13 +34,12 @@ from gdmutant.adapters.gdscript.marker_run import WINDOW_HOOK_NAME
 from gdmutant.adapters.gdscript.markers import MARKER_AUTOLOAD
 from gdmutant.engine.loop import SourceOutsideProject
 from gdmutant.engine.runner import (
-    CAPTURE_ENCODING,
-    CAPTURE_ERRORS,
+    BoundedOutput,
     ReportedSuite,
     SuiteResult,
     SuiteTimeout,
     parse_junit_xml,
-    script_error_excerpt,
+    run_bounded,
     with_filename,
 )
 
@@ -182,6 +181,8 @@ class _GodotJUnitRunner:
     _imported: bool
     #: Human name of the framework, for error messages ("<name> wrote no report", …).
     _framework: ClassVar[str] = ""
+    #: Strings `_missing_report_error` looks for anywhere in a run's output.
+    _watch: ClassVar[tuple[str, ...]] = ()
 
     def prepare(self, project_dir: str) -> None:
         """Warm Godot's import cache once, so ``class_name`` types resolve on a cold checkout.
@@ -219,9 +220,8 @@ class _GodotJUnitRunner:
                     cwd=project_dir,
                     timeout=_IMPORT_TIMEOUT,
                     check=False,
-                    capture_output=True,
-                    encoding=CAPTURE_ENCODING,
-                    errors=CAPTURE_ERRORS,
+                    stdout=subprocess.DEVNULL,  # never read, so never held
+                    stderr=subprocess.DEVNULL,
                 )
             except FileNotFoundError as error:
                 raise with_filename(error, self.godot) from error
@@ -246,7 +246,7 @@ class _GodotJUnitRunner:
     def _result_from_report(  # pragma: no cover - overridden per adapter
         self,
         report_text: str,
-        completed: subprocess.CompletedProcess[str],
+        completed: BoundedOutput,
         files: Sequence[str] | None = None,
     ) -> SuiteResult:
         """Parse this run's report into a `SuiteResult`, enforcing the adapter's **crash-safety**
@@ -266,9 +266,7 @@ class _GodotJUnitRunner:
         """
         raise NotImplementedError
 
-    def _missing_report_error(
-        self, report: Path, completed: subprocess.CompletedProcess[str]
-    ) -> RuntimeError:
+    def _missing_report_error(self, report: Path, completed: BoundedOutput) -> RuntimeError:
         """The error `run` raises when this invocation wrote no report at all.
 
         Overridable so an adapter can name a cause it can actually *recognise* in the captured
@@ -277,7 +275,7 @@ class _GodotJUnitRunner:
         mutant that broke loading all look identical here. `GdUnit4Runner` overrides it for the one
         case GdUnit4 announces by name.
         """
-        detail = (completed.stderr or completed.stdout or "").strip()
+        detail = completed.detail()
         return RuntimeError(
             f"{self._framework} wrote no report at {report}. Godot may have failed to run"
             + (f":\n{detail[-1000:]}" if detail else "")
@@ -376,18 +374,15 @@ class _GodotJUnitRunner:
         # failure, or a mutant that errors at load time), that's an execution failure — raise so the
         # loop tallies it as ERROR rather than silently inheriting the old verdict (NF-5).
         report.unlink(missing_ok=True)
-        # check=False: both frameworks exit non-zero on test failures (expected) — the report
-        # decides. capture_output: keep per-mutant Godot chatter off the console, and retain it so a
-        # failed run can be diagnosed instead of vanishing.
+        # The exit code is not checked: both frameworks exit non-zero on test failures, and the
+        # report decides. The output is kept off the console, and its bounded tail is kept so a
+        # failed run can be diagnosed without a flooding mutant filling memory.
         try:
-            completed = subprocess.run(
+            completed = run_bounded(
                 self.command(project_dir, markers=markers, files=files),
-                cwd=project_dir,
-                timeout=budget,
-                check=False,
-                capture_output=True,
-                encoding=CAPTURE_ENCODING,
-                errors=CAPTURE_ERRORS,
+                project_dir,
+                budget,
+                self._watch,
             )
         except subprocess.TimeoutExpired as expired:
             # A mutation that makes the suite hang is a detection — surface it as a timeout so the
@@ -402,10 +397,7 @@ class _GodotJUnitRunner:
         result = self._result_from_report(report.read_text(encoding="utf-8"), completed, files)
         if not markers:
             return result
-        # A newline between them, so a last stdout line with no newline of its own cannot run
-        # into the first stderr line and hide where a SCRIPT ERROR starts.
-        output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
-        return replace(result, runtime_error=script_error_excerpt(output))
+        return replace(result, runtime_error=completed.script_error())
 
 
 @dataclass
@@ -453,6 +445,7 @@ class GdUnit4Runner(_GodotJUnitRunner):
     exclude_tests: tuple[str, ...] = ()
     _imported: bool = field(default=False, init=False, repr=False)
     _framework: ClassVar[str] = "GdUnit4"
+    _watch: ClassVar[tuple[str, ...]] = (_GDUNIT_NO_TESTS_MARKER,)
 
     def command(
         self, project_dir: str, *, markers: bool = False, files: Sequence[str] | None = None
@@ -539,7 +532,7 @@ func _on_event(event: GdUnitEvent) -> void:
     def _result_from_report(
         self,
         report_text: str,
-        completed: subprocess.CompletedProcess[str],
+        completed: BoundedOutput,
         files: Sequence[str] | None = None,
     ) -> SuiteResult:
         """Crash-safety (see the class docstring): a report GdUnit4 *did* write, but describing zero
@@ -557,7 +550,7 @@ func _on_event(event: GdUnitEvent) -> void:
         except ValueError:
             result = None  # a report with no <testsuite> at all — a run that described nothing
         if result is None or result.tests == 0:
-            detail = (completed.stderr or completed.stdout or "").strip()
+            detail = completed.detail()
             # Name what actually ran. Under selection that is a handful of chosen files, not the
             # test directory, and sending a reader to look at the wrong scope is how a real fault
             # gets chased in the wrong place.
@@ -570,9 +563,7 @@ func _on_event(event: GdUnitEvent) -> void:
             )
         return result
 
-    def _missing_report_error(
-        self, report: Path, completed: subprocess.CompletedProcess[str]
-    ) -> RuntimeError:
+    def _missing_report_error(self, report: Path, completed: BoundedOutput) -> RuntimeError:
         """The base's no-report error, except when GdUnit4 said *why* — then say that instead.
 
         GdUnit4 exits **0** and writes no report when discovery finds no suites under ``-a``,
@@ -586,8 +577,7 @@ func _on_event(event: GdUnitEvent) -> void:
         phrase to offer "install the GdUnit4 addon", which would be wrong advice here — printing
         this marker at all proves the addon loaded.
         """
-        output = (completed.stdout or "") + (completed.stderr or "")
-        if _GDUNIT_NO_TESTS_MARKER not in output:
+        if not completed.saw(_GDUNIT_NO_TESTS_MARKER):
             return super()._missing_report_error(report, completed)
         return RuntimeError(
             f"GdUnit4 discovered no test suites under {self.test_path}, so it ran nothing and "
@@ -761,7 +751,7 @@ func _on_end_script() -> void:
     def _result_from_report(
         self,
         report_text: str,
-        completed: subprocess.CompletedProcess[str],
+        completed: BoundedOutput,
         files: Sequence[str] | None = None,
     ) -> SuiteResult:
         """Crash-safety (see the class docstring): raise — never return a pass — when the report
@@ -810,7 +800,7 @@ func _on_end_script() -> void:
             # false-error the mutant. Setting a bool from --jobs workers is safe (only ever True).
             self._nondeterminism_canary = True
         if result is None or tests == 0 or tests < baseline:
-            detail = (completed.stderr or completed.stdout or "").strip()
+            detail = completed.detail()
             if is_baseline:
                 # Discovery, not a crash — see the docstring. Mid-run drops keep the message below.
                 message = (
