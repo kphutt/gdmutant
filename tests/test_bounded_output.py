@@ -159,9 +159,7 @@ def test_command_runner_refuses_a_run_whose_output_could_not_be_read(
         raise OSError("pipe broke")
 
     monkeypatch.setattr(runner_mod._StreamTail, "_feed", boom)
-    with pytest.raises(
-        RuntimeError, match=r"^could not read the test command's output: pipe broke$"
-    ):
+    with pytest.raises(RuntimeError, match=r"^could not read the command's output: pipe broke$"):
         CommandRunner(_runs("print('x')")).run(str(tmp_path))
 
 
@@ -301,6 +299,9 @@ def test_command_runner_detail_prefers_stderr_even_when_it_is_only_whitespace(
         (["No test cases foun", "d"], {"No test cases found"}),
         (["No test cases", "\nfound"], set()),
         (["a!", "b"], {"!"}),
+        # After the SCRIPT ERROR excerpt is complete `_feed` stops splitting lines; it must not
+        # stop watching.
+        (["SCRIPT ERROR: x\n1\n2\n3\n", "No test cases found"], {"No test cases found"}),
     ],
 )
 def test_a_watched_string_is_found_even_when_reads_cut_it(
@@ -312,9 +313,11 @@ def test_a_watched_string_is_found_even_when_reads_cut_it(
     assert tail.found == found
 
 
-def test_an_unwatched_stream_finds_nothing() -> None:
+def test_asking_about_an_unwatched_string_is_refused() -> None:
+    # It would always answer no, which is a check that passes without checking anything.
     output = runner_mod.BoundedOutput.of(0, "No test cases found")
-    assert not output.saw("No test cases found")
+    with pytest.raises(ValueError, match="'No test cases found' was not watched"):
+        output.saw("No test cases found")
 
 
 def test_bounded_output_of_text_reads_as_a_real_run_would() -> None:

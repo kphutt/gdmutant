@@ -30,6 +30,7 @@ def _script(report: str | None, *, before: str = "", after: str = "") -> str:
     return (
         "import sys\n"
         f"sys.stdout.write({before!r})\n"
+        "sys.stdout.flush()\n"  # or the text layer holds `before` back until after the flood
         f"for _ in range({_FLOOD_MB}):\n"
         "    sys.stdout.buffer.write(b'stdout flood line\\n' * 58255)\n"
         "    sys.stderr.buffer.write(b'stderr flood line\\n' * 58255)\n"

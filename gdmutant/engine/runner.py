@@ -588,7 +588,10 @@ class BoundedOutput:
         return _joined_excerpt(self.stdout, self.stderr)
 
     def saw(self, needle: str) -> bool:
-        """Whether either stream contained `needle`, which must have been watched."""
+        """Whether either stream contained `needle`. Raises ``ValueError`` if it was not watched,
+        since the answer would then always be no."""
+        if needle not in self.stdout._watch:
+            raise ValueError(f"{needle!r} was not watched, so it could never be seen")
         return needle in self.stdout.found or needle in self.stderr.found
 
 
@@ -624,7 +627,7 @@ def run_bounded(
     for stream in streams:
         if stream.error is not None:
             raise RuntimeError(
-                f"could not read the test command's output: {stream.error}"
+                f"could not read the command's output: {stream.error}"
             ) from stream.error
     return BoundedOutput(process.returncode, *streams)
 
