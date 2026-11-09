@@ -173,7 +173,8 @@ Three states worth knowing before you read a report:
    each pin must read the new tag's commit and version. The test fails there until step 10 bumps
    the pins. That is the reminder working, not a regression. One exception covers step 10 itself.
    If HEAD is still the tagged commit and a pin file has uncommitted edits, the new tag's pins
-   also pass, so the suite can run on the bump before it is committed. A second test,
+   also pass, so the suite can run on the bump before it is committed. Every pin file must then
+   name the same release, so a bump that changed only some files still fails. A second test,
    `test_every_pins_comment_names_the_release_its_sha_belongs_to`, needs no network. It checks
    each comment against this clone's own tags. When a tag has not been fetched, it skips with
    `NOTCHECKED` and names the missing tags.

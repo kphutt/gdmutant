@@ -204,18 +204,26 @@ def _pin_files_differ_from_head() -> bool:
     return result.returncode == 1
 
 
-def check_pins_name_one_of(text: str, label: str, accepted: list[tuple[str, str]]) -> None:
-    """Pass if every pin in `text` names one of the `accepted` pairs, the same pair throughout.
-    Otherwise raise the first pair's failure, since that pair is the strict expectation."""
-    failures: list[AssertionError] = []
+def check_pins_name_one_of(texts: dict[str, str], accepted: list[tuple[str, str]]) -> None:
+    """Pass if one `accepted` pair fits every pin in every file of `texts`, label to text.
+
+    One pair across all the files, not one per file: a half-done bump, with one file on the new tag
+    and another still on the previous release, must fail. Otherwise raise every file's failure
+    against the first pair, since that pair is the strict expectation."""
+    first: list[str] | None = None
     for version, sha in accepted:
-        try:
-            check_pins_are_current(text, label, version, sha)
-        except AssertionError as failure:
-            failures.append(failure)
-        else:
+        problems: list[str] = []
+        for label, text in texts.items():
+            try:
+                check_pins_are_current(text, label, version, sha)
+            except AssertionError as failure:
+                problems.append(str(failure))
+        if not problems:
             return
-    raise failures[0]
+        if first is None:
+            first = problems
+    assert first is not None, "no accepted pair was given, so nothing could pass"
+    raise AssertionError("\n".join(first))
 
 
 def check_pins_are_current(text: str, label: str, version: str, sha: str) -> None:
@@ -246,8 +254,7 @@ def check_pins_are_current(text: str, label: str, version: str, sha: str) -> Non
         # Anything else (a branch name, an empty ref) isn't a version pin this check applies to.
 
 
-@pytest.mark.parametrize("path", DOCS_SHOWING_A_USES_LINE, ids=lambda p: p.name)
-def test_every_shipped_uses_line_pins_the_release_this_commit_should_name(path: Path) -> None:
+def test_every_shipped_uses_line_pins_the_release_this_commit_should_name() -> None:
     # A `uses:` line that names a real, valid, non-floating ref still goes stale the moment a new
     # version ships: v0.1.0 stayed pinned here through 0.1.1 and 0.1.2, so a reader copying the
     # README installed a version with a bug 0.1.1 had already fixed, and got an action.yml with no
@@ -257,7 +264,11 @@ def test_every_shipped_uses_line_pins_the_release_this_commit_should_name(path: 
     accepted = accepted_pins(
         version, _remote_tag_refs(), _head_commit(), _pin_files_differ_from_head()
     )
-    check_pins_name_one_of(path.read_text(encoding="utf-8"), str(path.relative_to(REPO)), accepted)
+    texts = {
+        str(path.relative_to(REPO)): path.read_text(encoding="utf-8")
+        for path in DOCS_SHOWING_A_USES_LINE
+    }
+    check_pins_name_one_of(texts, accepted)
 
 
 # --- the comment names the release its SHA belongs to, offline ----------------------------------
@@ -726,8 +737,8 @@ def test_step_10_before_its_commit_accepts_the_new_tags_pins() -> None:
     refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
     accepted = accepted_pins("0.1.3", refs, _FAKE_SHA, pins_dirty=True)
     assert accepted == [("0.1.2", _PREV_SHA), ("0.1.3", _FAKE_SHA)]
-    check_pins_name_one_of(_pin("0.1.3", _FAKE_SHA), "fake.md", accepted)
-    check_pins_name_one_of(_pin("0.1.2", _PREV_SHA), "fake.md", accepted)
+    check_pins_name_one_of({"fake.md": _pin("0.1.3", _FAKE_SHA)}, accepted)
+    check_pins_name_one_of({"fake.md": _pin("0.1.2", _PREV_SHA)}, accepted)
 
 
 def test_a_clean_tagged_commit_still_accepts_only_the_previous_release() -> None:
@@ -736,7 +747,7 @@ def test_a_clean_tagged_commit_still_accepts_only_the_previous_release() -> None
     accepted = accepted_pins("0.1.3", refs, _FAKE_SHA, pins_dirty=False)
     assert accepted == [("0.1.2", _PREV_SHA)]
     with pytest.raises(AssertionError, match=r"must read `@b{40} # v0\.1\.2`"):
-        check_pins_name_one_of(_pin("0.1.3", _FAKE_SHA), "fake.md", accepted)
+        check_pins_name_one_of({"fake.md": _pin("0.1.3", _FAKE_SHA)}, accepted)
 
 
 def test_edited_pin_files_loosen_nothing_away_from_the_tagged_commit() -> None:
@@ -753,7 +764,7 @@ def test_the_extra_pair_never_lets_a_file_mix_two_releases() -> None:
     mixed = _pin("0.1.2", _PREV_SHA) + _pin("0.1.3", _FAKE_SHA)
     # Both pairs fail, and the message is the strict pair's: the previous release.
     with pytest.raises(AssertionError, match=r"must read `@b{40} # v0\.1\.2`"):
-        check_pins_name_one_of(mixed, "fake.md", accepted)
+        check_pins_name_one_of({"fake.md": mixed}, accepted)
 
 
 def _repo_with_a_pin_file(root: Path) -> None:
@@ -788,3 +799,41 @@ def test_pin_files_differ_from_head_is_false_where_git_cannot_answer(
     assert _pin_files_differ_from_head() is False
     monkeypatch.setattr(_MODULE, "REPO", tmp_path / "does-not-exist")
     assert _pin_files_differ_from_head() is False
+
+
+def test_a_half_done_bump_across_two_files_fails() -> None:
+    # Step 10 before its commit, with one file bumped and another left behind. Each file alone
+    # names an accepted pair, but not the same one, so the pins as a set are wrong.
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    accepted = accepted_pins("0.1.3", refs, _FAKE_SHA, pins_dirty=True)
+    texts = {"README.md": _pin("0.1.3", _FAKE_SHA), "action.yml": _pin("0.1.2", _PREV_SHA)}
+    with pytest.raises(AssertionError) as raised:
+        check_pins_name_one_of(texts, accepted)
+    # The report is the strict pair's, and names the file that is off it.
+    assert "README.md pins" in str(raised.value)
+    assert "action.yml" not in str(raised.value)
+
+
+def test_a_complete_bump_across_every_file_passes() -> None:
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    accepted = accepted_pins("0.1.3", refs, _FAKE_SHA, pins_dirty=True)
+    texts = {"README.md": _pin("0.1.3", _FAKE_SHA), "action.yml": _pin("0.1.3", _FAKE_SHA)}
+    check_pins_name_one_of(texts, accepted)
+
+
+def test_the_strict_report_names_every_file_that_is_off() -> None:
+    accepted = [("0.1.2", _PREV_SHA)]
+    texts = {
+        "README.md": _pin("0.1.3"),
+        "action.yml": _pin("0.1.3"),
+        "guide.md": _pin("0.1.2", _PREV_SHA),
+    }
+    with pytest.raises(AssertionError) as raised:
+        check_pins_name_one_of(texts, accepted)
+    said = str(raised.value)
+    assert "README.md pins" in said and "action.yml pins" in said and "guide.md" not in said
+
+
+def test_no_accepted_pair_fails_rather_than_passing() -> None:
+    with pytest.raises(AssertionError, match="no accepted pair"):
+        check_pins_name_one_of({"fake.md": _pin("0.1.3")}, [])
