@@ -329,6 +329,16 @@ def test_local_tag_refs_raises_where_git_cannot_answer(
         _local_tag_refs()
 
 
+def test_local_tag_refs_raises_outside_a_repository_rather_than_answering_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # git exits 128 here. Only exit 1 means "no tags", so this must not come back as an empty map.
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    with pytest.raises(OSError, match="exited 128"):
+        _local_tag_refs()
+
+
 def test_the_ref_inputs_own_default_is_not_a_floating_tag() -> None:
     # The bug this test exists to catch shipped in exactly this input's `default:` value (a literal
     # `v1`, a ref this repo can never produce) and was invisible to every check above: those only
