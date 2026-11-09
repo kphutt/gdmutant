@@ -17,6 +17,19 @@ All notable changes to gdmutant are recorded here. The format follows
 - A test run that floods its output no longer runs gdmutant out of memory under `--runner gdunit4`
   or `--runner gut` either. 0.1.5 fixed this for `--runner command` only.
 
+## [0.1.6] - 2026-11-09
+
+This release changes no code. It corrects the GitHub Action example on the PyPI project page.
+Apart from that and the version number, the package is the same as 0.1.5.
+
+### GitHub Action example
+
+- The 0.1.5 PyPI page shows 0.1.4's commit labeled as v0.1.5. PyPI keeps each version's page as
+  uploaded, so that page stays wrong. This release's page pins `bf611f7`, the real v0.1.5 commit,
+  with the matching label. That action runs the same code as 0.1.6. (#360)
+- From now on, each release's page pins the release before it, with that release's own commit. A
+  release cannot pin its own commit, because a commit cannot contain its own hash. (#360)
+
 ## [0.1.5] - 2026-11-08
 
 This release makes parallel runs faster and more accurate, and lets you skip slow GdUnit4 tests.

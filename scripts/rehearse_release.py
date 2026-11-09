@@ -14,9 +14,9 @@ WHAT IT DOES, IN ORDER. Each step is one step of docs/releasing.md, done on a th
 
   1. Pick the version to rehearse: pyproject.toml's version if it is not tagged yet (a release in
      progress), otherwise the next patch version.
-  2. Runbook steps 1-2: set the version, re-lock, bump every `# vX.Y.Z` pin comment, date the
-     changelog. Each edit must find exactly what the runbook says it will find, so a runbook that
-     has drifted from the tree fails here.
+  2. Runbook steps 1-2: set the version, re-lock, date the changelog. The pins are left alone:
+     the release commit never touches them. Each edit must find exactly what the runbook says it
+     will find, so a runbook that has drifted from the tree fails here.
   3. The version-bump commit, before the tag exists: the suite (`pytest`), which is the only leg
      of Verify that the release commit can newly fail -- ci.yml already ran the whole `verify` job
      for real on the release pull request.
@@ -25,7 +25,7 @@ WHAT IT DOES, IN ORDER. Each step is one step of docs/releasing.md, done on a th
      scripts/verify_local.py, `uv build`, `twine check`, and every image in the built long
      description (scripts/check_readme_images.py).
   5. Runbook step 10: scripts/bump_action_pins.py, committed, then tests/test_action_pin.py must
-     pass with no NOTCHECKED warning, because by then every pin can be checked.
+     pass, now holding every pin to the new tag's commit and version.
   6. ci.yml's `license-check` job, publish.yml's last non-upload gate. It runs last because it
      rebuilds the clone's environment without the dev group.
 
@@ -95,8 +95,7 @@ QUICK_TESTS = (
     "tests/test_packaging.py",
 )
 
-#: pytest, quiet, with a line per failure, error and warning. The warning lines are how step 10 can
-#: tell a strict pass from one that printed NOTCHECKED.
+#: pytest, quiet, with a line per failure, error and warning.
 PYTEST = ("uv", "run", "--frozen", "pytest", "-q", "-rfEw", "-p", "no:cacheprovider")
 
 #: ci.yml's whole `verify` job, read out of the workflow rather than restated here. This is what
@@ -250,23 +249,6 @@ def set_pyproject_version(text: str, version: str) -> str:
     return new
 
 
-def bump_pin_comments(text: str, pin: re.Pattern[str], old: str, new: str, name: str) -> str:
-    """Point every `# vX.Y.Z` pin comment at `new`. Runbook step 1.
-
-    Every comment must name `old` (the last release) or `new` (a bump already made). Anything else
-    means an earlier release missed this pin, which is the drift this rehearsal exists to find."""
-    found = list(pin.finditer(text))
-    if not found:
-        raise StepFailed(f"{name} carries no `kphutt/gdmutant@<sha> # vX.Y.Z` pin to bump")
-    strays = sorted({m.group("version") for m in found} - {old, new})
-    if strays:
-        raise StepFailed(
-            f"{name} has a pin comment naming {', '.join(strays)}, neither the last release "
-            f"({old}) nor the one being cut ({new})"
-        )
-    return pin.sub(lambda m: m.group(0).replace(f"v{m.group('version')}", f"v{new}"), text)
-
-
 def date_changelog(text: str, version: str, today: str) -> str:
     """Rename the top `## [Unreleased]` heading to `## [X.Y.Z] - YYYY-MM-DD`. Runbook step 2."""
     top = CHANGELOG_TOP.search(text)
@@ -329,7 +311,7 @@ def refuse_a_stored_identity(stored: str) -> None:
 
 
 def refuse_an_unchanged_version_bump(dirty: bool, last: str | None, tag: str) -> None:
-    """Runbook steps 1-2 asked for four edits and the tree did not move. Exactly one state explains
+    """Runbook steps 1-2 asked for three edits and the tree did not move. Exactly one state explains
     that innocently: the packaged version is not tagged yet, so a release of it is already in
     progress and its own release pull request made every edit already. Anything else means an edit
     found what it expected and then wrote back what was already there."""
@@ -337,7 +319,7 @@ def refuse_an_unchanged_version_bump(dirty: bool, last: str | None, tag: str) ->
         return
     raise StepFailed(
         f"{tag} is the next release after v{last}, so runbook steps 1-2 had a version to bump, a "
-        "lockfile to re-resolve, pin comments to move and a changelog heading to date -- and "
+        "lockfile to re-resolve and a changelog heading to date -- and "
         "changed nothing at all. One of those edits no longer edits the file it names."
     )
 
@@ -551,18 +533,9 @@ def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
         return f"{source_sha[:12]} in {scratch}"
 
     def edit() -> str:
-        pin = load(work / "scripts" / "bump_action_pins.py", "rehearsal_bump_action_pins")
         pyproject = work / "pyproject.toml"
         rewrite_text(pyproject, lambda text: set_pyproject_version(text, version))
         run(["uv", "lock", "--quiet"], work)
-        for name in pin.PIN_FILES:
-            path = work / name
-            rewrite_text(
-                path,
-                lambda text, name=name: bump_pin_comments(
-                    text, pin.PIN, last or version, version, name
-                ),
-            )
         changelog = work / "CHANGELOG.md"
         today = datetime.date.today().isoformat()
         rewrite_text(changelog, lambda text: date_changelog(text, version, today))
@@ -650,13 +623,7 @@ def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
         # No --allow-empty, unlike the version-bump commit: if bump_action_pins.py left the tree
         # untouched, git's "nothing to commit" is the finding, not an inconvenience.
         run(commit_args(f"chore: bump action pins to {tag}"), work)
-        result = run([*PYTEST, "--no-cov", "tests/test_action_pin.py"], work)
-        if "NOTCHECKED" in result.stdout:
-            raise StepFailed(
-                "test_action_pin.py passed but warned NOTCHECKED after the pin bump, so the strict "
-                "SHA comparison never ran. After step 10 every pin must be comparable."
-            )
-        return pytest_summary(result)
+        return pytest_summary(run([*PYTEST, "--no-cov", "tests/test_action_pin.py"], work))
 
     actions = [clone, edit, suite, tag_guard, gate, build, images, pins, licenses]
     try:
