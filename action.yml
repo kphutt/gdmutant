@@ -2,7 +2,7 @@
 #
 # A consumer runs mutation testing on their Godot project in a few lines of YAML:
 #
-#     - uses: kphutt/gdmutant@bf611f70d52d985aa217cabcef53afaa29c5b0e7 # v0.1.5
+#     - uses: kphutt/gdmutant@38f511702537fb1b27e0a93f95c5232f05eb5d66 # v0.1.6
 #       with:
 #         godot-version: 4.7.0
 #         project-path: ./

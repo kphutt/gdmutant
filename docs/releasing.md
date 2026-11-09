@@ -125,7 +125,7 @@ full-history `gitleaks` pass, and the OIDC upload with the `verify-published` in
 it. `ci.yml` does run the Windows and Godot legs on every pull request, just never on a tagged
 commit.
 
-Two states worth knowing before you read a report:
+Three states worth knowing before you read a report:
 
 - **It refuses to start rather than guess.** No `v*` tag in the checkout (a tagless fetch) means it
   cannot tell which version a release would cut, and guessing would rehearse a version that already
@@ -136,12 +136,16 @@ Two states worth knowing before you read a report:
   carries on walking the rest of the path. It does not read that as a failure. If the packaged
   version *is* tagged, though, those edits had real work to do, and a tree they left unchanged is a
   failure: one of them no longer edits the file it names.
+- **Between a tag being pushed and step 10 merging, the rehearsal fails at the version-bump
+  commit.** It rehearses the next version, so it expects the pins to name the release just tagged,
+  and they still name the one before it. `tests/test_action_pin.py` fails on `main` for the same
+  reason in that window. Both turn green once step 10 merges.
 
 1. Set the version in `pyproject.toml`. The tag must match it exactly.
    `scripts/check_release_tag.py` fails the release if it doesn't.
 
-   Three things move together with that number, in the same commit. Miss any one and the release
-   PR goes red, or worse, goes green while shipping something stale.
+   One thing moves with that number, in the same commit. One thing must not move. Get either
+   wrong and the release PR goes red, or ships a wrong page to PyPI.
 
    *`uv.lock` records gdmutant's own version too.* Run `uv lock` after editing `pyproject.toml` and
    commit the result. Every CI job that installs dependencies uses `uv sync --frozen`, which refuses
@@ -149,23 +153,26 @@ Two states worth knowing before you read a report:
    test runs. A local `uv run` quietly re-locks for you, which is why this is easy to miss until CI
    says no.
 
-   *The `# vX.Y.Z` comment beside each pinned SHA.* Bump those to the version being cut, in this
-   same commit: `README.md`, `action.yml` and `docs/gdmutant-guide.md`. Do not touch the SHAs yet.
-   They cannot be right until the tag exists, and step 10 below is where they get corrected.
+   *Leave every action pin alone.* The release commit never touches a
+   `kphutt/gdmutant@<sha> # vX.Y.Z` line. Those lines live in `README.md`, `action.yml` and
+   `docs/gdmutant-guide.md`. Leave the SHA as it is, and leave the `# vX.Y.Z` comment too. The SHA
+   cannot be right yet. The commit it would name is the release itself, and a commit cannot hold
+   its own hash. A comment moved on its own is worse than a stale pin. It labels the previous
+   release's commit with the new version. 0.1.5 shipped exactly that. PyPI froze its README into
+   the 0.1.5 page, showing 0.1.4's commit commented `# v0.1.5`. So the pins keep naming the
+   previous release through the release, SHA and comment together. Step 10 moves both at once,
+   after the tag exists. Each release's PyPI page therefore shows the previous release's commit,
+   correctly labeled.
 
-   *The pinned SHAs stay stale on purpose until after the tag.*
-   `tests/test_action_pin.py` knows about two windows where the SHAs cannot be right, and in both
-   it checks the version comments instead and warns `NOTCHECKED` for each file, saying out loud
-   which half did not run. The first is before the tag exists: there is no commit to compare
-   against. The second is the tagged commit itself, which `publish.yml`'s gate checks out and
-   tests: a commit cannot contain its own hash, so it can only ever pin the previous release. On
-   any other commit once the tag exists, `main` included, the SHA half runs and fails until step 10
-   bumps the pins, which is the reminder working rather than a regression.
-   Both windows used to be failures, and each deadlocked the release it was meant to protect. The
-   first turned the version-bump PR red, so the tag could never be pushed. The second, found
-   before 0.1.3 was cut by running the test on the v0.1.2 tagged commit, would have failed the
-   release gate on every release, so nothing could ever reach PyPI. 0.1.2 was cut before the
-   test existed, so neither had been exercised.
+   `tests/test_action_pin.py` holds the pins to that rule. Two windows expect the previous release:
+   before the tag is pushed, and on the tagged commit itself. That commit is the one
+   `publish.yml`'s gate checks out and tests. In both windows each pin must read the previous
+   release's commit and version exactly. On any other commit once the tag exists, `main` included,
+   each pin must read the new tag's commit and version. The test fails there until step 10 bumps
+   the pins. That is the reminder working, not a regression. A second test,
+   `test_every_pins_comment_names_the_release_its_sha_belongs_to`, needs no network. It checks
+   each comment against this clone's own tags. When a tag has not been fetched, it skips with
+   `NOTCHECKED` and names the missing tags.
 2. Date the changelog. Change `CHANGELOG.md`'s bare `## [Unreleased]` heading (Keep a Changelog's
    own convention: no version number yet, since nothing under it has shipped) to
    `## [X.Y.Z] - YYYY-MM-DD`, using the date you expect to publish: one rename adds both the
@@ -212,11 +219,12 @@ Two states worth knowing before you read a report:
    [Recurring](#recurring-every-release), item 1.
 9. Verify what shipped. The project page is at https://pypi.org/p/gdmutant, and the checklist
    below covers what a green upload does not prove.
-10. Bump the pinned SHAs, promptly, in a follow-up PR: on a branch off `main`, run
+10. Bump the pins, SHA and comment together, promptly, in a follow-up PR: on a branch off `main`, run
     `uv run python scripts/bump_action_pins.py`, commit what it changed, and merge. It reads the
-    tag's commit from origin and rewrites every pin whose comment step 1 bumped, in every file its
-    `PIN_FILES` lists. It writes nothing and says why if the tag is not pushed yet, if a pin's
-    comment names another version, or if a listed file has no pin. Until this merges,
+    tag's commit from origin. It rewrites every pin in the files `PIN_FILES` lists to that commit
+    and that version, moving the SHA and the `# vX.Y.Z` comment in one edit. It writes nothing and
+    says why in four cases: the tag is not pushed yet, a pin has no comment, a pin's comment names
+    a later version, or a listed file has no pin. Until this merges,
     `tests/test_action_pin.py` fails on `main` and on every pull request, and a consumer copying a
     `uses:` line gets the previous release. It could not happen earlier, because the SHA does not
     exist until the tag does. A doc that gains a pin must be added to `PIN_FILES`:

@@ -32,11 +32,21 @@ def _pin(sha: str, version: str) -> str:
 # --- bump ---------------------------------------------------------------------------------------
 
 
-def test_bump_rewrites_every_pin_commented_with_the_version() -> None:
-    text = _pin(OLD, "0.1.3") + "prose\n" + _pin(OLD, "0.1.3")
+def test_bump_moves_the_sha_and_the_comment_together() -> None:
+    # The release commit leaves every pin alone, so this is the shape step 10 finds: each pin
+    # still names the previous release, SHA and comment alike. Both halves move in one edit.
+    text = _pin(OLD, "0.1.2") + "prose\n" + _pin(OLD, "0.1.2")
     new, changed, current, problems = bump_action_pins.bump(text, NEW, "0.1.3")
     assert new == _pin(NEW, "0.1.3") + "prose\n" + _pin(NEW, "0.1.3")
     assert (changed, current, problems) == (2, 0, [])
+
+
+def test_bump_repairs_a_comment_that_ran_ahead_of_its_sha() -> None:
+    # The shape 0.1.5 shipped: the release commit had already moved the comment to the new version
+    # while the SHA still named the previous release. The bump fixes the SHA and keeps the comment.
+    new, changed, current, problems = bump_action_pins.bump(_pin(OLD, "0.1.3"), NEW, "0.1.3")
+    assert new == _pin(NEW, "0.1.3")
+    assert (changed, current, problems) == (1, 0, [])
 
 
 def test_bump_counts_a_pin_already_on_the_tag_as_current() -> None:
@@ -52,11 +62,17 @@ def test_bump_never_touches_another_actions_pin() -> None:
     assert changed == 1
 
 
-def test_bump_reports_a_comment_step_one_missed() -> None:
-    new, changed, _, problems = bump_action_pins.bump(_pin(OLD, "0.1.2"), NEW, "0.1.3")
-    assert new == _pin(OLD, "0.1.2")  # left alone, not guessed at
+def test_bump_refuses_to_move_a_pin_backwards() -> None:
+    new, changed, _, problems = bump_action_pins.bump(_pin(OLD, "0.1.4"), NEW, "0.1.3")
+    assert new == _pin(OLD, "0.1.4")  # left alone, not guessed at
     assert changed == 0
-    assert len(problems) == 1 and "commented v0.1.2" in problems[0]
+    assert len(problems) == 1 and "commented v0.1.4, later than v0.1.3" in problems[0]
+
+
+def test_bump_compares_versions_as_numbers_not_strings() -> None:
+    # As strings "0.1.10" < "0.1.9", which would refuse a correct bump to 0.1.10.
+    new, changed, _, problems = bump_action_pins.bump(_pin(OLD, "0.1.9"), NEW, "0.1.10")
+    assert (new, changed, problems) == (_pin(NEW, "0.1.10"), 1, [])
 
 
 def test_bump_reports_a_pin_with_no_comment() -> None:
@@ -73,7 +89,7 @@ def _repo(tmp_path: Path, files: dict[str, str]) -> Path:
     for name in bump_action_pins.PIN_FILES:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(files.get(name, _pin(OLD, "0.1.3")).encode("utf-8"))
+        path.write_bytes(files.get(name, _pin(OLD, "0.1.2")).encode("utf-8"))
     return tmp_path
 
 
@@ -108,12 +124,12 @@ def test_one_bad_file_stops_every_write(
     # A half-bumped set of docs is worse than none: the pin test then fails on some files and
     # passes on others, and the one left behind is easy to miss. So a single problem anywhere
     # means nothing is written, including to the files that were fine.
-    root = _repo(tmp_path, {"action.yml": _pin(OLD, "0.1.2")})
+    root = _repo(tmp_path, {"action.yml": _pin(OLD, "0.1.4")})
     before = _contents(root)
     monkeypatch.setattr(bump_action_pins, "tag_commit", lambda version, root: NEW)
     assert bump_action_pins.main([], root=root) == 1
     assert _contents(root) == before
-    assert "action.yml: a pin is commented v0.1.2" in capsys.readouterr().err
+    assert "action.yml: a pin is commented v0.1.4" in capsys.readouterr().err
 
 
 def test_a_listed_file_with_no_pin_is_a_failure_not_a_skip(
@@ -126,7 +142,7 @@ def test_a_listed_file_with_no_pin_is_a_failure_not_a_skip(
 
 
 def test_main_keeps_crlf_line_endings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    crlf = _pin(OLD, "0.1.3").replace("\n", "\r\n")
+    crlf = _pin(OLD, "0.1.2").replace("\n", "\r\n")
     root = _repo(tmp_path, dict.fromkeys(bump_action_pins.PIN_FILES, crlf))
     monkeypatch.setattr(bump_action_pins, "tag_commit", lambda version, root: NEW)
     assert bump_action_pins.main([], root=root) == 0
@@ -137,7 +153,7 @@ def test_main_keeps_crlf_line_endings(tmp_path: Path, monkeypatch: pytest.Monkey
 def test_an_explicit_version_overrides_pyproject(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = _repo(tmp_path, dict.fromkeys(bump_action_pins.PIN_FILES, _pin(OLD, "0.2.0")))
+    root = _repo(tmp_path, dict.fromkeys(bump_action_pins.PIN_FILES, _pin(OLD, "0.1.3")))
     asked: list[str] = []
 
     def tag(version: str, root: Path) -> str:
@@ -171,3 +187,35 @@ def test_parse_ls_remote_maps_each_ref_to_its_sha() -> None:
         "refs/tags/v0.1.3": "c" * 40,
         "refs/tags/v0.1.3^{}": "d" * 40,
     }
+
+
+# --- the previous release ------------------------------------------------------------------------
+
+
+def _tags(*versions: str) -> dict[str, str]:
+    return {f"refs/tags/v{version}": "c" * 40 for version in versions}
+
+
+def test_previous_release_is_the_newest_tag_older_than_the_version() -> None:
+    refs = _tags("0.1.2", "0.1.3", "0.1.5")
+    assert bump_action_pins.previous_release("0.1.5", refs) == "0.1.3"
+    assert bump_action_pins.previous_release("0.1.4", refs) == "0.1.3"
+    assert bump_action_pins.previous_release("0.1.6", refs) == "0.1.5"
+
+
+def test_previous_release_sorts_versions_as_numbers() -> None:
+    assert bump_action_pins.previous_release("0.1.11", _tags("0.1.9", "0.1.10")) == "0.1.10"
+
+
+def test_previous_release_reads_annotated_tags_and_ignores_other_refs() -> None:
+    refs = {
+        "refs/tags/v0.1.2^{}": "d" * 40,
+        "refs/tags/nightly": "e" * 40,
+        "refs/tags/v0.2.0rc1": "e" * 40,
+        "refs/heads/v0.1.4": "e" * 40,
+    }
+    assert bump_action_pins.previous_release("0.1.5", refs) == "0.1.2"
+
+
+def test_previous_release_is_none_before_the_first_release() -> None:
+    assert bump_action_pins.previous_release("0.1.0", _tags("0.1.0")) is None
