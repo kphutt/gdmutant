@@ -19,7 +19,7 @@
 ## What it is
 
 Coverage tells you a line *ran*. Mutations tell you if a bug there would be *caught*: a killed
-mutant means yes, a survivor means no. A standalone CLI, no AI required. But it's great tool to use with AI for validating automated tests. 
+mutant means yes, a survivor means no. A standalone CLI, no AI required. But it's a great tool to use with AI for validating automated tests.
 
 Same idea, other languages: [mutmut](https://github.com/boxed/mutmut) for Python, [Stryker](https://stryker-mutator.io/) for JS/TS, [PIT](https://pitest.org/) for Java.
 
