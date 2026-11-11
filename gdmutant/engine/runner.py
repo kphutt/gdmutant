@@ -9,19 +9,18 @@ GDScript-adapter concern that lands with the end-to-end slice (it needs real God
 from __future__ import annotations
 
 import codecs
-import contextlib
 import io
 import math
 import os
-import signal
 import subprocess
-import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import IO, Final, Protocol, runtime_checkable
 from xml.etree import ElementTree
+
+from gdmutant.engine import process_tree
 
 #: What a GDScript runtime error prints to stdout/stderr (verified live, Godot 4.7). GDScript has no
 #: exceptions: a runtime error (a null access, an out-of-range index, …) aborts only the *current
@@ -598,42 +597,25 @@ class BoundedOutput:
         return needle in self.stdout.found or needle in self.stderr.found
 
 
-def _kill_tree(process: subprocess.Popen[bytes]) -> None:
-    """Stop `process` and every process it started, so none keeps holding files in a folder
-    gdmutant is about to delete. On Windows, children of a `process` that has already exited
-    are out of reach: `taskkill` finds a tree only through a live parent."""
-    try:
-        if sys.platform == "win32":
-            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-                subprocess.run(
-                    ["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                    timeout=_KILL_GRACE_SECS,
-                )
-        else:
-            with contextlib.suppress(ProcessLookupError):  # the whole group has already exited
-                os.killpg(process.pid, signal.SIGKILL)
-    finally:
-        process.kill()  # even if taskkill failed, hung, or was interrupted
-
-
 def run_bounded(
     command: Sequence[str], cwd: str, timeout: float, watch: Sequence[str] = ()
 ) -> BoundedOutput:
     """Run `command` in `cwd`, keeping a bounded part of each stream, and noting which of `watch`
-    either one printed. Raises ``TimeoutExpired`` after stopping the child and what it started
-    (see `_kill_tree`), also when a grandchild holds the pipes past `timeout`, and
-    ``RuntimeError`` if a stream could not be read, since it could hide a marker."""
+    either one printed. Raises ``TimeoutExpired`` after stopping the child and everything it
+    started, also when a grandchild holds the pipes past `timeout`, and ``RuntimeError`` if a
+    stream could not be read, since it could hide a marker."""
     command = list(command)
-    process = subprocess.Popen(
-        command,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=sys.platform != "win32",  # a process group `_kill_tree` can stop whole
-    )
+    tree = process_tree.start(command, cwd)
+    try:
+        return _wait_bounded(tree, command, timeout, watch)
+    finally:
+        tree.close()
+
+
+def _wait_bounded(
+    tree: process_tree.ProcessTree, command: list[str], timeout: float, watch: Sequence[str]
+) -> BoundedOutput:
+    process = tree.process
     streams = (_StreamTail(watch), _StreamTail(watch))
     readers: list[threading.Thread] = []
     deadline = time.monotonic() + timeout
@@ -649,7 +631,7 @@ def run_bounded(
             raise subprocess.TimeoutExpired(command, timeout)
     except BaseException:
         # A timeout, or Ctrl-C: never leave the child, or anything it started, running.
-        _kill_tree(process)
+        tree.kill()
         process.wait()
         for reader in readers:
             reader.join(_KILL_GRACE_SECS)
