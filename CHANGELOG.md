@@ -12,82 +12,53 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
-### Added
+## [0.1.6] - 2026-11-09
 
-- `--exclude-tests <entry>` (and `exclude-tests` in `.gdmutant.toml`) leaves tests out of a
-  `--runner gdunit4` run (#335, thanks @normanthesquid). Each entry is passed to gdUnit4 as `-i`, so
-  it can be a suite name, any part of a suite's `res://` path, or `suite:test` for one test.
-  Excluded tests run in no part of the run: not the baseline, not the coverage marker runs, and not
-  any mutant's test files. With `--coverage-analysis per-file`, a line only an excluded suite
-  reaches is reported as no coverage. An entry that matches no test file is warned about. `--runner
-  gut` and `--runner command` refuse the flag, and ignore a config list with a note.
+This release changes no code. It corrects the GitHub Action example on the PyPI project page.
+Apart from that and the version number, the package is the same as 0.1.5.
 
-### Changed
+### GitHub Action example
 
-- `--jobs N` with several source files now runs every file's mutants through one shared set of
-  workers (#332, thanks @normanthesquid). Before, each file got its own set, and the next file
-  waited for the last worker of the one before it, so a diff made of small files kept most workers
-  idle. Each file still prints its own `mutating ...` and plan lines, then one `Running up to N at a
-  time across M files.` line covers them all, and the progress line counts every file's mutants
-  together. Verdicts and the per-file scores are unchanged. A file outside `--project` is now
-  refused before the baseline runs, rather than when the run reaches it. Under `--jobs auto`, such a
-  file can't use the shared workers. When two or more other files are inside the project, it runs on
-  its own before them. Otherwise nothing is shared and the files run in the order given.
+- The 0.1.5 PyPI page shows 0.1.4's commit labeled as v0.1.5. PyPI keeps each version's page as
+  uploaded, so that page stays wrong. This release's page pins `bf611f7`, the real v0.1.5 commit,
+  with the matching label. That action runs the same code as 0.1.6. (#360)
+- From now on, each release's page pins the release before it, with that release's own commit. A
+  release cannot pin its own commit, because a commit cannot contain its own hash. (#360)
 
-- `.gdmutant.toml` can set `project = "."` without `--trust-config`. A `project` naming the folder
-  the file sits in, which is the folder you ran gdmutant from, points gdmutant at nothing you had
-  not already chosen, so the refusal was only getting in the way. Any spelling of that folder
-  counts (`./`, its absolute path, a symlink to it), because gdmutant asks the operating system
-  whether the two are one folder rather than comparing the text. Every other `project` still needs
-  `--trust-config`: `..`, a neighbouring folder, a subfolder, and a symlink that leads anywhere
-  else. So do `command` and `godot`, always. When a `project` is refused, the message now says
-  which value would have gone through.
-- `--jobs N` now refuses a suite that only passes with files in your real `user://` that no test
-  creates. If you already use `--jobs` with such a suite, it used to finish and report a score,
-  and now it stops with a message that names the isolated copy. Make the suite create what it
-  reads, or pass `--jobs 1`. Under `--jobs auto`, a source file outside `--project` still runs
-  serially in your project folder, and its baseline runs there too, so nothing changes for it.
-  The baseline copy is made and removed before the workers start, so peak disk use is the same.
-  The live check for this runs GdUnit4. GUT and the exit-code command runner get the same
-  isolation from the same code, but no live run proves GUT's.
+## [0.1.5] - 2026-11-08
 
-### Fixed
+This release makes parallel runs faster and more accurate, and lets you skip slow GdUnit4 tests.
+Three of these changes come from @normanthesquid. Thank you.
 
-- `--runner command` no longer runs out of memory when a mutant floods its test output (#331, thanks
-  @normanthesquid). gdmutant used to hold all of a run's output, though it only ever showed the last
-  2000 characters, so a mutant stuck printing errors until its timeout could grow gdmutant past a
-  memory cap, end the run, and lose its report. It now keeps only the end of the output, plus the
-  first `SCRIPT ERROR` and the three lines after it, so memory stays fixed however much a test
-  prints. Verdicts are unchanged. One small difference: when `--coverage-analysis` reports that its
-  marker run hit a `SCRIPT ERROR`, a line over 4000 characters in the error it quotes can now be cut
-  to 4000. The GdUnit4 and GUT runners still hold their whole output.
-- `--jobs N` no longer reports a survivor as killed when your tests write to `user://`. Each worker
-  already got its own copy of the project, but Godot works out where `user://` is from the
-  project's name settings rather than from its path, so every copy resolved it to the same
-  directory on your machine. Two workers writing to one fixed-name file there made the suite fail
-  for a reason that had nothing to do with the mutant, and a failing suite is a kill, so the run
-  came back with fewer survivors than it should have and a score that looked better than the truth.
-  Every worker copy is now given a `user://` of its own, inside one `gdmutant/` directory that is
-  cleaned up when the run ends. `--jobs` defaults to `1`, which was never affected.
+### Before you upgrade
 
-  A new live check runs gdmutant against a suite built to collide this way, and compares several
-  `--jobs 4` runs against a serial one: `tests/test_selftest_parallel_determinism.py`.
+`--jobs N` now runs your tests in an empty `user://` (the folder Godot keeps a game's saved data
+in). If your tests rely on files already sitting in your real `user://`, the run now stops with a
+message. Have the tests create those files, or use `--jobs 1`. (#318)
 
-- `--jobs N` no longer scores a suite as better than it is when the suite needs `user://` data
-  that no test creates. The baseline run (the check that your suite passes before any mutant
-  runs) used to happen in your own project folder, with your machine's real `user://`, while
-  every worker ran in an empty copy. A suite that read a file there passed the baseline and then
-  failed in every worker, and a failing suite counts as a kill. On one real Godot project,
-  `--jobs 1` reported 2 survivors and `--jobs 4` reported none, with no warning. The baseline now
-  runs in the same kind of isolated copy the workers get.
+### Parallel runs (`--jobs N`, which tests N mutants at a time)
 
-- A file's progress now ends on its true final count, printed once (#345). When the file's last
-  mutant did not parse, the progress line could end on `1/2` instead of `1/1`, and a file's final
-  count could print twice in a row.
+- Workers are now shared across all source files, so they no longer wait between files. This change
+  alone doesn't change any score. (#334, thanks @normanthesquid)
+- Each worker now gets its own `user://`, so tests that write there no longer collide. Before, that
+  could make a mutant your tests missed count as caught, so the score could be too high. If you used
+  `--jobs N` and your tests write to `user://`, run again to get the right score. (#318)
+- A file outside `--project` is now refused before any tests run, even when it has no mutants.
+  (#346)
 
-- `--jobs N` with one source file outside `--project` is now refused before the baseline runs,
-  the same as with several files (#346). Before, it was refused only after the baseline had run,
-  and not at all when the file had no mutants.
+### Skipping slow tests (GdUnit4)
+
+- The new `--exclude-tests <entry>` flag leaves tests out of a run. An entry is a suite name, part
+  of a `res://` path, or `suite:test`. You can also set `exclude-tests` in `.gdmutant.toml`. GUT and
+  command runs refuse the flag, and ignore the setting with a note. (#335, thanks @normanthesquid)
+
+### Other changes
+
+- A test command that floods its output (`--runner command`) no longer runs gdmutant out of memory.
+  (#333, thanks @normanthesquid)
+- `.gdmutant.toml` can now set `project` to its own folder, such as `project = "."`, without
+  `--trust-config`. Any other folder still needs it. (#324)
+- The progress line now ends on the right count, and prints it once. (#345)
 
 ## [0.1.4] - 2026-10-03
 

@@ -57,12 +57,14 @@ the run) for real. See `.github/workflows/mutation.yml`'s header comment for why
 and why the job deliberately has no job-level `continue-on-error`. It complements the coverage gate:
 coverage says a line *ran*, mutation says a bug there would be *caught*.
 
-mutmut has no incremental mode, so a full sweep costs the same ~35-40 minutes regardless of how
-small the change is. A pull request never gets one, even when the diff touches `gdmutant/` or
-`tests/`: a PR is pushed to repeatedly during review, and paying that cost on every push for a
-number that mostly doesn't move isn't worth it. Only a push to `main` (a change that already
-landed) can trigger the full sweep, and even then only if that diff touches `gdmutant/`, `tests/`,
-`corpus/`, `pyproject.toml`, or `uv.lock`. Those are the only paths that can move the score at all.
+A full mutmut sweep from a clean checkout takes about 65 minutes. mutmut does keep a hash of each
+function's source in `mutants/` and re-tests only the functions that changed, but a CI run starts
+without that folder, so every sweep there is a full one. A pull request never gets one, even when
+the diff touches `gdmutant/` or `tests/`: a PR is pushed to repeatedly during review, and paying
+that cost on every push for a number that mostly doesn't move isn't worth it. Only a push to `main`
+(a change that already landed) can trigger the full sweep, and even then only if that diff touches
+`gdmutant/`, `tests/`, `corpus/`, `pyproject.toml`, or `uv.lock`. Those are the only paths that can
+move the score at all.
 Every other push or PR gets a plain `pytest` run instead, which still catches a doc file
 (`also_copy` in `pyproject.toml`) breaking a test that reads it.
 

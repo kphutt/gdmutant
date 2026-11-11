@@ -18,8 +18,12 @@ test keeps the shipped copy honest about that.
 
 A second, separate way to go wrong: a real, valid, non-floating pin that simply falls behind. The
 docs shipped a `v0.1.0` SHA through two more releases before anyone noticed. This module also
-checks that every documented pin names the version currently in `pyproject.toml`, not just a
-version that once existed.
+checks that every documented pin names the release this commit should name, not just a version
+that once existed.
+
+A third: a pin whose `# vX.Y.Z` comment and SHA name different releases. 0.1.5 shipped its PyPI
+page that way, with 0.1.4's commit commented `# v0.1.5`. The release commit now leaves every pin
+alone, and both checks here hold the comment and the SHA to the same release.
 """
 
 from __future__ import annotations
@@ -29,7 +33,6 @@ import importlib.util
 import re
 import subprocess
 import sys
-import warnings
 from pathlib import Path
 
 import pytest
@@ -53,11 +56,6 @@ _USES = re.compile(r"kphutt/gdmutant@(?P<ref>[^\s\"'`]+)")
 
 #: A floating major/minor tag: `v1`, `v0`, `v1.2` — anything short of a full version.
 _FLOATING = re.compile(r"^v\d+(\.\d+)?$")
-
-#: The `# vX.Y.Z` comment beside a pinned SHA, which is what a reader actually reads to tell which
-#: release they are copying. Needs no network, so it is the half of the staleness check that can
-#: still run while a release's tag is being cut.
-_USES_VERSION_COMMENT = re.compile(r"kphutt/gdmutant@[0-9a-f]{40}\s*#\s*v(?P<tagged>\d+\.\d+\.\d+)")
 
 _BUMP = REPO / "scripts" / "bump_action_pins.py"
 _bump_spec = importlib.util.spec_from_file_location("bump_action_pins_for_pin", _BUMP)
@@ -119,27 +117,11 @@ def _remote_tag_refs() -> dict[str, str]:
     return dict(bump_action_pins.parse_ls_remote(output))
 
 
-def _latest_tag_commit(version: str) -> str | None:
-    """The commit `vVERSION` points at, read straight from `origin` rather than local refs.
-
-    `ci.yml`'s `verify` job checks out with no `fetch-depth` set, the actions/checkout default of
-    1, a single commit and no tags at all. `git rev-parse vX.Y.Z^{commit}` only works if that tag
-    ref exists locally, so it fails there with exit 128, "unknown revision", even though the tag
-    is real and published. `git ls-remote` asks the remote directly and needs no local history at
-    any depth. Prefer the `^{}`-dereferenced line, which is what an *annotated* tag's own commit
-    resolves to. A lightweight tag (this repo's kind, as of writing) has no such line, and the
-    plain ref is already the commit."""
-    sha = bump_action_pins.commit_of_tag(version, _remote_tag_refs())
-    if sha is None:
-        # The release window: `pyproject.toml` already names the version being cut, but its tag is
-        # not pushed yet, because the tag has to point at a commit that is already on `main`. This
-        # used to be an assert, which deadlocked the release it was meant to protect: bumping the
-        # version turned this test red, `Verify` is a required check, so the bump could not merge,
-        # so the tag could never be pushed to make it green. 0.1.2 was cut before this function
-        # existed, so nothing caught it. Returning None instead lets the caller fall back to a
-        # check that needs no tag, rather than blocking or passing silently.
-        return None
-    return sha
+#: A `uses:` ref, plus the `# vX.Y.Z` comment that may follow it on the same line. The comment is
+#: what a reader reads to tell which release they are copying, so it has to agree with the SHA.
+_USES_WITH_LABEL = re.compile(
+    r"kphutt/gdmutant@(?P<ref>[^\s\"'`]+)(?:[ \t]*#[ \t]*v(?P<label>\d+\.\d+\.\d+))?"
+)
 
 
 def _head_commit() -> str | None:
@@ -157,107 +139,262 @@ def _head_commit() -> str | None:
         return None
 
 
-def comparable_tag_commit(
-    version: str, tag_sha: str | None, head_sha: str | None
-) -> tuple[str | None, str | None]:
-    """The commit the documented pins must name, or None and the reason that cannot be checked.
+def expected_pin(version: str, refs: dict[str, str], head_sha: str | None) -> tuple[str, str]:
+    """The release every documented pin must name on this commit, as (version, commit).
 
-    Two windows make the SHA half impossible, and both are part of every release. Before the tag is
-    pushed there is no commit to compare against (`tag_sha` is None). And on the tagged commit
-    itself, the one `publish.yml`'s gate checks out and tests, the pins cannot name that commit,
-    because a commit cannot contain its own hash. Treating the second window as stale made the
-    release gate fail on every release, since the tagged commit can only ever pin the previous one:
-    reproduced by running this test on the v0.1.2 tagged commit. Everywhere else, including `main`
-    after the release, the pins must name the tag, and the follow-up PR that bumps them is what
-    turns that back green. When git cannot report HEAD (`head_sha` is None) the strict comparison
-    still runs, so a missing answer never loosens the check."""
-    if tag_sha is None:
-        return None, None
-    if tag_sha == head_sha:
-        return None, f"this checkout is v{version}'s own tagged commit, which cannot pin itself"
-    return tag_sha, None
+    The release commit never touches a pin. Once the tag exists, step 10's follow-up PR moves each
+    pin's SHA and its `# vX.Y.Z` comment together. So the pins name the previous release in two
+    windows, and `version` everywhere else:
+
+    * before `vVERSION` is pushed, because there is no commit to name yet;
+    * on `vVERSION`'s own tagged commit, the one `publish.yml`'s gate checks out and tests,
+      because a commit cannot contain its own hash.
+
+    Both windows are fully checked: the previous release's tag exists, so its SHA and its version
+    can both be compared. On any other commit once the tag exists, `main` included, the pins must
+    name `version`, and this fails until step 10 merges, which is the reminder working. When git
+    cannot report HEAD (`head_sha` is None) that strict expectation still applies, so a missing
+    answer never loosens the check.
+
+    0.1.5 shipped the shape this rules out. Its release commit moved the comments to `# v0.1.5`
+    while the SHAs still named 0.1.4, and PyPI froze that README into the 0.1.5 page."""
+    tag_sha = bump_action_pins.commit_of_tag(version, refs)
+    if tag_sha is not None and tag_sha != head_sha:
+        return version, tag_sha
+    previous = bump_action_pins.previous_release(version, refs)
+    assert previous is not None, (
+        f"no release older than v{version} is tagged on origin, so no documented pin can name a "
+        "real release yet"
+    )
+    previous_sha = bump_action_pins.commit_of_tag(previous, refs)
+    assert previous_sha is not None, f"v{previous} was listed but has no commit"
+    return previous, previous_sha
 
 
-def check_pins_are_current(
-    text: str,
-    label: str,
-    version: str,
-    latest_tag_sha: str | None,
-    unchecked_because: str | None = None,
-) -> None:
-    """Assert `text`'s shipped pins name `version`, raising `AssertionError` with `label` if not.
+def accepted_pins(
+    version: str, refs: dict[str, str], head_sha: str | None, pins_dirty: bool
+) -> list[tuple[str, str]]:
+    """Every (version, commit) pair the pins may name here: `expected_pin`'s, and at most one more.
+
+    The one extra case is step 10 before its commit. A maintainer runs `bump_action_pins.py` on a
+    branch cut from the tagged commit, so HEAD is still that commit, and `expected_pin` asks for the
+    previous release. The working tree already pins the new tag, and the suite run on it went red
+    although nothing was wrong. So when HEAD is the tag's own commit and a pin file differs from
+    HEAD, the new tag's pins are accepted too. A clean tree on the tagged commit, which is what
+    `publish.yml`'s gate checks out, stays strict: only the previous release passes there."""
+    accepted = [expected_pin(version, refs, head_sha)]
+    tag_sha = bump_action_pins.commit_of_tag(version, refs)
+    if pins_dirty and tag_sha is not None and tag_sha == head_sha:
+        accepted.append((version, tag_sha))
+    return accepted
+
+
+def _pin_files_differ_from_head() -> bool:
+    """Does any pin file in the working tree differ from HEAD? Anything git cannot answer counts
+    as no, so a failed question keeps the check strict rather than loosening it."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", *bump_action_pins.PIN_FILES],
+            cwd=REPO,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 1
+
+
+def check_pins_name_one_of(texts: dict[str, str], accepted: list[tuple[str, str]]) -> None:
+    """Pass if one `accepted` pair fits every pin in every file of `texts`, label to text.
+
+    One pair across all the files, not one per file: a half-done bump, with one file on the new tag
+    and another still on the previous release, must fail. Otherwise raise every file's failure
+    against the first pair, since that pair is the strict expectation."""
+    first: list[str] | None = None
+    for version, sha in accepted:
+        problems: list[str] = []
+        for label, text in texts.items():
+            try:
+                check_pins_are_current(text, label, version, sha)
+            except AssertionError as failure:
+                problems.append(str(failure))
+        if not problems:
+            return
+        if first is None:
+            first = problems
+    assert first is not None, "no accepted pair was given, so nothing could pass"
+    raise AssertionError("\n".join(first))
+
+
+def check_pins_are_current(text: str, label: str, version: str, sha: str) -> None:
+    """Assert every pin in `text` reads `@SHA # vVERSION`, both halves, or raise `AssertionError`.
 
     Split out from the test below so every branch is reachable from a unit test with synthetic
-    inputs. `latest_tag_sha is None` means the SHA half cannot run, in either of the two release
-    windows `comparable_tag_commit` describes: before the tag is pushed, and on the tagged commit
-    itself. Both only occur on a real release and both used to deadlock it, which is why they are
-    unit-tested here. `unchecked_because` is the reason the warning gives, and defaults to the
-    first window's.
-    """
-    if latest_tag_sha is None:
-        # The SHA half of this check cannot run (see the docstring for when). Say so out
-        # loud rather than skipping quietly, and still check the half that needs no tag: the `#
-        # vX.Y.Z` comment beside each pin. That comment is what actually went stale the time this
-        # mattered, when it read `# v0.1.0` through two later releases, so the protection this test
-        # exists for stays live during the release window instead of lapsing exactly then.
-        because = unchecked_because or f"v{version} is not on origin yet"
-        warnings.warn(
-            f"NOTCHECKED: {because}, so the pinned SHA could not be compared against its tag "
-            f"in {label}. Checked the version comment instead.",
-            stacklevel=2,
-        )
-        # Count the SHA pins first, and require a comment on every one of them. Collecting only the
-        # commented pins and asserting that set is non-empty would let a file carrying one commented
-        # pin and one bare pin through untouched: the bare one is the very thing this branch cannot
-        # otherwise verify, so skipping it is the shape this repo calls recurring bug one, here in
-        # the gate built to close another instance of it. Caught in review of this PR.
-        sha_pins = [ref for ref in _USES.findall(text) if _SHA.match(ref)]
-        commented = _USES_VERSION_COMMENT.findall(text)
-        assert sha_pins, f"{label} shows no SHA-pinned `uses:` line to check"
-        assert len(commented) == len(sha_pins), (
-            f"{label} has {len(sha_pins)} SHA-pinned `uses:` line(s) but only {len(commented)} "
-            "carry a `# vX.Y.Z` comment. With no tag pushed yet, a pin without that comment cannot "
-            "be checked by either half, so add the comment rather than leaving it unverifiable."
-        )
-        for tagged in commented:
-            assert tagged == version, (
-                f"{label} pins a ref commented `# v{tagged}`, not the current "
-                f"release `v{version}` -- bump the pin and its comment together"
-            )
-        return
-
-    refs = _USES.findall(text)
-    assert refs, f"{label} shows no `uses:` line to check"
-    for ref in refs:
+    inputs. A SHA pin with no comment fails too: nothing could then tell a reader which release it
+    is, and a check that skipped it would be this repo's recurring bug one."""
+    pins = list(_USES_WITH_LABEL.finditer(text))
+    assert pins, f"{label} shows no `uses:` line to check"
+    for pin in pins:
+        ref, tagged = pin["ref"], pin["label"]
         if _SHA.match(ref):
-            assert ref == latest_tag_sha, (
-                f"{label} pins `@{ref}`, which is not v{version}'s commit "
-                f"(`{latest_tag_sha}`) -- the documented ref has gone stale, bump it to the "
-                "latest release"
+            assert tagged is not None, (
+                f"{label} pins `@{ref}` with no `# vX.Y.Z` comment. Add `# v{version}`, so a "
+                "reader can tell which release it is"
+            )
+            assert (ref, tagged) == (sha, version), (
+                f"{label} pins `@{ref} # v{tagged}`, but on this commit every pin must read "
+                f"`@{sha} # v{version}`. The release commit leaves the pins alone, and step 10 of "
+                "docs/releasing.md (scripts/bump_action_pins.py) moves the SHA and the comment "
+                "together once the tag is pushed"
             )
         elif match := re.fullmatch(r"v(?P<tagged>\d+\.\d+\.\d+)", ref):
             assert match.group("tagged") == version, (
-                f"{label} pins `@{ref}`, not the current release `v{version}` -- bump it"
+                f"{label} pins `@{ref}`, not the release this commit should name, `v{version}`"
             )
         # Anything else (a branch name, an empty ref) isn't a version pin this check applies to.
 
 
-@pytest.mark.parametrize("path", DOCS_SHOWING_A_USES_LINE, ids=lambda p: p.name)
-def test_every_shipped_uses_line_pins_the_latest_released_version(path: Path) -> None:
+def test_every_shipped_uses_line_pins_the_release_this_commit_should_name() -> None:
     # A `uses:` line that names a real, valid, non-floating ref still goes stale the moment a new
     # version ships: v0.1.0 stayed pinned here through 0.1.1 and 0.1.2, so a reader copying the
     # README installed a version with a bug 0.1.1 had already fixed, and got an action.yml with no
     # `command` input, one shipped later. `test_no_shipped_uses_line_pins_a_floating_tag` above
     # only checks the ref isn't unsatisfiable, not that it's current -- this closes that gap.
     version = check_release_tag.packaged_version()
-    tag_sha, because = comparable_tag_commit(version, _latest_tag_commit(version), _head_commit())
-    check_pins_are_current(
-        path.read_text(encoding="utf-8"),
-        str(path.relative_to(REPO)),
-        version,
-        tag_sha,
-        because,
+    accepted = accepted_pins(
+        version, _remote_tag_refs(), _head_commit(), _pin_files_differ_from_head()
     )
+    texts = {
+        str(path.relative_to(REPO)): path.read_text(encoding="utf-8")
+        for path in DOCS_SHOWING_A_USES_LINE
+    }
+    check_pins_name_one_of(texts, accepted)
+
+
+# --- the comment names the release its SHA belongs to, offline ----------------------------------
+
+
+def pin_label_problems(text: str, label: str, refs: dict[str, str]) -> tuple[list[str], set[str]]:
+    """Every SHA pin whose `# vX.Y.Z` comment names a release whose tag is another commit.
+
+    Returns the problems, and the versions whose tags `refs` does not hold, so the caller can say
+    which pins it could not judge rather than passing them quietly. A pin with no comment is not
+    this function's business: the currency check above fails it."""
+    problems: list[str] = []
+    missing: set[str] = set()
+    for pin in _USES_WITH_LABEL.finditer(text):
+        ref, tagged = pin["ref"], pin["label"]
+        if tagged is None or not _SHA.match(ref):
+            continue
+        tag_sha = bump_action_pins.commit_of_tag(tagged, refs)
+        if tag_sha is None:
+            missing.add(tagged)
+        elif tag_sha != ref:
+            problems.append(
+                f"{label} pins `@{ref} # v{tagged}`, but v{tagged} is `{tag_sha}`. The comment "
+                "and the SHA name different releases"
+            )
+    return problems, missing
+
+
+def _local_tag_refs() -> dict[str, str]:
+    """This clone's own tags, mapped to their SHAs, with no network.
+
+    `git show-ref --tags -d` prints the same refs `git ls-remote` does, `^{}` lines included, but
+    space-separated. It exits 1 when there are no tags at all, which is an empty answer, not an
+    error. Anything else git cannot answer raises, and the caller turns that into a skip that says
+    so."""
+    result = subprocess.run(
+        ["git", "show-ref", "--tags", "-d"],
+        cwd=REPO,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode not in (0, 1):
+        raise OSError(f"`git show-ref` exited {result.returncode}: {result.stderr.strip()}")
+    return {
+        ref: sha for sha, ref in (line.split(" ", 1) for line in result.stdout.splitlines() if line)
+    }
+
+
+@pytest.mark.parametrize("path", DOCS_SHOWING_A_USES_LINE, ids=lambda p: p.name)
+def test_every_pins_comment_names_the_release_its_sha_belongs_to(path: Path) -> None:
+    """The guard for the 0.1.5 defect that needs no network: each `# vX.Y.Z` comment must name the
+    release whose tag is the SHA beside it. It reads this clone's own tags. Where a tag a pin names
+    has not been fetched (CI's shallow checkout fetches none), it skips and names the missing tags,
+    rather than passing; the currency check above, which asks origin, still covers that pin."""
+    label = str(path.relative_to(REPO))
+    try:
+        refs = _local_tag_refs()
+    except OSError as exc:
+        pytest.skip(f"NOTCHECKED: git could not list this clone's tags ({exc})")
+    problems, missing = pin_label_problems(path.read_text(encoding="utf-8"), label, refs)
+    assert not problems, "\n".join(problems)
+    if missing:
+        names = ", ".join(f"v{version}" for version in sorted(missing))
+        pytest.skip(
+            f"NOTCHECKED: {label} names {names}, which this clone has not fetched, so those pins "
+            "could not be compared with their tags. Run `git fetch --tags` to check them."
+        )
+
+
+#: The SHAs the 0.1.5 defect involved, written out so the proof below needs no tags at all.
+_V014 = "f1178ea01bc06a1e4ed2f8415e6351ddd34af608"
+_V015 = "bf611f70d52d985aa217cabcef53afaa29c5b0e7"
+_REAL_REFS = {"refs/tags/v0.1.4": _V014, "refs/tags/v0.1.5": _V015}
+
+
+def test_the_pin_0_1_5_shipped_on_pypi_is_caught() -> None:
+    # The exact line in the README 0.1.5 shipped: 0.1.4's commit, commented v0.1.5.
+    shipped = f"      - uses: kphutt/gdmutant@{_V014} # v0.1.5\n"
+    problems, missing = pin_label_problems(shipped, "README.md", _REAL_REFS)
+    assert missing == set()
+    assert len(problems) == 1 and "name different releases" in problems[0]
+
+
+def test_a_pin_whose_comment_matches_its_sha_passes() -> None:
+    for sha, version in ((_V014, "0.1.4"), (_V015, "0.1.5")):
+        assert pin_label_problems(_pin(version, sha), "README.md", _REAL_REFS) == ([], set())
+
+
+def test_a_pin_naming_an_unfetched_tag_is_reported_missing_not_passed() -> None:
+    problems, missing = pin_label_problems(_pin("0.1.9"), "README.md", _REAL_REFS)
+    assert (problems, missing) == ([], {"0.1.9"})
+
+
+def test_the_label_check_reads_an_annotated_tags_commit() -> None:
+    refs = {"refs/tags/v0.1.5": "c" * 40, "refs/tags/v0.1.5^{}": _V015}
+    assert pin_label_problems(_pin("0.1.5", _V015), "x", refs) == ([], set())
+    problems, _ = pin_label_problems(_pin("0.1.5", "c" * 40), "x", refs)
+    assert len(problems) == 1
+
+
+def test_local_tag_refs_answers_empty_in_a_repo_with_no_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path)
+    assert _local_tag_refs() == {}
+
+
+def test_local_tag_refs_raises_where_git_cannot_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path / "does-not-exist")
+    with pytest.raises(OSError):
+        _local_tag_refs()
+
+
+def test_local_tag_refs_raises_outside_a_repository_rather_than_answering_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # git exits 128 here. Only exit 1 means "no tags", so this must not come back as an empty map.
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    with pytest.raises(OSError, match="exited 128"):
+        _local_tag_refs()
 
 
 def test_the_ref_inputs_own_default_is_not_a_floating_tag() -> None:
@@ -278,10 +415,12 @@ def test_the_ref_inputs_own_default_is_not_a_floating_tag() -> None:
 
 #: A synthetic pin line, the shape every shipped doc uses: a full SHA plus a `# vX.Y.Z` comment.
 _FAKE_SHA = "a" * 40
+_PREV_SHA = "b" * 40
+_LATER_SHA = "c" * 40
 
 
 def _bare_pin(sha: str = _FAKE_SHA) -> str:
-    """A pin with no `# vX.Y.Z` comment: the shape neither half of the check can verify."""
+    """A pin with no `# vX.Y.Z` comment: the shape no check can tie to a release."""
     return f"      - uses: kphutt/gdmutant@{sha}\n"
 
 
@@ -289,105 +428,105 @@ def _pin(version: str, sha: str = _FAKE_SHA) -> str:
     return f"      - uses: kphutt/gdmutant@{sha} # v{version}\n"
 
 
-def test_the_release_window_passes_and_says_which_half_did_not_run() -> None:
-    """The state that used to deadlock: version bumped, tag not pushed, SHA necessarily stale.
-
-    `_latest_tag_commit` returns None there. This must pass, because the tag cannot exist until
-    the bump has merged, and it must say out loud that the SHA half did not run rather than going
-    quiet, which is this repo's recurring bug one.
-    """
-    with pytest.warns(UserWarning, match="NOTCHECKED"):
-        check_pins_are_current(_pin("0.1.3"), "fake.md", "0.1.3", None)
+def _refs(**tags: str) -> dict[str, str]:
+    """Tag refs from keyword pairs: `_refs(v0_1_2="b"*40)` is `refs/tags/v0.1.2`."""
+    return {f"refs/tags/{name.replace('_', '.')}": sha for name, sha in tags.items()}
 
 
-def test_the_release_window_still_catches_a_stale_pin_comment() -> None:
-    # The protection must not lapse during the window. A comment naming an older release is exactly
-    # the bug this whole module exists for: the docs shipped `# v0.1.0` through two later releases.
-    with (
-        pytest.warns(UserWarning, match="NOTCHECKED"),
-        pytest.raises(AssertionError, match="not the current"),
-    ):
-        check_pins_are_current(_pin("0.1.0"), "fake.md", "0.1.3", None)
+# --- which release the pins must name -----------------------------------------------------------
 
 
-def test_the_release_window_rejects_a_mix_of_commented_and_bare_pins() -> None:
-    # The hole a reviewer found in the first version of this fallback: it gathered the pins that DID
-    # carry a comment and asserted that set was non-empty, so a file with one commented pin beside
-    # one bare pin passed, leaving the bare pin -- the only one it could not verify -- unchecked.
-    mixed = _pin("0.1.3") + _bare_pin("b" * 40)
-    with (
-        pytest.warns(UserWarning, match="NOTCHECKED"),
-        pytest.raises(AssertionError, match="carry a `# vX.Y.Z` comment"),
-    ):
-        check_pins_are_current(mixed, "fake.md", "0.1.3", None)
+def test_before_the_tag_the_pins_name_the_previous_release() -> None:
+    # The release window that used to deadlock: version bumped, tag not pushed. It is now a strict
+    # check, both halves, because the previous release's tag exists.
+    refs = _refs(v0_1_2=_PREV_SHA)
+    assert expected_pin("0.1.3", refs, _LATER_SHA) == ("0.1.2", _PREV_SHA)
 
 
-def test_the_release_window_rejects_a_pin_with_no_version_comment() -> None:
-    # With no tag AND no comment, neither half can tell whether the pin is current. Refuse rather
-    # than pass, or the window becomes a hole a stale pin can walk through.
-    bare = _bare_pin()
-    with (
-        pytest.warns(UserWarning, match="NOTCHECKED"),
-        pytest.raises(AssertionError, match="carry a `# vX.Y.Z` comment"),
-    ):
-        check_pins_are_current(bare, "fake.md", "0.1.3", None)
+def test_on_the_tagged_commit_the_pins_still_name_the_previous_release() -> None:
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    assert expected_pin("0.1.3", refs, _FAKE_SHA) == ("0.1.2", _PREV_SHA)
 
 
-def test_once_the_tag_exists_the_sha_is_compared_again() -> None:
-    # After the tag is pushed the full check resumes: the SHA must equal the tag's commit, and a
-    # pin left at the previous release fails, which is the reminder to bump it working as intended.
-    check_pins_are_current(_pin("0.1.3"), "fake.md", "0.1.3", _FAKE_SHA)
-    with pytest.raises(AssertionError, match="has gone stale"):
-        check_pins_are_current(_pin("0.1.3", sha="b" * 40), "fake.md", "0.1.3", _FAKE_SHA)
+def test_any_other_commit_after_the_tag_names_the_new_release() -> None:
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    assert expected_pin("0.1.3", refs, _LATER_SHA) == ("0.1.3", _FAKE_SHA)
 
 
-def test_an_unreleased_version_resolves_to_none_rather_than_raising() -> None:
-    """The deadlock fix itself, at its source.
-
-    This used to `assert shas`, so a packaged version with no tag yet raised instead of returning,
-    turning a required check red and making the release that would create the tag unmergeable. The
-    tests above cover what the caller does with None. This one covers producing it at all.
-    """
-    assert _latest_tag_commit("99.99.99") is None
-    # A version that really is tagged still resolves, so the None path cannot swallow everything.
-    assert _latest_tag_commit("0.1.2") == "284f185f1495f2d79150781cf2e6de618ed11327"
+def test_an_unknown_head_still_expects_the_new_release_rather_than_loosening_the_check() -> None:
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    assert expected_pin("0.1.3", refs, None) == ("0.1.3", _FAKE_SHA)
 
 
-# --- the tagged-commit window -------------------------------------------------------------------
+def test_with_no_earlier_release_there_is_nothing_a_pin_could_name() -> None:
+    with pytest.raises(AssertionError, match="no release older than v0.1.0"):
+        expected_pin("0.1.0", {}, _LATER_SHA)
 
 
-def test_no_tag_yet_skips_the_sha_half_with_the_default_reason() -> None:
-    assert comparable_tag_commit("0.1.3", None, "a" * 40) == (None, None)
+# --- the pins against that release --------------------------------------------------------------
 
 
-def test_the_tagged_commit_itself_skips_the_sha_half_and_says_why() -> None:
-    sha, because = comparable_tag_commit("0.1.3", _FAKE_SHA, _FAKE_SHA)
-    assert sha is None
-    assert because is not None and "own tagged commit" in because
+def test_a_pin_naming_the_expected_release_at_its_commit_passes() -> None:
+    check_pins_are_current(_pin("0.1.3") + _pin("0.1.3"), "fake.md", "0.1.3", _FAKE_SHA)
 
 
-def test_any_other_commit_after_the_tag_still_compares_the_sha() -> None:
-    assert comparable_tag_commit("0.1.3", _FAKE_SHA, "c" * 40) == (_FAKE_SHA, None)
+def test_a_release_commit_that_bumps_the_comment_alone_fails() -> None:
+    # The 0.1.5 defect, as the release window sees it: comment moved to the version being cut,
+    # SHA still the previous release's. The suite now fails the release pull request that does it.
+    with pytest.raises(AssertionError, match="leaves the pins alone"):
+        check_pins_are_current(_pin("0.1.3", _PREV_SHA), "fake.md", "0.1.2", _PREV_SHA)
 
 
-def test_an_unknown_head_still_compares_the_sha_rather_than_loosening_the_check() -> None:
-    assert comparable_tag_commit("0.1.3", _FAKE_SHA, None) == (_FAKE_SHA, None)
+def test_a_stale_pin_fails_once_the_tag_exists() -> None:
+    with pytest.raises(AssertionError, match=r"must read `@a{40} # v0\.1\.3`"):
+        check_pins_are_current(_pin("0.1.2", _PREV_SHA), "fake.md", "0.1.3", _FAKE_SHA)
+
+
+def test_a_right_sha_under_the_wrong_comment_fails() -> None:
+    with pytest.raises(AssertionError, match="must read"):
+        check_pins_are_current(_pin("0.1.2", _FAKE_SHA), "fake.md", "0.1.3", _FAKE_SHA)
+
+
+def test_a_pin_with_no_version_comment_fails() -> None:
+    with pytest.raises(AssertionError, match="no `# vX.Y.Z` comment"):
+        check_pins_are_current(_bare_pin(), "fake.md", "0.1.3", _FAKE_SHA)
+
+
+def test_a_mix_of_commented_and_bare_pins_fails() -> None:
+    # A file with one good pin beside one bare pin must not pass on the strength of the good one.
+    with pytest.raises(AssertionError, match="no `# vX.Y.Z` comment"):
+        check_pins_are_current(_pin("0.1.3") + _bare_pin(), "fake.md", "0.1.3", _FAKE_SHA)
+
+
+def test_a_full_version_tag_ref_must_name_the_expected_release() -> None:
+    check_pins_are_current("uses: kphutt/gdmutant@v0.1.3\n", "fake.md", "0.1.3", _FAKE_SHA)
+    with pytest.raises(AssertionError, match="not the release this commit should name"):
+        check_pins_are_current("uses: kphutt/gdmutant@v0.1.2\n", "fake.md", "0.1.3", _FAKE_SHA)
+
+
+def test_a_file_with_no_uses_line_fails() -> None:
+    with pytest.raises(AssertionError, match="shows no `uses:` line"):
+        check_pins_are_current("no pins here\n", "fake.md", "0.1.3", _FAKE_SHA)
 
 
 def test_the_release_gate_on_the_tagged_commit_passes_with_the_previous_releases_pins() -> None:
-    """The deadlock this window exists for, end to end through both functions.
+    """End to end through both functions. On the tagged commit the docs pin the previous release,
+    SHA and comment alike. That has to pass, or `publish.yml` can never publish. The same pins on
+    a later commit must fail, so the stale-pin protection is intact."""
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    docs = _pin("0.1.2", _PREV_SHA)
+    check_pins_are_current(docs, "fake.md", *expected_pin("0.1.3", refs, _FAKE_SHA))
+    with pytest.raises(AssertionError, match="must read"):
+        check_pins_are_current(docs, "fake.md", *expected_pin("0.1.3", refs, _LATER_SHA))
 
-    On the tagged commit the docs still pin the previous release's SHA, and must, while their
-    comments already name the release being cut. That has to pass, or `publish.yml` can never
-    publish. The same pins on a later commit must fail, so the stale-pin protection is intact."""
-    previous = "b" * 40
-    docs = _pin("0.1.3", sha=previous)
-    sha, because = comparable_tag_commit("0.1.3", _FAKE_SHA, _FAKE_SHA)
-    with pytest.warns(UserWarning, match="own tagged commit"):
-        check_pins_are_current(docs, "fake.md", "0.1.3", sha, because)
-    sha, because = comparable_tag_commit("0.1.3", _FAKE_SHA, "c" * 40)
-    with pytest.raises(AssertionError, match="gone stale"):
-        check_pins_are_current(docs, "fake.md", "0.1.3", sha, because)
+
+def test_an_unreleased_version_has_no_tag_on_origin_and_a_released_one_does() -> None:
+    assert bump_action_pins.commit_of_tag("99.99.99", _remote_tag_refs()) is None
+    # A version that really is tagged still resolves, so the None path cannot swallow everything.
+    assert (
+        bump_action_pins.commit_of_tag("0.1.2", _remote_tag_refs())
+        == "284f185f1495f2d79150781cf2e6de618ed11327"
+    )
 
 
 def _tracked_files() -> list[Path]:
@@ -588,3 +727,113 @@ def test_a_tree_that_tracks_nothing_and_is_not_a_known_copy_fails(
     outcome, said = _outcome_of_scanning()
     assert outcome == "fail", f"an unexplained empty tree came back as {outcome!r}: {said}"
     assert "tracks no files" in said
+
+
+# --- step 10 before its commit ------------------------------------------------------------------
+
+
+def test_step_10_before_its_commit_accepts_the_new_tags_pins() -> None:
+    # HEAD is the tagged commit and the pin files are edited: the bump has run, not yet committed.
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    accepted = accepted_pins("0.1.3", refs, _FAKE_SHA, pins_dirty=True)
+    assert accepted == [("0.1.2", _PREV_SHA), ("0.1.3", _FAKE_SHA)]
+    check_pins_name_one_of({"fake.md": _pin("0.1.3", _FAKE_SHA)}, accepted)
+    check_pins_name_one_of({"fake.md": _pin("0.1.2", _PREV_SHA)}, accepted)
+
+
+def test_a_clean_tagged_commit_still_accepts_only_the_previous_release() -> None:
+    # The tree publish.yml's gate checks out. The new tag's pins cannot be there, so they must fail.
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    accepted = accepted_pins("0.1.3", refs, _FAKE_SHA, pins_dirty=False)
+    assert accepted == [("0.1.2", _PREV_SHA)]
+    with pytest.raises(AssertionError, match=r"must read `@b{40} # v0\.1\.2`"):
+        check_pins_name_one_of({"fake.md": _pin("0.1.3", _FAKE_SHA)}, accepted)
+
+
+def test_edited_pin_files_loosen_nothing_away_from_the_tagged_commit() -> None:
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    assert accepted_pins("0.1.3", refs, _LATER_SHA, pins_dirty=True) == [("0.1.3", _FAKE_SHA)]
+    assert accepted_pins("0.1.3", _refs(v0_1_2=_PREV_SHA), _LATER_SHA, pins_dirty=True) == [
+        ("0.1.2", _PREV_SHA)
+    ]
+
+
+def test_the_extra_pair_never_lets_a_file_mix_two_releases() -> None:
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    accepted = accepted_pins("0.1.3", refs, _FAKE_SHA, pins_dirty=True)
+    mixed = _pin("0.1.2", _PREV_SHA) + _pin("0.1.3", _FAKE_SHA)
+    # Both pairs fail, and the message is the strict pair's: the previous release.
+    with pytest.raises(AssertionError, match=r"must read `@b{40} # v0\.1\.2`"):
+        check_pins_name_one_of({"fake.md": mixed}, accepted)
+
+
+def _repo_with_a_pin_file(root: Path) -> None:
+    _init_git_repo(root)
+    for name in bump_action_pins.PIN_FILES:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(_pin("0.1.2", _PREV_SHA), encoding="utf-8")
+    (root / "unrelated.txt").write_text("tracked, but not a pin file\n", encoding="utf-8")
+    _commit_all(root)
+
+
+def test_pin_files_differ_from_head_sees_an_edit_and_only_an_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _repo_with_a_pin_file(tmp_path)
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path)
+    assert _pin_files_differ_from_head() is False
+    # A tracked file that is not a pin file, edited: still no.
+    (tmp_path / "unrelated.txt").write_text("edited\n", encoding="utf-8")
+    assert _pin_files_differ_from_head() is False
+    (tmp_path / "README.md").write_text(_pin("0.1.3"), encoding="utf-8")
+    assert _pin_files_differ_from_head() is True
+
+
+def test_pin_files_differ_from_head_is_false_where_git_cannot_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Outside a repository git exits 128 or 129, and with no directory it cannot start at all.
+    # Either way the answer must be "no", which keeps the check strict.
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path)
+    assert _pin_files_differ_from_head() is False
+    monkeypatch.setattr(_MODULE, "REPO", tmp_path / "does-not-exist")
+    assert _pin_files_differ_from_head() is False
+
+
+def test_a_half_done_bump_across_two_files_fails() -> None:
+    # Step 10 before its commit, with one file bumped and another left behind. Each file alone
+    # names an accepted pair, but not the same one, so the pins as a set are wrong.
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    accepted = accepted_pins("0.1.3", refs, _FAKE_SHA, pins_dirty=True)
+    texts = {"README.md": _pin("0.1.3", _FAKE_SHA), "action.yml": _pin("0.1.2", _PREV_SHA)}
+    with pytest.raises(AssertionError) as raised:
+        check_pins_name_one_of(texts, accepted)
+    # The report is the strict pair's, and names the file that is off it.
+    assert "README.md pins" in str(raised.value)
+    assert "action.yml" not in str(raised.value)
+
+
+def test_a_complete_bump_across_every_file_passes() -> None:
+    refs = _refs(v0_1_2=_PREV_SHA, v0_1_3=_FAKE_SHA)
+    accepted = accepted_pins("0.1.3", refs, _FAKE_SHA, pins_dirty=True)
+    texts = {"README.md": _pin("0.1.3", _FAKE_SHA), "action.yml": _pin("0.1.3", _FAKE_SHA)}
+    check_pins_name_one_of(texts, accepted)
+
+
+def test_the_strict_report_names_every_file_that_is_off() -> None:
+    accepted = [("0.1.2", _PREV_SHA)]
+    texts = {
+        "README.md": _pin("0.1.3"),
+        "action.yml": _pin("0.1.3"),
+        "guide.md": _pin("0.1.2", _PREV_SHA),
+    }
+    with pytest.raises(AssertionError) as raised:
+        check_pins_name_one_of(texts, accepted)
+    said = str(raised.value)
+    assert "README.md pins" in said and "action.yml pins" in said and "guide.md" not in said
+
+
+def test_no_accepted_pair_fails_rather_than_passing() -> None:
+    with pytest.raises(AssertionError, match="no accepted pair"):
+        check_pins_name_one_of({"fake.md": _pin("0.1.3")}, [])
