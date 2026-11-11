@@ -16,6 +16,9 @@ All notable changes to gdmutant are recorded here. The format follows
 
 - A test run that floods its output no longer runs gdmutant out of memory under `--runner gdunit4`
   or `--runner gut` either. 0.1.5 fixed this for `--runner command` only.
+- A mutant that times out now stops every process its test command started, not just the command
+  itself. A wrapper that starts Godot used to leave Godot running after a timeout, still using
+  the copy of the project gdmutant was about to delete. (#365)
 
 ## [0.1.6] - 2026-11-09
 

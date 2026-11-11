@@ -9,10 +9,13 @@ GDScript-adapter concern that lands with the end-to-end slice (it needs real God
 from __future__ import annotations
 
 import codecs
+import contextlib
 import io
 import math
 import os
+import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -595,15 +598,39 @@ class BoundedOutput:
         return needle in self.stdout.found or needle in self.stderr.found
 
 
+def _kill_tree(process: subprocess.Popen[bytes]) -> None:
+    """Stop `process` and every process it started. Killing only `process` leaves its children
+    running, still holding files in a folder gdmutant is about to delete."""
+    if sys.platform == "win32":
+        # Walks the tree from `process`, so it must run while `process` is still alive.
+        with contextlib.suppress(OSError):
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+    else:
+        with contextlib.suppress(ProcessLookupError):  # the whole group has already exited
+            os.killpg(process.pid, signal.SIGKILL)
+    process.kill()  # in case taskkill could not run
+
+
 def run_bounded(
     command: Sequence[str], cwd: str, timeout: float, watch: Sequence[str] = ()
 ) -> BoundedOutput:
     """Run `command` in `cwd`, keeping a bounded part of each stream, and noting which of `watch`
-    either one printed. Raises ``TimeoutExpired`` after killing the child, also when a grandchild
-    holds the pipes past `timeout`, and ``RuntimeError`` if a stream could not be read, since it
-    could hide a marker."""
+    either one printed. Raises ``TimeoutExpired`` after killing the child and everything it
+    started, also when a grandchild holds the pipes past `timeout`, and ``RuntimeError`` if a
+    stream could not be read, since it could hide a marker."""
     command = list(command)
-    process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=sys.platform != "win32",  # a process group `_kill_tree` can stop whole
+    )
     streams = (_StreamTail(watch), _StreamTail(watch))
     readers: list[threading.Thread] = []
     deadline = time.monotonic() + timeout
@@ -618,8 +645,8 @@ def run_bounded(
         if any(reader.is_alive() for reader in readers):
             raise subprocess.TimeoutExpired(command, timeout)
     except BaseException:
-        # A timeout, or Ctrl-C: never leave the child running, as `subprocess.run` never does.
-        process.kill()
+        # A timeout, or Ctrl-C: never leave the child, or anything it started, running.
+        _kill_tree(process)
         process.wait()
         for reader in readers:
             reader.join(_KILL_GRACE_SECS)
