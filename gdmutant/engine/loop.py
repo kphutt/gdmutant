@@ -26,6 +26,7 @@ import math
 import os
 import queue
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -840,19 +841,27 @@ _ISOLATED_BASELINE_NOTE = (
 
 
 @contextmanager
-def _scratch_dir(prefix: str, progress: Callable[[str], None] | None) -> Iterator[str]:
-    """A temporary directory whose failed cleanup is a warning, never the end of the run.
+def _scratch_dir(prefix: str) -> Iterator[str]:
+    """A temporary directory whose failed cleanup is a warning, never the end of the run: a run's
+    results are worth more than its scratch space. Deleting fails while something still holds a
+    file in it, such as a timed-out command's child, or antivirus on Windows."""
+    tmp = ""
+    try:
+        with tempfile.TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True) as tmp:
+            yield tmp
+    finally:  # a failed run is when a leftover process is likeliest
+        if tmp and Path(tmp).exists():
+            warn_left_behind(tmp)
 
-    Deleting it fails while something still holds a file in it, such as a test command's child
-    that outlived a timeout, or antivirus on Windows. A run's results are worth more than its
-    scratch space, so the directory is left behind and named instead."""
-    with tempfile.TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True) as tmp:
-        yield tmp
-    if progress is not None and Path(tmp).exists():
-        progress(
-            f"warning: could not delete the temporary folder {tmp}, because something is still "
-            "using it. Delete it once that has stopped."
-        )
+
+def warn_left_behind(folder: str | Path) -> None:
+    """Name a folder gdmutant made but could not delete. Always on stderr, even under
+    ``--progress none``, since nothing else tells anyone the folder is there."""
+    print(
+        f"warning: could not delete the temporary folder {folder} (something may still be "
+        "using it). Delete it once nothing is.",
+        file=sys.stderr,
+    )
 
 
 @contextmanager
@@ -860,7 +869,6 @@ def _baseline_project(
     project_dir: str,
     adapter: Adapter,
     isolated: bool,
-    progress: Callable[[str], None] | None = None,
 ) -> Iterator[str]:
     """Yield the directory the baseline suite runs in: the project itself, or an isolated copy.
 
@@ -889,7 +897,7 @@ def _baseline_project(
     if not isolated:
         yield project_dir
         return
-    with _scratch_dir("gdmutant-baseline-", progress) as tmp:
+    with _scratch_dir("gdmutant-baseline-") as tmp:
         copy = str(Path(tmp) / "project")
         shutil.copytree(project_dir, copy)
         # `mkdtemp` picked `tmp`, so this token is unique on the machine and cannot collide with a
@@ -943,7 +951,7 @@ def _run_baseline(
     # forget it, and the message keeps naming `project_dir` rather than the throwaway copy's path:
     # the project is what the reader has to go and fix.
     where = _ISOLATED_BASELINE_NOTE if isolated else ""
-    with _baseline_project(project_dir, adapter, isolated, progress) as suite_dir:
+    with _baseline_project(project_dir, adapter, isolated) as suite_dir:
         # Inside the context and after the copy, so copying the project never lands in the
         # wall-clock that derives every per-mutant timeout — the same rule `prepare` follows above.
         started = time.monotonic()
@@ -1318,8 +1326,8 @@ def _coverage_pass(
 
     Stops the run with `CoverageRunFailed` unless every clean-run rule holds
     (`engine.coverage.clean_run_problems`, plus `engine.coverage.window_problems` when selecting),
-    listing each one that failed. The copy is deleted before this returns, and the project itself is
-    never touched.
+    listing each one that failed. The copy is deleted before this returns unless something still
+    holds a file in it (`_scratch_dir`), and the project itself is never touched.
     """
     rel = {
         path: _project_relative(
@@ -1333,7 +1341,7 @@ def _coverage_pass(
     forward_label = _FORWARD if per_file else _ONE_PASS
     if progress is not None:
         progress("running the suite once with coverage markers ...")
-    with _scratch_dir("gdmutant-markers-", progress) as tmp:
+    with _scratch_dir("gdmutant-markers-") as tmp:
         copy = Path(tmp) / "project"
         # `.git` is left behind: nothing in a test run reads it, and on a real project it can be
         # the largest thing in the tree.
@@ -2151,7 +2159,7 @@ def _run_pool(
                 clock.record(outcome.verdict, ran)
 
     load_threshold = float(jobs)
-    with _scratch_dir("gdmutant-jobs-", clock.emit) as tmp:
+    with _scratch_dir("gdmutant-jobs-") as tmp:
         # Unique per run on this machine (mkdtemp picked it), so two gdmutant runs going at once
         # cannot hand their workers the same isolation token.
         run_id = Path(tmp).name

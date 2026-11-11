@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import HELD, MarkerRunner, hold_files, releases_nothing, shares_nothing
+from conftest import HELD, MarkerRunner, hold_files, left_behind, releases_nothing, shares_nothing
 
 import gdmutant.engine.loop as loop_mod
 from gdmutant.adapters.gdscript import ADAPTER
@@ -1042,16 +1042,8 @@ def test_parallel_matches_serial_verdicts_and_order(tmp_path: Path) -> None:
 _TWO_RUNNABLE = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"
 
 
-def _leftover_folders(lines: list[str]) -> list[Path]:
-    """The folders the cleanup warnings name, so a test can delete them once nothing holds them."""
-    marker = "warning: could not delete the temporary folder "
-    return [
-        Path(line[len(marker) :].split(", because")[0]) for line in lines if line.startswith(marker)
-    ]
-
-
 def test_a_temporary_folder_that_cannot_be_deleted_costs_a_warning_not_the_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # A test command's child that outlives a timeout keeps a file in its folder open on Windows.
     @dataclass
@@ -1062,35 +1054,43 @@ def test_a_temporary_folder_that_cannot_be_deleted_costs_a_warning_not_the_run(
 
     hold_files(monkeypatch)
     path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
-    lines: list[str] = []
-    result = run(
-        str(tmp_path), path, _TWO_RUNNABLE, LeavesAHeldFile(), jobs=2, progress=lines.append
-    )
+    # No `progress`, as under --progress none: the warning must still reach stderr.
+    result = run(str(tmp_path), path, _TWO_RUNNABLE, LeavesAHeldFile(), jobs=2)
     monkeypatch.undo()
-    leftovers = _leftover_folders(lines)
+    err = capsys.readouterr().err
+    leftovers = left_behind(err)
     for folder in leftovers:
         shutil.rmtree(folder)
     assert {o.verdict for o in result.outcomes} == {Verdict.SURVIVED}
     assert sorted(folder.name.split("-")[1] for folder in leftovers) == ["baseline", "jobs"]
-    assert all(
-        line.endswith(", because something is still using it. Delete it once that has stopped.")
-        for line in lines
-        if line.startswith("warning: could not delete")
-    )
+    assert err.count("(something may still be using it). Delete it once nothing is.") == 2
 
 
-def test_a_temporary_folder_that_is_deleted_says_nothing(tmp_path: Path) -> None:
+def test_a_temporary_folder_left_by_a_failed_run_is_still_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    @dataclass
+    class FailsHoldingAFile:
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            (Path(project_dir) / HELD).write_text("open", encoding="utf-8")
+            raise KeyboardInterrupt
+
+    hold_files(monkeypatch)
     path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
-    lines: list[str] = []
-    run(
-        str(tmp_path),
-        path,
-        _TWO_RUNNABLE,
-        ScriptedRunner([SuiteResult(1, 0, 0)] * 3),
-        jobs=2,
-        progress=lines.append,
-    )
-    assert _leftover_folders(lines) == []
+    with pytest.raises(KeyboardInterrupt):
+        run(str(tmp_path), path, _TWO_RUNNABLE, FailsHoldingAFile(), jobs=2)
+    monkeypatch.undo()
+    (folder,) = left_behind(capsys.readouterr().err)
+    shutil.rmtree(folder)
+    assert folder.name.startswith("gdmutant-baseline-")
+
+
+def test_a_temporary_folder_that_is_deleted_says_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    run(str(tmp_path), path, _TWO_RUNNABLE, ScriptedRunner([SuiteResult(1, 0, 0)] * 3), jobs=2)
+    assert left_behind(capsys.readouterr().err) == []
 
 
 @dataclass

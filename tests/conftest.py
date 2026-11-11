@@ -152,3 +152,13 @@ def hold_files(monkeypatch: pytest.MonkeyPatch) -> None:
         unlink(path, *args, **kwargs)
 
     monkeypatch.setattr(os, "unlink", held)
+
+
+def left_behind(stderr: str) -> list[Path]:
+    """The folders the cleanup warnings in `stderr` name, so a test can delete them itself."""
+    marker = "warning: could not delete the temporary folder "
+    return [
+        Path(line[len(marker) :].split(" (something may")[0])
+        for line in stderr.splitlines()
+        if line.startswith(marker)
+    ]

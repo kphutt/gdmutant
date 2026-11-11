@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from conftest import HELD, hold_files
+from conftest import HELD, hold_files, left_behind
 
 import gdmutant.engine.loop as loop_mod
 from gdmutant.adapters.gdscript import ADAPTER
@@ -568,7 +568,7 @@ def test_the_self_check_catches_a_map_that_hides_a_killable_mutant(tmp_path: Pat
 
 
 def test_a_marker_copy_that_cannot_be_deleted_costs_a_warning_not_the_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     @dataclass
     class HeldLab(Lab):
@@ -577,11 +577,9 @@ def test_a_marker_copy_that_cannot_be_deleted_costs_a_warning_not_the_run(
             return super().run_markers(project_dir, timeout)
 
     hold_files(monkeypatch)
-    lines: list[str] = []
-    result = _run(HeldLab(), tmp_path, self_check=1, progress=lines.append)
+    result = _run(HeldLab(), tmp_path, self_check=1)
     monkeypatch.undo()
-    (warning,) = [line for line in lines if line.startswith("warning: could not delete")]
-    folder = Path(warning.split("temporary folder ", 1)[1].split(", because")[0])
+    (folder,) = left_behind(capsys.readouterr().err)
     shutil.rmtree(folder)
     assert folder.name.startswith("gdmutant-markers-")
     assert Verdict.NO_COVERAGE in _verdicts(result)

@@ -16,7 +16,8 @@ All notable changes to gdmutant are recorded here. The format follows
 
 - A temporary folder gdmutant cannot delete no longer ends the run without a report. On Windows
   that happened when something still held a file in it, such as a child of a timed-out test
-  command. gdmutant now leaves the folder, warns with its path, and writes the report. (#365)
+  command. gdmutant now leaves the folder, warns with its path on stderr (even under
+  `--progress none`), and writes the report. (#365)
 
 ## [0.1.6] - 2026-11-09
 
