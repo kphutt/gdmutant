@@ -209,7 +209,8 @@ class _GodotJUnitRunner:
         # the real suite run (with its own timeout) surface a genuine problem as "wrote no report".
         with contextlib.suppress(subprocess.TimeoutExpired):
             try:
-                subprocess.run(
+                # Through `run_bounded`, so a timeout also stops whatever a wrapper started.
+                run_bounded(
                     [
                         self.godot,
                         "--headless",
@@ -217,11 +218,8 @@ class _GodotJUnitRunner:
                         str(Path(project_dir).resolve()),
                         "--import",
                     ],
-                    cwd=project_dir,
-                    timeout=_IMPORT_TIMEOUT,
-                    check=False,
-                    stdout=subprocess.DEVNULL,  # never read, so never held
-                    stderr=subprocess.DEVNULL,
+                    project_dir,
+                    _IMPORT_TIMEOUT,
                 )
             except FileNotFoundError as error:
                 raise with_filename(error, self.godot) from error

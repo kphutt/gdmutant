@@ -599,30 +599,33 @@ class BoundedOutput:
 
 
 def _kill_tree(process: subprocess.Popen[bytes]) -> None:
-    """Stop `process` and every process it started. Killing only `process` leaves its children
-    running, still holding files in a folder gdmutant is about to delete."""
-    if sys.platform == "win32":
-        # Walks the tree from `process`, so it must run while `process` is still alive.
-        with contextlib.suppress(OSError):
-            subprocess.run(
-                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-    else:
-        with contextlib.suppress(ProcessLookupError):  # the whole group has already exited
-            os.killpg(process.pid, signal.SIGKILL)
-    process.kill()  # in case taskkill could not run
+    """Stop `process` and every process it started, so none keeps holding files in a folder
+    gdmutant is about to delete. On Windows, children of a `process` that has already exited
+    are out of reach: `taskkill` finds a tree only through a live parent."""
+    try:
+        if sys.platform == "win32":
+            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=_KILL_GRACE_SECS,
+                )
+        else:
+            with contextlib.suppress(ProcessLookupError):  # the whole group has already exited
+                os.killpg(process.pid, signal.SIGKILL)
+    finally:
+        process.kill()  # even if taskkill failed, hung, or was interrupted
 
 
 def run_bounded(
     command: Sequence[str], cwd: str, timeout: float, watch: Sequence[str] = ()
 ) -> BoundedOutput:
     """Run `command` in `cwd`, keeping a bounded part of each stream, and noting which of `watch`
-    either one printed. Raises ``TimeoutExpired`` after killing the child and everything it
-    started, also when a grandchild holds the pipes past `timeout`, and ``RuntimeError`` if a
-    stream could not be read, since it could hide a marker."""
+    either one printed. Raises ``TimeoutExpired`` after stopping the child and what it started
+    (see `_kill_tree`), also when a grandchild holds the pipes past `timeout`, and
+    ``RuntimeError`` if a stream could not be read, since it could hide a marker."""
     command = list(command)
     process = subprocess.Popen(
         command,

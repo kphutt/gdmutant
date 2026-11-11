@@ -468,16 +468,39 @@ def test_on_windows_a_timeout_kills_the_tree_before_the_process(
     assert process.killed
 
 
-def test_on_windows_a_missing_taskkill_still_kills_the_process(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "failure",
+    [FileNotFoundError("taskkill"), subprocess.TimeoutExpired("taskkill", 5.0)],
+    ids=["missing", "hung"],
+)
+def test_on_windows_a_failed_taskkill_still_kills_the_process(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
 ) -> None:
-    def no_taskkill(*args: object, **kwargs: object) -> None:
-        raise FileNotFoundError("taskkill")
+    timeouts: list[object] = []
+
+    def failing_taskkill(*args: object, **kwargs: object) -> None:
+        timeouts.append(kwargs.get("timeout"))
+        raise failure
 
     process = _FakeProcess()
     monkeypatch.setattr(runner_mod.sys, "platform", "win32")
-    monkeypatch.setattr(runner_mod.subprocess, "run", no_taskkill)
+    monkeypatch.setattr(runner_mod.subprocess, "run", failing_taskkill)
     runner_mod._kill_tree(process)  # type: ignore[arg-type]
+    assert timeouts == [runner_mod._KILL_GRACE_SECS]  # a hung taskkill cannot hang the run
+    assert process.killed
+
+
+def test_on_windows_a_ctrl_c_during_taskkill_still_kills_the_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def interrupted(*args: object, **kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    process = _FakeProcess()
+    monkeypatch.setattr(runner_mod.sys, "platform", "win32")
+    monkeypatch.setattr(runner_mod.subprocess, "run", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        runner_mod._kill_tree(process)  # type: ignore[arg-type]
     assert process.killed
 
 
@@ -531,14 +554,17 @@ def test_a_timed_out_commands_children_are_stopped_too(tmp_path: Path) -> None:
         "    time.sleep(0.05)\n"
     )
     script = (
-        "import subprocess, sys, time\n"
+        "import os, subprocess, sys, time\n"
         f"subprocess.Popen([sys.executable, '-c', {beat!r}], "
         "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"while not os.path.exists({str(beats)!r}):\n"  # time out only once the child is beating
+        "    time.sleep(0.05)\n"
         "time.sleep(60)\n"
     )
     try:
         with pytest.raises(SuiteTimeout):
-            CommandRunner(_runs(script), timeout=3).run(str(tmp_path))
+            CommandRunner(_runs(script), timeout=10).run(str(tmp_path))
+        assert beats.exists(), "the command's child never started"
         time.sleep(0.5)
         before = beats.stat().st_size
         time.sleep(1.0)

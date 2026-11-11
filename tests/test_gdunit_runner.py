@@ -1,7 +1,7 @@
 """Tests for the GdUnit4 runner (subprocess mocked — no real Godot)."""
 
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -9,7 +9,7 @@ from conftest import patch_run
 
 import gdmutant.adapters.gdscript.runner as runner_mod
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner
-from gdmutant.engine.runner import Runner, SuiteTimeout, with_filename
+from gdmutant.engine.runner import BoundedOutput, Runner, SuiteTimeout, with_filename
 
 
 def _report(tmp_path: Path) -> Path:
@@ -349,12 +349,35 @@ def test_run_warms_the_import_cache_once_before_the_first_suite_run(
     # It runs before the first suite command, and targets the resolved project path.
     assert commands[0] == ["godot4", "--headless", "--path", str(tmp_path.resolve()), "--import"]
     assert "--import" not in commands[1]  # the suite run follows the warm-up
-    # The warm-up must not check the exit code (--import routinely exits non-zero on benign import
-    # chatter, and only TimeoutExpired is suppressed — check=True would raise and abort the run),
-    # and must discard its output, which nothing reads, so that chatter stays off the console.
     (_, import_kwargs) = import_calls[0]
-    assert import_kwargs["check"] is False
-    assert import_kwargs["stdout"] == import_kwargs["stderr"] == subprocess.DEVNULL
+    assert import_kwargs["timeout"] == runner_mod._IMPORT_TIMEOUT
+
+
+def test_the_import_warm_up_ignores_its_exit_code_and_goes_through_run_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `run_bounded` stops a timed-out wrapper's whole tree and never prints its output. --import
+    # routinely exits non-zero on benign chatter, so that exit code must not abort the run.
+    report = _report(tmp_path)
+    bounded: list[list[str]] = []
+
+    def fake_bounded(
+        command: list[str], cwd: str, timeout: float, watch: Sequence[str] = ()
+    ) -> BoundedOutput:
+        bounded.append(command)
+        if "--import" in command:
+            return BoundedOutput.of(1, "import chatter", "", watch)
+        report.write_text('<testsuite tests="1" failures="0"/>', encoding="utf-8")
+        return BoundedOutput.of(0, "", "", watch)
+
+    def no_run(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Godot was started without run_bounded")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", no_run)
+    monkeypatch.setattr(runner_mod, "run_bounded", fake_bounded)
+    result = GdUnit4Runner(godot="godot4").run(str(tmp_path))
+    assert "--import" in bounded[0]
+    assert (result.tests, result.failed) == (1, False)
 
 
 def test_run_survives_a_slow_import_warm_up(
