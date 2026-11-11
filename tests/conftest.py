@@ -135,3 +135,20 @@ class MarkerRunner:
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         content = Path(self.target).read_text(encoding="utf-8")
         return SuiteResult(tests=self.tests, failures=int(self.kill_marker in content), errors=0)
+
+
+#: The file name `hold_files` makes undeletable, as a process still using it would on Windows.
+HELD = "held-by-a-leftover-process.lock"
+
+
+def hold_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make deleting any file named `HELD` fail as Windows does while a process still has it open
+    (WinError 32 is a `PermissionError`), on every platform."""
+    unlink = os.unlink
+
+    def held(path: Any, *args: Any, **kwargs: Any) -> None:
+        if os.path.basename(os.fsdecode(path)) == HELD:
+            raise PermissionError(32, "The process cannot access the file", os.fsdecode(path))
+        unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", held)

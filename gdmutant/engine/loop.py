@@ -840,7 +840,28 @@ _ISOLATED_BASELINE_NOTE = (
 
 
 @contextmanager
-def _baseline_project(project_dir: str, adapter: Adapter, isolated: bool) -> Iterator[str]:
+def _scratch_dir(prefix: str, progress: Callable[[str], None] | None) -> Iterator[str]:
+    """A temporary directory whose failed cleanup is a warning, never the end of the run.
+
+    Deleting it fails while something still holds a file in it, such as a test command's child
+    that outlived a timeout, or antivirus on Windows. A run's results are worth more than its
+    scratch space, so the directory is left behind and named instead."""
+    with tempfile.TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True) as tmp:
+        yield tmp
+    if progress is not None and Path(tmp).exists():
+        progress(
+            f"warning: could not delete the temporary folder {tmp}, because something is still "
+            "using it. Delete it once that has stopped."
+        )
+
+
+@contextmanager
+def _baseline_project(
+    project_dir: str,
+    adapter: Adapter,
+    isolated: bool,
+    progress: Callable[[str], None] | None = None,
+) -> Iterator[str]:
     """Yield the directory the baseline suite runs in: the project itself, or an isolated copy.
 
     The baseline's job is to prove the suite is green **in the conditions the mutants will run in**
@@ -868,7 +889,7 @@ def _baseline_project(project_dir: str, adapter: Adapter, isolated: bool) -> Ite
     if not isolated:
         yield project_dir
         return
-    with tempfile.TemporaryDirectory(prefix="gdmutant-baseline-") as tmp:
+    with _scratch_dir("gdmutant-baseline-", progress) as tmp:
         copy = str(Path(tmp) / "project")
         shutil.copytree(project_dir, copy)
         # `mkdtemp` picked `tmp`, so this token is unique on the machine and cannot collide with a
@@ -922,7 +943,7 @@ def _run_baseline(
     # forget it, and the message keeps naming `project_dir` rather than the throwaway copy's path:
     # the project is what the reader has to go and fix.
     where = _ISOLATED_BASELINE_NOTE if isolated else ""
-    with _baseline_project(project_dir, adapter, isolated) as suite_dir:
+    with _baseline_project(project_dir, adapter, isolated, progress) as suite_dir:
         # Inside the context and after the copy, so copying the project never lands in the
         # wall-clock that derives every per-mutant timeout — the same rule `prepare` follows above.
         started = time.monotonic()
@@ -1312,7 +1333,7 @@ def _coverage_pass(
     forward_label = _FORWARD if per_file else _ONE_PASS
     if progress is not None:
         progress("running the suite once with coverage markers ...")
-    with tempfile.TemporaryDirectory(prefix="gdmutant-markers-") as tmp:
+    with _scratch_dir("gdmutant-markers-", progress) as tmp:
         copy = Path(tmp) / "project"
         # `.git` is left behind: nothing in a test run reads it, and on a real project it can be
         # the largest thing in the tree.
@@ -2130,7 +2151,7 @@ def _run_pool(
                 clock.record(outcome.verdict, ran)
 
     load_threshold = float(jobs)
-    with tempfile.TemporaryDirectory(prefix="gdmutant-jobs-") as tmp:
+    with _scratch_dir("gdmutant-jobs-", clock.emit) as tmp:
         # Unique per run on this machine (mkdtemp picked it), so two gdmutant runs going at once
         # cannot hand their workers the same isolation token.
         run_id = Path(tmp).name
