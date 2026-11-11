@@ -1085,6 +1085,19 @@ def test_a_temporary_folder_left_by_a_failed_run_is_still_named(
     assert folder.name.startswith("gdmutant-baseline-")
 
 
+def test_a_temporary_folder_that_was_never_made_is_not_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def no_space(*args: object, **kwargs: object) -> str:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(loop_mod.tempfile, "mkdtemp", no_space)
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    with pytest.raises(OSError, match="No space"):
+        run(str(tmp_path), path, _TWO_RUNNABLE, ScriptedRunner([SuiteResult(1, 0, 0)]), jobs=2)
+    assert left_behind(capsys.readouterr().err) == []
+
+
 def test_a_temporary_folder_that_is_deleted_says_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
