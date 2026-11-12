@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from conftest import bounded_output
 
 import gdmutant.engine.runner as runner_mod
 from gdmutant.engine.runner import (
@@ -315,15 +316,15 @@ def test_a_watched_string_is_found_even_when_reads_cut_it(
 
 def test_asking_about_an_unwatched_string_is_refused() -> None:
     # It would always answer no, which is a check that passes without checking anything.
-    output = runner_mod.BoundedOutput.of(0, "No test cases found")
+    output = bounded_output(0, "No test cases found")
     with pytest.raises(ValueError, match="'No test cases found' was not watched"):
         output.saw("No test cases found")
 
 
 def test_bounded_output_of_text_reads_as_a_real_run_would() -> None:
-    assert runner_mod.BoundedOutput.of(1).detail() == ""
-    assert runner_mod.BoundedOutput.of(1, "a\r\nb\rc").detail() == "a\nb\nc"
-    assert runner_mod.BoundedOutput.of(1, "out", "a\r\nb\rc").detail() == "a\nb\nc"
+    assert bounded_output(1).detail() == ""
+    assert bounded_output(1, "a\r\nb\rc").detail() == "a\nb\nc"
+    assert bounded_output(1, "out", "a\r\nb\rc").detail() == "a\nb\nc"
 
 
 def test_command_runner_a_child_holding_its_output_open_times_out(tmp_path: Path) -> None:

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import patch_run
+from conftest import bounded_output, patch_run
 
 import gdmutant.adapters.gdscript.marker_run as marker_mod
 import gdmutant.adapters.gdscript.runner as runner_mod
@@ -358,7 +358,7 @@ def test_the_command_runner_marker_run_gets_the_runners_own_budget(
 
     def fake(command: list[str], cwd: str, timeout: float) -> Any:
         seen.append(timeout)
-        return engine_runner.BoundedOutput.of(0)
+        return bounded_output(0)
 
     monkeypatch.setattr(engine_runner, "run_bounded", fake)
     CommandRunner(["h"], timeout=77.0).run_markers(".")
