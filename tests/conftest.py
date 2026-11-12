@@ -15,14 +15,21 @@ from gdmutant.engine.runner import SuiteResult
 _TEMPLATES: dict[str, tuple[Path, Any]] = {}
 
 
-#: Where `copy_of_template` builds its templates: pytest's own temporary directory for this run,
-#: which pytest prunes itself, even after a run that was killed before it could clean up.
+#: Where `copy_of_template` builds its templates: pytest's own temporary directory for this run.
+#: pytest prunes it on a later run, and a killed run's within about 3 days (its lock's timeout).
 _TEMPLATE_ROOT: list[Path] = []
+
+
+def start_template_session(root: Path) -> None:
+    """Build templates under `root` from now on. A second pytest session in one process (mutmut
+    runs several) gets a new directory, so the templates built for the last one are forgotten."""
+    _TEMPLATE_ROOT[:] = [root]
+    _TEMPLATES.clear()
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _template_root(tmp_path_factory: pytest.TempPathFactory) -> None:
-    _TEMPLATE_ROOT[:] = [tmp_path_factory.mktemp("templates")]
+    start_template_session(tmp_path_factory.mktemp("templates"))
 
 
 def copy_of_template(dest: Path, key: str, build: Callable[[Path], Any]) -> Any:
