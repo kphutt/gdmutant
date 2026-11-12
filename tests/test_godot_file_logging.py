@@ -19,7 +19,7 @@ _SOURCE = "func f(a):\n\treturn a > 1\n"
 
 def _project(tmp_path: Path, settings: str = "") -> Path:
     project = tmp_path / "copy"
-    project.mkdir()
+    project.mkdir(parents=True)
     (project / "project.godot").write_text(
         f'config_version=5\n\n[application]\n\nconfig/name="demo"\n{settings}', encoding="utf-8"
     )
@@ -49,6 +49,19 @@ def test_a_project_that_turned_its_log_on_is_overruled(tmp_path: Path) -> None:
     text = _settings(project)
     assert all(line in text.splitlines() for line in _OFF)
     assert "=true\n" not in text.split("[debug]")[1]
+
+
+def test_an_os_override_ahead_of_pc_is_overruled_too(tmp_path: Path) -> None:
+    # Godot uses the first matching override, so `.windows=true` above `.pc` would still log.
+    project = _project(
+        tmp_path,
+        "\n[debug]\n\nfile_logging/enable_file_logging.windows=true\n"
+        "file_logging/enable_file_logging.pc=true\n",
+    )
+    isolate_user_dir(str(project), "run-w0")
+    debug = _settings(project).split("[debug]")[1]
+    assert "file_logging/enable_file_logging.windows=false" in debug.splitlines()
+    assert "=true" not in debug
 
 
 def test_asking_for_the_log_leaves_the_projects_own_setting(tmp_path: Path) -> None:
@@ -106,6 +119,10 @@ def test_both_entry_points_pick_the_adapter_the_flag_asks_for(
             ["run", *sources, "--project", str(tmp_path), "--runner", "gdunit4", "-j", "2", *flag]
         )
     assert ran.value.adapter is (expected or ADAPTER_WITH_GODOT_FILE_LOGGING)
+    # What a worker copy then gets: no log unless the flag asked for one.
+    project = _project(tmp_path / "worker")
+    ran.value.adapter.isolate_copy(str(project), "run-w0")
+    assert ("[debug]" in _settings(project)) is not bool(flag)
 
 
 def test_changed_since_keeps_the_log_choice() -> None:
