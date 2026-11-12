@@ -12,6 +12,10 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- gdmutant is now verified against GdUnit4 6.2.3, up from 6.2.2.
+
 ## [0.1.6] - 2026-11-09
 
 This release changes no code. It corrects the GitHub Action example on the PyPI project page.
