@@ -601,8 +601,25 @@ def test_stopping_the_running_commands_reaches_one_another_thread_waits_on(
     deadline = time.monotonic() + 30
     while not runner_mod._RUNNING and time.monotonic() < deadline:
         time.sleep(0.05)
-    runner_mod.stop_running_commands()
-    waiting.join(30)
+    try:
+        runner_mod.stop_running_commands()
+        waiting.join(30)
+    finally:
+        runner_mod.allow_commands()
     assert not waiting.is_alive(), "the command is still running"
     assert done and done[0].returncode != 0
     assert not runner_mod._RUNNING
+
+
+def test_a_command_started_after_a_stop_is_stopped_at_once(tmp_path: Path) -> None:
+    # A worker can start another run (a confirmation, a fallback) after the stop's snapshot.
+    started = time.monotonic()
+    try:
+        runner_mod.stop_running_commands()
+        with pytest.raises(runner_mod.CommandsStopped):
+            runner_mod.run_bounded(_runs("import time; time.sleep(60)"), str(tmp_path), 60.0)
+    finally:
+        runner_mod.allow_commands()
+    assert time.monotonic() - started < 30
+    assert not runner_mod._RUNNING
+    assert runner_mod.run_bounded(_runs("print('ok')"), str(tmp_path), 30.0).returncode == 0

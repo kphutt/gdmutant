@@ -22,7 +22,8 @@ All notable changes to gdmutant are recorded here. The format follows
   `--import` step. On Windows, a process whose parent has already exited is still out of reach.
   Ctrl-C under `--jobs` now stops the test commands still running too, and waits for them before
   deleting the workers' copies. On Linux and macOS each test command now runs in its own session,
-  so closing the terminal no longer stops it; gdmutant does on a timeout or Ctrl-C. (#365)
+  so gdmutant stops it on a timeout or Ctrl-C, but if gdmutant itself is killed or its terminal
+  closes, the command keeps running. (#365)
 
 ## [0.1.6] - 2026-11-09
 

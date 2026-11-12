@@ -1,6 +1,5 @@
 """Tests for the mutation-run loop (no Godot — fake runners drive killed/survived)."""
 
-import _thread
 import inspect
 import itertools
 import os
@@ -2851,22 +2850,116 @@ def test_ctrl_c_under_jobs_stops_the_running_commands_before_the_copies_go(
     stopped = threading.Event()
     finished: list[bool] = []
     copies: list[Path] = []
+    lock = threading.Lock()
+
+    running = threading.Barrier(3)  # both workers mid-run, and the test
+    fired: list[bool] = []
 
     @dataclass
     class InterruptedMidRun:
         def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
             if threading.current_thread() is not threading.main_thread():
-                copies.append(Path(project_dir))
-                _thread.interrupt_main()
+                with lock:
+                    copies.append(Path(project_dir))
+                running.wait(30)
                 stopped.wait(30)  # stands in for a command only stop_running_commands ends
                 time.sleep(0.5)  # a killed command takes a moment to exit; its copy must wait
                 finished.append(Path(project_dir).exists())
             return SuiteResult(tests=1, failures=0, errors=0)
 
+    class CtrlCWhileWaiting(threading.Thread):
+        def join(self, timeout: float | None = None) -> None:
+            if threading.current_thread() is threading.main_thread() and not fired:
+                if len(copies) < 2:  # a worker still starting: let it, then press Ctrl-C
+                    super().join(timeout)
+                    return
+                fired.append(True)
+                raise KeyboardInterrupt
+            super().join(timeout)
+
+    allowed: list[bool] = []
     monkeypatch.setattr(loop_mod, "stop_running_commands", stopped.set)
+    monkeypatch.setattr(loop_mod, "allow_commands", lambda: allowed.append(stopped.is_set()))
+    monkeypatch.setattr(loop_mod.threading, "Thread", CtrlCWhileWaiting)
+    threading.Thread(target=lambda: running.wait(30), daemon=True).start()
     path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
     with pytest.raises(KeyboardInterrupt):
         run(str(tmp_path), path, _TWO_RUNNABLE, InterruptedMidRun(), jobs=2)
     assert stopped.is_set(), "the running commands were not stopped"
     assert finished and all(finished), "a worker's copy was deleted while it was still running"
     assert not any(copy.exists() for copy in copies)
+    assert allowed == [True], "commands stay refused after the stopped run"
+
+
+def test_a_second_ctrl_c_while_waiting_still_waits_for_every_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @dataclass
+    class Worker:
+        """Two Ctrl-Cs land while waiting for it; it finishes on the third wait."""
+
+        waits: int = 0
+        alive: bool = True
+
+        def is_alive(self) -> bool:
+            return self.alive
+
+        def join(self, timeout: float | None = None) -> None:
+            self.waits += 1
+            if self.waits <= 2:
+                raise KeyboardInterrupt
+            self.alive = False
+
+    stops: list[int] = []
+
+    def stop_once_interrupted() -> None:
+        stops.append(1)
+        if len(stops) == 1:  # a Ctrl-C while stopping is caught too
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(loop_mod, "stop_running_commands", stop_once_interrupted)
+    worker = Worker()
+    stop = threading.Event()
+    with pytest.raises(KeyboardInterrupt):
+        loop_mod._join_workers([worker], stop)  # type: ignore[list-item]
+    assert not worker.alive, "the wait ended before the worker did"
+    assert stop.is_set()
+    assert len(stops) == 3  # after each of the two Ctrl-Cs, and again after the interrupted stop
+
+
+def test_ctrl_c_while_workers_start_stops_the_ones_already_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stopped = threading.Event()
+    finished: list[bool] = []
+    copytree = shutil.copytree
+    copies: list[str] = []
+
+    def interrupted_copy(src: str, dst: str, *args: Any, **kwargs: Any) -> Any:
+        copies.append(dst)
+        if Path(dst).name == "w1":  # the second worker's copy: Ctrl-C lands here
+            deadline = time.monotonic() + 10
+            while not finished_started and time.monotonic() < deadline:
+                time.sleep(0.01)
+            raise KeyboardInterrupt
+        return copytree(src, dst, *args, **kwargs)
+
+    finished_started: list[bool] = []
+
+    @dataclass
+    class WaitsToBeStopped:
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            if threading.current_thread() is not threading.main_thread():
+                finished_started.append(True)
+                stopped.wait(30)  # stands in for a command only stop_running_commands ends
+                time.sleep(0.5)
+                finished.append(Path(project_dir).exists())
+            return SuiteResult(tests=1, failures=0, errors=0)
+
+    monkeypatch.setattr(loop_mod, "stop_running_commands", stopped.set)
+    monkeypatch.setattr(loop_mod.shutil, "copytree", interrupted_copy)
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    with pytest.raises(KeyboardInterrupt):
+        run(str(tmp_path), path, _TWO_RUNNABLE, WaitsToBeStopped(), jobs=2)
+    assert stopped.is_set(), "the running commands were not stopped"
+    assert finished == [True], "the first worker's copy went before it finished"
