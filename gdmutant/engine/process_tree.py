@@ -205,7 +205,9 @@ def start(command: Sequence[str], cwd: str) -> ProcessTree:
             tree.job = None
         api.resume(handle)
     except BaseException:  # never leave the command suspended, or running outside any kill
-        tree.kill()
-        tree.close()
+        try:
+            tree.kill()
+        finally:
+            tree.close()
         raise
     return tree

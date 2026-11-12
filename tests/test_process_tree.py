@@ -123,6 +123,20 @@ def test_on_windows_an_interrupted_assign_stops_the_command_and_releases_the_job
     assert process.killed
 
 
+def test_on_windows_a_failed_stop_after_a_failed_start_still_releases_the_job(
+    monkeypatch: pytest.MonkeyPatch, windows: _FakeWin32
+) -> None:
+    def fails(*args: object) -> None:
+        raise OSError("failed")
+
+    monkeypatch.setattr(windows, "resume", fails)
+    monkeypatch.setattr(windows, "terminate", fails)
+    _fake_popen(monkeypatch, {}, windows)
+    with pytest.raises(OSError, match="failed"):
+        process_tree.start(["x"], ".")
+    assert windows.calls[-1] == "close 9"
+
+
 def test_on_windows_a_command_that_cannot_resume_is_stopped(
     monkeypatch: pytest.MonkeyPatch, windows: _FakeWin32
 ) -> None:
