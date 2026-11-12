@@ -48,7 +48,7 @@ from gdmutant.engine.loop import run as _run
 from gdmutant.engine.loop import run_paths as _run_paths
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import CATALOG, TableOperator
-from gdmutant.engine.runner import ReportedSuite, SuiteResult, SuiteTimeout
+from gdmutant.engine.runner import CompileFailed, ReportedSuite, SuiteResult, SuiteTimeout
 from gdmutant.engine.spans import Span
 
 
@@ -351,6 +351,74 @@ def test_a_zero_test_mutant_run_that_also_failed_stays_a_kill(tmp_path: Path) ->
     )
     result = run(str(tmp_path), path, src, runner)
     assert [o.verdict for o in result.outcomes] == [Verdict.KILLED]
+
+
+_ONE_MUTANT = "func f(a, b) -> bool:\n\treturn a > b\n"
+
+
+@pytest.mark.parametrize("raised", [True, False], ids=["no report", "tests failed"])
+def test_a_mutant_whose_file_did_not_compile_is_invalid(tmp_path: Path, raised: bool) -> None:
+    # It never ran, so neither a failed run nor failing tests say anything about it.
+    path = _write(tmp_path, "f.gd", _ONE_MUTANT)
+    named = (str(tmp_path / "f.gd"), str(tmp_path / "test_f.gd"))
+    mutant_run: SuiteResult | Exception = (
+        CompileFailed("no report", named)
+        if raised
+        else SuiteResult(tests=3, failures=3, errors=0, uncompiled=named)
+    )
+    runner = ScriptedRunner([SuiteResult(tests=3, failures=0, errors=0), mutant_run])
+    result = run(str(tmp_path), path, _ONE_MUTANT, runner)
+    assert [(o.verdict, o.error) for o in result.outcomes] == [(Verdict.INVALID, None)]
+    assert result.mutation_score is None
+
+
+def test_a_source_path_spelled_differently_still_matches_the_file_that_did_not_compile(
+    tmp_path: Path,
+) -> None:
+    # The runner names files by resolved path; the engine can be handed another spelling.
+    _write(tmp_path, "f.gd", _ONE_MUTANT)
+    (tmp_path / "sub").mkdir()
+    failed = CompileFailed("no report", (str(tmp_path.resolve() / "f.gd"),))
+    runner = ScriptedRunner([SuiteResult(tests=3, failures=0, errors=0), failed])
+    result = run(str(tmp_path), str(tmp_path / "sub" / ".." / "f.gd"), _ONE_MUTANT, runner)
+    assert [o.verdict for o in result.outcomes] == [Verdict.INVALID]
+
+
+def test_a_failed_run_whose_compile_errors_name_other_files_stays_an_error(
+    tmp_path: Path,
+) -> None:
+    path = _write(tmp_path, "f.gd", _ONE_MUTANT)
+    failed = CompileFailed("no report", (str(tmp_path / "other.gd"),))
+    runner = ScriptedRunner([SuiteResult(tests=3, failures=0, errors=0), failed])
+    result = run(str(tmp_path), path, _ONE_MUTANT, runner)
+    assert [(o.verdict, o.error) for o in result.outcomes] == [(Verdict.ERROR, "no report")]
+
+
+def test_failing_tests_with_compile_errors_in_other_files_still_kill(tmp_path: Path) -> None:
+    path = _write(tmp_path, "f.gd", _ONE_MUTANT)
+    killed = SuiteResult(tests=3, failures=1, errors=0, uncompiled=(str(tmp_path / "other.gd"),))
+    runner = ScriptedRunner([SuiteResult(tests=3, failures=0, errors=0), killed])
+    result = run(str(tmp_path), path, _ONE_MUTANT, runner)
+    assert [o.verdict for o in result.outcomes] == [Verdict.KILLED]
+
+
+def test_a_jobs_worker_matches_the_uncompiled_file_in_its_own_copy(tmp_path: Path) -> None:
+    @dataclass
+    class FileNeverCompiles:
+        lock: threading.Lock = field(default_factory=threading.Lock)
+        calls: int = 0
+
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            with self.lock:
+                self.calls += 1
+                if self.calls == 1:
+                    return SuiteResult(tests=1, failures=0, errors=0)
+            raise CompileFailed("no report", (str(Path(project_dir) / "f.gd"),))
+
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    result = run(str(tmp_path), path, _TWO_RUNNABLE, FileNeverCompiles(), jobs=2)
+    assert len(result.outcomes) > 1
+    assert {o.verdict for o in result.outcomes} == {Verdict.INVALID}
 
 
 def test_baseline_runner_exception_becomes_baseline_failed(tmp_path: Path) -> None:

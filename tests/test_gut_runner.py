@@ -13,6 +13,7 @@ import gdmutant.adapters.gdscript.runner as runner_mod
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner, GutRunner
 from gdmutant.engine.runner import (
     CommandRunner,
+    CompileFailed,
     FileSelecting,
     MarkerRunnable,
     ReportedSuite,
@@ -20,6 +21,9 @@ from gdmutant.engine.runner import (
     RunWarning,
     SuiteTimeout,
 )
+
+#: What a fake `subprocess.run` returns: the runner reads the captured output of every run.
+_DONE = subprocess.CompletedProcess[str]([], 0, "", "")
 
 
 def _report(tmp_path: Path) -> Path:
@@ -61,7 +65,9 @@ def test_run_parses_the_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     report = _report(tmp_path)
     # GUT wraps its suites in <testsuites>; the parser sums the child <testsuite> elements.
     xml = '<testsuites><testsuite tests="4" failures="1" errors="0"/></testsuites>'
-    monkeypatch.setattr(runner_mod.subprocess, "run", lambda *a, **k: report.write_text(xml))
+    monkeypatch.setattr(
+        runner_mod.subprocess, "run", lambda *a, **k: (report.write_text(xml), _DONE)[1]
+    )
 
     result = GutRunner().run(str(tmp_path))
 
@@ -77,9 +83,10 @@ def test_run_invokes_subprocess_with_the_constructed_command(
     report = _report(tmp_path)
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
-    def capture(*args: object, **kwargs: object) -> None:
+    def capture(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append((args, kwargs))
         report.write_text('<testsuites><testsuite tests="1" failures="0"/></testsuites>')
+        return _DONE
 
     monkeypatch.setattr(runner_mod.subprocess, "run", capture)
     runner = GutRunner(test_dir="res://t", godot="godot4", timeout=42.0)
@@ -110,12 +117,13 @@ def test_run_reflects_latest_report_on_repeated_calls(
         ]
     )
 
-    def fake_run(*args: object, **kwargs: object) -> None:
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         command = args[0]
         assert isinstance(command, list)
         if "--import" in command:
-            return
+            return _DONE
         report.write_text(next(outcomes), encoding="utf-8")
+        return _DONE
 
     monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
     runner = GutRunner()
@@ -278,12 +286,13 @@ def test_run_warms_the_import_cache_once_before_the_first_suite_run(
     report = _report(tmp_path)
     calls: list[list[str]] = []
 
-    def capture(*args: object, **kwargs: object) -> None:
+    def capture(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         command = args[0]
         assert isinstance(command, list)
         calls.append(command)
         if "--import" not in command:
             report.write_text('<testsuites><testsuite tests="1" failures="0"/></testsuites>')
+        return _DONE
 
     monkeypatch.setattr(runner_mod.subprocess, "run", capture)
     runner = GutRunner(godot="godot4")
@@ -734,3 +743,52 @@ def test_a_selected_file_the_baseline_never_reported_only_lowers_the_floor(
     )
     runner.run(str(tmp_path))
     assert runner.run_selected(str(tmp_path), ["res://test/unit/c.gd"]).tests == 1
+
+
+#: What Godot printed when the tests loaded a source with a type error: its own error, the test
+#: script that loads it failing in turn, then a runtime error that is not a compile error.
+_DID_NOT_COMPILE = (
+    'SCRIPT ERROR: Parse Error: Cannot return a value of type "String" as "int".\n'
+    "   at: GDScript::reload (res://src/turn_order.gd:36)\n"
+    "   GDScript backtrace (most recent call first):\n"
+    "SCRIPT ERROR: Compile Error: Failed to compile depended scripts.\n"
+    "   at: GDScript::reload (res://test/test_turn_order.gd:0)\n"
+    "SCRIPT ERROR: Invalid call. Nonexistent function 'f' in base 'GDScript'.\n"
+    "   at: test_f (res://test/test_other.gd:10)\n"
+)
+
+
+def test_a_report_carries_the_scripts_that_did_not_compile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GUT runs on past a script that did not compile, so the tests that use it fail instead.
+    report = _report(tmp_path)
+    xml = '<testsuites><testsuite tests="3" failures="3" errors="0"/></testsuites>'
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        report.write_text(xml)
+        return subprocess.CompletedProcess([], 1, "", _DID_NOT_COMPILE)
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    result = GutRunner().run(str(tmp_path))
+    project = tmp_path.resolve()
+    assert result.uncompiled == (
+        str(project / "src" / "turn_order.gd"),
+        str(project / "test" / "test_turn_order.gd"),
+    )
+
+
+def test_a_failed_run_names_the_scripts_that_did_not_compile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess([], 1, "", _DID_NOT_COMPILE),
+    )
+    with pytest.raises(CompileFailed) as failed:
+        GutRunner().run(str(tmp_path))
+    assert [Path(file).name for file in failed.value.files] == [
+        "turn_order.gd",
+        "test_turn_order.gd",
+    ]

@@ -19,6 +19,14 @@ All notable changes to gdmutant are recorded here. The format follows
   GdUnit4 and GUT "wrote no report" message now names the report's path inside the project, not
   an absolute one. (#359)
 
+### Fixed
+
+- A mutant whose file Godot cannot compile is now scored `invalid`, not `error` or `killed`. For
+  example, a statement deletion can leave a parameter unused, which a project that treats that
+  warning as an error refuses to load. Such a mutant never ran, so a coverage self-check no longer
+  stops the run over it. A compile error that names only other files leaves the verdict as before.
+  (#359)
+
 ## [0.1.6] - 2026-11-09
 
 This release changes no code. It corrects the GitHub Action example on the PyPI project page.

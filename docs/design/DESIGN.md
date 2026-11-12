@@ -112,7 +112,8 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
     never run, Stryker's `Ignored` status, see
     [ADR-0004](../decisions/0004-equivalent-mutant-ignore-annotation.md) and
     [ADR-0006](../decisions/0006-operator-scoped-ignore-and-ignored-status.md))
-  - invalid (the mutant didn't parse, per NF-5)
+  - invalid (the mutant didn't parse, per NF-5, or the run's output said its file did not
+    compile)
   - error (the runner failed to execute it, e.g. a crash)
   - no coverage (only with `--coverage-analysis all` or `per-file`: a marker run showed no test reaches the
     mutant's statement, so it is decided without running the suite, Stryker's `NoCoverage` status,
@@ -170,7 +171,8 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
 - NF-5: Mutant validity. The adapter must never hand the runner un-parseable source. A mutation that
   would produce invalid GDScript is detected (re-parse check) and classified `invalid` (→ `CompileError`
   in the report), never counted as `killed`. A wrong mutant means a silently wrong survivor report,
-  the worst failure.
+  the worst failure. A mutant that parses but that Godot refuses to compile (a type error, or a
+  warning the project treats as an error) is also `invalid`, when Godot's output names its file.
 
   Oracle boundary: the validity check is gdtoolkit's parser, not Godot itself. A
   mutant gdtoolkit accepts but Godot rejects at load fails toward score-*inflation* (the suite errors →

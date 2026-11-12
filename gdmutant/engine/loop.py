@@ -9,7 +9,8 @@ suite via a `Runner`, and classifies the outcome:
   detection, so it counts as killed (Stryker's ``Timeout`` status),
 * **ignored** — a ``# gdmutant: ignore`` annotation suppresses it (an equivalent/unkillable mutant);
   generated for the report but never run, and excluded from the score (Stryker's ``Ignored``),
-* **invalid** — the mutant didn't parse (NF-5); never counted as killed, never run,
+* **invalid** — the mutant didn't parse (NF-5), or the run's output said its file did not
+  compile; never counted as killed,
 * **error** — the runner failed to execute the mutant (e.g. a Godot crash); tallied so one bad run
   doesn't discard the whole pass, and excluded from the score.
 * **no coverage**: only with coverage analysis on (``--coverage-analysis all``): the marker run
@@ -53,6 +54,7 @@ from gdmutant.engine.coverage import (
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import CATALOG, Operator
 from gdmutant.engine.runner import (
+    CompileFailed,
     FileSelecting,
     MarkerRunnable,
     Preparable,
@@ -222,7 +224,8 @@ class SourceOutsideProject(Exception):
 class Verdict(Enum):
     """What happened when one mutant's suite ran: caught (`KILLED`, including a suite `TIMEOUT`,
     which counts as caught — see `SuiteTimeout`), missed (`SURVIVED`), skipped without a run
-    (`IGNORED`, `INVALID`), or the run itself failed (`ERROR`)."""
+    (`IGNORED`), never run as written (`INVALID`: it did not parse, or did not compile), or the
+    run itself failed (`ERROR`)."""
 
     KILLED = "killed"
     SURVIVED = "survived"
@@ -2485,9 +2488,13 @@ def _run_one(
             # (Stryker's Timeout status), distinct from ERROR below.
             return Verdict.TIMEOUT, None
         except Exception as failure:
+            if isinstance(failure, CompileFailed) and _names(failure.files, target):
+                return Verdict.INVALID, None
             # The runner failed to execute this mutant (e.g. a Godot crash). Tally it as ERROR and
             # carry on — one bad run must not discard the whole pass (FG-4.1).
             return Verdict.ERROR, str(failure) or type(failure).__name__
+        if _names(result.uncompiled, target):
+            return Verdict.INVALID, None  # the tests ran without it, so they say nothing about it
         if result.tests == 0 and not result.failed:
             # Zero tests, no failures — the same silent lie the baseline guard refuses, one mutant
             # at a time. The baseline already proved this project collects tests (`_run_baseline`
@@ -2510,3 +2517,9 @@ def _run_one(
         return (Verdict.KILLED if result.failed else Verdict.SURVIVED), None
     finally:
         _write_source(target, source, eol)  # never leave the project mutated
+
+
+def _names(files: tuple[str, ...], target: Path) -> bool:
+    """Whether `files` (absolute paths) include `target`."""
+    resolved = target.resolve()
+    return any(Path(file).resolve() == resolved for file in files)

@@ -24,6 +24,7 @@ and report parsing with the subprocess mocked.
 from __future__ import annotations
 
 import contextlib
+import re
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -36,6 +37,7 @@ from gdmutant.engine.loop import SourceOutsideProject
 from gdmutant.engine.runner import (
     CAPTURE_ENCODING,
     CAPTURE_ERRORS,
+    CompileFailed,
     ReportedSuite,
     SuiteResult,
     SuiteTimeout,
@@ -60,6 +62,11 @@ _GUT_WINDOW_HOOK_NAME = "gut_windows.gd"
 #: **fail-safe**: if a future GdUnit4 reworded this, the hint simply stops appearing and the generic
 #: no-report error is raised as before — the run still fails, it is only diagnosed less precisely.
 _GDUNIT_NO_TESTS_MARKER = "No test cases found"
+
+#: Godot's report of a script that did not compile: this line, then one naming the script. A
+#: script that loads a broken one gets its own "Failed to compile depended scripts" error.
+_COMPILE_ERROR = re.compile(r"SCRIPT ERROR: (?:Parse|Compile) Error: ")
+_ERROR_AT = re.compile(r"^\s*at: .*\((res://.+):\d+\)\s*$")
 
 #: What every GDScript file ends in.
 _GDSCRIPT_SUFFIX = ".gd"
@@ -146,6 +153,17 @@ DEFAULT_TIMEOUT = 600.0
 # The one-time import warm-up gets its own generous budget, independent of the per-suite timeout: on
 # a cold checkout Godot imports every asset, which can take much longer than a single test run.
 _IMPORT_TIMEOUT = 300.0
+
+
+def _uncompiled_scripts(output: str, project: Path) -> tuple[str, ...]:
+    """The scripts Godot's `output` says did not compile, as absolute paths in `project`, each once
+    and in the order first named."""
+    lines = output.splitlines()
+    found: dict[str, None] = {}
+    for message, at in zip(lines, lines[1:], strict=False):
+        if _COMPILE_ERROR.search(message) and (script := _ERROR_AT.match(at)):
+            found[str(project / script[1].removeprefix("res://"))] = None
+    return tuple(found)
 
 
 @dataclass
@@ -397,16 +415,23 @@ class _GodotJUnitRunner:
             raise SuiteTimeout(f"{self._framework} run exceeded {budget:g}s") from expired
         except FileNotFoundError as error:
             raise with_filename(error, self.godot) from error
-        if not report.exists():
-            raise self._missing_report_error(report, completed)
-        # Parse under the adapter's crash-safety contract — both adapters reject a zero-test report
-        # rather than returning a pass; GUT additionally rejects a drop below its baseline count.
-        result = self._result_from_report(report.read_text(encoding="utf-8"), completed, files)
-        if not markers:
-            return result
         # A newline between them, so a last stdout line with no newline of its own cannot run
         # into the first stderr line and hide where a SCRIPT ERROR starts.
         output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
+        uncompiled = _uncompiled_scripts(output, project)
+        try:
+            if not report.exists():
+                raise self._missing_report_error(report, completed)
+            # Parse under the adapter's crash-safety contract: both adapters reject a zero-test
+            # report rather than returning a pass; GUT also rejects a drop below its baseline count.
+            result = self._result_from_report(report.read_text(encoding="utf-8"), completed, files)
+        except Exception as failure:
+            if not uncompiled:
+                raise
+            raise CompileFailed(str(failure), uncompiled) from failure
+        result = replace(result, uncompiled=uncompiled)
+        if not markers:
+            return result
         return replace(result, runtime_error=script_error_excerpt(output))
 
 
