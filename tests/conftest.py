@@ -4,15 +4,16 @@ import atexit
 import os
 import shutil
 import stat
+import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from gdmutant.engine.runner import SuiteResult
+from gdmutant.engine.runner import BoundedOutput, SuiteResult
 
 _TEMPLATES: dict[str, tuple[Path, Any]] = {}
 
@@ -135,3 +136,19 @@ class MarkerRunner:
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         content = Path(self.target).read_text(encoding="utf-8")
         return SuiteResult(tests=self.tests, failures=int(self.kill_marker in content), errors=0)
+
+
+def patch_run(monkeypatch: pytest.MonkeyPatch, module: Any, fake: Callable[..., Any]) -> None:
+    """Route a fake `subprocess.run` through `run_bounded`, which `module` runs Godot with, and
+    through `subprocess.run` itself, which it uses for anything else."""
+
+    def bounded(
+        command: Sequence[str], cwd: str, timeout: float, watch: Sequence[str] = ()
+    ) -> BoundedOutput:
+        done = fake(list(command), cwd=cwd, timeout=timeout)
+        if not isinstance(done, subprocess.CompletedProcess):  # a fake with nothing to print
+            done = subprocess.CompletedProcess(command, 0, "", "")
+        return BoundedOutput.of(done.returncode, done.stdout or "", done.stderr or "", watch)
+
+    monkeypatch.setattr(module.subprocess, "run", fake)
+    monkeypatch.setattr(module, "run_bounded", bounded)
