@@ -61,6 +61,8 @@ _DETECTED = frozenset({"Killed", "Timeout"})
 #: The status a mutant no test reaches gets (coverage analysis only). Undetected, like `Survived`,
 #: so it is in the score's denominator exactly as `MutationRun.mutation_score` puts it there.
 _NO_COVERAGE = "NoCoverage"
+#: The statuses whose `description` and `statusReason` are the gap/risk/start narrative.
+_NARRATED = frozenset({"Survived", _NO_COVERAGE})
 
 #: Schema status -> (tag word, colour class, the outcome phrase shown beside the change).
 #: Every claim the page makes about a mutant is a finished string built **here**, from the run's
@@ -388,8 +390,9 @@ def _findings(
         # angle, since only survivors carry it. Taking it from the first angle unconditionally lost
         # the copy whenever a killed mutant happened to be grouped ahead of a surviving one on the
         # same token (`0 -> 1` killed, `0 -> -1` survived), leaving a finding tagged SURVIVED with
-        # nothing to say.
-        if not finding.gap:
+        # nothing to say. Other statuses can carry a `statusReason` that is not a narrative: an
+        # ignored mutant's reason, or why an errored one's run failed.
+        if not finding.gap and status in _NARRATED:
             finding.gap, finding.risk, finding.start = _narrative(mutant)
     for finding in findings:
         classes = {a.cls for a in finding.angles}

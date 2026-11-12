@@ -461,7 +461,8 @@ two comes back entirely CRLF.
 
 - `status` is one of `Killed`, `Survived`, `Timeout` (the mutation hung the suite: a detection, so
   it counts as killed), `Ignored` (a `# gdmutant: ignore` annotation suppressed it, excluded
-  from the score), `CompileError` (the mutant didn't parse, never counted as killed), or
+  from the score), `CompileError` (the mutant didn't parse or Godot could not compile it, never
+  counted as killed), or
   `RuntimeError` (the runner failed to execute it, e.g. a Godot crash), or, only with
   `--coverage-analysis all`, `NoCoverage` (no test reaches it, so it never ran, and it is scored
   like `Survived`). The console summary and

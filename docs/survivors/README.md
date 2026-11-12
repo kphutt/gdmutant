@@ -30,7 +30,8 @@ test that checks it. Three more categories show in the summary but never enter t
 - ignored: suppressed by a `# gdmutant: ignore` annotation, generated for the report but never
   run against your tests.
 - invalid: the mutant didn't parse, and gdmutant's re-parse guard caught a broken mutation before it
-  ever reached your tests.
+  ever reached your tests. Or Godot could not compile the mutated file (for example, when your
+  project treats a warning as an error), so your tests ran without it.
 - error: your test runner failed to execute this mutant (a crash, not a pass or a fail), tallied
   on its own so one bad run doesn't discard the whole pass.
 

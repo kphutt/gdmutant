@@ -117,6 +117,15 @@ class SuiteTimeout(Exception):
     """
 
 
+class CompileFailed(RuntimeError):
+    """A run that failed after its output said `files` (absolute paths) did not compile. A mutant
+    whose own file is among them never ran, so the engine scores it invalid, not an error."""
+
+    def __init__(self, message: str, files: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.files = files
+
+
 @dataclass(frozen=True)
 class SuiteResult:
     """The aggregate outcome of running a test suite once."""
@@ -142,6 +151,9 @@ class SuiteResult:
     #: the same empty tuple: what reads this runs only for a runner that selects test files, and
     #: such a runner always has a report.
     suites: tuple[ReportedSuite, ...] = ()
+    #: Source files the run's output said did not compile, as absolute paths. A mutant whose own
+    #: file is among them never ran, so the engine scores it invalid whatever the tests reported.
+    uncompiled: tuple[str, ...] = ()
 
     @property
     def failed(self) -> bool:
