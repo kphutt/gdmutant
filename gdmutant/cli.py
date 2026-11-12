@@ -1827,9 +1827,9 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "--godot-file-logging",
         action="store_true",
         help="under --jobs, let each worker's Godot write its log file (user://logs/godot.log). "
-        "Off by default: a mutant that loops forever printing an error can grow that file until the "
-        "disk is full, and a finished run deletes each worker's user:// anyway. Turn it on to read "
-        "a worker's log while the run is still going. A --jobs 1 run uses your project's own "
+        "Off by default: a mutant that loops forever printing an error can grow that file until "
+        "the disk is full, and a finished run deletes each worker's user:// anyway. Turn it on to "
+        "read a worker's log while the run is still going. A --jobs 1 run uses your project's own "
         "setting.",
     )
     run_parser.add_argument(
