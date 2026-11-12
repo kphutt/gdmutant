@@ -675,9 +675,8 @@ def run_bounded(
     if stopping:  # a stop began while it started, after the snapshot: stop it here
         _kill_tree(process)
         process.wait()
-        for pipe in (process.stdout, process.stderr):  # not read: a grandchild may hold them
-            if pipe is not None:
-                pipe.close()
+        for pipe in filter(None, (process.stdout, process.stderr)):
+            pipe.close()  # not read: a grandchild may still hold them
         raise refused
     try:
         return _wait_bounded(process, command, timeout, watch)
