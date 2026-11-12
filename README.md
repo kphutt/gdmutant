@@ -217,7 +217,7 @@ Every input and output, and how to pin a version, is in
 | | Verified at every release | Expected to work |
 |---|---|---|
 | Godot | 4.7.2 | 4.3+ |
-| Runner | GUT 9.7.1, gdUnit4 6.2.2 | GUT 9.x, gdUnit4 6.x, any headless command |
+| Runner | GUT 9.7.1, gdUnit4 6.2.3 | GUT 9.x, gdUnit4 6.x, any headless command |
 
 ## Documentation
 
