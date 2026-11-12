@@ -1095,7 +1095,7 @@ def test_a_temporary_folder_that_was_never_made_is_not_named(
     path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
     with pytest.raises(OSError, match="No space"):
         run(str(tmp_path), path, _TWO_RUNNABLE, ScriptedRunner([SuiteResult(1, 0, 0)]), jobs=2)
-    assert left_behind(capsys.readouterr().err) == []
+    assert "warning:" not in capsys.readouterr().err
 
 
 def test_a_temporary_folder_that_is_deleted_says_nothing(
@@ -1103,7 +1103,55 @@ def test_a_temporary_folder_that_is_deleted_says_nothing(
 ) -> None:
     path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
     run(str(tmp_path), path, _TWO_RUNNABLE, ScriptedRunner([SuiteResult(1, 0, 0)] * 3), jobs=2)
-    assert left_behind(capsys.readouterr().err) == []
+    assert "warning:" not in capsys.readouterr().err
+
+
+def test_a_temporary_folder_whose_own_removal_fails_is_named(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A leftover process whose working directory is the folder blocks removing the folder itself.
+    rmdir = os.rmdir
+    held: list[str] = []
+
+    def held_open(path: Any, *args: Any, **kwargs: Any) -> None:
+        if os.path.basename(os.fsdecode(path)).startswith("gdmutant-probe-"):
+            held.append(os.fsdecode(path))
+            raise PermissionError(32, "The process cannot access the file", os.fsdecode(path))
+        rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "rmdir", held_open)
+    with loop_mod._scratch_dir("gdmutant-probe-") as tmp:
+        (Path(tmp) / "f").write_text("x", encoding="utf-8")
+    monkeypatch.undo()
+    (folder,) = left_behind(capsys.readouterr().err)
+    shutil.rmtree(folder)
+    assert held and str(folder) == tmp
+
+
+@pytest.mark.parametrize("failure", ["exists", "stderr"])
+def test_naming_a_leftover_folder_never_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+) -> None:
+    def denied(*args: object, **kwargs: object) -> bool:
+        raise PermissionError(5, "Access is denied")
+
+    class Closed:
+        def write(self, text: str) -> int:
+            raise OSError(32, "Broken pipe")
+
+        def flush(self) -> None:
+            raise OSError(32, "Broken pipe")
+
+    if failure == "exists":
+        monkeypatch.setattr(loop_mod.Path, "exists", denied)
+    else:
+        monkeypatch.setattr(loop_mod.sys, "stderr", Closed())
+    loop_mod.warn_if_left_behind(tmp_path)  # tmp_path exists, so it is named
+    if failure == "exists":  # unsure whether it is there: name it rather than stay silent
+        assert left_behind(capsys.readouterr().err) == [tmp_path]
 
 
 @dataclass

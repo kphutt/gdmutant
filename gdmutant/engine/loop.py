@@ -31,7 +31,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -850,18 +850,24 @@ def _scratch_dir(prefix: str) -> Iterator[str]:
         with tempfile.TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True) as tmp:
             yield tmp
     finally:  # a failed run is when a leftover process is likeliest
-        if tmp and Path(tmp).exists():
-            warn_left_behind(tmp)
+        if tmp:
+            warn_if_left_behind(tmp)
 
 
-def warn_left_behind(folder: str | Path) -> None:
-    """Name a folder gdmutant made but could not delete. Always on stderr, even under
-    ``--progress none``, since nothing else tells anyone the folder is there."""
-    print(
-        f"warning: could not delete the temporary folder {folder} (something may still be "
-        "using it). Delete it once nothing is.",
-        file=sys.stderr,
-    )
+def warn_if_left_behind(folder: str | Path) -> None:
+    """Name `folder` on stderr if it is still there, even under ``--progress none``, since nothing
+    else tells anyone. Never raises: it runs during cleanup, where an error would end the run."""
+    try:
+        there = Path(folder).exists()
+    except OSError:  # e.g. a folder Windows is still deleting: say so rather than guess
+        there = True
+    if there:
+        with suppress(OSError):  # stderr itself may be gone
+            print(
+                f"warning: could not delete the temporary folder {folder} (something may still "
+                "be using it). Delete it once nothing is.",
+                file=sys.stderr,
+            )
 
 
 @contextmanager

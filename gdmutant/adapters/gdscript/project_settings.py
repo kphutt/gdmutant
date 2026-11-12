@@ -21,7 +21,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from gdmutant.engine.loop import warn_left_behind
+from gdmutant.engine.loop import warn_if_left_behind
 
 #: The section and keys that decide where Godot resolves ``user://``.
 _APPLICATION = "application"
@@ -165,8 +165,7 @@ def release_user_dir(token: str) -> None:
     """
     folder = worker_user_dirs_root() / token
     shutil.rmtree(folder, ignore_errors=True)
-    if folder.exists():
-        warn_left_behind(folder)
+    warn_if_left_behind(folder)
 
 
 def godot_data_path() -> Path:
