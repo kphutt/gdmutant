@@ -20,7 +20,9 @@ All notable changes to gdmutant are recorded here. The format follows
   itself. A wrapper that starts Godot used to leave Godot running after a timeout, still using
   the copy of the project gdmutant was about to delete. The same applies to Godot's one-time
   `--import` step. On Windows, a process whose parent has already exited is still out of reach.
-  (#365)
+  Ctrl-C under `--jobs` now stops the test commands still running too, and waits for them before
+  deleting the workers' copies. On Linux and macOS each test command now runs in its own session,
+  so closing the terminal no longer stops it; gdmutant does on a timeout or Ctrl-C. (#365)
 
 ## [0.1.6] - 2026-11-09
 

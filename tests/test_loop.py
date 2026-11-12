@@ -1,5 +1,6 @@
 """Tests for the mutation-run loop (no Godot — fake runners drive killed/survived)."""
 
+import _thread
 import inspect
 import itertools
 import os
@@ -2841,3 +2842,31 @@ def test_a_pool_with_nothing_to_run_decides_every_mutant_without_a_worker(tmp_pa
     result = run(str(tmp_path), path, src, runner, jobs=4)
     assert result.outcomes and {o.verdict for o in result.outcomes} == {Verdict.IGNORED}
     assert len(runner.seen) == 1  # the baseline only
+
+
+def test_ctrl_c_under_jobs_stops_the_running_commands_before_the_copies_go(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Ctrl-C reaches only the main thread, which is waiting for the workers at the time.
+    stopped = threading.Event()
+    finished: list[bool] = []
+    copies: list[Path] = []
+
+    @dataclass
+    class InterruptedMidRun:
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            if threading.current_thread() is not threading.main_thread():
+                copies.append(Path(project_dir))
+                _thread.interrupt_main()
+                stopped.wait(30)  # stands in for a command only stop_running_commands ends
+                time.sleep(0.5)  # a killed command takes a moment to exit; its copy must wait
+                finished.append(Path(project_dir).exists())
+            return SuiteResult(tests=1, failures=0, errors=0)
+
+    monkeypatch.setattr(loop_mod, "stop_running_commands", stopped.set)
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    with pytest.raises(KeyboardInterrupt):
+        run(str(tmp_path), path, _TWO_RUNNABLE, InterruptedMidRun(), jobs=2)
+    assert stopped.is_set(), "the running commands were not stopped"
+    assert finished and all(finished), "a worker's copy was deleted while it was still running"
+    assert not any(copy.exists() for copy in copies)

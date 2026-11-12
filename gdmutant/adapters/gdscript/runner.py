@@ -200,8 +200,9 @@ class _GodotJUnitRunner:
         so re-importing per mutant would just burn a Godot boot.
 
         The exit code is ignored — ``--import`` returns non-zero on benign addon/import chatter
-        across Godot versions — and any failure is left to surface as the usual "wrote no report"
-        error from the real run, rather than masking it behind a warm-up error.
+        across Godot versions — and so is a timeout, so either surfaces as the usual "wrote no
+        report" error from the real run. Godot not starting, or its output not being readable,
+        stops the run here instead.
         """
         if self._imported:
             return

@@ -504,16 +504,19 @@ def test_on_windows_a_ctrl_c_during_taskkill_still_kills_the_process(
     assert process.killed
 
 
-@pytest.mark.parametrize("gone", [False, True])
+@pytest.mark.parametrize(
+    "failure", [None, ProcessLookupError(4242), PermissionError(1, "Operation not permitted")]
+)
 def test_elsewhere_a_timeout_kills_the_process_group(
-    monkeypatch: pytest.MonkeyPatch, gone: bool
+    monkeypatch: pytest.MonkeyPatch, failure: OSError | None
 ) -> None:
+    # A group that already exited, or one with a member we may not signal, still kills the command.
     groups: list[tuple[int, int]] = []
 
     def killpg(pid: int, sig: int) -> None:
         groups.append((pid, sig))
-        if gone:
-            raise ProcessLookupError(pid)
+        if failure is not None:
+            raise failure
 
     process = _FakeProcess()
     monkeypatch.setattr(runner_mod.sys, "platform", "linux")
@@ -563,13 +566,43 @@ def test_a_timed_out_commands_children_are_stopped_too(tmp_path: Path) -> None:
     )
     try:
         with pytest.raises(SuiteTimeout):
-            CommandRunner(_runs(script), timeout=10).run(str(tmp_path))
+            CommandRunner(_runs(script), timeout=5).run(str(tmp_path))
         assert beats.exists(), "the command's child never started"
         time.sleep(0.5)
         before = beats.stat().st_size
         time.sleep(1.0)
         assert beats.stat().st_size == before, "the command's child is still running"
     finally:
-        if pid_file.exists():  # never leave it running, even when the test fails
-            with contextlib.suppress(OSError):
-                os.kill(int(pid_file.read_text()), signal.SIGTERM)
+        _stop_if_still_beating(beats, pid_file)
+
+
+def _stop_if_still_beating(beats: Path, pid_file: Path) -> None:
+    """Stop a test's grandchild only if it is still writing, so a reused process ID is never hit."""
+    if not beats.exists():
+        return
+    size = beats.stat().st_size
+    time.sleep(0.2)
+    if beats.stat().st_size != size:
+        with contextlib.suppress(OSError, ValueError):  # ValueError: a half-written ID
+            os.kill(int(pid_file.read_text()), signal.SIGTERM)
+
+
+def test_stopping_the_running_commands_reaches_one_another_thread_waits_on(
+    tmp_path: Path,
+) -> None:
+    # Under --jobs the commands run on worker threads, and only the main thread gets Ctrl-C.
+    done: list[runner_mod.BoundedOutput] = []
+    waiting = threading.Thread(
+        target=lambda: done.append(
+            runner_mod.run_bounded(_runs("import time; time.sleep(60)"), str(tmp_path), 60.0)
+        )
+    )
+    waiting.start()
+    deadline = time.monotonic() + 30
+    while not runner_mod._RUNNING and time.monotonic() < deadline:
+        time.sleep(0.05)
+    runner_mod.stop_running_commands()
+    waiting.join(30)
+    assert not waiting.is_alive(), "the command is still running"
+    assert done and done[0].returncode != 0
+    assert not runner_mod._RUNNING

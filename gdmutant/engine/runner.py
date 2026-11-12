@@ -613,10 +613,25 @@ def _kill_tree(process: subprocess.Popen[bytes]) -> None:
                     timeout=_KILL_GRACE_SECS,
                 )
         else:
-            with contextlib.suppress(ProcessLookupError):  # the whole group has already exited
+            with contextlib.suppress(OSError):  # e.g. the whole group has already exited
                 os.killpg(process.pid, signal.SIGKILL)
     finally:
         process.kill()  # even if taskkill failed, hung, or was interrupted
+
+
+#: Every command `run_bounded` is waiting on. Only the main thread gets Ctrl-C, but under --jobs
+#: worker threads run the commands, so the main thread stops them through this.
+_RUNNING: set[subprocess.Popen[bytes]] = set()
+_RUNNING_LOCK = threading.Lock()
+
+
+def stop_running_commands() -> None:
+    """Stop every command `run_bounded` is waiting on, in any thread, and all each one started."""
+    with _RUNNING_LOCK:
+        running = list(_RUNNING)
+    for process in running:
+        with contextlib.suppress(OSError):
+            _kill_tree(process)
 
 
 def run_bounded(
@@ -634,6 +649,18 @@ def run_bounded(
         stderr=subprocess.PIPE,
         start_new_session=sys.platform != "win32",  # a process group `_kill_tree` can stop whole
     )
+    with _RUNNING_LOCK:
+        _RUNNING.add(process)
+    try:
+        return _wait_bounded(process, command, timeout, watch)
+    finally:
+        with _RUNNING_LOCK:
+            _RUNNING.discard(process)
+
+
+def _wait_bounded(
+    process: subprocess.Popen[bytes], command: list[str], timeout: float, watch: Sequence[str]
+) -> BoundedOutput:
     streams = (_StreamTail(watch), _StreamTail(watch))
     readers: list[threading.Thread] = []
     deadline = time.monotonic() + timeout

@@ -59,6 +59,7 @@ from gdmutant.engine.runner import (
     Runner,
     SuiteResult,
     SuiteTimeout,
+    stop_running_commands,
 )
 
 # Per-mutant time budget, derived from the baseline run so a hanging mutant is cut off in seconds
@@ -2163,15 +2164,30 @@ def _run_pool(
             # waits for the ones already running. Leaving this to the normal path meant an
             # exception here (a copy that would not copy) fell straight out of the `with`, which
             # then deleted the tree the running workers were reading from.
-            for thread in threads:
-                thread.join()
-            stop.set()  # no worker is left to take what the feeder still holds
-            feeder.join()
-            for token in isolated:
-                adapter.release_copy(token)
+            try:
+                _join_workers(threads, stop)
+            finally:
+                stop.set()  # no worker is left to take what the feeder still holds
+                feeder.join()
+                for token in isolated:
+                    adapter.release_copy(token)
     if errors:
         raise errors[0]
     return outcomes
+
+
+def _join_workers(threads: list[threading.Thread], stop: threading.Event) -> None:
+    """Wait for every worker. Ctrl-C reaches only this thread, so on one, stop the workers and the
+    commands they are running, then still wait: their copies must outlive them."""
+    try:
+        for thread in threads:
+            thread.join()
+    except BaseException:
+        stop.set()
+        stop_running_commands()
+        for thread in threads:
+            thread.join()
+        raise
 
 
 def run_paths(
