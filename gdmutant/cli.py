@@ -25,6 +25,7 @@ from pathlib import Path
 from gdmutant import __version__
 from gdmutant.adapters.gdscript import (
     ADAPTER,
+    ADAPTER_WITH_GODOT_FILE_LOGGING,
     generate_mutants,
     is_valid_gdscript,
     unknown_ignore_operators,
@@ -708,6 +709,13 @@ def _changed_lines(ref: str, files: list[str]) -> dict[str, set[int]] | None:
     return changed
 
 
+def _adapter(changed: dict[str, set[int]] | None, godot_file_logging: bool) -> Adapter:
+    """The adapter a run uses: `ADAPTER`, keeping each worker's Godot log if asked, and scoped to
+    the `changed` lines under ``--changed-since``."""
+    base = ADAPTER_WITH_GODOT_FILE_LOGGING if godot_file_logging else ADAPTER
+    return base if changed is None else _diff_scoped(base, changed)
+
+
 def _diff_scoped(base: Adapter, changed: dict[str, set[int]]) -> Adapter:
     """Wrap `base` so it emits only mutants on lines changed since the base ref — a filter
     on the generated set, keyed by resolved path; a file with no changed lines yields no mutants.
@@ -1030,6 +1038,7 @@ def run_mutation(
     coverage: CoverageAnalysis = CoverageAnalysis.OFF,
     marker: Marker | None = None,
     self_check: int | None = SELF_CHECK_SAMPLE,
+    godot_file_logging: bool = False,
 ) -> int:
     """Mutate `source_path`, run via `runner`, print the summary, optionally write a report file.
 
@@ -1062,7 +1071,7 @@ def run_mutation(
         if require_clean:
             return 2
     path = Path(source_path)
-    adapter = ADAPTER if changed is None else _diff_scoped(ADAPTER, changed)
+    adapter = _adapter(changed, godot_file_logging)
     try:
         result = run(
             project_dir,
@@ -1290,6 +1299,7 @@ def run_mutation_paths(
     coverage: CoverageAnalysis = CoverageAnalysis.OFF,
     marker: Marker | None = None,
     self_check: int | None = SELF_CHECK_SAMPLE,
+    godot_file_logging: bool = False,
 ) -> int:
     """Mutate several `.gd` files against one project in a single pass — the baseline runs **once**
     and the score is aggregated across every file, with one merged report. Same return
@@ -1312,7 +1322,7 @@ def run_mutation_paths(
             print(problem, file=sys.stderr)
             if require_clean:
                 return 2
-    adapter = ADAPTER if changed is None else _diff_scoped(ADAPTER, changed)
+    adapter = _adapter(changed, godot_file_logging)
     try:
         runs = run_paths(
             project_dir,
@@ -1814,6 +1824,15 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "starts the fixed count immediately on Windows, which has no such signal).",
     )
     run_parser.add_argument(
+        "--godot-file-logging",
+        action="store_true",
+        help="under --jobs, let each worker's Godot write its log file (user://logs/godot.log). "
+        "Off by default: a mutant that loops forever printing an error can grow that file until the "
+        "disk is full, and a finished run deletes each worker's user:// anyway. Turn it on to read "
+        "a worker's log while the run is still going. A --jobs 1 run uses your project's own "
+        "setting.",
+    )
+    run_parser.add_argument(
         "--report",
         action="append",
         choices=("step-summary",),
@@ -2198,6 +2217,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "changed": changed,
             "jobs": args.jobs,
             "jobs_auto": args.jobs_auto,
+            "godot_file_logging": args.godot_file_logging,
             "step_summary": _wants_step_summary(args.report),
             "progress_style": _resolve_progress_style(args.progress_style),
             "coverage": CoverageAnalysis(args.coverage_analysis),

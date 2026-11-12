@@ -12,6 +12,12 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Under `--jobs`, each worker's Godot no longer writes its log file, `user://logs/godot.log`. A
+  mutant that loops forever printing an error could grow that file until the disk was full, and a
+  finished run deleted it anyway. The new `--godot-file-logging` flag turns it back on.
+
 ## [0.1.6] - 2026-11-09
 
 This release changes no code. It corrects the GitHub Action example on the PyPI project page.

@@ -27,6 +27,11 @@ _USE_CUSTOM_USER_DIR = "config/use_custom_user_dir"
 _CUSTOM_USER_DIR_NAME = "config/custom_user_dir_name"
 _PROJECT_NAME = "config/name"
 
+#: Godot's own log, ``user://logs/godot.log``. A mutant that floods it, such as endless recursion
+#: printing an error each time, can fill the disk (`isolate_user_dir`'s `file_logging`).
+_DEBUG = "debug"
+_FILE_LOGGING = ("file_logging/enable_file_logging", "file_logging/enable_file_logging.pc")
+
 #: Every isolated worker directory is nested under this one name inside the machine's data
 #: directory, rather than scattered beside the user's own Godot projects. It is what makes the
 #: leftovers of an interrupted run obvious, findable and safe to delete by hand -- and it is the
@@ -84,7 +89,7 @@ def worker_user_dirs_root() -> Path:
     return godot_data_path() / _WORKER_PARENT
 
 
-def isolate_user_dir(copy_dir: str, token: str) -> None:
+def isolate_user_dir(copy_dir: str, token: str, file_logging: bool = False) -> None:
     """Give the project copy at `copy_dir` a ``user://`` that no other copy resolves to.
 
     This is the GDScript half of `engine.adapter.Adapter.isolate_copy`. Godot resolves ``user://``
@@ -146,6 +151,9 @@ def isolate_user_dir(copy_dir: str, token: str) -> None:
     )
     if not _NAMED.search(text):
         text = with_setting(text, _APPLICATION, _PROJECT_NAME, f'"{token}"')
+    if not file_logging:  # the log is deleted with the worker's user:// anyway
+        for key in _FILE_LOGGING:
+            text = with_setting(text, _DEBUG, key, "false")
     settings.write_text(text, encoding="utf-8", newline="")
 
 
