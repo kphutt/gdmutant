@@ -9,8 +9,9 @@ implementation to drift.
 **Why the user-dir half lives here and not in the engine.** The engine's parallel path copies the
 project once per worker and asks the language adapter to give each copy whatever state it would
 otherwise share (`engine.adapter.Adapter.isolate_copy`). For GDScript that state is ``user://``, and
-isolating it means writing two Godot project settings -- a sentence the engine must never have to
-understand (NF-3, AGENTS.md's language-neutral rule).
+isolating it means writing a few Godot project settings (plus, by default, turning off Godot's log
+file) -- sentences the engine must never have to understand (NF-3, AGENTS.md's language-neutral
+rule).
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ _FILE_LOGGING = "file_logging/enable_file_logging"
 
 #: That setting or any feature-tag override of it (``.pc``, ``.windows``, ...). Godot uses the
 #: first matching one in the section, so every one the project sets is turned off too.
-_FILE_LOGGING_KEY = re.compile(rf"^[ \t]*({re.escape(_FILE_LOGGING)}(?:\.[\w.]+)?)[ \t]*=", re.M)
+_FILE_LOGGING_KEY = re.compile(rf"^[ \t]*({re.escape(_FILE_LOGGING)}(?:\.[^\s=]+)?)[ \t]*=", re.M)
 
 #: Every isolated worker directory is nested under this one name inside the machine's data
 #: directory, rather than scattered beside the user's own Godot projects. It is what makes the

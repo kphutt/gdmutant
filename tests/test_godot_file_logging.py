@@ -64,6 +64,20 @@ def test_an_os_override_ahead_of_pc_is_overruled_too(tmp_path: Path) -> None:
     assert "=true" not in debug
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        "  file_logging/enable_file_logging.linux.x86_64 = true",
+        "file_logging/enable_file_logging.my-tag=true",
+        "\tfile_logging/enable_file_logging.windows\t=true",
+    ],
+)
+def test_an_override_however_it_is_written_is_overruled(tmp_path: Path, line: str) -> None:
+    project = _project(tmp_path, f"\n[debug]\n\n{line}\n")
+    isolate_user_dir(str(project), "run-w0")
+    assert "true" not in _settings(project).split("[debug]")[1]
+
+
 def test_asking_for_the_log_leaves_the_projects_own_setting(tmp_path: Path) -> None:
     project = _project(tmp_path, "\n[debug]\n\nfile_logging/enable_file_logging.pc=true\n")
     isolate_user_dir(str(project), "run-w0", file_logging=True)
