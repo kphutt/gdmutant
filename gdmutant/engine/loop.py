@@ -862,7 +862,7 @@ def warn_if_left_behind(folder: str | Path) -> None:
     except OSError:  # e.g. a folder Windows is still deleting: say so rather than guess
         there = True
     if there:
-        with suppress(OSError):  # stderr itself may be gone
+        with suppress(OSError, ValueError):  # stderr gone or closed, or a path it cannot encode
             print(
                 f"warning: could not delete the temporary folder {folder} (something may still "
                 "be using it). Delete it once nothing is.",

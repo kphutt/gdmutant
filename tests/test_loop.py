@@ -1,6 +1,7 @@
 """Tests for the mutation-run loop (no Godot — fake runners drive killed/survived)."""
 
 import inspect
+import io
 import itertools
 import os
 import shutil
@@ -1128,7 +1129,7 @@ def test_a_temporary_folder_whose_own_removal_fails_is_named(
     assert held and str(folder) == tmp
 
 
-@pytest.mark.parametrize("failure", ["exists", "stderr"])
+@pytest.mark.parametrize("failure", ["exists", "stderr", "closed"])
 def test_naming_a_leftover_folder_never_raises(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1147,8 +1148,12 @@ def test_naming_a_leftover_folder_never_raises(
 
     if failure == "exists":
         monkeypatch.setattr(loop_mod.Path, "exists", denied)
-    else:
+    elif failure == "stderr":
         monkeypatch.setattr(loop_mod.sys, "stderr", Closed())
+    else:
+        closed = io.StringIO()
+        closed.close()  # writing to a closed stream raises ValueError, not OSError
+        monkeypatch.setattr(loop_mod.sys, "stderr", closed)
     loop_mod.warn_if_left_behind(tmp_path)  # tmp_path exists, so it is named
     if failure == "exists":  # unsure whether it is there: name it rather than stay silent
         assert left_behind(capsys.readouterr().err) == [tmp_path]
