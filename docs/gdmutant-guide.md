@@ -127,6 +127,12 @@ fix it, make the suite create what it reads, or pass `--jobs 1`, which runs the 
 every mutant in your own project folder. The baseline copy is made and removed before the
 workers start, so it adds copy time but no extra disk at the peak.
 
+On Windows, once a worker's test command finishes or times out, gdmutant stops every process
+that command started, including one started on purpose to outlive it, such as a build server.
+So a test command must not rely on a background server another worker started. If it did, that
+server could stop partway through, and the mutant would count as killed for a reason unrelated
+to it. Turn off build-server reuse (for example MSBuild's node reuse) when running with `--jobs`.
+
 The live test for this runs GdUnit4. GUT and the exit-code command runner get the same isolation
 from the same code, but no live run proves GUT's.
 
