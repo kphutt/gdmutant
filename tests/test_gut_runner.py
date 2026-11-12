@@ -734,3 +734,41 @@ def test_a_selected_file_the_baseline_never_reported_only_lowers_the_floor(
     )
     runner.run(str(tmp_path))
     assert runner.run_selected(str(tmp_path), ["res://test/unit/c.gd"]).tests == 1
+
+
+#: Godot's report of a script that did not compile, as it prints it.
+_PARSE_ERROR = (
+    'SCRIPT ERROR: Parse Error: The parameter "x" is never used. (Warning treated as error.)\n'
+    "   at: GDScript::reload (res://src/a.gd:3)\n"
+)
+
+
+def test_a_failed_run_quotes_an_early_script_error_however_much_follows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stderr = _PARSE_ERROR + "later output\n" * 200
+    assert len(stderr) > 2000
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess([], 1, "", stderr),
+    )
+    with pytest.raises(RuntimeError) as failed:
+        GutRunner().run(str(tmp_path))
+    assert _PARSE_ERROR.strip() in str(failed.value)
+
+
+def test_a_failed_run_quotes_a_script_error_on_stdout_over_other_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            [], 1, "Godot Engine v4\n" + _PARSE_ERROR, "WARNING: something else\n"
+        ),
+    )
+    with pytest.raises(RuntimeError) as failed:
+        GutRunner().run(str(tmp_path))
+    assert _PARSE_ERROR.strip() in str(failed.value)
+    assert "something else" not in str(failed.value)

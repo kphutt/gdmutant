@@ -15,9 +15,10 @@ All notable changes to gdmutant are recorded here. The format follows
 ### Changed
 
 - A mutant scored `error` now says why its run failed. The `--json` report carries the reason as
-  the mutant's `statusReason`, and a coverage self-check that stops on an `error` quotes it. The
-  GdUnit4 and GUT "wrote no report" message now names the report's path inside the project, not
-  an absolute one. (#359)
+  the mutant's `statusReason`, and a coverage self-check that stops on an `error` quotes it. When
+  Godot printed a `SCRIPT ERROR`, the GdUnit4 and GUT reason quotes the first one, not only the
+  end of the output. The GdUnit4 and GUT "wrote no report" message now names the report's path
+  inside the project, not an absolute one. (#359)
 
 ## [0.1.6] - 2026-11-09
 
