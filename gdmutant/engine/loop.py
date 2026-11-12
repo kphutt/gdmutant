@@ -30,7 +30,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -2137,11 +2137,11 @@ def _run_pool(
         # cannot hand their workers the same isolation token.
         run_id = Path(tmp).name
         feeder = threading.Thread(target=feed)
-        feeder.start()
         threads: list[threading.Thread] = []
         isolated: list[str] = []
         started_ok = True
         try:
+            feeder.start()  # inside the `try`: a Ctrl-C just after must still stop it
             for w in range(worker_count):
                 if stop.is_set():  # an error already: start no more workers
                     break
@@ -2171,7 +2171,8 @@ def _run_pool(
             finally:
                 try:
                     stop.set()  # no worker is left to take what the feeder still holds
-                    feeder.join()
+                    with suppress(RuntimeError):  # it never started
+                        feeder.join()
                     for token in isolated:
                         adapter.release_copy(token)
                 finally:

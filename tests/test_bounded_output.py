@@ -567,6 +567,50 @@ def test_a_command_asked_for_after_a_stop_never_starts(
     assert not runner_mod._RUNNING
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="setsid: a grandchild outside the group")
+def test_a_refused_command_does_not_wait_for_a_grandchild_holding_its_pipes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The grandchild leaves the group the kill reaches, and keeps the command's pipes open.
+    pid_file = tmp_path / "pid"
+    grandchild = (
+        "import os, time\n"
+        "os.setsid()\n"
+        f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    )
+    script = (
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}])\n"
+        "time.sleep(60)\n"
+    )
+    popen = subprocess.Popen
+    started: list[bool] = []
+
+    def stop_once_the_grandchild_runs(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        process = popen(*args, **kwargs)
+        if not started:
+            started.append(True)
+            deadline = time.monotonic() + 30
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            runner_mod.stop_running_commands()  # after the check, before the command is tracked
+        return process
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", stop_once_the_grandchild_runs)
+    begun = time.monotonic()
+    try:
+        with pytest.raises(runner_mod.CommandsStopped):
+            runner_mod.run_bounded(_runs(script), str(tmp_path), 120.0)
+        assert pid_file.exists(), "the grandchild never started"
+        assert time.monotonic() - begun < 30, "waited for the grandchild holding the pipes"
+    finally:
+        runner_mod.allow_commands()
+        if pid_file.exists():  # it outlives the test by design; it is ours, so stop it
+            with contextlib.suppress(OSError, ValueError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+
+
 def test_a_command_a_stop_overtakes_while_it_starts_is_stopped_at_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
