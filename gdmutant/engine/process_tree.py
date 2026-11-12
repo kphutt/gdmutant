@@ -9,8 +9,9 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from typing import Any, Final
 
@@ -130,13 +131,16 @@ class ProcessTree:
 
     process: subprocess.Popen[bytes]
     job: int | None = None
+    #: Held by `kill` and `close`, which a Ctrl-C can run on two threads at once.
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def kill(self) -> None:
         """Stop the command and everything it started, then the command itself in any case."""
         try:
             if sys.platform == "win32":
-                if self.job is None or not _windows().terminate(self.job):
-                    _taskkill(self.process.pid)
+                with self._lock:
+                    if self.job is None or not _windows().terminate(self.job):
+                        _taskkill(self.process.pid)
             else:
                 with contextlib.suppress(OSError):  # e.g. the whole group already exited
                     os.killpg(self.process.pid, signal.SIGKILL)
@@ -145,9 +149,10 @@ class ProcessTree:
 
     def close(self) -> None:
         """Release the job handle, which also ends any process still in the job."""
-        if self.job is not None:
-            _windows().close(self.job)
-            self.job = None
+        with self._lock:
+            if self.job is not None:
+                _windows().close(self.job)
+                self.job = None
 
 
 def _taskkill(pid: int) -> None:

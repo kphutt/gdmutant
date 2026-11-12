@@ -25,8 +25,9 @@ All notable changes to gdmutant are recorded here. The format follows
   `--jobs` on Windows, a test command must not rely on a background server another worker
   started: turn off build-server reuse (for example MSBuild's node reuse). Ctrl-C under `--jobs`
   now stops the test commands still running too, and waits for them before deleting the workers'
-  copies. On Linux and macOS each test command now runs in its own session, so closing the
-  terminal no longer stops it; gdmutant does on a timeout or Ctrl-C. (#365)
+  copies. On Linux and macOS each test command now runs in its own session, so gdmutant stops it
+  on a timeout or Ctrl-C, but if gdmutant itself is killed or its terminal closes, the command
+  keeps running. (#365)
 
 ## [0.1.6] - 2026-11-09
 

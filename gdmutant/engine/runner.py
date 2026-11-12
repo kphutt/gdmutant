@@ -602,15 +602,30 @@ class BoundedOutput:
 #: worker threads run the commands, so the main thread stops them through this.
 _RUNNING: list[process_tree.ProcessTree] = []
 _RUNNING_LOCK = threading.Lock()
+_stopping = False
+
+
+class CommandsStopped(Exception):
+    """`run_bounded` was asked to run a command after `stop_running_commands`."""
 
 
 def stop_running_commands() -> None:
-    """Stop every command `run_bounded` is waiting on, in any thread, and all each one started."""
+    """Stop every command `run_bounded` is waiting on, in any thread, and all each one started,
+    and stop any it starts from now until `allow_commands`."""
+    global _stopping
     with _RUNNING_LOCK:
+        _stopping = True
         running = list(_RUNNING)
     for tree in running:
         with contextlib.suppress(OSError):
             tree.kill()
+
+
+def allow_commands() -> None:
+    """Let `run_bounded` run commands again after `stop_running_commands`."""
+    global _stopping
+    with _RUNNING_LOCK:
+        _stopping = False
 
 
 def run_bounded(
@@ -623,7 +638,16 @@ def run_bounded(
     command = list(command)
     tree = process_tree.start(command, cwd)
     with _RUNNING_LOCK:
-        _RUNNING.append(tree)
+        stopping = _stopping
+        if not stopping:
+            _RUNNING.append(tree)
+    if stopping:  # started after the snapshot `stop_running_commands` took: stop it here
+        try:
+            tree.kill()
+            tree.process.communicate()
+        finally:
+            tree.close()
+        raise CommandsStopped(f"gdmutant is stopping, so {command[0]} was not run")
     try:
         return _wait_bounded(tree, command, timeout, watch)
     finally:

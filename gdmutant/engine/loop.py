@@ -59,6 +59,7 @@ from gdmutant.engine.runner import (
     Runner,
     SuiteResult,
     SuiteTimeout,
+    allow_commands,
     stop_running_commands,
 )
 
@@ -2151,13 +2152,14 @@ def _run_pool(
                 # returns, and a suite run against a copy that is not yet isolated is exactly the
                 # collision this prevents.
                 token = f"{run_id}-w{w}"
+                isolated.append(token)  # recorded first, so an interrupt cannot skip its release
                 adapter.isolate_copy(worker_dir, token)
-                isolated.append(token)
                 thread = threading.Thread(target=worker, args=(worker_dir,))
+                threads.append(thread)  # likewise for its join
                 thread.start()
-                threads.append(thread)
         except BaseException:
             stop.set()
+            stop_running_commands()
             raise
         finally:
             # Join inside the `finally`, so a failure part way through starting the workers still
@@ -2171,23 +2173,29 @@ def _run_pool(
                 feeder.join()
                 for token in isolated:
                     adapter.release_copy(token)
+                allow_commands()
     if errors:
         raise errors[0]
     return outcomes
 
 
 def _join_workers(threads: list[threading.Thread], stop: threading.Event) -> None:
-    """Wait for every worker. Ctrl-C reaches only this thread, so on one, stop the workers and the
-    commands they are running, then still wait: their copies must outlive them."""
-    try:
-        for thread in threads:
-            thread.join()
-    except BaseException:
-        stop.set()
-        stop_running_commands()
-        for thread in threads:
-            thread.join()
-        raise
+    """Wait for every worker. Ctrl-C reaches only this thread, so on each one, stop the workers and
+    every command they run, and keep waiting: their copies must outlive them."""
+    interrupted: KeyboardInterrupt | None = None
+    while True:
+        try:
+            if interrupted is not None:  # inside the `try`, so a Ctrl-C here is caught too
+                stop.set()
+                stop_running_commands()
+            for thread in threads:
+                while thread.is_alive():
+                    thread.join(_POLL_SECS)  # in slices, so a Ctrl-C is noticed promptly
+            break
+        except KeyboardInterrupt as exc:
+            interrupted = exc
+    if interrupted is not None:
+        raise interrupted
 
 
 def run_paths(
