@@ -455,6 +455,37 @@ def test_the_process_tree_is_released_however_the_command_ends(
     assert closed == [True]
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="a Job Object exists only on Windows")
+def test_on_windows_a_child_left_behind_by_a_finished_command_is_stopped(tmp_path: Path) -> None:
+    # The child holds no pipe, so the command finishes normally, and closing its job ends the child.
+    beats = tmp_path / "beats"
+    pid_file = tmp_path / "pid"
+    beat = (
+        "import os, time\n"
+        f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        "while True:\n"
+        f"    open({str(beats)!r}, 'a').write('.')\n"
+        "    time.sleep(0.05)\n"
+    )
+    script = (
+        "import os, subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {beat!r}], stdin=subprocess.DEVNULL, "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"while not os.path.exists({str(beats)!r}):\n"
+        "    time.sleep(0.05)\n"
+    )
+    try:
+        assert runner_mod.run_bounded(_runs(script), str(tmp_path), 30.0).returncode == 0
+        time.sleep(0.5)
+        before = beats.stat().st_size
+        time.sleep(1.0)
+        assert beats.stat().st_size == before, "the command's child is still running"
+    finally:
+        if pid_file.exists():  # never leave it running, even when the test fails
+            with contextlib.suppress(OSError):
+                os.kill(int(pid_file.read_text()), signal.SIGTERM)
+
+
 @pytest.mark.parametrize("parent", ["waits", "exits"])
 def test_a_timed_out_commands_children_are_stopped_too(tmp_path: Path, parent: str) -> None:
     # The grandchild appends to `beats` until something stops it, and holds the pipes, so a parent

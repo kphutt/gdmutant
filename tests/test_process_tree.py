@@ -107,17 +107,52 @@ def test_on_windows_a_job_the_command_cannot_join_falls_back_to_none(
     assert tree.job is None
 
 
-def test_on_windows_an_interrupted_assign_still_resumes_the_command(
+def test_on_windows_an_interrupted_assign_stops_the_command_and_releases_the_job(
     monkeypatch: pytest.MonkeyPatch, windows: _FakeWin32
 ) -> None:
     def interrupted(job: int, process: int) -> bool:
+        windows.calls.append("assign")
         raise KeyboardInterrupt
 
     monkeypatch.setattr(windows, "assign", interrupted)
-    _fake_popen(monkeypatch, {}, windows)
+    _no_taskkill(monkeypatch)
+    process = _fake_popen(monkeypatch, {}, windows)
     with pytest.raises(KeyboardInterrupt):
         process_tree.start(["x"], ".")
-    assert windows.calls[-1] == "resume 77"
+    assert windows.calls == ["new_job", "popen", "assign", "terminate 9", "close 9"]
+    assert process.killed
+
+
+def test_on_windows_a_command_that_cannot_resume_is_stopped(
+    monkeypatch: pytest.MonkeyPatch, windows: _FakeWin32
+) -> None:
+    def fails(process: int) -> None:
+        windows.calls.append("resume")
+        raise OSError("could not resume the test command")
+
+    monkeypatch.setattr(windows, "resume", fails)
+    _no_taskkill(monkeypatch)
+    process = _fake_popen(monkeypatch, {}, windows)
+    with pytest.raises(OSError, match="resume"):
+        process_tree.start(["x"], ".")
+    assert windows.calls[-3:] == ["resume", "terminate 9", "close 9"]
+    assert process.killed
+
+
+@pytest.mark.parametrize("failure", [OSError("no kernel32"), AttributeError("NtResumeProcess")])
+def test_on_windows_without_the_win32_bindings_the_command_starts_without_a_job(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    def unavailable() -> None:
+        raise failure
+
+    monkeypatch.setattr(process_tree.sys, "platform", "win32")
+    monkeypatch.setattr(process_tree, "_windows", unavailable)
+    seen: dict[str, object] = {}
+    _fake_popen(monkeypatch, seen)
+    tree = process_tree.start(["x"], ".")
+    assert seen["creationflags"] == 0
+    assert tree.job is None
 
 
 def test_on_windows_no_job_starts_the_command_normally(

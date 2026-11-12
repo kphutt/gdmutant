@@ -19,7 +19,8 @@ All notable changes to gdmutant are recorded here. The format follows
 - A mutant that times out now stops every process its test command started, not just the command
   itself. A wrapper that starts Godot used to leave Godot running after a timeout, still using
   the copy of the project gdmutant was about to delete. The same applies to Godot's one-time
-  `--import` step, and to a process whose parent has already exited. (#365)
+  `--import` step, and to a process whose parent has already exited. On Windows, a process a
+  test command leaves running after it finishes is stopped too. (#365)
 
 ## [0.1.6] - 2026-11-09
 
