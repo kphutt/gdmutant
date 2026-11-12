@@ -21,7 +21,9 @@ All notable changes to gdmutant are recorded here. The format follows
   the copy of the project gdmutant was about to delete. The same applies to Godot's one-time
   `--import` step, and to a process whose parent has already exited. On Windows, a process a
   test command leaves running after it finishes is stopped too, including one it starts on purpose
-  to outlive it, such as a build server. Elsewhere, such a process keeps running. (#365)
+  to outlive it, such as a build server. Elsewhere, such a process keeps running. So under
+  `--jobs` on Windows, a test command must not rely on a background server another worker
+  started: turn off build-server reuse (for example MSBuild's node reuse). (#365)
 
 ## [0.1.6] - 2026-11-09
 
