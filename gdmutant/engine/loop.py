@@ -2140,6 +2140,7 @@ def _run_pool(
         feeder.start()
         threads: list[threading.Thread] = []
         isolated: list[str] = []
+        started_ok = True
         try:
             for w in range(worker_count):
                 if stop.is_set():  # an error already: start no more workers
@@ -2158,8 +2159,7 @@ def _run_pool(
                 threads.append(thread)  # likewise for its join
                 thread.start()
         except BaseException:
-            stop.set()
-            stop_running_commands()
+            started_ok = False
             raise
         finally:
             # Join inside the `finally`, so a failure part way through starting the workers still
@@ -2167,33 +2167,38 @@ def _run_pool(
             # exception here (a copy that would not copy) fell straight out of the `with`, which
             # then deleted the tree the running workers were reading from.
             try:
-                _join_workers(threads, stop)
+                _join_workers(threads, stop, stopping=not started_ok)
             finally:
-                stop.set()  # no worker is left to take what the feeder still holds
-                feeder.join()
-                for token in isolated:
-                    adapter.release_copy(token)
-                allow_commands()
+                try:
+                    stop.set()  # no worker is left to take what the feeder still holds
+                    feeder.join()
+                    for token in isolated:
+                        adapter.release_copy(token)
+                finally:
+                    allow_commands()
     if errors:
         raise errors[0]
     return outcomes
 
 
-def _join_workers(threads: list[threading.Thread], stop: threading.Event) -> None:
-    """Wait for every worker. Ctrl-C reaches only this thread, so on each one, stop the workers and
-    every command they run, and keep waiting: their copies must outlive them."""
-    interrupted: KeyboardInterrupt | None = None
+def _join_workers(
+    threads: list[threading.Thread], stop: threading.Event, stopping: bool = False
+) -> None:
+    """Wait for every worker. On Ctrl-C (only this thread gets it), any other interrupt, or with
+    `stopping` set, stop the workers and every command they run, and keep waiting."""
+    interrupted: BaseException | None = None
     while True:
         try:
-            if interrupted is not None:  # inside the `try`, so a Ctrl-C here is caught too
+            if stopping:  # inside the `try`, so a Ctrl-C here is caught too
                 stop.set()
                 stop_running_commands()
             for thread in threads:
                 while thread.is_alive():
                     thread.join(_POLL_SECS)  # in slices, so a Ctrl-C is noticed promptly
             break
-        except KeyboardInterrupt as exc:
-            interrupted = exc
+        except BaseException as exc:  # their copies must outlive them, whatever ends the wait
+            interrupted = interrupted or exc
+            stopping = True
     if interrupted is not None:
         raise interrupted
 

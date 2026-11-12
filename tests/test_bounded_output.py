@@ -550,15 +550,52 @@ def test_stopping_the_running_commands_reaches_one_another_thread_waits_on(
     assert not runner_mod._RUNNING
 
 
-def test_a_command_started_after_a_stop_is_stopped_at_once(tmp_path: Path) -> None:
+def test_a_command_asked_for_after_a_stop_never_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # A worker can start another run (a confirmation, a fallback) after the stop's snapshot.
-    started = time.monotonic()
+    def must_not_start(*args: object, **kwargs: object) -> None:
+        raise AssertionError("a command started after the stop")
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", must_not_start)
     try:
         runner_mod.stop_running_commands()
+        with pytest.raises(runner_mod.CommandsStopped):
+            runner_mod.run_bounded(_runs("print('x')"), str(tmp_path), 60.0)
+    finally:
+        runner_mod.allow_commands()
+    assert not runner_mod._RUNNING
+
+
+def test_a_command_a_stop_overtakes_while_it_starts_is_stopped_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: list[subprocess.Popen[bytes]] = []
+    popen = subprocess.Popen
+
+    def stop_while_starting(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        if started:  # taskkill, stopping the tree on Windows
+            return popen(*args, **kwargs)
+        runner_mod.stop_running_commands()  # after the check, before the command is tracked
+        started.append(popen(*args, **kwargs))
+        return started[0]
+
+    closed: list[bool] = []
+    close = process_tree.ProcessTree.close
+    monkeypatch.setattr(
+        process_tree.ProcessTree, "close", lambda tree: (closed.append(True), close(tree))[1]
+    )
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", stop_while_starting)
+    begun = time.monotonic()
+    try:
         with pytest.raises(runner_mod.CommandsStopped):
             runner_mod.run_bounded(_runs("import time; time.sleep(60)"), str(tmp_path), 60.0)
     finally:
         runner_mod.allow_commands()
-    assert time.monotonic() - started < 30
+    assert time.monotonic() - begun < 30
+    (process,) = started
+    assert process.returncode is not None, "the command is still running"
+    assert process.stdout is not None and process.stdout.closed
+    assert closed == [True], "the refused command's job was not released"
     assert not runner_mod._RUNNING
     assert runner_mod.run_bounded(_runs("print('ok')"), str(tmp_path), 30.0).returncode == 0

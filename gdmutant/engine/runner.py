@@ -636,18 +636,24 @@ def run_bounded(
     started, also when a grandchild holds the pipes past `timeout`, and ``RuntimeError`` if a
     stream could not be read, since it could hide a marker."""
     command = list(command)
+    refused = CommandsStopped(f"gdmutant is stopping, so {command[0]} was not run")
+    with _RUNNING_LOCK:
+        if _stopping:
+            raise refused
     tree = process_tree.start(command, cwd)
     with _RUNNING_LOCK:
         stopping = _stopping
         if not stopping:
             _RUNNING.append(tree)
-    if stopping:  # started after the snapshot `stop_running_commands` took: stop it here
+    if stopping:  # a stop began while it started, after the snapshot: stop it here
         try:
             tree.kill()
-            tree.process.communicate()
+            tree.process.wait()
+            for pipe in filter(None, (tree.process.stdout, tree.process.stderr)):
+                pipe.close()  # not read: a grandchild may still hold them
         finally:
             tree.close()
-        raise CommandsStopped(f"gdmutant is stopping, so {command[0]} was not run")
+        raise refused
     try:
         return _wait_bounded(tree, command, timeout, watch)
     finally:

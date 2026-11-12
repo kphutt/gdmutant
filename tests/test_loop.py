@@ -2891,12 +2891,13 @@ def test_ctrl_c_under_jobs_stops_the_running_commands_before_the_copies_go(
     assert allowed == [True], "commands stay refused after the stopped run"
 
 
+@pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit])
 def test_a_second_ctrl_c_while_waiting_still_waits_for_every_worker(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, interrupt: type[BaseException]
 ) -> None:
     @dataclass
     class Worker:
-        """Two Ctrl-Cs land while waiting for it; it finishes on the third wait."""
+        """Two interrupts land while waiting for it; it finishes on the third wait."""
 
         waits: int = 0
         alive: bool = True
@@ -2905,9 +2906,11 @@ def test_a_second_ctrl_c_while_waiting_still_waits_for_every_worker(
             return self.alive
 
         def join(self, timeout: float | None = None) -> None:
+            # In slices: on Windows a Ctrl-C is only seen between them.
+            assert timeout == loop_mod._POLL_SECS
             self.waits += 1
             if self.waits <= 2:
-                raise KeyboardInterrupt
+                raise interrupt
             self.alive = False
 
     stops: list[int] = []
@@ -2920,7 +2923,7 @@ def test_a_second_ctrl_c_while_waiting_still_waits_for_every_worker(
     monkeypatch.setattr(loop_mod, "stop_running_commands", stop_once_interrupted)
     worker = Worker()
     stop = threading.Event()
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(interrupt):
         loop_mod._join_workers([worker], stop)  # type: ignore[list-item]
     assert not worker.alive, "the wait ended before the worker did"
     assert stop.is_set()
@@ -2963,3 +2966,26 @@ def test_ctrl_c_while_workers_start_stops_the_ones_already_running(
         run(str(tmp_path), path, _TWO_RUNNABLE, WaitsToBeStopped(), jobs=2)
     assert stopped.is_set(), "the running commands were not stopped"
     assert finished == [True], "the first worker's copy went before it finished"
+
+
+def test_ctrl_c_while_releasing_the_copies_still_lets_commands_run_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allowed: list[bool] = []
+
+    def interrupted(token: str) -> None:
+        if not token.endswith("-baseline"):  # a worker's copy: the pool's own cleanup
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(loop_mod, "allow_commands", lambda: allowed.append(True))
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    with pytest.raises(KeyboardInterrupt):
+        _run(
+            str(tmp_path),
+            path,
+            _TWO_RUNNABLE,
+            ScriptedRunner([SuiteResult(1, 0, 0)] * 3),
+            adapter=replace(ADAPTER, release_copy=interrupted),
+            jobs=2,
+        )
+    assert allowed == [True], "every later run would refuse to start any command"

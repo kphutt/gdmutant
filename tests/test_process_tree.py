@@ -5,6 +5,7 @@ The real-process tests, which run whichever platform this is, are in test_bounde
 from __future__ import annotations
 
 import subprocess
+import threading
 from dataclasses import dataclass, field
 
 import pytest
@@ -297,3 +298,32 @@ def test_elsewhere_a_kill_stops_the_process_group(
     ProcessTree(process).kill()  # type: ignore[arg-type]
     assert groups == [(4242, 9)]
     assert process.killed
+
+
+def test_on_windows_closing_waits_for_a_kill_that_is_using_the_job(
+    monkeypatch: pytest.MonkeyPatch, windows: _FakeWin32
+) -> None:
+    # Ctrl-C can kill on the main thread while the worker closes the same tree.
+    terminating = threading.Event()
+    finish = threading.Event()
+
+    def slow_terminate(job: int) -> bool:
+        windows.calls.append(f"terminate {job}")
+        terminating.set()
+        finish.wait(10)
+        windows.calls.append("terminated")
+        return True
+
+    monkeypatch.setattr(windows, "terminate", slow_terminate)
+    tree = ProcessTree(_FakeProcess(), job=9)  # type: ignore[arg-type]
+    killer = threading.Thread(target=tree.kill)
+    killer.start()
+    terminating.wait(10)
+    closer = threading.Thread(target=tree.close)
+    closer.start()
+    closer.join(0.3)
+    assert closer.is_alive(), "the job was closed while a kill was using it"
+    finish.set()
+    killer.join(10)
+    closer.join(10)
+    assert windows.calls == ["terminate 9", "terminated", "close 9"]
