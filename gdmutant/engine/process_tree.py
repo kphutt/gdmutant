@@ -138,7 +138,7 @@ class ProcessTree:
                 if self.job is None or not _windows().terminate(self.job):
                     _taskkill(self.process.pid)
             else:
-                with contextlib.suppress(ProcessLookupError):  # the whole group already exited
+                with contextlib.suppress(OSError):  # e.g. the whole group already exited
                     os.killpg(self.process.pid, signal.SIGKILL)
         finally:
             self.process.kill()

@@ -276,16 +276,19 @@ def test_elsewhere_the_command_leads_a_process_group_of_its_own(
     assert tree.job is None
 
 
-@pytest.mark.parametrize("gone", [False, True])
+@pytest.mark.parametrize(
+    "failure", [None, ProcessLookupError(4242), PermissionError(1, "Operation not permitted")]
+)
 def test_elsewhere_a_kill_stops_the_process_group(
-    monkeypatch: pytest.MonkeyPatch, gone: bool
+    monkeypatch: pytest.MonkeyPatch, failure: OSError | None
 ) -> None:
+    # A group that already exited, or one with a member we may not signal, still kills the command.
     groups: list[tuple[int, int]] = []
 
     def killpg(pid: int, sig: int) -> None:
         groups.append((pid, sig))
-        if gone:
-            raise ProcessLookupError(pid)
+        if failure is not None:
+            raise failure
 
     process = _FakeProcess()
     monkeypatch.setattr(process_tree.sys, "platform", "linux")

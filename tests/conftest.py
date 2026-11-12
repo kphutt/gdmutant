@@ -139,8 +139,8 @@ class MarkerRunner:
 
 
 def patch_run(monkeypatch: pytest.MonkeyPatch, module: Any, fake: Callable[..., Any]) -> None:
-    """Route a fake `subprocess.run` through both ways `module` runs Godot: `subprocess.run` for an
-    import warm-up whose output is never read, and `run_bounded` for every run whose output is."""
+    """Route a fake `subprocess.run` through `run_bounded`, which `module` runs Godot with, and
+    through `subprocess.run` itself, which it uses for anything else."""
 
     def bounded(
         command: Sequence[str], cwd: str, timeout: float, watch: Sequence[str] = ()

@@ -9,6 +9,7 @@ GDScript-adapter concern that lands with the end-to-end slice (it needs real God
 from __future__ import annotations
 
 import codecs
+import contextlib
 import io
 import math
 import os
@@ -597,6 +598,21 @@ class BoundedOutput:
         return needle in self.stdout.found or needle in self.stderr.found
 
 
+#: Every command `run_bounded` is waiting on. Only the main thread gets Ctrl-C, but under --jobs
+#: worker threads run the commands, so the main thread stops them through this.
+_RUNNING: list[process_tree.ProcessTree] = []
+_RUNNING_LOCK = threading.Lock()
+
+
+def stop_running_commands() -> None:
+    """Stop every command `run_bounded` is waiting on, in any thread, and all each one started."""
+    with _RUNNING_LOCK:
+        running = list(_RUNNING)
+    for tree in running:
+        with contextlib.suppress(OSError):
+            tree.kill()
+
+
 def run_bounded(
     command: Sequence[str], cwd: str, timeout: float, watch: Sequence[str] = ()
 ) -> BoundedOutput:
@@ -606,9 +622,13 @@ def run_bounded(
     stream could not be read, since it could hide a marker."""
     command = list(command)
     tree = process_tree.start(command, cwd)
+    with _RUNNING_LOCK:
+        _RUNNING.append(tree)
     try:
         return _wait_bounded(tree, command, timeout, watch)
     finally:
+        with _RUNNING_LOCK:
+            _RUNNING.remove(tree)
         tree.close()
 
 
