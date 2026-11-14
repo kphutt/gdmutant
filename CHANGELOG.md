@@ -12,6 +12,10 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- gdmutant is now verified against GdUnit4 6.2.3, up from 6.2.2.
+
 ### Fixed
 
 - A temporary folder gdmutant cannot delete no longer ends the run without a report. On Windows
