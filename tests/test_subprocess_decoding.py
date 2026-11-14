@@ -263,10 +263,10 @@ def test_the_scan_reaches_the_files_that_read_external_tool_output() -> None:
                 keyword.arg in _TEXT_MODE_ARGS for keyword in node.keywords
             ):
                 reached.add(module.relative_to(REPO).as_posix())
-    # Not `gdmutant/engine/runner.py`: it decodes bytes itself with the same two constants, so
-    # the scan has no call there to reach. The behavioural test above covers it instead.
+    # Not the runners: they read Godot through `engine.runner.run_bounded`, which decodes bytes
+    # itself with the same two constants, so the scan has no call there to reach. The behavioural
+    # test above covers it instead.
     assert {
-        "gdmutant/adapters/gdscript/runner.py",  # GdUnit4/GUT: real Godot
         "gdmutant/cli.py",  # git, for --since and the backup check
         "scripts/check_mutation_baseline.py",  # mutmut's own output, read by a gate
         "tests/test_selftest_live.py",  # the live self-test: real Godot, Windows included
