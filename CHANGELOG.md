@@ -17,11 +17,25 @@ All notable changes to gdmutant are recorded here. The format follows
 - Under `--jobs`, each worker's Godot no longer writes its log file, `user://logs/godot.log`. A
   mutant that loops forever printing an error could grow that file until the disk was full, and a
   finished run deleted it anyway. The new `--godot-file-logging` flag turns it back on.
+- gdmutant is now verified against GdUnit4 6.2.3, up from 6.2.2.
 
 ### Fixed
 
+- A temporary folder gdmutant cannot delete no longer ends the run without a report. On Windows
+  that happened when something still held a file in it, such as a child of a timed-out test
+  command. gdmutant now leaves the folder, warns with its path on stderr (even under
+  `--progress none`), and writes the report. (#365)
+
 - A test run that floods its output no longer runs gdmutant out of memory under `--runner gdunit4`
   or `--runner gut` either. 0.1.5 fixed this for `--runner command` only.
+- A mutant that times out now stops every process its test command started, not just the command
+  itself. A wrapper that starts Godot used to leave Godot running after a timeout, still using
+  the copy of the project gdmutant was about to delete. The same applies to Godot's one-time
+  `--import` step. On Windows, a process whose parent has already exited is still out of reach.
+  Ctrl-C under `--jobs` now stops the test commands still running too, and waits for them before
+  deleting the workers' copies. On Linux and macOS each test command now runs in its own session,
+  so gdmutant stops it on a timeout or Ctrl-C, but if gdmutant itself is killed or its terminal
+  closes, the command keeps running. (#365)
 
 ## [0.1.6] - 2026-11-09
 

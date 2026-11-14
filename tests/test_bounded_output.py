@@ -2,12 +2,16 @@
 
 Most drive it through `CommandRunner`, which adds the least between a command and its result."""
 
+import contextlib
+import os
+import signal
 import subprocess
 import sys
 import threading
 import time
 import tracemalloc
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -434,3 +438,264 @@ def test_stream_tail_marker_line_starts_where_the_overlap_does(brk: str | None) 
             excerpt = _stream_tail(line + "\n", cuts).excerpt
             where = f"break {brk!r} at {pos}, cuts {cuts}"
             assert excerpt == [line[starts_at:]], where
+
+
+# --- a timeout stops everything the command started -------------------------------------------
+
+
+@dataclass
+class _FakeProcess:
+    pid: int = 4242
+    killed: bool = False
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def test_on_windows_a_timeout_kills_the_tree_before_the_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+    process = _FakeProcess()
+    monkeypatch.setattr(runner_mod.sys, "platform", "win32")
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, process.killed)),
+    )
+    runner_mod._kill_tree(process)  # type: ignore[arg-type]
+    # Before the kill: taskkill walks the tree from a process that is still alive.
+    assert calls == [(["taskkill", "/T", "/F", "/PID", "4242"], False)]
+    assert process.killed
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [FileNotFoundError("taskkill"), subprocess.TimeoutExpired("taskkill", 5.0)],
+    ids=["missing", "hung"],
+)
+def test_on_windows_a_failed_taskkill_still_kills_the_process(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    timeouts: list[object] = []
+
+    def failing_taskkill(*args: object, **kwargs: object) -> None:
+        timeouts.append(kwargs.get("timeout"))
+        raise failure
+
+    process = _FakeProcess()
+    monkeypatch.setattr(runner_mod.sys, "platform", "win32")
+    monkeypatch.setattr(runner_mod.subprocess, "run", failing_taskkill)
+    runner_mod._kill_tree(process)  # type: ignore[arg-type]
+    assert timeouts == [runner_mod._KILL_GRACE_SECS]  # a hung taskkill cannot hang the run
+    assert process.killed
+
+
+def test_on_windows_a_ctrl_c_during_taskkill_still_kills_the_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def interrupted(*args: object, **kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    process = _FakeProcess()
+    monkeypatch.setattr(runner_mod.sys, "platform", "win32")
+    monkeypatch.setattr(runner_mod.subprocess, "run", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        runner_mod._kill_tree(process)  # type: ignore[arg-type]
+    assert process.killed
+
+
+@pytest.mark.parametrize(
+    "failure", [None, ProcessLookupError(4242), PermissionError(1, "Operation not permitted")]
+)
+def test_elsewhere_a_timeout_kills_the_process_group(
+    monkeypatch: pytest.MonkeyPatch, failure: OSError | None
+) -> None:
+    # A group that already exited, or one with a member we may not signal, still kills the command.
+    groups: list[tuple[int, int]] = []
+
+    def killpg(pid: int, sig: int) -> None:
+        groups.append((pid, sig))
+        if failure is not None:
+            raise failure
+
+    process = _FakeProcess()
+    monkeypatch.setattr(runner_mod.sys, "platform", "linux")
+    monkeypatch.setattr(runner_mod.os, "killpg", killpg, raising=False)
+    monkeypatch.setattr(runner_mod.signal, "SIGKILL", 9, raising=False)
+    runner_mod._kill_tree(process)  # type: ignore[arg-type]
+    assert groups == [(4242, 9)]
+    assert process.killed
+
+
+@pytest.mark.parametrize(("platform", "own_group"), [("win32", False), ("linux", True)])
+def test_the_command_gets_a_process_group_of_its_own_off_windows(
+    monkeypatch: pytest.MonkeyPatch, platform: str, own_group: bool
+) -> None:
+    seen: dict[str, object] = {}
+
+    def popen(command: list[str], **kwargs: object) -> None:
+        seen.update(kwargs)
+        raise FileNotFoundError(command[0])
+
+    monkeypatch.setattr(runner_mod.sys, "platform", platform)
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", popen)
+    with pytest.raises(FileNotFoundError):
+        runner_mod.run_bounded(["x"], ".", 1.0)
+    assert seen["start_new_session"] is own_group
+
+
+def test_a_timed_out_commands_children_are_stopped_too(tmp_path: Path) -> None:
+    # The grandchild appends to `beats` until something stops it. Real processes, so on Windows
+    # this runs taskkill and elsewhere killpg.
+    beats = tmp_path / "beats"
+    pid_file = tmp_path / "pid"
+    beat = (
+        "import os, time\n"
+        f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        "while True:\n"
+        f"    open({str(beats)!r}, 'a').write('.')\n"
+        "    time.sleep(0.05)\n"
+    )
+    script = (
+        "import os, subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {beat!r}], "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"while not os.path.exists({str(beats)!r}):\n"  # time out only once the child is beating
+        "    time.sleep(0.05)\n"
+        "time.sleep(60)\n"
+    )
+    try:
+        with pytest.raises(SuiteTimeout):
+            CommandRunner(_runs(script), timeout=5).run(str(tmp_path))
+        assert beats.exists(), "the command's child never started"
+        time.sleep(0.5)
+        before = beats.stat().st_size
+        time.sleep(1.0)
+        assert beats.stat().st_size == before, "the command's child is still running"
+    finally:
+        _stop_if_still_beating(beats, pid_file)
+
+
+def _stop_if_still_beating(beats: Path, pid_file: Path) -> None:
+    """Stop a test's grandchild only if it is still writing, so a reused process ID is never hit."""
+    if not beats.exists():
+        return
+    size = beats.stat().st_size
+    time.sleep(0.2)
+    if beats.stat().st_size != size:
+        with contextlib.suppress(OSError, ValueError):  # ValueError: a half-written ID
+            os.kill(int(pid_file.read_text()), signal.SIGTERM)
+
+
+def test_stopping_the_running_commands_reaches_one_another_thread_waits_on(
+    tmp_path: Path,
+) -> None:
+    # Under --jobs the commands run on worker threads, and only the main thread gets Ctrl-C.
+    done: list[runner_mod.BoundedOutput] = []
+    waiting = threading.Thread(
+        target=lambda: done.append(
+            runner_mod.run_bounded(_runs("import time; time.sleep(60)"), str(tmp_path), 60.0)
+        )
+    )
+    waiting.start()
+    deadline = time.monotonic() + 30
+    while not runner_mod._RUNNING and time.monotonic() < deadline:
+        time.sleep(0.05)
+    try:
+        runner_mod.stop_running_commands()
+        waiting.join(30)
+    finally:
+        runner_mod.allow_commands()
+    assert not waiting.is_alive(), "the command is still running"
+    assert done and done[0].returncode != 0
+    assert not runner_mod._RUNNING
+
+
+def test_a_command_asked_for_after_a_stop_never_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A worker can start another run (a confirmation, a fallback) after the stop's snapshot.
+    def must_not_start(*args: object, **kwargs: object) -> None:
+        raise AssertionError("a command started after the stop")
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", must_not_start)
+    try:
+        runner_mod.stop_running_commands()
+        with pytest.raises(runner_mod.CommandsStopped):
+            runner_mod.run_bounded(_runs("print('x')"), str(tmp_path), 60.0)
+    finally:
+        runner_mod.allow_commands()
+    assert not runner_mod._RUNNING
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="setsid: a grandchild outside the group")
+def test_a_refused_command_does_not_wait_for_a_grandchild_holding_its_pipes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The grandchild leaves the group the kill reaches, and keeps the command's pipes open.
+    pid_file = tmp_path / "pid"
+    grandchild = (
+        "import os, time\n"
+        "os.setsid()\n"
+        f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    )
+    script = (
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}])\n"
+        "time.sleep(60)\n"
+    )
+    popen = subprocess.Popen
+    started: list[bool] = []
+
+    def stop_once_the_grandchild_runs(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        process = popen(*args, **kwargs)
+        if not started:
+            started.append(True)
+            deadline = time.monotonic() + 30
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            runner_mod.stop_running_commands()  # after the check, before the command is tracked
+        return process
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", stop_once_the_grandchild_runs)
+    begun = time.monotonic()
+    try:
+        with pytest.raises(runner_mod.CommandsStopped):
+            runner_mod.run_bounded(_runs(script), str(tmp_path), 120.0)
+        assert pid_file.exists(), "the grandchild never started"
+        assert time.monotonic() - begun < 30, "waited for the grandchild holding the pipes"
+    finally:
+        runner_mod.allow_commands()
+        if pid_file.exists():  # it outlives the test by design; it is ours, so stop it
+            with contextlib.suppress(OSError, ValueError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+
+
+def test_a_command_a_stop_overtakes_while_it_starts_is_stopped_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: list[subprocess.Popen[bytes]] = []
+    popen = subprocess.Popen
+
+    def stop_while_starting(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        if started:  # taskkill, stopping the tree on Windows
+            return popen(*args, **kwargs)
+        runner_mod.stop_running_commands()  # after the check, before the command is tracked
+        started.append(popen(*args, **kwargs))
+        return started[0]
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", stop_while_starting)
+    begun = time.monotonic()
+    try:
+        with pytest.raises(runner_mod.CommandsStopped):
+            runner_mod.run_bounded(_runs("import time; time.sleep(60)"), str(tmp_path), 60.0)
+    finally:
+        runner_mod.allow_commands()
+    assert time.monotonic() - begun < 30
+    (process,) = started
+    assert process.returncode is not None, "the command is still running"
+    assert process.stdout is not None and process.stdout.closed
+    assert not runner_mod._RUNNING
+    assert runner_mod.run_bounded(_runs("print('ok')"), str(tmp_path), 30.0).returncode == 0
