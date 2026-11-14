@@ -45,7 +45,7 @@ from gdmutant.adapters.gdscript.markers import MARKER_AUTOLOAD, place_markers
 from gdmutant.adapters.gdscript.project_settings import with_setting
 from gdmutant.engine.coverage import MarkedCopy
 from gdmutant.engine.mutants import Mutant
-from gdmutant.engine.runner import CAPTURE_ENCODING, CAPTURE_ERRORS
+from gdmutant.engine.runner import run_bounded
 
 #: The directory inside the copy that holds the recorder and the hits file.
 RECORDER_DIR = "_gdmutant"
@@ -196,15 +196,7 @@ class GDScriptMarker:
         would otherwise surface much later as a marker run full of "Identifier not found"."""
         command = [self.godot, "--headless", "--path", str(copy.resolve()), "--import"]
         try:
-            done = subprocess.run(
-                command,
-                cwd=copy,
-                capture_output=True,
-                encoding=CAPTURE_ENCODING,
-                errors=CAPTURE_ERRORS,
-                timeout=_IMPORT_TIMEOUT,
-                check=False,
-            )
+            done = run_bounded(command, str(copy), _IMPORT_TIMEOUT)
         except FileNotFoundError:
             raise RuntimeError(
                 f"coverage analysis runs Godot ({self.godot!r}) once, to register its recorder in "
@@ -218,7 +210,7 @@ class GDScriptMarker:
         cache = copy / _CLASS_CACHE
         listed = cache.read_text(encoding="utf-8") if cache.is_file() else ""
         if f'"{MARKER_AUTOLOAD}"' not in listed:
-            output = (done.stdout + done.stderr).strip()[-1500:]
+            output = (done.stdout.tail + done.stderr.tail).strip()[-1500:]
             raise RuntimeError(
                 f"Godot's import scan did not register the {MARKER_AUTOLOAD} recorder class in "
                 f"the marked copy, so no marker could call it. Godot said:\n{output}"

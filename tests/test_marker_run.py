@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import bounded_output, patch_run
 
 import gdmutant.adapters.gdscript.marker_run as marker_mod
 import gdmutant.adapters.gdscript.runner as runner_mod
@@ -59,9 +60,7 @@ def _registers(calls: list[list[str]], *, register: bool = True, output: str = "
 
     def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         calls.append(command)
-        assert (kwargs["capture_output"], kwargs["check"]) == (True, False)
-        # Explicitly decoded, like both JUnit runners (engine.runner.CAPTURE_ENCODING).
-        assert (kwargs["encoding"], kwargs["errors"]) == ("utf-8", "replace")
+        assert set(kwargs) == {"cwd", "timeout"}  # through `run_bounded`
         cache = Path(kwargs["cwd"]) / ".godot" / "global_script_class_cache.cfg"
         cache.parent.mkdir(exist_ok=True)
         name = MARKER_AUTOLOAD if register else "Other"
@@ -80,7 +79,7 @@ def test_mark_writes_the_marked_source_the_recorder_and_the_autoload(
 ) -> None:
     copy = _copy(tmp_path)
     calls: list[list[str]] = []
-    monkeypatch.setattr(marker_mod.subprocess, "run", _registers(calls))
+    patch_run(monkeypatch, marker_mod, _registers(calls))
     marked = GDScriptMarker(godot="my-godot").mark(str(copy), _files(copy))
 
     text = (copy / "a.gd").read_text(encoding="utf-8")
@@ -109,7 +108,7 @@ def test_mark_writes_the_marked_source_the_recorder_and_the_autoload(
 def test_spot_ids_are_unique_across_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     copy = _copy(tmp_path)
     (copy / "b.gd").write_text(_SOURCE, encoding="utf-8")
-    monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
+    patch_run(monkeypatch, marker_mod, _registers([]))
     (copy / "c.gd").write_text(_SOURCE, encoding="utf-8")
     files = {**_files(copy), **_files(copy, "b.gd"), **_files(copy, "c.gd")}
     marked = GDScriptMarker().mark(str(copy), files)
@@ -193,7 +192,7 @@ def test_a_similar_name_is_not_mistaken_for_the_recorder(
 ) -> None:
     copy = _copy(tmp_path, _SETTINGS + f'\n[autoload]\n\n{MARKER_AUTOLOAD}Extra="*res://x.gd"\n')
     (copy / "x.gd").write_text(f"class_name {MARKER_AUTOLOAD}Extra\n", encoding="utf-8")
-    monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
+    patch_run(monkeypatch, marker_mod, _registers([]))
     GDScriptMarker().mark(str(copy), _files(copy))  # no refusal
 
 
@@ -205,7 +204,7 @@ def test_a_missing_godot_names_the_flag_that_fixes_it(
     def missing(*_a: Any, **_k: Any) -> Any:
         raise FileNotFoundError(2, "not found")
 
-    monkeypatch.setattr(marker_mod.subprocess, "run", missing)
+    patch_run(monkeypatch, marker_mod, missing)
     with pytest.raises(RuntimeError, match="Pass the Godot executable with --godot") as caught:
         GDScriptMarker(godot="nope").mark(str(copy), _files(copy))
     assert "'nope'" in str(caught.value)
@@ -220,7 +219,7 @@ def test_a_hung_import_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         assert kwargs["timeout"] == 300.0
         raise subprocess.TimeoutExpired(command, 300.0)
 
-    monkeypatch.setattr(marker_mod.subprocess, "run", hangs)
+    patch_run(monkeypatch, marker_mod, hangs)
     with pytest.raises(RuntimeError, match="took longer than 300s"):
         GDScriptMarker().mark(str(copy), _files(copy))
 
@@ -229,9 +228,7 @@ def test_an_import_that_did_not_register_the_recorder_is_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     copy = _copy(tmp_path)
-    monkeypatch.setattr(
-        marker_mod.subprocess, "run", _registers([], register=False, output="ERROR: boom")
-    )
+    patch_run(monkeypatch, marker_mod, _registers([], register=False, output="ERROR: boom"))
     with pytest.raises(RuntimeError, match="did not register the _GdmMarks") as caught:
         GDScriptMarker().mark(str(copy), _files(copy))
     assert caught.value.args[0].endswith("Godot said:\nERROR: boom")
@@ -241,9 +238,9 @@ def test_an_import_that_wrote_no_class_list_is_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     copy = _copy(tmp_path)
-    monkeypatch.setattr(
-        marker_mod.subprocess,
-        "run",
+    patch_run(
+        monkeypatch,
+        marker_mod,
         lambda command, **_k: subprocess.CompletedProcess(command, 0, "", ""),
     )
     with pytest.raises(RuntimeError, match="did not register"):
@@ -315,7 +312,7 @@ def test_a_junit_marker_run_reports_a_script_error_outside_every_test(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: Any, report: str
 ) -> None:
     out = "Run tests\nSCRIPT ERROR: Invalid access\n   at: res://a.gd:4\nAll passed\n"
-    monkeypatch.setattr(runner_mod.subprocess, "run", _writes_report(tmp_path, report, out))
+    patch_run(monkeypatch, runner_mod, _writes_report(tmp_path, report, out))
     marked = runner.run_markers(str(tmp_path))
     assert (marked.tests, marked.failures, marked.errors) == (2, 0, 0)
     assert marked.runtime_error == "SCRIPT ERROR: Invalid access\n   at: res://a.gd:4\nAll passed"
@@ -333,7 +330,7 @@ def test_a_junit_marker_run_passes_its_own_command(
         seen.append(command)
         return fake(command, **kwargs)
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", recording)
+    patch_run(monkeypatch, runner_mod, recording)
     runner = GdUnit4Runner()
     runner.run_markers(str(tmp_path), timeout=7)
     assert seen[-1][-1] == "-c"
@@ -346,7 +343,7 @@ def test_a_script_that_is_not_utf8_does_not_stop_the_name_check(
 ) -> None:
     copy = _copy(tmp_path)
     (copy / "latin.gd").write_bytes(b"# caf\xe9\nextends Node\n")
-    monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
+    patch_run(monkeypatch, marker_mod, _registers([]))
     GDScriptMarker().mark(str(copy), _files(copy))  # no UnicodeDecodeError
 
 
@@ -359,11 +356,11 @@ def test_the_command_runner_marker_run_gets_the_runners_own_budget(
 ) -> None:
     seen: list[object] = []
 
-    def fake(command: list[str], cwd: str, budget: float) -> Any:
-        seen.append(budget)
-        return 0, engine_runner._StreamTail(), engine_runner._StreamTail()
+    def fake(command: list[str], cwd: str, timeout: float) -> Any:
+        seen.append(timeout)
+        return bounded_output(0)
 
-    monkeypatch.setattr(engine_runner, "_run_keeping_tails", fake)
+    monkeypatch.setattr(engine_runner, "run_bounded", fake)
     CommandRunner(["h"], timeout=77.0).run_markers(".")
     assert seen == [77.0]
 
@@ -387,7 +384,7 @@ def test_a_junit_marker_run_gets_the_runners_own_budget_and_scans_stderr(
         fake(command, **kwargs)
         return subprocess.CompletedProcess(command, 0, "fine", "SCRIPT ERROR: late\n  at: x.gd:2")
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", recording)
+    patch_run(monkeypatch, runner_mod, recording)
     assert runner.run_markers(str(tmp_path)).runtime_error == "SCRIPT ERROR: late\n  at: x.gd:2"
     assert seen == [66.0]
 
@@ -437,7 +434,7 @@ def test_a_name_only_mentioned_in_a_value_is_not_an_autoload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     copy = _copy(tmp_path, _SETTINGS + f'\nconfig/description="uses {MARKER_AUTOLOAD}=x"\n')
-    monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
+    patch_run(monkeypatch, marker_mod, _registers([]))
     GDScriptMarker().mark(str(copy), _files(copy))
 
 
@@ -472,7 +469,7 @@ def test_the_recorder_class_named_in_a_comment_or_a_string_is_not_a_declaration(
 ) -> None:
     copy = _copy(tmp_path)
     (copy / "x.gd").write_text(script, encoding="utf-8")
-    monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
+    patch_run(monkeypatch, marker_mod, _registers([]))
     GDScriptMarker().mark(str(copy), _files(copy))  # no refusal
 
 
@@ -481,7 +478,7 @@ def test_a_commented_out_autoload_entry_is_not_a_taken_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
     copy = _copy(tmp_path, _SETTINGS + f'\n[autoload]\n\n;{name}="*res://x.gd"\n')
-    monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
+    patch_run(monkeypatch, marker_mod, _registers([]))
     GDScriptMarker().mark(str(copy), _files(copy))  # no refusal
 
 
@@ -496,5 +493,5 @@ def test_a_project_file_with_non_ascii_text_is_read_as_utf8(
     # "Á" is the bytes C3 81 in UTF-8, and 0x81 is undefined in Windows' cp1252, so reading this
     # project.godot with the platform's default encoding fails there. Godot writes UTF-8.
     copy = _copy(tmp_path, 'config_version=5\n\n[application]\n\nconfig/name="Árbol"\n')
-    monkeypatch.setattr(marker_mod.subprocess, "run", _registers([]))
+    patch_run(monkeypatch, marker_mod, _registers([]))
     GDScriptMarker().mark(str(copy), _files(copy))
