@@ -20,6 +20,8 @@ Fixes for parallel runs and noisy test output.
   (#370, thanks @normanthesquid)
 - A mutant scored `error` now says why in the report. (#361, thanks @normanthesquid)
 - Verified against GdUnit4 6.2.3. (#372, thanks @normanthesquid)
+- On Linux and macOS, each test command now runs in its own session, so it keeps running if
+  gdmutant itself is killed. (#367, thanks @normanthesquid)
 
 ### Fixed
 
