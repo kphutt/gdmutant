@@ -151,7 +151,9 @@ Three states worth knowing before you read a report:
    commit the result. Every CI job that installs dependencies uses `uv sync --frozen`, which refuses
    a lockfile that disagrees with the manifest, so a bump without a re-lock fails before a single
    test runs. A local `uv run` quietly re-locks for you, which is why this is easy to miss until CI
-   says no.
+   says no. After `uv lock`, the `uv.lock` diff should be only gdmutant's own version line. With
+   uv 0.11.30, `uv lock` also rewrote `revision = 5` near the top to `revision = 3`. If that line
+   changes, put it back as it was, then check with `uv lock --check`.
 
    *Leave every action pin alone.* The release commit never touches a
    `kphutt/gdmutant@<sha> # vX.Y.Z` line. Those lines live in `README.md`, `action.yml` and
@@ -169,7 +171,10 @@ Three states worth knowing before you read a report:
    `publish.yml`'s gate checks out and tests. In both windows each pin must read the previous
    release's commit and version exactly. On any other commit once the tag exists, `main` included,
    each pin must read the new tag's commit and version. The test fails there until step 10 bumps
-   the pins. That is the reminder working, not a regression. A second test,
+   the pins. That is the reminder working, not a regression. One exception covers step 10 itself.
+   If HEAD is still the tagged commit and a pin file has uncommitted edits, the new tag's pins
+   also pass, so the suite can run on the bump before it is committed. Every pin file must then
+   name the same release, so a bump that changed only some files still fails. A second test,
    `test_every_pins_comment_names_the_release_its_sha_belongs_to`, needs no network. It checks
    each comment against this clone's own tags. When a tag has not been fetched, it skips with
    `NOTCHECKED` and names the missing tags.
