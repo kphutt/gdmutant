@@ -529,8 +529,8 @@ def test_the_dirtiness_check_sees_a_real_edit(tmp_path: Path) -> None:
 
 def test_only_the_version_bump_commit_may_be_empty() -> None:
     """A release already in progress has had every step 1-2 edit made by its release pull request,
-    so that commit is genuinely empty and `git commit` exits 1 on it. The step 10 pin bump gets no
-    such allowance: an empty commit there means bump_action_pins.py did nothing."""
+    so that commit is genuinely empty and `git commit` exits 1 on it. No other commit gets that
+    allowance."""
     assert "--allow-empty" in rehearse_release.commit_args("m", allow_empty=True)
     assert "--allow-empty" not in rehearse_release.commit_args("m")
 

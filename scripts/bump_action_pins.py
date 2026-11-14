@@ -1,21 +1,21 @@
-"""Point every documented `uses: kphutt/gdmutant@<sha> # vX.Y.Z` pin at the vX.Y.Z tag's commit.
+"""Point every documented `uses: kphutt/gdmutant@vX.Y.Z` pin at the packaged version's tag.
 
-This is step 10 of docs/releasing.md, done by a command instead of by hand. It has to run after
-the release, never in the release commit: the SHA it writes does not exist until the tag does.
-It moves each pin's SHA and its `# vX.Y.Z` comment together, in one edit, so a pin never names
-one release while carrying another release's commit. Until it runs, tests/test_action_pin.py
-fails on `main` and on every pull request, because the docs still pin the previous release.
+This is part of step 1 of docs/releasing.md, done by a command instead of by hand. It runs in the
+release commit itself, next to the version bump: the docs name the release tag, `vX.Y.Z`, and the
+tag's name is known before the tag exists, so the commit that cuts a release can already name it.
+The tag cannot move once pushed (a tag ruleset blocks deleting or re-pointing it, and releases are
+immutable), so a reader who copies the line gets exactly the release it names.
 
-Usage, from the repo root, once `vX.Y.Z` is on origin:
+Usage, from the repo root:
 
   uv run python scripts/bump_action_pins.py            # the version in pyproject.toml
   uv run python scripts/bump_action_pins.py --version 0.1.3
 
-It reads the tag's commit from origin, rewrites every pin to that commit and that version, and
-writes nothing at all unless every file checks out. It fails, and says why, when the tag is not on
-origin yet, when a listed file has no pin, when a pin has no `# vX.Y.Z` comment, or when a pin's
-comment names a later version than the one asked for, which would move the pin backwards. Running
-it twice is harmless: the second run reports every pin already current.
+It reads no network. It rewrites every pin in the files `PIN_FILES` lists to `@vVERSION`, and
+writes nothing at all unless every file checks out. It fails, and says why, when a listed file has
+no pin, when a pin is not an exact release tag (a commit ID, a branch such as `main`, a major-only
+tag such as `v1`), or when a pin names a later version than the one asked for, which would move it
+backwards. Running it twice is harmless: the second run reports every pin already current.
 
 `PIN_FILES` is the one list of files that carry a pin. tests/test_action_pin.py checks the same
 list and fails if any other file in the repo gains a pin, so a new doc cannot slip past both.
@@ -25,23 +25,23 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-#: Every file that shows a SHA-pinned `uses: kphutt/gdmutant@...` line, relative to the repo root.
+#: Every file that shows a `uses: kphutt/gdmutant@...` line, relative to the repo root.
 PIN_FILES = ("README.md", "action.yml", "docs/gdmutant-guide.md")
 
-#: A pin with its version comment: the SHA and the version are the parts that matter.
-PIN = re.compile(
-    r"(kphutt/gdmutant@)(?P<sha>[0-9a-f]{40})(?P<gap>\s*#\s*v)(?P<version>\d+\.\d+\.\d+)"
-)
+#: Any `kphutt/gdmutant@<ref>` a reader could copy, wherever it appears in a pin file. The ref
+#: must start with a letter or digit, so a templated ref in code (`@{action_ref}`) is not a pin.
+#: The one rule for what counts as a pin, shared with tests/test_action_pin.py so the two cannot
+#: drift.
+PIN = re.compile(r"(?P<head>kphutt/gdmutant@)(?P<ref>[A-Za-z0-9][^\s\"'`]*)")
 
-#: Any SHA pin, commented or not. More of these than `PIN` matches means a pin with no comment.
-ANY_PIN = re.compile(r"kphutt/gdmutant@[0-9a-f]{40}")
+#: The one shape a documented pin may take: an exact release tag.
+RELEASE_TAG = re.compile(r"v(?P<version>\d+\.\d+\.\d+)")
 
 
 def packaged_version(root: Path) -> str:
@@ -50,107 +50,61 @@ def packaged_version(root: Path) -> str:
         return str(tomllib.load(handle)["project"]["version"])
 
 
-def parse_ls_remote(output: str) -> dict[str, str]:
-    """`git ls-remote` output as a mapping from ref name to SHA."""
-    return {ref: sha for sha, ref in (line.split("\t") for line in output.splitlines() if line)}
-
-
-def commit_of_tag(version: str, refs: dict[str, str]) -> str | None:
-    """The commit `vVERSION` points at, given origin's tag refs, or None when it is not there.
-
-    The one rule for this, shared with tests/test_action_pin.py so the two cannot drift. An
-    annotated tag's `^{}` line is its commit. A lightweight tag (this repo's kind) has only the
-    plain line, which already is the commit."""
-    tag = f"refs/tags/v{version}"
-    return refs.get(f"{tag}^{{}}") or refs.get(tag)
-
-
 def version_key(version: str) -> tuple[int, int, int]:
     """`0.1.10` as `(0, 1, 10)`, so versions sort as numbers rather than as strings."""
     major, minor, patch = (int(part) for part in version.split("."))
     return major, minor, patch
 
 
-#: A release tag's ref, plain or `^{}`-dereferenced: the version is the part that matters.
-RELEASE_TAG = re.compile(r"^refs/tags/v(?P<version>\d+\.\d+\.\d+)(\^\{\})?$")
+def pins(text: str) -> list[str]:
+    """Every pin's ref in `text`, in order."""
+    return [match["ref"] for match in PIN.finditer(text)]
 
 
-def previous_release(version: str, refs: dict[str, str]) -> str | None:
-    """The newest released version older than `version`, given tag refs, or None if there is none.
-
-    This is the release the docs pin while `version` is being cut: the release commit leaves every
-    pin alone, so until step 10 runs the pins still name the release before it."""
-    older = {
-        match["version"]
-        for ref in refs
-        if (match := RELEASE_TAG.match(ref))
-        and version_key(match["version"]) < version_key(version)
-    }
-    return max(older, key=version_key, default=None)
-
-
-def tag_commit(version: str, root: Path) -> str | None:
-    """The commit `vVERSION` points at on origin, or None when the tag is not there yet. Read from
-    origin rather than local refs, so a clone that has not fetched the tag still gets it right."""
-    tag = f"refs/tags/v{version}"
-    output = subprocess.run(
-        ["git", "ls-remote", "origin", tag, f"{tag}^{{}}"],
-        cwd=root,
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        check=True,
-    ).stdout
-    return commit_of_tag(version, parse_ls_remote(output))
-
-
-def bump(text: str, sha: str, version: str) -> tuple[str, int, int, list[str]]:
-    """Point every pin at `sha` and comment it `vVERSION`, both halves in one edit.
+def bump(text: str, version: str) -> tuple[str, int, int, list[str]]:
+    """Point every pin at `vVERSION`.
 
     Returns the new text, how many pins changed, how many were already current, and a problem for
-    every pin that cannot be moved safely: one whose comment names a later version (bumping it
-    would move it backwards), and any pin with no comment at all. Other SHA-pinned actions in the
-    same file are never touched: only `kphutt/gdmutant@` pins match."""
+    every pin that cannot be moved safely: one that is not an exact release tag, and one that names
+    a later version (bumping it would move it backwards). Other actions' pins in the same file are
+    never touched: only `kphutt/gdmutant@` pins match."""
     changed = current = 0
     problems: list[str] = []
 
     def replace(match: re.Match[str]) -> str:
         nonlocal changed, current
-        if version_key(match["version"]) > version_key(version):
+        ref = match["ref"]
+        tag = RELEASE_TAG.fullmatch(ref)
+        if tag is None:
             problems.append(
-                f"a pin is commented v{match['version']}, later than v{version}: bumping it "
-                "would move it backwards, so check which version you meant"
+                f"a pin reads `@{ref}`, which is not an exact release tag. Docs pin `@vX.Y.Z`, "
+                "never a commit ID, a branch or a major-only tag. Rewrite it by hand, then run "
+                "this again"
             )
             return match[0]
-        if match["sha"] == sha and match["version"] == version:
+        if version_key(tag["version"]) > version_key(version):
+            problems.append(
+                f"a pin reads `@{ref}`, later than v{version}: bumping it would move it "
+                "backwards, so check which version you meant"
+            )
+            return match[0]
+        if tag["version"] == version:
             current += 1
             return match[0]
         changed += 1
-        return f"{match[1]}{sha}{match['gap']}{version}"
+        return f"{match['head']}v{version}"
 
-    new = PIN.sub(replace, text)
-    bare = len(ANY_PIN.findall(text)) - len(PIN.findall(text))
-    if bare:
-        problems.append(
-            f"{bare} pin(s) carry no `# vX.Y.Z` comment, so there is no way to tell which release "
-            "they mean. Add the comment, then run this again"
-        )
-    return new, changed, current, problems
+    return PIN.sub(replace, text), changed, current, problems
 
 
 def main(argv: list[str] | None = None, root: Path = REPO) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--version", help="default: the version in pyproject.toml")
     args = parser.parse_args(argv)
-    version = args.version or packaged_version(root)
-
-    sha = tag_commit(version, root)
-    if sha is None:
-        print(
-            f"bump_action_pins: v{version} is not on origin yet. Push the tag first: the pins can "
-            "only name a commit the tag already points at.",
-            file=sys.stderr,
-        )
+    # `is None`, not `or`: an empty `--version ""` must be refused, never read as "use the default".
+    version = packaged_version(root) if args.version is None else args.version
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        print(f"bump_action_pins: {version!r} is not an X.Y.Z version", file=sys.stderr)
         return 1
 
     updates: dict[Path, str] = {}
@@ -160,9 +114,9 @@ def main(argv: list[str] | None = None, root: Path = REPO) -> int:
         path = root / name
         # Bytes, not read_text: that would turn a CRLF checkout into LF on the way back out.
         text = path.read_bytes().decode("utf-8")
-        new, file_changed, file_current, file_problems = bump(text, sha, version)
+        new, file_changed, file_current, file_problems = bump(text, version)
         if file_changed + file_current + len(file_problems) == 0:
-            problems.append(f"{name}: no `kphutt/gdmutant@<sha> # vX.Y.Z` pin found")
+            problems.append(f"{name}: no `kphutt/gdmutant@vX.Y.Z` pin found")
         problems += [f"{name}: {p}" for p in file_problems]
         changed += file_changed
         current += file_current
@@ -177,7 +131,7 @@ def main(argv: list[str] | None = None, root: Path = REPO) -> int:
     for path, new in updates.items():
         path.write_bytes(new.encode("utf-8"))
     print(
-        f"bump_action_pins: v{version} is {sha[:7]}. Updated {changed} pin(s) in "
+        f"bump_action_pins: pinned v{version}. Updated {changed} pin(s) in "
         f"{len(updates)} file(s), {current} already current."
     )
     return 0

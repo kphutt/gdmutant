@@ -108,8 +108,8 @@ Every merge to `main` rehearses the steps below on a throwaway copy
 [`scripts/rehearse_release.py`](../scripts/rehearse_release.py)). It makes the step 1 and 2 edits,
 runs the suite on the version-bump commit, tags it locally, and then on the tagged commit runs what
 `publish.yml` gates the upload on: the tag guard, the whole of `ci.yml`'s `verify` job through
-`scripts/verify_local.py`, the build, `twine check` and the image check. Then step 10's pin bump and
-the strict pin test, and `ci.yml`'s `license-check` job last. Its `origin` is a bare repo in a temp
+`scripts/verify_local.py`, the build, `twine check` and the image check, with `ci.yml`'s
+`license-check` job last. Its `origin` is a bare repo in a temp
 directory, so nothing it does can reach GitHub or an index. A red rehearsal means this runbook would
 fail today, found weeks before the release that would have hit it. Run it by hand before cutting a
 real release:
@@ -125,7 +125,7 @@ full-history `gitleaks` pass, and the OIDC upload with the `verify-published` in
 it. `ci.yml` does run the Windows and Godot legs on every pull request, just never on a tagged
 commit.
 
-Three states worth knowing before you read a report:
+Two states worth knowing before you read a report:
 
 - **It refuses to start rather than guess.** No `v*` tag in the checkout (a tagless fetch) means it
   cannot tell which version a release would cut, and guessing would rehearse a version that already
@@ -136,16 +136,12 @@ Three states worth knowing before you read a report:
   carries on walking the rest of the path. It does not read that as a failure. If the packaged
   version *is* tagged, though, those edits had real work to do, and a tree they left unchanged is a
   failure: one of them no longer edits the file it names.
-- **Between a tag being pushed and step 10 merging, the rehearsal fails at the version-bump
-  commit.** It rehearses the next version, so it expects the pins to name the release just tagged,
-  and they still name the one before it. `tests/test_action_pin.py` fails on `main` for the same
-  reason in that window. Both turn green once step 10 merges.
 
 1. Set the version in `pyproject.toml`. The tag must match it exactly.
    `scripts/check_release_tag.py` fails the release if it doesn't.
 
-   One thing moves with that number, in the same commit. One thing must not move. Get either
-   wrong and the release PR goes red, or ships a wrong page to PyPI.
+   Two things move with that number, in the same commit. Miss either and the release PR goes
+   red, or ships a wrong page to PyPI.
 
    *`uv.lock` records gdmutant's own version too.* Run `uv lock` after editing `pyproject.toml` and
    commit the result. Every CI job that installs dependencies uses `uv sync --frozen`, which refuses
@@ -155,29 +151,22 @@ Three states worth knowing before you read a report:
    uv 0.11.30, `uv lock` also rewrote `revision = 5` near the top to `revision = 3`. If that line
    changes, put it back as it was, then check with `uv lock --check`.
 
-   *Leave every action pin alone.* The release commit never touches a
-   `kphutt/gdmutant@<sha> # vX.Y.Z` line. Those lines live in `README.md`, `action.yml` and
-   `docs/gdmutant-guide.md`. Leave the SHA as it is, and leave the `# vX.Y.Z` comment too. The SHA
-   cannot be right yet. The commit it would name is the release itself, and a commit cannot hold
-   its own hash. A comment moved on its own is worse than a stale pin. It labels the previous
-   release's commit with the new version. 0.1.5 shipped exactly that. PyPI froze its README into
-   the 0.1.5 page, showing 0.1.4's commit commented `# v0.1.5`. So the pins keep naming the
-   previous release through the release, SHA and comment together. Step 10 moves both at once,
-   after the tag exists. Each release's PyPI page therefore shows the previous release's commit,
-   correctly labeled.
+   *Point every action pin at the new tag.* Run `uv run python scripts/bump_action_pins.py` after
+   editing `pyproject.toml`, and commit what it changed. The pins are the
+   `kphutt/gdmutant@vX.Y.Z` lines in the files its `PIN_FILES` lists (`README.md`, `action.yml`
+   and `docs/gdmutant-guide.md`). It rewrites each one to the version `pyproject.toml` now
+   declares, and needs no network. It writes nothing and says why when a listed file has no pin, a
+   pin is not an exact release tag (a commit ID, a branch, a major-only tag such as `@v1`), or a
+   pin names a later version. The release commit can name the tag before the tag exists, because
+   the name is known in advance. It still never names anything a tag has to exist for first,
+   such as the tagged commit's SHA: a commit cannot hold its own hash. So the docs pin the tag,
+   never the commit, and the PyPI page for each release shows that release's own `uses:` line.
 
-   `tests/test_action_pin.py` holds the pins to that rule. Two windows expect the previous release:
-   before the tag is pushed, and on the tagged commit itself. That commit is the one
-   `publish.yml`'s gate checks out and tests. In both windows each pin must read the previous
-   release's commit and version exactly. On any other commit once the tag exists, `main` included,
-   each pin must read the new tag's commit and version. The test fails there until step 10 bumps
-   the pins. That is the reminder working, not a regression. One exception covers step 10 itself.
-   If HEAD is still the tagged commit and a pin file has uncommitted edits, the new tag's pins
-   also pass, so the suite can run on the bump before it is committed. Every pin file must then
-   name the same release, so a bump that changed only some files still fails. A second test,
-   `test_every_pins_comment_names_the_release_its_sha_belongs_to`, needs no network. It checks
-   each comment against this clone's own tags. When a tag has not been fetched, it skips with
-   `NOTCHECKED` and names the missing tags.
+   `tests/test_action_pin.py` holds the pins to that rule on every commit: each pin must read
+   `@v` plus the packaged version, exactly. A commit ID, a branch, a floating tag or any other
+   version fails it, so a release PR that bumps the version without the pins goes red. A doc that
+   gains a pin must be added to `PIN_FILES`: the same test scans every tracked file and fails
+   until it is, so no pin can be left out of the bump.
 2. Date the changelog. Change `CHANGELOG.md`'s bare `## [Unreleased]` heading (Keep a Changelog's
    own convention: no version number yet, since nothing under it has shipped) to
    `## [X.Y.Z] - YYYY-MM-DD`, using the date you expect to publish: one rename adds both the
@@ -198,7 +187,9 @@ Three states worth knowing before you read a report:
    itself (a separate, deliberate config change, not a bypass of the active rule), delete the tag,
    and re-enable it. Treat that as a rare, considered override, only for a tag nothing external
    has ever referenced (nothing published, no clone or consumer could have pinned to it), never as
-   a routine fix.
+   a routine fix. Releases are immutable too (repo setting, enforced by
+   `scripts/harden_github.py`): once published, a release and its assets cannot be edited. That
+   pair is why the docs can pin a tag rather than a commit.
 5. *Automatic.* `release.yml` runs its two guards (the tag matches the packaged version, and the
    tagged commit is on `main`) and then stages a draft Release with generated notes. A guard
    that fails leaves no Release at all, so nothing has shipped.
@@ -224,16 +215,6 @@ Three states worth knowing before you read a report:
    [Recurring](#recurring-every-release), item 1.
 9. Verify what shipped. The project page is at https://pypi.org/p/gdmutant, and the checklist
    below covers what a green upload does not prove.
-10. Bump the pins, SHA and comment together, promptly, in a follow-up PR: on a branch off `main`, run
-    `uv run python scripts/bump_action_pins.py`, commit what it changed, and merge. It reads the
-    tag's commit from origin. It rewrites every pin in the files `PIN_FILES` lists to that commit
-    and that version, moving the SHA and the `# vX.Y.Z` comment in one edit. It writes nothing and
-    says why in four cases: the tag is not pushed yet, a pin has no comment, a pin's comment names
-    a later version, or a listed file has no pin. Until this merges,
-    `tests/test_action_pin.py` fails on `main` and on every pull request, and a consumer copying a
-    `uses:` line gets the previous release. It could not happen earlier, because the SHA does not
-    exist until the tag does. A doc that gains a pin must be added to `PIN_FILES`:
-    `tests/test_action_pin.py` fails until it is, so no pin can be left out of the bump.
 
 ## After the release
 Almost everything that can be wrong with a release is invisible from the inside. The maintainer's
@@ -307,11 +288,11 @@ manual version becomes the way to reproduce a failure by hand.
    about a published ref resolving for somebody else, or about what the published package renders.
 
    *Automated, and separate from "does it resolve":* `tests/test_action_pin.py` checks that every
-   documented `uses:` pin names *this* release's commit, not just some real commit. A pin that
-   resolves and runs can still be stale: `v0.1.0` stayed pinned through two later releases before
-   anyone noticed, and every one of those runs would have passed the resolves-and-completes check
-   above while installing an old version. The pins can only name the new tag once it exists, so
-   they are bumped in step 10's follow-up PR, and this check fails on `main` until that merges.
+   documented `uses:` pin names *this* release's tag, not just some real tag. A pin that resolves
+   and runs can still be stale: `v0.1.0` stayed pinned through two later releases before anyone
+   noticed, and every one of those runs would have passed the resolves-and-completes check above
+   while installing an old version. The release commit moves the pins with the version (step 1),
+   so the check holds on every commit, the tagged one included.
 
 4. Look at the repository the way a stranger does. Front page, private window.
 

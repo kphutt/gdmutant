@@ -582,6 +582,23 @@ def live_environment_policy(repo: str, name: str) -> LiveEnvironmentPolicy:
     )
 
 
+def immutable_releases_enabled(repo: str) -> bool | None:
+    """Whether the repo's releases are immutable: True, False, or None when the API cannot say.
+
+    The docs pin the action by release tag (`kphutt/gdmutant@vX.Y.Z`), which is only as safe as
+    the tag and its release are fixed. The tag ruleset keeps the tag in place; this setting keeps
+    the published release from being edited or its assets swapped. A failed or unparseable read is
+    None, never False, so "could not ask" is not reported as a confirmed answer either way."""
+    succeeded, out = _gh(["api", f"repos/{repo}/immutable-releases"])
+    if not succeeded:
+        return None
+    try:
+        enabled = json.loads(out).get("enabled")
+    except (ValueError, AttributeError):
+        return None
+    return enabled if isinstance(enabled, bool) else None
+
+
 def report_state(
     repo: str,
     contexts: list[str] | None = None,
@@ -606,6 +623,13 @@ def report_state(
             print(f"    {key:34} {(security.get(key) or {}).get('status')}")
     else:
         _warn("Could not read repo settings.")
+
+    immutable = immutable_releases_enabled(repo)
+    shown = {True: "enabled", False: "DISABLED", None: "?"}[immutable]
+    print(f"    {'immutable releases':34} {shown}")
+    if immutable is not True:
+        _warn("Immutable releases are not confirmed on. The docs pin the action by release tag,")
+        print("         which is only safe while a published release cannot be changed.")
 
     succeeded, out = _gh(["api", f"repos/{repo}/branches/main/protection"])
     print(f"    {'branch protection (main)':34} {'ENABLED' if succeeded else 'not set'}")
@@ -832,6 +856,16 @@ def main(argv: list[str] | None = None) -> int:
             ["-X", "PUT", f"repos/{args.repo}/automated-security-fixes"],
             None,
             "Could not enable automated security fixes.",
+            args.dry_run,
+        )
+    )
+    # The docs pin the action by release tag, so a published release must not be editable.
+    applied.append(
+        _apply(
+            "Immutable releases enabled.",
+            ["-X", "PUT", f"repos/{args.repo}/immutable-releases"],
+            None,
+            "Could not enable immutable releases.",
             args.dry_run,
         )
     )
