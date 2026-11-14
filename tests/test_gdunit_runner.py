@@ -150,8 +150,12 @@ def test_run_raises_when_no_report_is_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     patch_run(monkeypatch, runner_mod, lambda *a, **k: subprocess.CompletedProcess([], 1, "", ""))
-    with pytest.raises(RuntimeError, match="no report"):
+    with pytest.raises(RuntimeError, match="no report") as caught:
         GdUnit4Runner().run(str(tmp_path))
+    # Project-relative, so no home directory or --jobs temporary copy reaches a shared report.
+    assert str(caught.value).startswith(
+        "GdUnit4 wrote no report at reports/report_1/results.xml. Godot may have failed to run"
+    )
 
 
 def test_run_surfaces_godot_output_when_no_report(
@@ -614,3 +618,95 @@ def test_a_chosen_file_list_carries_the_exclusions_too(tmp_path: Path) -> None:
         "-i",
         "a_test:test_slow",
     ]
+
+
+#: Godot's report of a script that did not compile, as it prints it.
+_PARSE_ERROR = (
+    'SCRIPT ERROR: Parse Error: The parameter "x" is never used. (Warning treated as error.)\n'
+    "   at: GDScript::reload (res://src/a.gd:3)\n"
+)
+#: Enough output after an early error to push it out of the last 1,000 characters.
+_LATER_OUTPUT = "later output\n" * 200
+
+
+def _fails(stdout: str, stderr: str) -> Callable[..., subprocess.CompletedProcess[str]]:
+    return lambda *a, **k: subprocess.CompletedProcess([], 1, stdout, stderr)
+
+
+def _reports_zero_tests(
+    report: Path, stdout: str, stderr: str
+) -> Callable[..., subprocess.CompletedProcess[str]]:
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text('<testsuites><testsuite tests="0"/></testsuites>', encoding="utf-8")
+        return subprocess.CompletedProcess([], 0, stdout, stderr)
+
+    return fake_run
+
+
+def test_a_failed_run_quotes_an_early_script_error_however_much_follows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_run(monkeypatch, runner_mod, _fails("", _PARSE_ERROR + _LATER_OUTPUT))
+    with pytest.raises(RuntimeError) as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert _PARSE_ERROR.strip() in str(failed.value)
+
+
+def test_a_failed_run_quotes_a_script_error_on_stdout_over_other_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_run(
+        monkeypatch,
+        runner_mod,
+        _fails("Godot Engine v4\n" + _PARSE_ERROR, "WARNING: something else\n"),
+    )
+    with pytest.raises(RuntimeError) as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert _PARSE_ERROR.strip() in str(failed.value)
+    assert "something else" not in str(failed.value)
+
+
+def test_a_failed_run_quotes_the_stderr_script_error_when_both_streams_have_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    on_stdout = "SCRIPT ERROR: Invalid call. Nonexistent function 'f'.\n"
+    patch_run(monkeypatch, runner_mod, _fails(on_stdout, _PARSE_ERROR))
+    with pytest.raises(RuntimeError) as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert _PARSE_ERROR.strip() in str(failed.value)
+    assert "Nonexistent function" not in str(failed.value)
+
+
+def test_a_zero_test_run_quotes_an_early_script_error_however_much_follows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = _report(tmp_path)
+    patch_run(
+        monkeypatch, runner_mod, _reports_zero_tests(report, "", _PARSE_ERROR + _LATER_OUTPUT)
+    )
+    with pytest.raises(RuntimeError, match=r"0 tests") as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert _PARSE_ERROR.strip() in str(failed.value)
+
+
+def test_a_failed_run_without_a_script_error_quotes_the_end_of_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stderr = "".join(f"WARNING: line {n}\n" for n in range(200))
+    patch_run(monkeypatch, runner_mod, _fails("Godot Engine v4\n", stderr))
+    with pytest.raises(RuntimeError) as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert str(failed.value).endswith(":\n" + stderr.strip()[-1000:])
+
+
+def test_a_failed_run_quotes_at_most_the_start_of_a_long_script_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    error = "SCRIPT ERROR: " + "x" * 3000
+    patch_run(monkeypatch, runner_mod, _fails("", error + "\n"))
+    with pytest.raises(RuntimeError) as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert str(failed.value).endswith(":\n" + error[:1000])

@@ -12,6 +12,14 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A mutant scored `error` now says why its run failed. The `--json` report carries the reason as
+  the mutant's `statusReason`, and a coverage self-check that stops on an `error` quotes it. When
+  Godot printed a `SCRIPT ERROR`, the GdUnit4 and GUT reason quotes the first one, not only the
+  end of the output. The GdUnit4 and GUT "wrote no report" message now names the report's path
+  inside the project, not an absolute one. (#359)
+
 ### Fixed
 
 - A test run that floods its output no longer runs gdmutant out of memory under `--runner gdunit4`

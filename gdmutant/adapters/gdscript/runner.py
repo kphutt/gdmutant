@@ -60,6 +60,10 @@ _GUT_WINDOW_HOOK_NAME = "gut_windows.gd"
 #: no-report error is raised as before — the run still fails, it is only diagnosed less precisely.
 _GDUNIT_NO_TESTS_MARKER = "No test cases found"
 
+#: How much of a failed run's output its message quotes: of a ``SCRIPT ERROR`` from its start,
+#: else from the end of the output.
+_DETAIL_CHARS = 1000
+
 #: What every GDScript file ends in.
 _GDSCRIPT_SUFFIX = ".gd"
 
@@ -145,6 +149,15 @@ DEFAULT_TIMEOUT = 600.0
 # The one-time import warm-up gets its own generous budget, independent of the per-suite timeout: on
 # a cold checkout Godot imports every asset, which can take much longer than a single test run.
 _IMPORT_TIMEOUT = 300.0
+
+
+def _failure_detail(completed: BoundedOutput) -> str:
+    """What a failed run's message quotes: the first ``SCRIPT ERROR`` on stderr, else on stdout,
+    else the end of the output. Godot often prints the cause first."""
+    for stream in (completed.stderr, completed.stdout):
+        if stream.excerpt is not None:
+            return "\n".join(stream.excerpt).strip()[:_DETAIL_CHARS]
+    return completed.detail()[-_DETAIL_CHARS:]
 
 
 @dataclass
@@ -275,10 +288,12 @@ class _GodotJUnitRunner:
         mutant that broke loading all look identical here. `GdUnit4Runner` overrides it for the one
         case GdUnit4 announces by name.
         """
-        detail = completed.detail()
+        detail = _failure_detail(completed)
+        # Project-relative: the reason lands in a shareable report, and under --jobs `report` is
+        # in a temporary copy that is gone after the run.
         return RuntimeError(
-            f"{self._framework} wrote no report at {report}. Godot may have failed to run"
-            + (f":\n{detail[-1000:]}" if detail else "")
+            f"{self._framework} wrote no report at {Path(self.report_path).as_posix()}. "
+            "Godot may have failed to run" + (f":\n{detail}" if detail else "")
         )
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
@@ -550,7 +565,7 @@ func _on_event(event: GdUnitEvent) -> void:
         except ValueError:
             result = None  # a report with no <testsuite> at all — a run that described nothing
         if result is None or result.tests == 0:
-            detail = completed.detail()
+            detail = _failure_detail(completed)
             # Name what actually ran. Under selection that is a handful of chosen files, not the
             # test directory, and sending a reader to look at the wrong scope is how a real fault
             # gets chased in the wrong place.
@@ -559,7 +574,7 @@ func _on_event(event: GdUnitEvent) -> void:
                 f"GdUnit4 wrote a report describing 0 tests under {scope}, so nothing "
                 "actually ran. That cannot be a passing suite, and treating it as one would report "
                 "this mutant as SURVIVED off a run that never happened"
-                + (f":\n{detail[-1000:]}" if detail else "")
+                + (f":\n{detail}" if detail else "")
             )
         return result
 
@@ -800,7 +815,7 @@ func _on_end_script() -> void:
             # false-error the mutant. Setting a bool from --jobs workers is safe (only ever True).
             self._nondeterminism_canary = True
         if result is None or tests == 0 or tests < baseline:
-            detail = completed.detail()
+            detail = _failure_detail(completed)
             if is_baseline:
                 # Discovery, not a crash — see the docstring. Mid-run drops keep the message below.
                 message = (
@@ -826,7 +841,7 @@ func _on_end_script() -> void:
                     f"{reason}: a test suite failed to compile/load and GUT skipped it (it runs "
                     "the rest green and exits 0, so this would otherwise be a false survivor)"
                 )
-            raise RuntimeError(message + (f":\n{detail[-1000:]}" if detail else ""))
+            raise RuntimeError(message + (f":\n{detail}" if detail else ""))
         return result
 
     def run_warning(self) -> str | None:

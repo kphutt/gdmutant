@@ -565,6 +565,21 @@ def test_the_self_check_catches_a_map_that_hides_a_killable_mutant(tmp_path: Pat
     assert "gave 'killed'" in message
 
 
+def test_a_no_coverage_self_check_failure_says_why_the_run_failed(tmp_path: Path) -> None:
+    @dataclass
+    class BrokenLab(Lab):
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            if self.runs:
+                raise RuntimeError("Godot refused to load t.gd")
+            return super().run(project_dir, timeout)
+
+    with pytest.raises(CoverageSelfCheckFailed) as caught:
+        _run(BrokenLab(), tmp_path, self_check=None)
+    assert str(caught.value).endswith(
+        "to run without it.\nThe whole-suite run failed with:\nGodot refused to load t.gd"
+    )
+
+
 def test_the_self_check_counts_what_it_compared(tmp_path: Path) -> None:
     result = _run(Lab(), tmp_path, self_check=None)
     assert result.self_checked == 3
