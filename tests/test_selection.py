@@ -553,6 +553,41 @@ def test_a_kill_from_a_set_that_fails_unmutated_is_not_reported_as_a_kill_by_tha
     assert [o.verdict for o in coupled] == [Verdict.KILLED, Verdict.SURVIVED, Verdict.SURVIVED]
 
 
+def test_a_whole_suite_fallback_that_errors_keeps_why(tmp_path: Path) -> None:
+    @dataclass
+    class WholeBreaks(Lab):
+        """Breaks the whole suite for line 5's mutants only, the ones whose kill is untrusted."""
+
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            text = (Path(project_dir) / "t.gd").read_text(encoding="utf-8")
+            if self.started and "y < 2" in text:
+                raise RuntimeError("the whole suite broke")
+            return super().run(project_dir, timeout)
+
+    result = _run(WholeBreaks(dirty={(A,)}), tmp_path, self_check=0)
+    coupled = [o for o in result.outcomes if o.order_coupled]
+    assert [(o.verdict, o.error) for o in coupled] == [(Verdict.ERROR, "the whole suite broke")] * 3
+
+
+def test_a_self_checked_mutant_that_errors_both_ways_keeps_why(tmp_path: Path) -> None:
+    @dataclass
+    class AlwaysBreaks(Lab):
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            if self.started:
+                raise RuntimeError("both broke")
+            return super().run(project_dir, timeout)
+
+        def run_selected(
+            self, project_dir: str, files: Sequence[str], timeout: float | None = None
+        ) -> SuiteResult:
+            raise RuntimeError("both broke")
+
+    result = _run(AlwaysBreaks(), tmp_path, self_check=None)
+    checked = [o for o in result.outcomes if o.self_checked]
+    assert checked
+    assert {(o.verdict, o.error) for o in checked} == {(Verdict.ERROR, "both broke")}
+
+
 def test_a_set_is_confirmed_once_however_many_mutants_it_kills(tmp_path: Path) -> None:
     lab = Lab(killers={_KILL_5: A, "x > 2": A, _KILL_9: B})
     _run(lab, tmp_path, self_check=0)
@@ -939,6 +974,32 @@ def test_a_hang_under_selection_and_a_kill_from_the_whole_suite_are_one_answer(
     result = _run(Hangs(), tmp_path, self_check=None)
     assert result.outcomes[0].verdict is Verdict.TIMEOUT
     assert result.outcomes[0].self_checked
+
+
+def test_a_self_check_disagreement_says_why_the_selected_run_failed(tmp_path: Path) -> None:
+    class SelectedBreaks(Lab):
+        def run_selected(
+            self, project_dir: str, files: Sequence[str], timeout: float | None = None
+        ) -> SuiteResult:
+            raise RuntimeError("the selected files broke")
+
+    with pytest.raises(CoverageSelfCheckFailed) as caught:
+        _run(SelectedBreaks(), tmp_path, self_check=None)
+    assert str(caught.value).endswith("\nThe selected run failed with:\nthe selected files broke")
+
+
+def test_a_self_check_disagreement_says_why_the_whole_suite_run_failed(tmp_path: Path) -> None:
+    class WholeBreaks(Lab):
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            if self.started:
+                raise RuntimeError("the whole suite broke")
+            return super().run(project_dir, timeout)
+
+    with pytest.raises(CoverageSelfCheckFailed) as caught:
+        _run(WholeBreaks(), tmp_path, self_check=None)
+    assert str(caught.value).endswith(
+        "to run without it.\nThe whole-suite run failed with:\nthe whole suite broke"
+    )
 
 
 def test_a_self_checked_mutant_keeps_its_own_identity_and_its_file_count(tmp_path: Path) -> None:

@@ -77,6 +77,23 @@ def test_timeout_maps_to_stryker_timeout_and_counts_as_detected() -> None:
     assert "timeout:  1  (counted as killed)" in console_summary(run)
 
 
+def test_an_errored_mutant_carries_why_as_its_status_reason() -> None:
+    run = MutationRun(
+        (
+            MutantOutcome(
+                Mutant("f.gd", Span(2, 9, 2, 10), "comparison", ">", ">="),
+                Verdict.ERROR,
+                error="GdUnit4 wrote no report",
+            ),
+            MutantOutcome(Mutant("f.gd", Span(2, 13, 2, 14), "numeric", "0", "1"), Verdict.ERROR),
+        )
+    )
+    mutants = stryker_report(run, "f.gd", _SRC, "gdscript")["files"]["f.gd"]["mutants"]
+    assert mutants[0]["status"] == "RuntimeError"
+    assert mutants[0]["statusReason"] == "GdUnit4 wrote no report"
+    assert "statusReason" not in mutants[1]
+
+
 def test_ignored_maps_to_stryker_ignored_with_reason_and_excluded_from_score() -> None:
     # An ignored mutant renders as Stryker "Ignored" and carries its reason as statusReason (omitted
     # when the reason is empty); it's excluded from the score like invalid/error.
