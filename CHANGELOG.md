@@ -18,6 +18,11 @@ All notable changes to gdmutant are recorded here. The format follows
   mutant that loops forever printing an error could grow that file until the disk was full, and a
   finished run deleted it anyway. The new `--godot-file-logging` flag turns it back on.
 
+### Fixed
+
+- A test run that floods its output no longer runs gdmutant out of memory under `--runner gdunit4`
+  or `--runner gut` either. 0.1.5 fixed this for `--runner command` only.
+
 ## [0.1.6] - 2026-11-09
 
 This release changes no code. It corrects the GitHub Action example on the PyPI project page.
