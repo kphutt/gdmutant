@@ -7,11 +7,13 @@ runner. Real Godot runs of the same thing live in `tests/test_selftest_live.py`.
 from __future__ import annotations
 
 import json
+import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from conftest import HELD, hold_files, left_behind
 
 import gdmutant.engine.loop as loop_mod
 from gdmutant.adapters.gdscript import ADAPTER
@@ -563,6 +565,24 @@ def test_the_self_check_catches_a_map_that_hides_a_killable_mutant(tmp_path: Pat
     message = str(caught.value)
     assert "t.gd:5:11 (comparison: > -> >=)" in message
     assert "gave 'killed'" in message
+
+
+def test_a_marker_copy_that_cannot_be_deleted_costs_a_warning_not_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    @dataclass
+    class HeldLab(Lab):
+        def run_markers(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            (Path(project_dir) / HELD).write_text("open", encoding="utf-8")
+            return super().run_markers(project_dir, timeout)
+
+    hold_files(monkeypatch)
+    result = _run(HeldLab(), tmp_path, self_check=1)
+    monkeypatch.undo()
+    (folder,) = left_behind(capsys.readouterr().err)
+    shutil.rmtree(folder)
+    assert folder.name.startswith("gdmutant-markers-")
+    assert Verdict.NO_COVERAGE in _verdicts(result)
 
 
 def test_the_self_check_counts_what_it_compared(tmp_path: Path) -> None:

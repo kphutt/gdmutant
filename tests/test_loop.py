@@ -1,6 +1,7 @@
 """Tests for the mutation-run loop (no Godot — fake runners drive killed/survived)."""
 
 import inspect
+import io
 import itertools
 import os
 import shutil
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import MarkerRunner, releases_nothing, shares_nothing
+from conftest import HELD, MarkerRunner, hold_files, left_behind, releases_nothing, shares_nothing
 
 import gdmutant.engine.loop as loop_mod
 from gdmutant.adapters.gdscript import ADAPTER
@@ -1040,6 +1041,122 @@ def test_parallel_matches_serial_verdicts_and_order(tmp_path: Path) -> None:
 
 #: Two mutants are runnable here, so `jobs=2` really starts two workers.
 _TWO_RUNNABLE = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"
+
+
+def test_a_temporary_folder_that_cannot_be_deleted_costs_a_warning_not_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A test command's child that outlives a timeout keeps a file in its folder open on Windows.
+    @dataclass
+    class LeavesAHeldFile:
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            (Path(project_dir) / HELD).write_text("open", encoding="utf-8")
+            return SuiteResult(tests=1, failures=0, errors=0)
+
+    hold_files(monkeypatch)
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    # No `progress`, as under --progress none: the warning must still reach stderr.
+    result = run(str(tmp_path), path, _TWO_RUNNABLE, LeavesAHeldFile(), jobs=2)
+    monkeypatch.undo()
+    err = capsys.readouterr().err
+    leftovers = left_behind(err)
+    for folder in leftovers:
+        shutil.rmtree(folder)
+    assert {o.verdict for o in result.outcomes} == {Verdict.SURVIVED}
+    assert sorted(folder.name.split("-")[1] for folder in leftovers) == ["baseline", "jobs"]
+    assert err.count("(something may still be using it). Delete it once nothing is.") == 2
+
+
+def test_a_temporary_folder_left_by_a_failed_run_is_still_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    @dataclass
+    class FailsHoldingAFile:
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            (Path(project_dir) / HELD).write_text("open", encoding="utf-8")
+            raise KeyboardInterrupt
+
+    hold_files(monkeypatch)
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    with pytest.raises(KeyboardInterrupt):
+        run(str(tmp_path), path, _TWO_RUNNABLE, FailsHoldingAFile(), jobs=2)
+    monkeypatch.undo()
+    (folder,) = left_behind(capsys.readouterr().err)
+    shutil.rmtree(folder)
+    assert folder.name.startswith("gdmutant-baseline-")
+
+
+def test_a_temporary_folder_that_was_never_made_is_not_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def no_space(*args: object, **kwargs: object) -> str:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(loop_mod.tempfile, "mkdtemp", no_space)
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    with pytest.raises(OSError, match="No space"):
+        run(str(tmp_path), path, _TWO_RUNNABLE, ScriptedRunner([SuiteResult(1, 0, 0)]), jobs=2)
+    assert "warning:" not in capsys.readouterr().err
+
+
+def test_a_temporary_folder_that_is_deleted_says_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _write(tmp_path, "f.gd", _TWO_RUNNABLE)
+    run(str(tmp_path), path, _TWO_RUNNABLE, ScriptedRunner([SuiteResult(1, 0, 0)] * 3), jobs=2)
+    assert "warning:" not in capsys.readouterr().err
+
+
+def test_a_temporary_folder_whose_own_removal_fails_is_named(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A leftover process whose working directory is the folder blocks removing the folder itself.
+    rmdir = os.rmdir
+    held: list[str] = []
+
+    def held_open(path: Any, *args: Any, **kwargs: Any) -> None:
+        if os.path.basename(os.fsdecode(path)).startswith("gdmutant-probe-"):
+            held.append(os.fsdecode(path))
+            raise PermissionError(32, "The process cannot access the file", os.fsdecode(path))
+        rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "rmdir", held_open)
+    with loop_mod._scratch_dir("gdmutant-probe-") as tmp:
+        (Path(tmp) / "f").write_text("x", encoding="utf-8")
+    monkeypatch.undo()
+    (folder,) = left_behind(capsys.readouterr().err)
+    shutil.rmtree(folder)
+    assert held and str(folder) == tmp
+
+
+@pytest.mark.parametrize("failure", ["exists", "stderr", "closed"])
+def test_naming_a_leftover_folder_never_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+) -> None:
+    def denied(*args: object, **kwargs: object) -> bool:
+        raise PermissionError(5, "Access is denied")
+
+    class Closed:
+        def write(self, text: str) -> int:
+            raise OSError(32, "Broken pipe")
+
+        def flush(self) -> None:
+            raise OSError(32, "Broken pipe")
+
+    if failure == "exists":
+        monkeypatch.setattr(loop_mod.Path, "exists", denied)
+    elif failure == "stderr":
+        monkeypatch.setattr(loop_mod.sys, "stderr", Closed())
+    else:
+        closed = io.StringIO()
+        closed.close()  # writing to a closed stream raises ValueError, not OSError
+        monkeypatch.setattr(loop_mod.sys, "stderr", closed)
+    loop_mod.warn_if_left_behind(tmp_path)  # tmp_path exists, so it is named
+    if failure == "exists":  # unsure whether it is there: name it rather than stay silent
+        assert left_behind(capsys.readouterr().err) == [tmp_path]
 
 
 @dataclass

@@ -26,11 +26,12 @@ import math
 import os
 import queue
 import shutil
+import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -840,7 +841,41 @@ _ISOLATED_BASELINE_NOTE = (
 
 
 @contextmanager
-def _baseline_project(project_dir: str, adapter: Adapter, isolated: bool) -> Iterator[str]:
+def _scratch_dir(prefix: str) -> Iterator[str]:
+    """A temporary directory whose failed cleanup is a warning, never the end of the run: a run's
+    results are worth more than its scratch space. Deleting fails while something still holds a
+    file in it, such as a timed-out command's child, or antivirus on Windows."""
+    tmp = ""
+    try:
+        with tempfile.TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True) as tmp:
+            yield tmp
+    finally:  # a failed run is when a leftover process is likeliest
+        if tmp:
+            warn_if_left_behind(tmp)
+
+
+def warn_if_left_behind(folder: str | Path) -> None:
+    """Name `folder` on stderr if it is still there, even under ``--progress none``, since nothing
+    else tells anyone. Never raises: it runs during cleanup, where an error would end the run."""
+    try:
+        there = Path(folder).exists()
+    except OSError:  # e.g. a folder Windows is still deleting: say so rather than guess
+        there = True
+    if there:
+        with suppress(OSError, ValueError):  # stderr gone or closed (ValueError)
+            print(
+                f"warning: could not delete the temporary folder {folder} (something may still "
+                "be using it). Delete it once nothing is.",
+                file=sys.stderr,
+            )
+
+
+@contextmanager
+def _baseline_project(
+    project_dir: str,
+    adapter: Adapter,
+    isolated: bool,
+) -> Iterator[str]:
     """Yield the directory the baseline suite runs in: the project itself, or an isolated copy.
 
     The baseline's job is to prove the suite is green **in the conditions the mutants will run in**
@@ -868,7 +903,7 @@ def _baseline_project(project_dir: str, adapter: Adapter, isolated: bool) -> Ite
     if not isolated:
         yield project_dir
         return
-    with tempfile.TemporaryDirectory(prefix="gdmutant-baseline-") as tmp:
+    with _scratch_dir("gdmutant-baseline-") as tmp:
         copy = str(Path(tmp) / "project")
         shutil.copytree(project_dir, copy)
         # `mkdtemp` picked `tmp`, so this token is unique on the machine and cannot collide with a
@@ -1297,8 +1332,8 @@ def _coverage_pass(
 
     Stops the run with `CoverageRunFailed` unless every clean-run rule holds
     (`engine.coverage.clean_run_problems`, plus `engine.coverage.window_problems` when selecting),
-    listing each one that failed. The copy is deleted before this returns, and the project itself is
-    never touched.
+    listing each one that failed. The copy is deleted before this returns unless something still
+    holds a file in it (`_scratch_dir`), and the project itself is never touched.
     """
     rel = {
         path: _project_relative(
@@ -1312,7 +1347,7 @@ def _coverage_pass(
     forward_label = _FORWARD if per_file else _ONE_PASS
     if progress is not None:
         progress("running the suite once with coverage markers ...")
-    with tempfile.TemporaryDirectory(prefix="gdmutant-markers-") as tmp:
+    with _scratch_dir("gdmutant-markers-") as tmp:
         copy = Path(tmp) / "project"
         # `.git` is left behind: nothing in a test run reads it, and on a real project it can be
         # the largest thing in the tree.
@@ -2130,7 +2165,7 @@ def _run_pool(
                 clock.record(outcome.verdict, ran)
 
     load_threshold = float(jobs)
-    with tempfile.TemporaryDirectory(prefix="gdmutant-jobs-") as tmp:
+    with _scratch_dir("gdmutant-jobs-") as tmp:
         # Unique per run on this machine (mkdtemp picked it), so two gdmutant runs going at once
         # cannot hand their workers the same isolation token.
         run_id = Path(tmp).name

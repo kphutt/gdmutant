@@ -14,6 +14,11 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ### Fixed
 
+- A temporary folder gdmutant cannot delete no longer ends the run without a report. On Windows
+  that happened when something still held a file in it, such as a child of a timed-out test
+  command. gdmutant now leaves the folder, warns with its path on stderr (even under
+  `--progress none`), and writes the report. (#365)
+
 - A test run that floods its output no longer runs gdmutant out of memory under `--runner gdunit4`
   or `--runner gut` either. 0.1.5 fixed this for `--runner command` only.
 

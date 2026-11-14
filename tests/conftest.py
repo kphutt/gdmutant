@@ -138,6 +138,33 @@ class MarkerRunner:
         return SuiteResult(tests=self.tests, failures=int(self.kill_marker in content), errors=0)
 
 
+#: The file name `hold_files` makes undeletable, as a process still using it would on Windows.
+HELD = "held-by-a-leftover-process.lock"
+
+
+def hold_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make deleting any file named `HELD` fail as Windows does while a process still has it open
+    (WinError 32 is a `PermissionError`), on every platform."""
+    unlink = os.unlink
+
+    def held(path: Any, *args: Any, **kwargs: Any) -> None:
+        if os.path.basename(os.fsdecode(path)) == HELD:
+            raise PermissionError(32, "The process cannot access the file", os.fsdecode(path))
+        unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", held)
+
+
+def left_behind(stderr: str) -> list[Path]:
+    """The folders the cleanup warnings in `stderr` name, so a test can delete them itself."""
+    marker = "warning: could not delete the temporary folder "
+    return [
+        Path(line[len(marker) :].split(" (something may")[0])
+        for line in stderr.splitlines()
+        if line.startswith(marker)
+    ]
+
+
 def bounded_output(
     returncode: int, stdout: str = "", stderr: str = "", watch: Sequence[str] = ()
 ) -> BoundedOutput:
