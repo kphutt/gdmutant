@@ -811,3 +811,13 @@ def test_a_failed_run_without_a_script_error_quotes_the_end_of_stderr(
     with pytest.raises(RuntimeError) as failed:
         GutRunner().run(str(tmp_path))
     assert str(failed.value).endswith(":\n" + stderr.strip()[-1000:])
+
+
+def test_a_failed_run_quotes_at_most_the_start_of_a_long_script_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    error = "SCRIPT ERROR: " + "x" * 3000
+    patch_run(monkeypatch, runner_mod, _fails("", error + "\n"))
+    with pytest.raises(RuntimeError) as failed:
+        GutRunner().run(str(tmp_path))
+    assert str(failed.value).endswith(":\n" + error[:1000])

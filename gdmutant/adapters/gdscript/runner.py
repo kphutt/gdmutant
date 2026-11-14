@@ -60,7 +60,8 @@ _GUT_WINDOW_HOOK_NAME = "gut_windows.gd"
 #: no-report error is raised as before — the run still fails, it is only diagnosed less precisely.
 _GDUNIT_NO_TESTS_MARKER = "No test cases found"
 
-#: How much of the end of a failed run's output its message quotes, when no error stands out.
+#: How much of a failed run's output its message quotes: of a ``SCRIPT ERROR`` from its start,
+#: else from the end of the output.
 _DETAIL_CHARS = 1000
 
 #: What every GDScript file ends in.
@@ -155,7 +156,7 @@ def _failure_detail(completed: BoundedOutput) -> str:
     else the end of the output. Godot often prints the cause first."""
     for stream in (completed.stderr, completed.stdout):
         if stream.excerpt is not None:
-            return "\n".join(stream.excerpt).strip()
+            return "\n".join(stream.excerpt).strip()[:_DETAIL_CHARS]
     return completed.detail()[-_DETAIL_CHARS:]
 
 
