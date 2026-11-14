@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from conftest import patch_run
 
 import gdmutant.adapters.gdscript.runner as runner_mod
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner
@@ -69,7 +70,7 @@ def test_run_parses_the_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     report = _report(tmp_path)
     xml = '<testsuite tests="4" failures="1" errors="0"/>'
     # The mock stands in for Godot writing the report this invocation.
-    monkeypatch.setattr(runner_mod.subprocess, "run", lambda *a, **k: report.write_text(xml))
+    patch_run(monkeypatch, runner_mod, lambda *a, **k: report.write_text(xml))
 
     result = GdUnit4Runner().run(str(tmp_path))
 
@@ -91,7 +92,7 @@ def test_run_invokes_subprocess_with_the_constructed_command(
         calls.append((args, kwargs))
         report.write_text('<testsuite tests="1" failures="0"/>', encoding="utf-8")
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", capture)
+    patch_run(monkeypatch, runner_mod, capture)
     runner = GdUnit4Runner(test_path="res://t", godot="godot4", timeout=42.0)
     runner.run(str(tmp_path))
 
@@ -101,11 +102,7 @@ def test_run_invokes_subprocess_with_the_constructed_command(
     assert args[0] == runner.command(str(tmp_path))
     assert kwargs["cwd"] == str(tmp_path)
     assert kwargs["timeout"] == 42.0
-    assert kwargs["check"] is False
-    assert kwargs["capture_output"] is True  # per-mutant chatter is captured, not inherited
-    # Decoded explicitly, never by the machine's code page: a Godot byte the code page has no
-    # character for silently loses the whole captured stream (engine.runner.CAPTURE_ENCODING).
-    assert (kwargs["encoding"], kwargs["errors"]) == ("utf-8", "replace")
+    assert set(kwargs) == {"cwd", "timeout"}  # through `run_bounded`, so output is bounded
 
 
 def test_run_reflects_latest_report_on_repeated_calls(
@@ -129,7 +126,7 @@ def test_run_reflects_latest_report_on_repeated_calls(
             return
         report.write_text(next(outcomes), encoding="utf-8")
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    patch_run(monkeypatch, runner_mod, fake_run)
     runner = GdUnit4Runner()
     assert runner.run(str(tmp_path)).failed is False
     assert runner.run(str(tmp_path)).failed is True
@@ -143,9 +140,7 @@ def test_run_does_not_return_a_stale_report(
     # the tool's worst failure mode (NF-5).
     report = _report(tmp_path)
     report.write_text('<testsuite tests="9" failures="0" errors="0"/>', encoding="utf-8")
-    monkeypatch.setattr(
-        runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, "", "")
-    )
+    patch_run(monkeypatch, runner_mod, lambda *a, **k: subprocess.CompletedProcess([], 1, "", ""))
 
     with pytest.raises(RuntimeError, match="no report"):
         GdUnit4Runner().run(str(tmp_path))
@@ -154,9 +149,7 @@ def test_run_does_not_return_a_stale_report(
 def test_run_raises_when_no_report_is_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, "", "")
-    )
+    patch_run(monkeypatch, runner_mod, lambda *a, **k: subprocess.CompletedProcess([], 1, "", ""))
     with pytest.raises(RuntimeError, match="no report") as caught:
         GdUnit4Runner().run(str(tmp_path))
     # Project-relative, so no home directory or --jobs temporary copy reaches a shared report.
@@ -172,9 +165,9 @@ def test_run_surfaces_godot_output_when_no_report(
     # be diagnosed instead of vanishing. Pinned as `endswith(":\n" + output)` rather than a bare
     # substring match, so the join itself is tested: a substring match still passes when the
     # separator is mangled and the output is buried mid-sentence.
-    monkeypatch.setattr(
-        runner_mod.subprocess,
-        "run",
+    patch_run(
+        monkeypatch,
+        runner_mod,
         lambda *a, **k: subprocess.CompletedProcess([], 1, "", "SCRIPT ERROR: boom"),
     )
     with pytest.raises(RuntimeError) as excinfo:
@@ -191,9 +184,7 @@ def test_the_no_report_error_ends_cleanly_when_godot_captured_nothing(
     # runner had no equivalent: a mutant that turned the empty-output fallback into junk appended
     # ":\njunk" with the whole suite still green (found by the line-scoped mutation run for this
     # change).
-    monkeypatch.setattr(
-        runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, "", "")
-    )
+    patch_run(monkeypatch, runner_mod, lambda *a, **k: subprocess.CompletedProcess([], 1, "", ""))
     with pytest.raises(RuntimeError) as excinfo:
         GdUnit4Runner().run(str(tmp_path))
     assert str(excinfo.value).endswith("Godot may have failed to run"), excinfo.value
@@ -205,9 +196,7 @@ def test_the_zero_test_report_error_ends_cleanly_when_godot_captured_nothing(
     # The peer of the test above, for the other error path. Same empty-output branch, same
     # requirement: no dangling ":" and no junk after the last word.
     report = _report(tmp_path)
-    monkeypatch.setattr(
-        runner_mod.subprocess, "run", _writes(report, '<testsuite tests="0" failures="0"/>')
-    )
+    patch_run(monkeypatch, runner_mod, _writes(report, '<testsuite tests="0" failures="0"/>'))
     with pytest.raises(RuntimeError) as excinfo:
         GdUnit4Runner().run(str(tmp_path))
     assert str(excinfo.value).endswith("off a run that never happened"), excinfo.value
@@ -221,9 +210,9 @@ def test_run_treats_a_zero_test_report_as_an_error(
     # No measured GdUnit4 writes this report (it writes none at all), which is exactly why the
     # contract must not depend on that observation: GUT was assumed safe on the same evidence.
     report = _report(tmp_path)
-    monkeypatch.setattr(
-        runner_mod.subprocess,
-        "run",
+    patch_run(
+        monkeypatch,
+        runner_mod,
         _writes(report, '<testsuite tests="0" failures="0" errors="0"/>'),
     )
     with pytest.raises(RuntimeError) as excinfo:
@@ -241,7 +230,7 @@ def test_run_treats_a_report_with_no_testsuite_as_an_error(
     # The other zero shape: XML that parses but describes no suite at all. parse_junit_xml raises
     # ValueError on it, which must become the same crash-safety error, never a leaked ValueError.
     report = _report(tmp_path)
-    monkeypatch.setattr(runner_mod.subprocess, "run", _writes(report, '<testsuites tests="0"/>'))
+    patch_run(monkeypatch, runner_mod, _writes(report, '<testsuites tests="0"/>'))
     with pytest.raises(RuntimeError, match="0 tests"):
         GdUnit4Runner().run(str(tmp_path))
 
@@ -252,9 +241,9 @@ def test_zero_test_report_error_surfaces_godot_output(
     # The captured output is what makes the error diagnosable rather than a bare assertion. Same
     # `endswith(":\n" + output)` shape as the no-report peer above, for the same reason.
     report = _report(tmp_path)
-    monkeypatch.setattr(
-        runner_mod.subprocess,
-        "run",
+    patch_run(
+        monkeypatch,
+        runner_mod,
         _writes(report, '<testsuite tests="0" failures="0"/>', stderr="SCRIPT ERROR: boom"),
     )
     with pytest.raises(RuntimeError) as excinfo:
@@ -268,9 +257,9 @@ def test_empty_discovery_is_reported_as_discovery_not_a_crash(
     # GdUnit4 exits 0 and writes NO report when discovery finds no suites under -a, printing "No
     # test cases found". The generic "Godot may have failed to run" would send the user to debug a
     # crash that is not happening and never name the flag that fixes it.
-    monkeypatch.setattr(
-        runner_mod.subprocess,
-        "run",
+    patch_run(
+        monkeypatch,
+        runner_mod,
         lambda *a, **k: subprocess.CompletedProcess(
             [], 0, "No test cases found, abort test run!", ""
         ),
@@ -297,9 +286,9 @@ def test_empty_discovery_is_recognised_on_stderr_too(
     # v6.1.3 put it on stdout, so only that half was pinned, and the stderr half of the
     # concatenation could be deleted with the whole suite still green — caught by the line-scoped
     # mutation run for this change, which is exactly the "one path enforces less" shape.
-    monkeypatch.setattr(
-        runner_mod.subprocess,
-        "run",
+    patch_run(
+        monkeypatch,
+        runner_mod,
         lambda *a, **k: subprocess.CompletedProcess(
             [], 0, "", "No test cases found, abort test run!"
         ),
@@ -314,9 +303,9 @@ def test_a_no_report_run_without_the_discovery_marker_keeps_the_generic_error(
     # The discovery hint is a special case, not a replacement: a genuine crash (no marker) must
     # still raise the hedged "wrote no report" error, which is what cli._gdunit4_addon_hint keys on
     # to offer the missing-addon advice.
-    monkeypatch.setattr(
-        runner_mod.subprocess,
-        "run",
+    patch_run(
+        monkeypatch,
+        runner_mod,
         lambda *a, **k: subprocess.CompletedProcess([], 1, "", "SCRIPT ERROR: crashed"),
     )
     with pytest.raises(RuntimeError, match="wrote no report"):
@@ -331,7 +320,7 @@ def test_run_raises_suite_timeout_on_subprocess_timeout(
     def boom(*args: object, **kwargs: object) -> None:
         raise subprocess.TimeoutExpired(cmd="godot", timeout=1.0)
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", boom)
+    patch_run(monkeypatch, runner_mod, boom)
     with pytest.raises(SuiteTimeout):
         GdUnit4Runner(timeout=1.0).run(str(tmp_path))
 
@@ -353,7 +342,7 @@ def test_run_warms_the_import_cache_once_before_the_first_suite_run(
         if "--import" not in command:
             report.write_text('<testsuite tests="1" failures="0"/>', encoding="utf-8")
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", capture)
+    patch_run(monkeypatch, runner_mod, capture)
     runner = GdUnit4Runner(godot="godot4")
     runner.run(str(tmp_path))
     runner.run(str(tmp_path))  # second mutant: must NOT re-import
@@ -366,11 +355,10 @@ def test_run_warms_the_import_cache_once_before_the_first_suite_run(
     assert "--import" not in commands[1]  # the suite run follows the warm-up
     # The warm-up must not check the exit code (--import routinely exits non-zero on benign import
     # chatter, and only TimeoutExpired is suppressed — check=True would raise and abort the run),
-    # and must capture output so that chatter stays off the console.
+    # and must discard its output, which nothing reads, so that chatter stays off the console.
     (_, import_kwargs) = import_calls[0]
     assert import_kwargs["check"] is False
-    assert import_kwargs["capture_output"] is True
-    assert (import_kwargs["encoding"], import_kwargs["errors"]) == ("utf-8", "replace")
+    assert import_kwargs["stdout"] == import_kwargs["stderr"] == subprocess.DEVNULL
 
 
 def test_run_survives_a_slow_import_warm_up(
@@ -389,7 +377,7 @@ def test_run_survives_a_slow_import_warm_up(
         report.write_text('<testsuite tests="2" failures="0"/>', encoding="utf-8")
         return subprocess.CompletedProcess([], 0, "", "")
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    patch_run(monkeypatch, runner_mod, fake_run)
     result = GdUnit4Runner().run(str(tmp_path))
     assert (result.tests, result.failed) == (2, False)
 
@@ -416,7 +404,7 @@ def test_prepare_retries_after_a_non_timeout_failure(
             return
         report.write_text('<testsuite tests="1" failures="0"/>', encoding="utf-8")
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", flaky)
+    patch_run(monkeypatch, runner_mod, flaky)
     runner = GdUnit4Runner(godot="godot4")
     with pytest.raises(OSError, match="transient"):
         runner.run(str(tmp_path))
@@ -457,7 +445,7 @@ def test_prepare_names_the_attempted_godot_path_when_the_os_omits_it(
     def boom(*args: object, **kwargs: object) -> None:
         raise FileNotFoundError(2, "The system cannot find the file specified")
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", boom)
+    patch_run(monkeypatch, runner_mod, boom)
     runner = GdUnit4Runner(godot="/nonexistent/godot")
     with pytest.raises(FileNotFoundError) as excinfo:
         runner.run(str(tmp_path))
@@ -476,7 +464,7 @@ def test_run_names_the_attempted_godot_path_when_the_os_omits_it(
             return
         raise FileNotFoundError(2, "The system cannot find the file specified")
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", flaky)
+    patch_run(monkeypatch, runner_mod, flaky)
     runner = GdUnit4Runner(godot="/nonexistent/godot")
     with pytest.raises(FileNotFoundError) as excinfo:
         runner.run(str(tmp_path))
@@ -522,7 +510,7 @@ def test_run_selected_passes_the_files_and_keeps_every_guard(
             report.write_text('<testsuites><testsuite tests="2" failures="0"/></testsuites>')
         return subprocess.CompletedProcess([], 0, "", "")
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    patch_run(monkeypatch, runner_mod, fake_run)
     result = GdUnit4Runner().run_selected(str(tmp_path), ["res://t/a.gd"])
     assert result.tests == 2
     last = seen[-1]
@@ -537,9 +525,9 @@ def test_a_selected_run_that_describes_no_tests_names_the_files_not_the_director
     """The zero-test guard is the same one the whole-suite path uses, so it must say which scope
     it actually measured, or it sends a reader to look in the wrong place."""
     report = _report(tmp_path)
-    monkeypatch.setattr(
-        runner_mod.subprocess,
-        "run",
+    patch_run(
+        monkeypatch,
+        runner_mod,
         _writes(report, '<testsuites><testsuite tests="0" failures="0"/></testsuites>'),
     )
     with pytest.raises(RuntimeError, match="0 tests under the 2 selected test files"):
@@ -562,7 +550,7 @@ def test_run_markers_files_asks_for_the_marker_variant_of_the_given_files(
             report.write_text('<testsuites><testsuite tests="2" failures="0"/></testsuites>')
         return subprocess.CompletedProcess([], 0, "", "")
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    patch_run(monkeypatch, runner_mod, fake_run)
     result = GdUnit4Runner().run_markers_files(str(tmp_path), ["res://t/b.gd", "res://t/a.gd"])
     assert result.tests == 2
     assert seen[-1][-1] == "-c"
@@ -637,18 +625,31 @@ _PARSE_ERROR = (
     'SCRIPT ERROR: Parse Error: The parameter "x" is never used. (Warning treated as error.)\n'
     "   at: GDScript::reload (res://src/a.gd:3)\n"
 )
+#: Enough output after an early error to push it out of the last 1,000 characters.
+_LATER_OUTPUT = "later output\n" * 200
+
+
+def _fails(stdout: str, stderr: str) -> Callable[..., subprocess.CompletedProcess[str]]:
+    return lambda *a, **k: subprocess.CompletedProcess([], 1, stdout, stderr)
+
+
+def _reports_zero_tests(
+    report: Path, stdout: str, stderr: str
+) -> Callable[..., subprocess.CompletedProcess[str]]:
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = args[0]
+        assert isinstance(command, list)
+        if "--import" not in command:
+            report.write_text('<testsuites><testsuite tests="0"/></testsuites>', encoding="utf-8")
+        return subprocess.CompletedProcess([], 0, stdout, stderr)
+
+    return fake_run
 
 
 def test_a_failed_run_quotes_an_early_script_error_however_much_follows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    stderr = _PARSE_ERROR + "later output\n" * 200
-    assert len(stderr) > 2000
-    monkeypatch.setattr(
-        runner_mod.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess([], 1, "", stderr),
-    )
+    patch_run(monkeypatch, runner_mod, _fails("", _PARSE_ERROR + _LATER_OUTPUT))
     with pytest.raises(RuntimeError) as failed:
         GdUnit4Runner().run(str(tmp_path))
     assert _PARSE_ERROR.strip() in str(failed.value)
@@ -657,14 +658,45 @@ def test_a_failed_run_quotes_an_early_script_error_however_much_follows(
 def test_a_failed_run_quotes_a_script_error_on_stdout_over_other_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        runner_mod.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(
-            [], 1, "Godot Engine v4\n" + _PARSE_ERROR, "WARNING: something else\n"
-        ),
+    patch_run(
+        monkeypatch,
+        runner_mod,
+        _fails("Godot Engine v4\n" + _PARSE_ERROR, "WARNING: something else\n"),
     )
     with pytest.raises(RuntimeError) as failed:
         GdUnit4Runner().run(str(tmp_path))
     assert _PARSE_ERROR.strip() in str(failed.value)
     assert "something else" not in str(failed.value)
+
+
+def test_a_failed_run_quotes_the_stderr_script_error_when_both_streams_have_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    on_stdout = "SCRIPT ERROR: Invalid call. Nonexistent function 'f'.\n"
+    patch_run(monkeypatch, runner_mod, _fails(on_stdout, _PARSE_ERROR))
+    with pytest.raises(RuntimeError) as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert _PARSE_ERROR.strip() in str(failed.value)
+    assert "Nonexistent function" not in str(failed.value)
+
+
+def test_a_zero_test_run_quotes_an_early_script_error_however_much_follows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = _report(tmp_path)
+    patch_run(
+        monkeypatch, runner_mod, _reports_zero_tests(report, "", _PARSE_ERROR + _LATER_OUTPUT)
+    )
+    with pytest.raises(RuntimeError, match=r"0 tests") as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert _PARSE_ERROR.strip() in str(failed.value)
+
+
+def test_a_failed_run_without_a_script_error_quotes_the_end_of_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stderr = "".join(f"WARNING: line {n}\n" for n in range(200))
+    patch_run(monkeypatch, runner_mod, _fails("Godot Engine v4\n", stderr))
+    with pytest.raises(RuntimeError) as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert str(failed.value).endswith(":\n" + stderr.strip()[-1000:])

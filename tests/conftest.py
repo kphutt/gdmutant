@@ -4,15 +4,16 @@ import atexit
 import os
 import shutil
 import stat
+import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from gdmutant.engine.runner import SuiteResult
+from gdmutant.engine.runner import CAPTURE_ENCODING, BoundedOutput, SuiteResult, _StreamTail
 
 _TEMPLATES: dict[str, tuple[Path, Any]] = {}
 
@@ -135,3 +136,37 @@ class MarkerRunner:
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         content = Path(self.target).read_text(encoding="utf-8")
         return SuiteResult(tests=self.tests, failures=int(self.kill_marker in content), errors=0)
+
+
+def bounded_output(
+    returncode: int, stdout: str = "", stderr: str = "", watch: Sequence[str] = ()
+) -> BoundedOutput:
+    """What `run_bounded` keeps of a command that printed `stdout` and `stderr`: each is read
+    through `_StreamTail.drain`, as a real run's pipe is."""
+    tails = []
+    for text in (stdout, stderr):
+        tail = _StreamTail(watch)
+        with tempfile.TemporaryFile() as file:  # a file, not a pipe: a long text cannot block
+            file.write(text.encode(CAPTURE_ENCODING))
+            file.seek(0)
+            tail.drain(file)
+        if tail.error is not None:
+            raise tail.error
+        tails.append(tail)
+    return BoundedOutput(returncode, *tails)
+
+
+def patch_run(monkeypatch: pytest.MonkeyPatch, module: Any, fake: Callable[..., Any]) -> None:
+    """Route a fake `subprocess.run` through both ways `module` runs Godot: `subprocess.run` for an
+    import warm-up whose output is never read, and `run_bounded` for every run whose output is."""
+
+    def bounded(
+        command: Sequence[str], cwd: str, timeout: float, watch: Sequence[str] = ()
+    ) -> BoundedOutput:
+        done = fake(list(command), cwd=cwd, timeout=timeout)
+        if not isinstance(done, subprocess.CompletedProcess):  # a fake with nothing to print
+            done = subprocess.CompletedProcess(command, 0, "", "")
+        return bounded_output(done.returncode, done.stdout or "", done.stderr or "", watch)
+
+    monkeypatch.setattr(module.subprocess, "run", fake)
+    monkeypatch.setattr(module, "run_bounded", bounded)
