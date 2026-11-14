@@ -213,8 +213,9 @@ class _GodotJUnitRunner:
         so re-importing per mutant would just burn a Godot boot.
 
         The exit code is ignored — ``--import`` returns non-zero on benign addon/import chatter
-        across Godot versions — and any failure is left to surface as the usual "wrote no report"
-        error from the real run, rather than masking it behind a warm-up error.
+        across Godot versions — and so is a timeout, so either surfaces as the usual "wrote no
+        report" error from the real run. Godot not starting, or its output not being readable,
+        stops the run here instead.
         """
         if self._imported:
             return
@@ -222,7 +223,8 @@ class _GodotJUnitRunner:
         # the real suite run (with its own timeout) surface a genuine problem as "wrote no report".
         with contextlib.suppress(subprocess.TimeoutExpired):
             try:
-                subprocess.run(
+                # Through `run_bounded`, so a timeout also stops whatever a wrapper started.
+                run_bounded(
                     [
                         self.godot,
                         "--headless",
@@ -230,11 +232,8 @@ class _GodotJUnitRunner:
                         str(Path(project_dir).resolve()),
                         "--import",
                     ],
-                    cwd=project_dir,
-                    timeout=_IMPORT_TIMEOUT,
-                    check=False,
-                    stdout=subprocess.DEVNULL,  # never read, so never held
-                    stderr=subprocess.DEVNULL,
+                    project_dir,
+                    _IMPORT_TIMEOUT,
                 )
             except FileNotFoundError as error:
                 raise with_filename(error, self.godot) from error

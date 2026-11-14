@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import HELD, hold_files, left_behind
 
 from gdmutant.adapters.gdscript import project_settings
 from gdmutant.adapters.gdscript.project_settings import (
@@ -175,12 +176,25 @@ def test_releasing_a_copy_removes_the_user_dir_it_was_given(
 
 
 def test_releasing_a_copy_that_left_nothing_behind_is_quiet(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # Cleanup runs when the mutants are already scored, so nothing it finds (or fails to find) may
     # turn a finished run into a failed one.
     monkeypatch.setattr(project_settings, "godot_data_path", lambda: tmp_path / "never-created")
     release_user_dir("run-w0")
+    assert capsys.readouterr().err == ""
+
+
+def test_a_user_dir_that_cannot_be_deleted_is_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(project_settings, "godot_data_path", lambda: tmp_path)
+    mine = worker_user_dirs_root() / "run-w0"
+    (mine / "logs").mkdir(parents=True)
+    (mine / "logs" / HELD).write_text("open", encoding="utf-8")
+    hold_files(monkeypatch)
+    release_user_dir("run-w0")
+    assert left_behind(capsys.readouterr().err) == [mine]
 
 
 def test_the_data_path_on_windows_is_the_roaming_profile(
