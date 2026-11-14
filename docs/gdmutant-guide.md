@@ -74,6 +74,7 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | `--exclude <glob>` | *(none)* | Skip matching files when expanding a directory (repeatable). |
 | `--exclude-tests <entry>` | *(none)* | Leave a test out of every run, as gdUnit4's `-i` takes it: a suite name, any part of a suite's `res://` path, or `suite:test` for one test (repeatable; `--runner gdunit4` only). |
 | `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. `auto` picks a worker count from your CPU count and throttles under load instead of a fixed N. |
+| `--godot-file-logging` | off | Under `--jobs`, let each worker's Godot write `user://logs/godot.log`. See [Parallelism](#parallelism). |
 | `--timeout <seconds>` | derived from the baseline | Per-mutant test timeout. See [How long a mutant gets](#how-long-a-mutant-gets). |
 | `--coverage-analysis {off,all,per-file}` | `off` | `all` finds the mutants no test reaches before any mutant runs, and reports them as `no coverage` without running them. `per-file` does that and runs every other mutant against only the test files that reach it, which is the setting that saves real time. See [Coverage analysis](#coverage-analysis). |
 | `--coverage-self-check N\|all` | `3` | How many of coverage analysis's own decisions are re-run against the whole suite to confirm them. `all` checks every mutant both ways. |
@@ -126,6 +127,11 @@ worker, which counts as a kill, so the run reported a better score than a serial
 fix it, make the suite create what it reads, or pass `--jobs 1`, which runs the baseline and
 every mutant in your own project folder. The baseline copy is made and removed before the
 workers start, so it adds copy time but no extra disk at the peak.
+
+Each worker's copy also turns off Godot's log file, `user://logs/godot.log`. A mutant that loops
+forever printing an error can grow that file until the disk is full, and a finished run deletes
+each worker's `user://` anyway. To read a worker's log while the run is still going, pass
+`--godot-file-logging`. A `--jobs 1` run keeps your project's own setting.
 
 The live test for this runs GdUnit4. GUT and the exit-code command runner get the same isolation
 from the same code, but no live run proves GUT's.

@@ -9,8 +9,9 @@ implementation to drift.
 **Why the user-dir half lives here and not in the engine.** The engine's parallel path copies the
 project once per worker and asks the language adapter to give each copy whatever state it would
 otherwise share (`engine.adapter.Adapter.isolate_copy`). For GDScript that state is ``user://``, and
-isolating it means writing two Godot project settings -- a sentence the engine must never have to
-understand (NF-3, AGENTS.md's language-neutral rule).
+isolating it means writing a few Godot project settings (plus, by default, turning off Godot's log
+file) -- sentences the engine must never have to understand (NF-3, AGENTS.md's language-neutral
+rule).
 """
 
 from __future__ import annotations
@@ -26,6 +27,15 @@ _APPLICATION = "application"
 _USE_CUSTOM_USER_DIR = "config/use_custom_user_dir"
 _CUSTOM_USER_DIR_NAME = "config/custom_user_dir_name"
 _PROJECT_NAME = "config/name"
+
+#: Godot's own log, ``user://logs/godot.log``. A mutant that floods it, such as endless recursion
+#: printing an error each time, can fill the disk (`isolate_user_dir`'s `file_logging`).
+_DEBUG = "debug"
+_FILE_LOGGING = "file_logging/enable_file_logging"
+
+#: That setting or any feature-tag override of it (``.pc``, ``.windows``, ...). Godot uses the
+#: first matching one in the section, so every one the project sets is turned off too.
+_FILE_LOGGING_KEY = re.compile(rf"^[ \t]*({re.escape(_FILE_LOGGING)}(?:\.[^\s=]+)?)[ \t]*=", re.M)
 
 #: Every isolated worker directory is nested under this one name inside the machine's data
 #: directory, rather than scattered beside the user's own Godot projects. It is what makes the
@@ -84,7 +94,7 @@ def worker_user_dirs_root() -> Path:
     return godot_data_path() / _WORKER_PARENT
 
 
-def isolate_user_dir(copy_dir: str, token: str) -> None:
+def isolate_user_dir(copy_dir: str, token: str, file_logging: bool = False) -> None:
     """Give the project copy at `copy_dir` a ``user://`` that no other copy resolves to.
 
     This is the GDScript half of `engine.adapter.Adapter.isolate_copy`. Godot resolves ``user://``
@@ -107,6 +117,9 @@ def isolate_user_dir(copy_dir: str, token: str) -> None:
       back to one ``app_userdata/[unnamed project]`` directory shared by every nameless project on
       the machine (verified against Godot 4.7). A nameless project would therefore look isolated and
       not be.
+
+    Unless `file_logging` is set, it also turns off Godot's log file, ``user://logs/godot.log``:
+    ``[debug] file_logging/enable_file_logging=false``, and every feature-tag override of it.
 
     One consequence to know about: a worker's ``user://`` starts **empty**. A suite whose tests read
     data there that no test in the run created fails in every worker, and consistently failing tests
@@ -146,6 +159,10 @@ def isolate_user_dir(copy_dir: str, token: str) -> None:
     )
     if not _NAMED.search(text):
         text = with_setting(text, _APPLICATION, _PROJECT_NAME, f'"{token}"')
+    if not file_logging:  # the log is deleted with the worker's user:// anyway
+        keys = {_FILE_LOGGING, f"{_FILE_LOGGING}.pc", *_FILE_LOGGING_KEY.findall(text)}
+        for key in sorted(keys):
+            text = with_setting(text, _DEBUG, key, "false")
     settings.write_text(text, encoding="utf-8", newline="")
 
 
@@ -154,7 +171,8 @@ def release_user_dir(token: str) -> None:
 
     `engine.adapter.Adapter.release_copy`: the engine deletes the project copy itself, but the
     directory Godot wrote outside it is ours to remove. Nothing reads it after the worker's last
-    suite run -- it holds that framework's temporary files and Godot's own log -- and leaving it
+    suite run -- it holds that framework's temporary files, and Godot's own log under
+    ``--godot-file-logging`` -- and leaving it
     would grow the machine's data directory by one directory per worker per run, forever.
 
     Best effort on purpose, and it never raises: this runs when the mutants are already scored, so a
