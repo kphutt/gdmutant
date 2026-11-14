@@ -373,10 +373,10 @@ class CommandRunner:
         """
         budget = self.timeout if timeout is None else timeout
         try:
-            returncode, out, err = _run_keeping_tails(list(self.command), project_dir, budget)
+            run = run_bounded(self.command, project_dir, budget)
         except subprocess.TimeoutExpired as expired:
             # A mutation-induced hang is a detection, not a crash — surface it distinctly so the
-            # engine tallies Timeout (killed), not error. `_run_keeping_tails` has already killed
+            # engine tallies Timeout (killed), not error. `run_bounded` has already killed
             # the child process by the time it raises.
             raise SuiteTimeout(f"test command exceeded {budget:g}s") from expired
         except FileNotFoundError as error:
@@ -385,31 +385,30 @@ class CommandRunner:
             # naming the actual bad command — the same Windows quirk the GdUnit4/GUT call sites
             # patch around.
             raise with_filename(error, self.command[0]) from error
-        if out.excerpt is not None or err.excerpt is not None:
+        if run.stdout.excerpt is not None or run.stderr.excerpt is not None:
             # Regardless of exit code (see the class docstring), and `errors`, not `failures`: the
             # run itself cannot be trusted. The newline keeps a last stdout line with no newline of
             # its own from running into stderr's first line.
-            output = f"{out.tail}\n{err.tail}"
+            output = f"{run.stdout.tail}\n{run.stderr.tail}"
             return SuiteResult(
                 tests=1,
                 failures=0,
                 errors=1,
                 detail=(
                     f"the command's output contains a Godot {_SCRIPT_ERROR_MARKER!r} "
-                    f"(exit code {returncode}). GDScript has no exceptions, so a "
+                    f"(exit code {run.returncode}). GDScript has no exceptions, so a "
                     "runtime error aborts only the current function call at that statement: a "
                     "test harness that only checks its own recorded assertion failures can read "
                     f"a half-executed test as a pass. Output:\n{output.strip()[-2000:]}"
                 ),
-                runtime_error=_joined_excerpt(out, err),
+                runtime_error=run.script_error(),
             )
-        if returncode == 0:
+        if run.returncode == 0:
             return SuiteResult(tests=1, failures=0, errors=0)
         # One suite as a single pass/fail unit — per-test counts aren't available without a report.
         # Keep the command's own output so a *baseline* failure (a first-run misconfiguration, the
         # common case) can be diagnosed instead of vanishing. Stderr if it said anything at all.
-        detail = (err if err.seen else out).tail.strip()
-        return SuiteResult(tests=1, failures=1, errors=0, detail=detail[-2000:])
+        return SuiteResult(tests=1, failures=1, errors=0, detail=run.detail()[-2000:])
 
     def run_markers(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         """The marker run (`MarkerRunnable`): the same command as `run`. An exit code has no
@@ -457,10 +456,15 @@ def _after_last_break(text: str) -> str:
 class _StreamTail:
     """One output stream in bounded memory: whether it said anything, its tail, its first lines,
     and its first `_SCRIPT_ERROR_MARKER` line with the lines after it (``None`` until one is seen).
-    Lines are split the way `script_error_excerpt` splits them."""
+    Lines are split the way `script_error_excerpt` splits them. `found` holds each of `watch` that
+    appeared anywhere in the stream."""
 
-    def __init__(self) -> None:
+    def __init__(self, watch: Sequence[str] = ()) -> None:
         self.seen = False
+        self.found: set[str] = set()
+        self._watch = tuple(watch)
+        #: The end of what was read, long enough to find a watched string cut by a read.
+        self._carry = ""
         self._text = ""
         self._trailing = ""
         self.head: list[str] = []
@@ -501,6 +505,11 @@ class _StreamTail:
             self._trailing = text[len(stripped) :]
         else:
             self._trailing = (self._trailing + text)[-_TAIL_CHARS:]
+        if self._watch:
+            window = self._carry + text
+            self.found.update(needle for needle in self._watch if needle in window)
+            keep = max(map(len, self._watch)) - 1
+            self._carry = window[max(0, len(window) - keep) :]
         if self.excerpt is not None and len(self.excerpt) == _EXCERPT_LINES:
             return  # the excerpt is complete, and so is `head`: from here only the tail changes
         *lines, self._line = (self._line + text).split("\n")
@@ -550,26 +559,52 @@ def _joined_excerpt(out: _StreamTail, err: _StreamTail) -> str:
     return "\n".join([*out.excerpt, *bridge, *err.head][:_EXCERPT_LINES]).strip()
 
 
-def _run_keeping_tails(
-    command: list[str], cwd: str, budget: float
-) -> tuple[int, _StreamTail, _StreamTail]:
-    """Run `command` in `cwd` and return ``(exit code, stdout, stderr)``, each stream bounded.
-    Raises ``TimeoutExpired`` after killing the child, also when a grandchild holds the pipes past
-    the budget, and ``RuntimeError`` if a stream could not be read, since it could hide a marker."""
+@dataclass(frozen=True)
+class BoundedOutput:
+    """A finished command's exit code and the bounded part of its output `run_bounded` kept."""
+
+    returncode: int
+    stdout: _StreamTail
+    stderr: _StreamTail
+
+    def detail(self) -> str:
+        """The end of stderr if it said anything, else of stdout, stripped."""
+        return (self.stderr if self.stderr.seen else self.stdout).tail.strip()
+
+    def script_error(self) -> str:
+        """`script_error_excerpt` of stdout and stderr joined by a newline."""
+        return _joined_excerpt(self.stdout, self.stderr)
+
+    def saw(self, needle: str) -> bool:
+        """Whether either stream contained `needle`. Raises ``ValueError`` if it was not watched,
+        since the answer would then always be no."""
+        if needle not in self.stdout._watch:
+            raise ValueError(f"{needle!r} was not watched, so it could never be seen")
+        return needle in self.stdout.found or needle in self.stderr.found
+
+
+def run_bounded(
+    command: Sequence[str], cwd: str, timeout: float, watch: Sequence[str] = ()
+) -> BoundedOutput:
+    """Run `command` in `cwd`, keeping a bounded part of each stream, and noting which of `watch`
+    either one printed. Raises ``TimeoutExpired`` after killing the child, also when a grandchild
+    holds the pipes past `timeout`, and ``RuntimeError`` if a stream could not be read, since it
+    could hide a marker."""
+    command = list(command)
     process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    streams = (_StreamTail(), _StreamTail())
+    streams = (_StreamTail(watch), _StreamTail(watch))
     readers: list[threading.Thread] = []
-    deadline = time.monotonic() + budget
+    deadline = time.monotonic() + timeout
     try:
         for stream, pipe in zip(streams, (process.stdout, process.stderr), strict=True):
             reader = threading.Thread(target=stream.drain, args=(pipe,), daemon=True)
             reader.start()
             readers.append(reader)
-        process.wait(timeout=budget)
+        process.wait(timeout=timeout)
         for reader in readers:
             reader.join(max(0.0, deadline - time.monotonic()))
         if any(reader.is_alive() for reader in readers):
-            raise subprocess.TimeoutExpired(command, budget)
+            raise subprocess.TimeoutExpired(command, timeout)
     except BaseException:
         # A timeout, or Ctrl-C: never leave the child running, as `subprocess.run` never does.
         process.kill()
@@ -580,9 +615,9 @@ def _run_keeping_tails(
     for stream in streams:
         if stream.error is not None:
             raise RuntimeError(
-                f"could not read the test command's output: {stream.error}"
+                f"could not read the command's output: {stream.error}"
             ) from stream.error
-    return process.returncode, *streams
+    return BoundedOutput(process.returncode, *streams)
 
 
 def suite_seconds(raw: str | None) -> float:
