@@ -79,10 +79,12 @@ def _mutant_json(index: int, outcome: MutantOutcome, source_lines: list[str]) ->
     # statusReason — omitted when empty, so a bare `# gdmutant: ignore` adds no key.
     if outcome.verdict is Verdict.IGNORED and m.ignore_reason:
         mutant["statusReason"] = m.ignore_reason
+    if outcome.verdict is Verdict.ERROR and outcome.error:
+        mutant["statusReason"] = outcome.error
     # A survivor carries the same gap/risk/start narrative the console block shows, so the HTML
     # viewer explains *why it matters* and *where to start* — not just the diff. `description` gets
     # the gap; `statusReason` gets the risk + starting point. (Killed/timeout/invalid/error mutants
-    # need no such narrative; ignored keeps its own reason above.)
+    # need no such narrative; ignored and errored keep their own reasons above.)
     if outcome.verdict is Verdict.SURVIVED:
         # The report carries the file's own source, so the narrative gets the mutated line for
         # free — which is what lets an assert survivor explain itself in the JSON and the HTML

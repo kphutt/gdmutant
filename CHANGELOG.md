@@ -17,6 +17,11 @@ All notable changes to gdmutant are recorded here. The format follows
 - Under `--jobs`, each worker's Godot no longer writes its log file, `user://logs/godot.log`. A
   mutant that loops forever printing an error could grow that file until the disk was full, and a
   finished run deleted it anyway. The new `--godot-file-logging` flag turns it back on.
+- A mutant scored `error` now says why its run failed. The `--json` report carries the reason as
+  the mutant's `statusReason`, and a coverage self-check that stops on an `error` quotes it. When
+  Godot printed a `SCRIPT ERROR`, the GdUnit4 and GUT reason quotes the first one, not only the
+  end of the output. The GdUnit4 and GUT "wrote no report" message now names the report's path
+  inside the project, not an absolute one. (#359)
 - gdmutant is now verified against GdUnit4 6.2.3, up from 6.2.2.
 
 ### Fixed
