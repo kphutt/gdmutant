@@ -1636,7 +1636,8 @@ def _journal_entry(outcome: MutantOutcome, plan: MutantPlan) -> dict[str, Any]:
 def _resumed(journal: Journal, mutant: Mutant, plan: MutantPlan) -> MutantOutcome | None:
     """The verdict the journal holds for `mutant`, if it was reached under the same `plan`.
 
-    A different plan means coverage analysis decided otherwise this time, so the mutant runs again.
+    A different plan means coverage analysis decided otherwise this time, so the mutant runs again,
+    as does one whose run failed (`ERROR`).
     """
     entry = journal.recorded(mutant)
     if entry is None or entry.get("plan") != _plan_entry(plan):
@@ -1653,6 +1654,8 @@ def _resumed(journal: Journal, mutant: Mutant, plan: MutantPlan) -> MutantOutcom
         or not (error is None or isinstance(error, str))
     ):
         raise JournalRefused(f"{journal.path} has a verdict this version cannot read: {entry}")
+    if verdict is Verdict.ERROR:  # the run failed, so there is no verdict to keep
+        return None
     return MutantOutcome(mutant, verdict, selected=selected, error=error, **flags)
 
 

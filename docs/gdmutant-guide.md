@@ -168,13 +168,14 @@ report for the whole run.
 - The file is refused, with exit 2, if it was written for different sources, or if anything that
   can change a verdict differs:
   - a source file being mutated
-  - after the baseline, a script, scene, resource or shader in the project, tests included, or
-    `project.godot`. Folders whose names start with `.`, such as `.godot`, are not checked. A
-    suite that saves files into the project saves the same ones each time, so it can still resume.
+  - a script, scene, resource or shader in the project, tests included, or `project.godot`.
+    Folders whose names start with `.`, such as `.godot`, are not checked, and neither is a file
+    the baseline changes, since that is one the suite writes itself.
   - the runner, `--command`, `--godot`, `--tests`, `--timeout`, `--since` or `--exclude-tests`
   - the coverage analysis settings, or the gdmutant version
 
   `--jobs` may differ.
+- A mutant whose run failed (an `error` verdict) runs again.
 - A verdict is written only once the run after it has finished, and not at all once gdmutant has
   begun to stop. So a run that stops loses the last verdict of each worker, as well as the mutants
   still running, and a suite that Ctrl-C cut short is not written as a verdict.

@@ -237,7 +237,16 @@ def test_a_file_that_is_not_a_journal_is_refused(tmp_path: Path, content: bytes)
     assert (tmp_path / "run.journal").read_bytes() == content  # left as it was
 
 
-@pytest.mark.parametrize("entry", ["garbage", '{"something": 1}', '{"confirmed": ["a"]}'])
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "garbage",
+        '{"something": 1}',
+        '{"confirmed": ["a"]}',
+        '{"files": {}}',
+        '{"written": ["a.tres"]}',  # only ever follows the files it adds to
+    ],
+)
 def test_an_unreadable_entry_refuses_the_journal(tmp_path: Path, entry: str) -> None:
     sources = _project(tmp_path)
     _open(tmp_path, sources).close()
@@ -257,7 +266,6 @@ def test_an_unreadable_entry_refuses_the_journal(tmp_path: Path, entry: str) -> 
         MutantOutcome(_MUTANT, Verdict.SURVIVED, self_checked=True),
         MutantOutcome(_MUTANT, Verdict.TIMEOUT, selected=2, over_budget=True),
         MutantOutcome(_MUTANT, Verdict.KILLED, order_coupled=True),
-        MutantOutcome(_MUTANT, Verdict.ERROR, error="Godot fell over"),
     ],
 )
 def test_a_recorded_verdict_reads_back_as_it_was(tmp_path: Path, outcome: MutantOutcome) -> None:
@@ -290,6 +298,20 @@ def test_a_verdict_reached_under_another_plan_is_not_reused(tmp_path: Path) -> N
     assert _resumed(journal, mutant, WHOLE_SUITE) is None
     assert _resumed(journal, mutant, MutantPlan(files=("a",))) is not None
     journal.close()
+
+
+def test_a_run_that_failed_is_run_again(tmp_path: Path) -> None:
+    sources = _project(tmp_path)
+    mutant = _mutant(tmp_path)
+    journal = _open(tmp_path, sources)
+    failed = MutantOutcome(mutant, Verdict.ERROR, error="Godot fell over")
+    journal.record(mutant, _journal_entry(failed, WHOLE_SUITE))
+    assert _resumed(journal, mutant, WHOLE_SUITE) is None
+    journal.record(mutant, _journal_entry(MutantOutcome(mutant, Verdict.KILLED), WHOLE_SUITE))
+    journal.close()
+    again = _open(tmp_path, sources)  # the later verdict for the same mutant wins
+    assert _resumed(again, mutant, WHOLE_SUITE) == MutantOutcome(mutant, Verdict.KILLED)
+    again.close()
 
 
 @pytest.mark.parametrize(
@@ -374,10 +396,13 @@ class _DiesAfter:
     marker: str
     dies_on: int | None = None
     runs: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
-        self.runs += 1
-        if self.runs == self.dies_on:
+        with self._lock:  # --jobs workers count at once
+            self.runs += 1
+            run = self.runs
+        if run == self.dies_on:
             raise _Killed
         text = (Path(project_dir) / self.relname).read_text(encoding="utf-8")
         return SuiteResult(tests=3, failures=int(self.marker in text), errors=0)
@@ -475,18 +500,23 @@ def test_a_resumed_multi_file_run_gives_every_file_its_verdicts(tmp_path: Path) 
     class _Both:
         dies_on: int | None = None
         runs: int = 0
+        _lock: threading.Lock = field(default_factory=threading.Lock)
 
         def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
-            self.runs += 1
-            if self.runs == self.dies_on:
+            with self._lock:
+                self.runs += 1
+                run = self.runs
+            if run == self.dies_on:
                 raise _Killed
             texts = [(Path(project_dir) / n).read_text(encoding="utf-8") for n in files]
             failed = any(">=" in t or "- 1" in t for t in texts)
             return SuiteResult(tests=3, failures=int(failed), errors=0)
 
+    unbroken_runner = _Both()
     unbroken = _run_paths(
-        str(tmp_path / "u"), _project(tmp_path / "u", files), _Both(), ADAPTER, jobs=2
+        str(tmp_path / "u"), _project(tmp_path / "u", files), unbroken_runner, ADAPTER, jobs=2
     )
+    mutants = unbroken_runner.runs - 1
     root = tmp_path / "r"
     sources = _project(root, files)
     journal = _open(root, sources)
@@ -494,9 +524,13 @@ def test_a_resumed_multi_file_run_gives_every_file_its_verdicts(tmp_path: Path) 
         _run_paths(str(root), sources, _Both(dies_on=5), ADAPTER, jobs=2, journal=journal)
     journal.close()
     journal = _open(root, sources)
-    resumed = _run_paths(str(root), sources, _Both(), ADAPTER, jobs=2, journal=journal)
+    recorded = journal.resumed
+    assert recorded >= 1
+    runner = _Both()
+    resumed = _run_paths(str(root), sources, runner, ADAPTER, jobs=2, journal=journal)
     journal.close()
     assert [_verdicts(r) for r in resumed.values()] == [_verdicts(r) for r in unbroken.values()]
+    assert runner.runs == 1 + mutants - recorded  # the baseline, then only what was missing
 
 
 # --- the CLI ------------------------------------------------------------------------------------
@@ -561,16 +595,50 @@ def test_a_journal_that_stops_taking_writes_ends_the_run_with_the_source_restore
     path.write_text(_SOURCE, encoding="utf-8")
     journal = str(tmp_path / "run.journal")
     Journal.open(journal, str(tmp_path), {str(path): _SOURCE}, {}, __version__).close()
+    synced: list[int] = []
 
-    def full(fd: int) -> None:
-        raise OSError(28, "No space left on device")
+    def fills_after_the_project_files(fd: int) -> None:
+        synced.append(fd)
+        if len(synced) > 1:  # the project's files go in; the first verdict does not
+            raise OSError(28, "No space left on device")
 
     # Only the journal's own view of `os`: the source file's restore must still work.
-    monkeypatch.setattr(journal_mod, "os", SimpleNamespace(fsync=full))
+    monkeypatch.setattr(journal_mod, "os", SimpleNamespace(fsync=fills_after_the_project_files))
     runner = MarkerRunner(str(path), ">=")
     assert run_mutation(str(path), str(tmp_path), runner, resume=journal, resume_settings={}) == 2
     assert f"could not write to the journal {journal}" in capsys.readouterr().err
+    assert len(synced) == 2  # it failed on a verdict, mid-run
     assert path.read_text(encoding="utf-8") == _SOURCE
+
+
+class _FullDisk:
+    """A file handle on a disk that is full: every write is buffered, and nothing reaches it."""
+
+    def __init__(self) -> None:
+        self.writes = 0
+
+    def write(self, text: str) -> int:
+        self.writes += 1
+        return len(text)
+
+    def flush(self) -> None:
+        raise OSError(28, "No space left on device")
+
+    def close(self) -> None:
+        self.flush()  # as a real handle does, with the unwritten text still buffered
+
+
+def test_a_journal_takes_no_write_after_one_failed_and_still_closes(tmp_path: Path) -> None:
+    journal = _open(tmp_path, _project(tmp_path))
+    journal.close()
+    disk = _FullDisk()
+    journal._handle = disk  # type: ignore[assignment]
+    with pytest.raises(JournalRefused, match="No space left"):
+        journal.record(_mutant(tmp_path), {"verdict": "killed"})
+    with pytest.raises(JournalRefused, match="could not write to the journal"):
+        journal.confirm(("tests/a.gd",), True)
+    assert disk.writes == 1  # a second write could have landed after half a line
+    journal.close()  # says nothing more: the failed write already did
 
 
 def test_main_hands_the_journal_and_every_verdict_changing_setting_to_the_run(
@@ -895,24 +963,66 @@ def test_run_mutation_refuses_a_journal_once_a_test_changed(
 
 
 @dataclass
-class _WritesIntoTheProject(MarkerRunner):
-    """`MarkerRunner`, whose suite saves a resource into the project every time it runs."""
+class _WritesIntoTheProject:
+    """Kills when ``>=`` is in the f.gd it is handed, and saves a resource into that project on
+    every run, stamped with the run's number."""
+
+    runs: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
-        saved = Path(project_dir) / "test_out" / "state.tres"
+        with self._lock:
+            self.runs += 1
+            run = self.runs
+        root = Path(project_dir)
+        saved = root / "test_out" / "state.tres"
         saved.parent.mkdir(exist_ok=True)
-        saved.write_text("[resource]\n", encoding="utf-8")
-        return super().run(project_dir, timeout)
+        saved.write_text(f"[resource]\nrun = {run}\n", encoding="utf-8")
+        killed = ">=" in (root / "f.gd").read_text(encoding="utf-8")
+        return SuiteResult(tests=3, failures=int(killed), errors=0)
 
 
+@pytest.mark.parametrize("jobs", [(1, 1), (2, 1), (1, 2), (2, 2)], ids=str)
 def test_a_suite_that_writes_into_the_project_can_still_be_resumed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], jobs: tuple[int, int]
+) -> None:
+    path = tmp_path / "f.gd"
+    path.write_text(_SOURCE, encoding="utf-8")
+    test = tmp_path / "tests" / "test_f.gd"
+    test.parent.mkdir()
+    test.write_text("extends Node\n", encoding="utf-8")
+    journal = str(tmp_path / "run.journal")
+    runner = _WritesIntoTheProject()
+    # Under --jobs the suite writes only into copies, so the project is left as it was.
+    for run_jobs in (*jobs, 1, 1):
+        assert run_mutation(str(path), str(tmp_path), runner, resume=journal, jobs=run_jobs) == 0
+    assert capsys.readouterr().err.count(f"Resuming {journal}: ") == 3
+    test.write_text("extends Node\nfunc test_more():\n\tpass\n", encoding="utf-8")
+    assert run_mutation(str(path), str(tmp_path), runner, resume=journal) == 2
+    err = capsys.readouterr().err
+    assert "tests/test_f.gd has changed since" in err
+    assert "state.tres" not in err
+
+
+@dataclass
+class _SavesTheSource:
+    """Kills on ``>=``, and saves the f.gd it ran against into the project, so an unmutated run
+    saves the same file each time and a mutant's run leaves a different one behind."""
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        text = (Path(project_dir) / "f.gd").read_text(encoding="utf-8")
+        (Path(project_dir) / "saved.tres").write_text(text, encoding="utf-8")
+        return SuiteResult(tests=3, failures=int(">=" in text), errors=0)
+
+
+def test_a_file_a_mutant_left_behind_is_one_the_resumed_baseline_rewrites(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     path = tmp_path / "f.gd"
     path.write_text(_SOURCE, encoding="utf-8")
+    (tmp_path / "saved.tres").write_text(_SOURCE, encoding="utf-8")  # an earlier run's
     journal = str(tmp_path / "run.journal")
-    runner = _WritesIntoTheProject(str(path), ">=")
-    assert run_mutation(str(path), str(tmp_path), runner, resume=journal) == 0
-    capsys.readouterr()
-    assert run_mutation(str(path), str(tmp_path), runner, resume=journal) == 0
+    assert run_mutation(str(path), str(tmp_path), _SavesTheSource(), resume=journal) == 0
+    assert (tmp_path / "saved.tres").read_text(encoding="utf-8") != _SOURCE  # the last mutant's
+    assert run_mutation(str(path), str(tmp_path), _SavesTheSource(), resume=journal) == 0
     assert f"Resuming {journal}: " in capsys.readouterr().err
