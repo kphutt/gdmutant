@@ -172,6 +172,7 @@ def test_a_different_setting_refuses_the_journal(tmp_path: Path) -> None:
     with pytest.raises(JournalRefused) as changed:
         _open(tmp_path, sources, runner="gut", timeout="None")
     assert "runner was 'gdunit4', and is now 'gut'" in str(changed.value)
+    assert "git checkout" not in str(changed.value)  # no source changed, so nothing to restore
     with pytest.raises(JournalRefused) as unset:
         _open(tmp_path, sources, runner="gdunit4")
     assert "timeout was 'None', and is now unset" in str(unset.value)

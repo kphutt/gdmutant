@@ -262,21 +262,28 @@ def _check_header(path: str, line: str, expected: dict[str, Any]) -> None:
     sources = found.get("sources")
     recorded: dict[str, str] = sources if isinstance(sources, dict) else {}
     differences = []
+    changed: list[str] = []
     if sorted(recorded) != sorted(expected["sources"]):
         differences.append(
             f"it mutated {', '.join(sorted(recorded))}, and this run mutates "
             f"{', '.join(sorted(expected['sources']))}"
         )
     else:
-        differences += _file_differences(recorded, expected["sources"])
-    differences += _setting_differences(found.get("settings"), expected["settings"])
+        changed = _file_differences(recorded, expected["sources"])
+    differences += changed + _setting_differences(found.get("settings"), expected["settings"])
     if differences:
+        # Only a changed source can be a mutant a killed run left behind.
+        restore = (
+            "A run that was stopped while it mutated a file in place can leave a mutant in it: if "
+            "so, restore that file (for example with git checkout), then run again. "
+            if changed
+            else ""
+        )
         raise JournalRefused(
             f"{path} was written for a different run:\n"
             + "".join(f"  {difference}\n" for difference in differences)
-            + "A run that was stopped while it mutated a file in place can leave a mutant in it: "
-            "if so, restore that file (for example with git checkout), then run again. To start "
-            "over instead, delete the journal or name a new one."
+            + restore
+            + "To start over, delete the journal or name a new one."
         )
 
 
