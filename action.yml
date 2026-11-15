@@ -2,15 +2,15 @@
 #
 # A consumer runs mutation testing on their Godot project in a few lines of YAML:
 #
-#     - uses: kphutt/gdmutant@b210ecfa725d138bfdb2e29ac7e1266ea1052d66 # v0.1.7
+#     - uses: kphutt/gdmutant@v0.1.7
 #       with:
 #         godot-version: 4.7.0
 #         project-path: ./
 #         paths: scripts            # the source to mutate (default: the whole project)
 #
-# Consumers pin the commit SHA (or a full version tag such as `@v0.1.0`). There is no floating `@v1`
-# or `@v0` tag: every published tag names a full version and is immutable, so this repo cannot
-# produce a moving major tag. See docs/gdmutant-guide.md's "GitHub Actions" section.
+# Consumers pin a full release tag such as `@v0.1.7` (or that release's commit SHA). There is no
+# floating `@v1` or `@v0` tag: every published tag names a full version and cannot be moved, so this
+# repo cannot produce a moving major tag. See docs/gdmutant-guide.md's "GitHub Actions" section.
 #
 # The action sets up Godot, installs gdmutant, runs it, and writes the surviving mutants — WITH their
 # gap/risk/start explanations — to the GitHub Actions job summary ($GITHUB_STEP_SUMMARY), right where
@@ -193,9 +193,9 @@ runs:
                 # the gdmutant it runs are genuinely the same version, not "whatever ref resolved".
                 return f"gdmutant=={action_ref.removeprefix('v')}"
 
-            # A SHA-pinned `uses:` line (the documented, recommended way to pin — see the guide's
-            # Pinning section) or a branch: PyPI has no notion of an arbitrary commit, so install
-            # gdmutant's own code from that exact ref instead.
+            # A SHA-pinned `uses:` line (allowed for a policy that requires commit IDs — see the
+            # guide's Pinning section) or a branch: PyPI has no notion of an arbitrary commit, so
+            # install gdmutant's own code from that exact ref instead.
             return f"git+https://github.com/kphutt/gdmutant@{action_ref}"
 
 

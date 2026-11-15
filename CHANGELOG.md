@@ -12,6 +12,10 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The GitHub Action examples now use the release tag, such as `@v0.1.7`, instead of a commit ID.
+
 ## [0.1.7] - 2026-11-14
 
 Fixes for parallel runs and noisy test output.
