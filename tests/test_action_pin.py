@@ -85,7 +85,7 @@ def test_the_guide_says_there_is_no_floating_tag() -> None:
     # The claim a consumer needs, in the place they will look for it.
     guide = (REPO / "docs" / "gdmutant-guide.md").read_text(encoding="utf-8")
     assert "## GitHub Actions" in guide
-    assert "`@v1` or `@v0`" in guide
+    assert "no major-version tags" in guide
 
 
 def test_the_guide_says_the_tags_cannot_move_and_how_to_pin_a_commit_instead() -> None:

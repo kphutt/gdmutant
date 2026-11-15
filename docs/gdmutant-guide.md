@@ -800,16 +800,11 @@ Give the gdmutant step an `id` to reach its output from a later step:
 
 ### Pinning
 
-Pin the full `vX.Y.Z` release tag shown above (e.g. `@v0.1.7`). Never `@v1` or `@v0`: a
-tag ruleset blocks deleting or re-pointing any tag for anyone acting normally, and the release
-guard rejects a tag that doesn't equal the packaged version, so a floating major tag is not
-something this repo can produce through ordinary use.
-gdmutant's release tags cannot be moved or deleted, and releases from 0.1.8 on are also
-immutable. If your policy requires commit IDs, pin that release's commit instead
-(`kphutt/gdmutant@<sha> # v0.1.7`).
+Pin the exact release tag, such as `@v0.1.7`. gdmutant's release tags cannot be moved or
+deleted, and releases from 0.1.8 on are also immutable. There are no major-version tags such as
+`@v1`. If your policy requires commit IDs, pin the release's commit instead.
 
-The bumps a floating tag would have handed you come from Dependabot instead, as PRs you review
-before taking:
+Dependabot can keep the pin up to date, as PRs you review before taking:
 
 ```yaml
 # .github/dependabot.yml
