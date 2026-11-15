@@ -13,15 +13,15 @@ import contextlib
 import io
 import math
 import os
-import signal
 import subprocess
-import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import IO, Final, Protocol, runtime_checkable
 from xml.etree import ElementTree
+
+from gdmutant.engine import process_tree
 
 #: What a GDScript runtime error prints to stdout/stderr (verified live, Godot 4.7). GDScript has no
 #: exceptions: a runtime error (a null access, an out-of-range index, …) aborts only the *current
@@ -586,30 +586,9 @@ class BoundedOutput:
         return needle in self.stdout.found or needle in self.stderr.found
 
 
-def _kill_tree(process: subprocess.Popen[bytes]) -> None:
-    """Stop `process` and every process it started, so none keeps holding files in a folder
-    gdmutant is about to delete. On Windows, children of a `process` that has already exited
-    are out of reach: `taskkill` finds a tree only through a live parent."""
-    try:
-        if sys.platform == "win32":
-            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-                subprocess.run(
-                    ["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                    timeout=_KILL_GRACE_SECS,
-                )
-        else:
-            with contextlib.suppress(OSError):  # e.g. the whole group has already exited
-                os.killpg(process.pid, signal.SIGKILL)
-    finally:
-        process.kill()  # even if taskkill failed, hung, or was interrupted
-
-
 #: Every command `run_bounded` is waiting on. Only the main thread gets Ctrl-C, but under --jobs
 #: worker threads run the commands, so the main thread stops them through this.
-_RUNNING: set[subprocess.Popen[bytes]] = set()
+_RUNNING: list[process_tree.ProcessTree] = []
 _RUNNING_LOCK = threading.Lock()
 _stopping = False
 
@@ -625,9 +604,9 @@ def stop_running_commands() -> None:
     with _RUNNING_LOCK:
         _stopping = True
         running = list(_RUNNING)
-    for process in running:
+    for tree in running:
         with contextlib.suppress(OSError):
-            _kill_tree(process)
+            tree.kill()
 
 
 def allow_commands() -> None:
@@ -641,41 +620,40 @@ def run_bounded(
     command: Sequence[str], cwd: str, timeout: float, watch: Sequence[str] = ()
 ) -> BoundedOutput:
     """Run `command` in `cwd`, keeping a bounded part of each stream, and noting which of `watch`
-    either one printed. Raises ``TimeoutExpired`` after stopping the child and what it started
-    (see `_kill_tree`), also when a grandchild holds the pipes past `timeout`, and
-    ``RuntimeError`` if a stream could not be read, since it could hide a marker."""
+    either one printed. Raises ``TimeoutExpired`` after stopping the child and everything it
+    started, also when a grandchild holds the pipes past `timeout`, and ``RuntimeError`` if a
+    stream could not be read, since it could hide a marker."""
     command = list(command)
     refused = CommandsStopped(f"gdmutant is stopping, so {command[0]} was not run")
     with _RUNNING_LOCK:
         if _stopping:
             raise refused
-    process = subprocess.Popen(
-        command,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=sys.platform != "win32",  # a process group `_kill_tree` can stop whole
-    )
+    tree = process_tree.start(command, cwd)
     with _RUNNING_LOCK:
         stopping = _stopping
         if not stopping:
-            _RUNNING.add(process)
+            _RUNNING.append(tree)
     if stopping:  # a stop began while it started, after the snapshot: stop it here
-        _kill_tree(process)
-        process.wait()
-        for pipe in filter(None, (process.stdout, process.stderr)):
-            pipe.close()  # not read: a grandchild may still hold them
+        try:
+            tree.kill()
+            tree.process.wait()
+            for pipe in filter(None, (tree.process.stdout, tree.process.stderr)):
+                pipe.close()  # not read: a grandchild may still hold them
+        finally:
+            tree.close()
         raise refused
     try:
-        return _wait_bounded(process, command, timeout, watch)
+        return _wait_bounded(tree, command, timeout, watch)
     finally:
         with _RUNNING_LOCK:
-            _RUNNING.discard(process)
+            _RUNNING.remove(tree)
+        tree.close()
 
 
 def _wait_bounded(
-    process: subprocess.Popen[bytes], command: list[str], timeout: float, watch: Sequence[str]
+    tree: process_tree.ProcessTree, command: list[str], timeout: float, watch: Sequence[str]
 ) -> BoundedOutput:
+    process = tree.process
     streams = (_StreamTail(watch), _StreamTail(watch))
     readers: list[threading.Thread] = []
     deadline = time.monotonic() + timeout
@@ -691,7 +669,7 @@ def _wait_bounded(
             raise subprocess.TimeoutExpired(command, timeout)
     except BaseException:
         # A timeout, or Ctrl-C: never leave the child, or anything it started, running.
-        _kill_tree(process)
+        tree.kill()
         process.wait()
         for reader in readers:
             reader.join(_KILL_GRACE_SECS)
