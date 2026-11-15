@@ -1,18 +1,24 @@
 """Tests for ``--resume``: the journal file, and a run that picks up where another stopped."""
 
 import json
+import threading
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from conftest import MarkerRunner
+from test_selection import _KILL_5, A, B, Lab
+from test_selection import _SOURCE as _LAB_SOURCE
 
 import gdmutant.cli as cli
 import gdmutant.engine.journal as journal_mod
 from gdmutant import __version__
 from gdmutant.adapters.gdscript import ADAPTER
 from gdmutant.cli import main, run_mutation, run_mutation_paths
+from gdmutant.engine.coverage import CoverageAnalysis
 from gdmutant.engine.journal import Journal, JournalRefused, source_key
 from gdmutant.engine.loop import (
     WHOLE_SUITE,
@@ -21,13 +27,19 @@ from gdmutant.engine.loop import (
     MutationRun,
     Verdict,
     _journal_entry,
+    _Recorder,
     _resumed,
     _Trust,
 )
 from gdmutant.engine.loop import run as _run
 from gdmutant.engine.loop import run_paths as _run_paths
 from gdmutant.engine.mutants import Mutant
-from gdmutant.engine.runner import SuiteResult
+from gdmutant.engine.runner import (
+    SuiteResult,
+    allow_commands,
+    commands_stopping,
+    stop_running_commands,
+)
 from gdmutant.engine.spans import Span
 
 _SOURCE = "func f(a, b) -> bool:\n\treturn a > b and a < b\n"
@@ -114,12 +126,39 @@ def test_a_different_set_of_sources_refuses_the_journal(tmp_path: Path) -> None:
     _open(tmp_path, {p: t for p, t in both.items() if p.endswith("f.gd")}).close()
     with pytest.raises(JournalRefused) as added:
         _open(tmp_path, both)
-    assert "g.gd was not part of it" in str(added.value)
+    assert "it mutated f.gd, and this run mutates f.gd, g.gd" in str(added.value)
     (tmp_path / "run.journal").unlink()
     _open(tmp_path, both).close()
     with pytest.raises(JournalRefused) as dropped:
         _open(tmp_path, {p: t for p, t in both.items() if p.endswith("f.gd")})
-    assert "g.gd was part of it" in str(dropped.value)
+    assert "it mutated f.gd, g.gd, and this run mutates f.gd" in str(dropped.value)
+    assert "g.gd is gone since" in str(dropped.value)
+
+
+def test_a_changed_test_file_refuses_the_journal(tmp_path: Path) -> None:
+    sources = _project(tmp_path)
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_f.gd").write_text("extends Node\n", encoding="utf-8")
+    journal = str(tmp_path / "run.journal")
+    others = [str(tests / "test_f.gd")]
+    Journal.open(journal, str(tmp_path), sources, _SETTINGS, __version__, others).close()
+    Journal.open(journal, str(tmp_path), sources, _SETTINGS, __version__, others).close()
+    (tests / "test_f.gd").write_text("extends Node\nfunc test_more():\n\tpass\n", encoding="utf-8")
+    with pytest.raises(JournalRefused) as changed:
+        Journal.open(journal, str(tmp_path), sources, _SETTINGS, __version__, others)
+    assert "tests/test_f.gd has changed since" in str(changed.value)
+    (tests / "test_g.gd").write_text("extends Node\n", encoding="utf-8")
+    with pytest.raises(JournalRefused) as added:
+        Journal.open(
+            journal,
+            str(tmp_path),
+            sources,
+            _SETTINGS,
+            __version__,
+            [*others, str(tests / "test_g.gd")],
+        )
+    assert "tests/test_g.gd is new since" in str(added.value)
 
 
 def test_a_different_setting_refuses_the_journal(tmp_path: Path) -> None:
@@ -179,8 +218,10 @@ def test_an_empty_file_starts_a_new_journal(tmp_path: Path) -> None:
         b'{"journal": "something else"}\n',
         b"[1, 2]\n",
         b"\xff\xfe\n",
+        b'{\n  "schemaVersion": "2"\n}',
+        b'{"journal": "gdmutant journal"}',
     ],
-    ids=["text", "other-json", "not-an-object", "not-utf8"],
+    ids=["text", "other-json", "not-an-object", "not-utf8", "a-report", "one-line"],
 )
 def test_a_file_that_is_not_a_journal_is_refused(tmp_path: Path, content: bytes) -> None:
     sources = _project(tmp_path)
@@ -296,6 +337,8 @@ def test_a_confirmed_set_of_test_files_is_not_confirmed_again_after_a_resume(
     trust = _Trust(first, journal)  # type: ignore[arg-type]
     assert not trust.confirms(str(tmp_path), ("tests/a.gd",), 10.0)
     assert not trust.confirms(str(tmp_path), ("tests/a.gd",), 10.0)  # cached, not recorded twice
+    _Recorder(journal, trust).flush()
+    _Recorder(journal, trust).flush()
     journal.close()
     assert first.asked == [("tests/a.gd",)]
     again = _open(tmp_path, sources)
@@ -368,7 +411,7 @@ def test_a_resumed_run_gives_the_verdicts_an_unbroken_run_gives_and_runs_only_th
             str(root),
             path,
             _LONGER,
-            _DiesAfter("f.gd", ">=", dies_on=4),
+            _DiesAfter("f.gd", ">=", dies_on=7),
             ADAPTER,
             jobs=jobs,
             journal=journal,
@@ -563,3 +606,268 @@ def test_dry_run_says_it_ignores_resume(tmp_path: Path, capsys: pytest.CaptureFi
     assert main(["run", str(path), "--dry-run", "--resume", str(tmp_path / "j")]) == 0
     assert "--resume is ignored" in capsys.readouterr().err
     assert not (tmp_path / "j").exists()
+
+
+# --- what a stopped run must never write --------------------------------------------------------
+
+
+def test_a_verdict_is_written_one_run_behind_and_never_once_a_stop_began(tmp_path: Path) -> None:
+    sources = _project(tmp_path)
+    journal = _open(tmp_path, sources)
+    first, second, third = (
+        Mutant(str(tmp_path / "f.gd"), Span(2, column, 2, column + 1), "comparison", ">", ">=")
+        for column in (11, 12, 13)
+    )
+    recorder = _Recorder(journal, None)
+    recorder.hold(MutantOutcome(first, Verdict.SURVIVED), WHOLE_SUITE)
+    assert journal.recorded(first) is None  # its suite may yet turn out to have been stopped
+    recorder.hold(MutantOutcome(second, Verdict.SURVIVED), WHOLE_SUITE)
+    assert journal.recorded(first) is not None
+    assert journal.recorded(second) is None
+    stop_running_commands()
+    try:
+        recorder.hold(MutantOutcome(third, Verdict.KILLED), WHOLE_SUITE)
+        recorder.flush()
+    finally:
+        allow_commands()
+    assert journal.recorded(second) is None
+    assert journal.recorded(third) is None
+    journal.close()
+
+
+def test_two_workers_confirming_one_set_at_once_journal_it_once(tmp_path: Path) -> None:
+    @dataclass
+    class _Overtaken:
+        """Another worker answers for the same set while this confirmation is still running."""
+
+        other: _Trust
+
+        def run_selected(
+            self, project_dir: str, files: tuple[str, ...], timeout: float | None = None
+        ) -> SuiteResult:
+            assert not self.other.confirms(project_dir, files, 10.0)  # the other worker: red
+            return SuiteResult(tests=1, failures=0, errors=0)  # and this one: green
+
+    trust = _Trust(_Confirming(clean=False))  # type: ignore[arg-type]
+    racing = _Trust(_Overtaken(trust))  # type: ignore[arg-type]
+    racing._clean = trust._clean  # one cache, two runners: two workers sharing one _Trust
+    racing._unrecorded = trust._unrecorded
+    racing._lock = trust._lock
+    assert not racing.confirms(str(tmp_path), ("tests/a.gd",), 10.0)  # the first answer stands
+    assert trust.take_unrecorded() == [(("tests/a.gd",), False)]
+
+
+class _AnsweredAsTheStopBegan:
+    """A `_Trust` whose last answer came from a confirmation run the stop had just killed."""
+
+    def take_unrecorded(self) -> list[tuple[tuple[str, ...], bool]]:
+        stop_running_commands()
+        return [(("tests/a.gd",), False)]
+
+
+def test_an_answer_from_a_stopped_confirmation_is_not_journaled(tmp_path: Path) -> None:
+    journal = _open(tmp_path, _project(tmp_path))
+    try:
+        _Recorder(journal, _AnsweredAsTheStopBegan()).flush()  # type: ignore[arg-type]
+    finally:
+        allow_commands()
+    assert journal.confirmations == {}
+    journal.close()
+
+
+def _killed_verdicts(journal: str) -> int:
+    lines = Path(journal).read_text(encoding="utf-8").splitlines()
+    return sum('"verdict": "killed"' in line for line in lines)
+
+
+@dataclass
+class _InterruptedSerially:
+    """Every mutant survives. Run `interrupted` reports a failure, as a suite stopped by the
+    console's Ctrl-C does on Windows, and the next run never gets going: the interrupt arrives."""
+
+    interrupted: int
+    runs: int = 0
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        self.runs += 1
+        if self.runs == self.interrupted + 1:
+            raise _Killed
+        return SuiteResult(tests=3, failures=int(self.runs == self.interrupted), errors=0)
+
+
+def test_a_suite_the_interrupt_killed_is_not_journaled_as_a_kill(tmp_path: Path) -> None:
+    sources = _project(tmp_path, {"f.gd": _LONGER})
+    journal = _open(tmp_path, sources)
+    with pytest.raises(_Killed):
+        _run(
+            str(tmp_path),
+            str(tmp_path / "f.gd"),
+            _LONGER,
+            _InterruptedSerially(4),
+            ADAPTER,
+            journal=journal,
+        )
+    journal.close()
+    assert _killed_verdicts(str(tmp_path / "run.journal")) == 0
+    assert _open(tmp_path, sources).resumed == 2  # the two runs before it, and nothing else
+
+
+@dataclass
+class _StoppedUnderJobs:
+    """Every mutant survives, until run `stops_on` stops every command, as Ctrl-C does under
+    --jobs, and dies. From then on a run reports a failure, as a stopped suite does."""
+
+    stops_on: int
+    runs: int = 0
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        with self.lock:
+            self.runs += 1
+            stopping = self.runs == self.stops_on
+        if stopping:
+            stop_running_commands()
+            raise _Killed
+        time.sleep(0.01)
+        return SuiteResult(tests=3, failures=int(commands_stopping()), errors=0)
+
+
+def test_suites_a_stop_killed_under_jobs_are_not_journaled_as_kills(tmp_path: Path) -> None:
+    sources = _project(tmp_path, {"f.gd": _LONGER})
+    journal = _open(tmp_path, sources)
+    try:
+        with pytest.raises(_Killed):
+            _run(
+                str(tmp_path),
+                str(tmp_path / "f.gd"),
+                _LONGER,
+                _StoppedUnderJobs(5),
+                ADAPTER,
+                jobs=3,
+                journal=journal,
+            )
+    finally:
+        allow_commands()
+    journal.close()
+    assert _killed_verdicts(str(tmp_path / "run.journal")) == 0
+
+
+# --- resuming with coverage analysis on ---------------------------------------------------------
+
+
+@dataclass
+class _DyingLab(Lab):
+    """`Lab`, dying on its suite run number `dies_on`."""
+
+    dies_on: int | None = None
+    calls: int = 0
+
+    def _tick(self) -> None:
+        self.calls += 1
+        if self.calls == self.dies_on:
+            raise _Killed
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        self._tick()
+        return super().run(project_dir, timeout)
+
+    def run_selected(
+        self, project_dir: str, files: Sequence[str], timeout: float | None = None
+    ) -> SuiteResult:
+        self._tick()
+        return super().run_selected(project_dir, files, timeout)
+
+
+def _lab(dies_on: int | None = None) -> _DyingLab:
+    # Line 5 is reached by a.gd, which fails on its own, so its kills are order-coupled. Line 9 is
+    # reached by nothing, so its mutants are no coverage, and the self-check samples them.
+    return _DyingLab(
+        dirty={(A,)}, forward={A: {0}, B: set()}, killers={_KILL_5: A}, dies_on=dies_on
+    )
+
+
+def _lab_run(lab: _DyingLab, project: Path, journal: Journal | None) -> MutationRun:
+    target = project / "t.gd"
+    target.write_text(_LAB_SOURCE, encoding="utf-8")  # as an interrupted run restores it
+    lab.target = target
+    return _run(
+        str(project),
+        str(target),
+        _LAB_SOURCE,
+        lab,
+        ADAPTER,
+        coverage=CoverageAnalysis.PER_FILE,
+        marker=lab,
+        journal=journal,
+    )
+
+
+def _everything(result: MutationRun) -> list[object]:
+    return [
+        (o.verdict, o.self_checked, o.selected, o.order_coupled, o.over_budget, o.error)
+        for o in result.outcomes
+    ] + [result.order_coupled_sets]
+
+
+def test_a_resumed_per_file_run_gives_the_report_an_unbroken_one_gives(tmp_path: Path) -> None:
+    (tmp_path / "u").mkdir()
+    unbroken_lab = _lab()
+    unbroken = _lab_run(unbroken_lab, tmp_path / "u", None)
+    assert {o.verdict for o in unbroken.outcomes} >= {Verdict.KILLED, Verdict.NO_COVERAGE}
+    assert unbroken.order_coupled_sets == ((A,),)
+    assert any(o.self_checked for o in unbroken.outcomes)
+
+    project = tmp_path / "r"
+    project.mkdir()
+    sources = {str(project / "t.gd"): _LAB_SOURCE}
+    journal = Journal.open(str(tmp_path / "run.journal"), str(project), sources, {}, __version__)
+    with pytest.raises(_Killed):
+        _lab_run(_lab(dies_on=unbroken_lab.calls - 2), project, journal)
+    journal.close()
+
+    journal = Journal.open(str(tmp_path / "run.journal"), str(project), sources, {}, __version__)
+    assert journal.resumed
+    resumed_lab = _lab()
+    resumed = _lab_run(resumed_lab, project, journal)
+    journal.close()
+    assert _everything(resumed) == _everything(unbroken)
+    assert resumed_lab.calls < unbroken_lab.calls
+
+
+# --- the files a resumed run checks -------------------------------------------------------------
+
+
+def test_the_project_files_a_journal_checks_are_what_a_test_run_can_read(tmp_path: Path) -> None:
+    names = (
+        "project.godot",
+        "a.gd",
+        "scenes/s.tscn",
+        "data/r.tres",
+        "fx/x.gdshader",
+        "report.json",
+        "a.gd.uid",
+        ".godot/imported/a.gd",
+        "notes.md",
+    )
+    for name in names:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("", encoding="utf-8")
+    found = {Path(p).relative_to(tmp_path).as_posix() for p in cli._project_inputs(str(tmp_path))}
+    assert found == {"project.godot", "a.gd", "scenes/s.tscn", "data/r.tres", "fx/x.gdshader"}
+
+
+def test_run_mutation_refuses_a_journal_once_a_test_changed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "f.gd"
+    path.write_text(_SOURCE, encoding="utf-8")
+    test = tmp_path / "tests" / "test_f.gd"
+    test.parent.mkdir()
+    test.write_text("extends Node\n", encoding="utf-8")
+    journal = str(tmp_path / "run.journal")
+    runner = MarkerRunner(str(path), ">=")
+    assert run_mutation(str(path), str(tmp_path), runner, resume=journal) == 0
+    test.write_text("extends Node\nfunc test_more():\n\tpass\n", encoding="utf-8")
+    capsys.readouterr()
+    assert run_mutation(str(path), str(tmp_path), runner, resume=journal) == 2
+    assert "tests/test_f.gd has changed since" in capsys.readouterr().err

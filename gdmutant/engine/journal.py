@@ -1,11 +1,13 @@
 """A run's verdicts, written to a file as each one lands, so a run that stops part way can resume.
 
-The file is JSON Lines. The first line says what the run was: the gdmutant version, each source's
-content hash, and the settings that can change a verdict. Each later line is one mutant's verdict,
-or one answer to "does this set of test files pass unmutated?" (coverage analysis's `_Trust`).
+The file is JSON Lines. The first line says what the run was: the gdmutant version, the sources it
+mutates, a hash of each of them and of every file its tests may read, and the settings that can
+change a verdict. Each later line is one mutant's verdict, or one answer to "does this set of test
+files pass unmutated?" (coverage analysis's `_Trust`).
 
-A journal is resumed only by a run of the same sources, unchanged, under the same settings. Any
-difference refuses it, since a verdict recorded against other code says nothing about this code.
+A journal is resumed only by a run of the same sources, with those files unchanged, under the same
+settings. Any difference refuses it, since a verdict recorded against other code says nothing
+about this code.
 The engine decides what goes in a record. This module only keeps records and matches them up.
 """
 
@@ -15,7 +17,7 @@ import hashlib
 import json
 import os
 import threading
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import IO, Any
 
@@ -41,8 +43,8 @@ def source_key(path: str, project_dir: str) -> str:
         return resolved.as_posix()
 
 
-def _digest(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def _digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def _mutant_key(source: str, mutant: Mutant) -> str:
@@ -94,28 +96,36 @@ class Journal:
         sources: Mapping[str, str],
         settings: Mapping[str, str],
         version: str,
+        other_files: Iterable[str] = (),
     ) -> Journal:
         """Resume the journal at `path`, or start one there if it is missing or empty.
 
-        `sources` maps each source path to its contents, and `settings` holds whatever else can
-        change a verdict, as strings. Raises `JournalRefused` if the file at `path` was written for
-        anything else, or is not a gdmutant journal.
+        `sources` maps each source to mutate to its contents, `other_files` names the files the
+        tests may read, such as the tests themselves, and `settings` holds whatever else can change
+        a verdict, as strings. Raises `JournalRefused` if the file at `path` was written for
+        anything else, or is not a gdmutant journal, and then leaves that file as it was.
         """
+        files = {source_key(p, project_dir): _digest(Path(p).read_bytes()) for p in other_files}
+        files |= {source_key(p, project_dir): _digest(text.encode()) for p, text in sources.items()}
         header = {
             "journal": _KIND,
             "format": FORMAT,
             "gdmutant": version,
-            "sources": {source_key(p, project_dir): _digest(text) for p, text in sources.items()},
+            "mutate": sorted(source_key(p, project_dir) for p in sources),
+            "files": files,
             "settings": dict(settings),
         }
         target = Path(path)
-        lines = _complete_lines(target)
+        lines, cut = _lines(target)
         outcomes: dict[str, dict[str, Any]] = {}
         confirmations: dict[tuple[str, ...], bool] = {}
         if lines:
             _check_header(path, lines[0], header)
             for number, line in enumerate(lines[1:], start=2):
                 _read_entry(path, number, line, outcomes, confirmations)
+            if cut is not None:  # only once the file is known to be a journal
+                with target.open("r+b") as cutting:
+                    cutting.truncate(cut)
         handle = target.open("a", encoding="utf-8", newline="\n")
         journal = cls(path, project_dir, handle, outcomes, confirmations)
         if not lines:
@@ -159,20 +169,21 @@ class Journal:
             raise JournalRefused(f"could not write to the journal {self.path}: {error}") from error
 
 
-def _complete_lines(target: Path) -> list[str]:
-    """The journal's lines, after cutting off a last line a killed run left half written."""
+def _lines(target: Path) -> tuple[list[str], int | None]:
+    """The file's complete lines, and where to cut it to drop a last line a killed run left half
+    written (``None`` when there is none)."""
     try:
         data = target.read_bytes()
     except FileNotFoundError:
-        return []
+        return [], None
+    if data and b"\n" not in data:  # every journal ends its first line
+        raise JournalRefused(f"{target} is not a gdmutant journal")
     complete = data[: data.rfind(b"\n") + 1]
-    if len(complete) < len(data):
-        with target.open("r+b") as handle:
-            handle.truncate(len(complete))
     try:
-        return complete.decode("utf-8").splitlines()
+        lines = complete.decode("utf-8").splitlines()
     except UnicodeDecodeError:
         raise JournalRefused(f"{target} is not a gdmutant journal") from None
+    return lines, len(complete) if len(complete) < len(data) else None
 
 
 def _parse(path: str, number: int, line: str) -> dict[str, Any]:
@@ -195,7 +206,14 @@ def _check_header(path: str, line: str, expected: dict[str, Any]) -> None:
             f"{expected['gdmutant']}. Its verdicts may not match this version's. Delete it, or "
             "name a new journal, to start over."
         )
-    differences = _source_differences(found.get("sources"), expected["sources"])
+    differences = []
+    if found.get("mutate") != expected["mutate"]:
+        mutated = found.get("mutate")
+        before = ", ".join(map(str, mutated)) if isinstance(mutated, list) else "nothing"
+        differences.append(
+            f"it mutated {before}, and this run mutates {', '.join(expected['mutate'])}"
+        )
+    differences += _file_differences(found.get("files"), expected["files"])
     differences += _setting_differences(found.get("settings"), expected["settings"])
     if differences:
         raise JournalRefused(
@@ -207,15 +225,15 @@ def _check_header(path: str, line: str, expected: dict[str, Any]) -> None:
         )
 
 
-def _source_differences(found: object, expected: dict[str, str]) -> list[str]:
+def _file_differences(found: object, expected: dict[str, str]) -> list[str]:
     recorded: dict[str, str] = found if isinstance(found, dict) else {}
     differences = []
-    for source, digest in expected.items():
-        if source not in recorded:
-            differences.append(f"{source} was not part of it")
-        elif recorded[source] != digest:
-            differences.append(f"{source} has changed since")
-    differences += [f"{source} was part of it" for source in recorded if source not in expected]
+    for file, digest in expected.items():
+        if file not in recorded:
+            differences.append(f"{file} is new since")
+        elif recorded[file] != digest:
+            differences.append(f"{file} has changed since")
+    differences += [f"{file} is gone since" for file in recorded if file not in expected]
     return differences
 
 

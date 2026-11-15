@@ -144,10 +144,17 @@ report for the whole run.
 
 - The unmutated baseline runs again first, and so do coverage analysis's marker runs when it is
   on. A red suite is still refused, and the time budget is measured afresh.
-- The file is refused, with exit 2, if it was written for different sources, a source has changed
-  since, or a setting that can change a verdict differs: the runner, `--command`, `--godot`,
-  `--tests`, `--timeout`, `--since`, `--exclude-tests`, the coverage analysis settings, or the
-  gdmutant version. `--jobs` may differ.
+- The file is refused, with exit 2, if it was written for different sources, or if anything that
+  can change a verdict differs:
+  - a script, scene, resource or shader in the project, tests included, or `project.godot`
+    (folders whose names start with `.`, such as `.godot`, are not checked)
+  - the runner, `--command`, `--godot`, `--tests`, `--timeout`, `--since` or `--exclude-tests`
+  - the coverage analysis settings, or the gdmutant version
+
+  `--jobs` may differ.
+- A verdict is written once the run after it has finished, so a run that stops loses the last
+  verdict of each worker as well as the mutants still running. A suite stopped by Ctrl-C is never
+  written as a verdict.
 - A serial run that is killed can leave a mutant in the file it was mutating (see
   [How gdmutant writes to your files](#how-gdmutant-writes-to-your-files)). That file then counts as
   changed, so restore it, for example with `git checkout -- <path>`, before you run again.

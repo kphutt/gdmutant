@@ -38,7 +38,7 @@ from gdmutant.adapters.gdscript.runner import (
 )
 from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.coverage import SELF_CHECK_SAMPLE, CoverageAnalysis, Marker
-from gdmutant.engine.journal import Journal, JournalRefused
+from gdmutant.engine.journal import Journal, JournalRefused, source_key
 from gdmutant.engine.loop import (
     BaselineFailed,
     MutationRun,
@@ -1022,6 +1022,24 @@ def _self_check_size(value: str) -> int | None:
     return int(value)
 
 
+#: The kinds of project file a test run can read: a change to one can change a verdict.
+_PROJECT_INPUTS = frozenset({".gd", ".tscn", ".tres", ".scn", ".res", ".gdshader", ".gdshaderinc"})
+
+
+def _project_inputs(project_dir: str) -> list[str]:
+    """Every file under `project_dir` a resumed journal must find unchanged, leaving out hidden
+    folders such as Godot's own `.godot` cache."""
+    found = []
+    for directory, folders, names in os.walk(project_dir):
+        folders[:] = sorted(folder for folder in folders if not folder.startswith("."))
+        found += [
+            os.path.join(directory, name)
+            for name in sorted(names)
+            if Path(name).suffix in _PROJECT_INPUTS or name == "project.godot"
+        ]
+    return found
+
+
 def _open_journal(
     resume: str | None,
     project_dir: str,
@@ -1033,7 +1051,14 @@ def _open_journal(
     if resume is None:
         return None
     try:
-        journal = Journal.open(resume, project_dir, sources, settings or {}, __version__)
+        journal = Journal.open(
+            resume,
+            project_dir,
+            sources,
+            settings or {},
+            __version__,
+            _project_inputs(project_dir),
+        )
     except OSError as error:
         raise JournalRefused(f"could not open the journal {resume}: {error}") from error
     if journal.resumed:
@@ -1910,8 +1935,9 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         help="record each verdict in FILE as it lands, and skip every mutant FILE already has a "
         "verdict for. Run the same command again after a run stops part way, and it picks up "
         "where that one stopped (the unmutated baseline still runs first). FILE is refused if "
-        "it was written for different sources, a source has changed since, or a setting that "
-        "can change a verdict differs; --jobs may differ. Delete FILE to start over",
+        "it was written for different sources, a script, scene or resource in the project has "
+        "changed since, or a setting that can change a verdict differs; --jobs may differ. "
+        "Delete FILE to start over",
     )
     run_parser.add_argument(
         "--dry-run",
@@ -2287,7 +2313,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "coverage-self-check": args.coverage_self_check,
                 "exclude-tests": json.dumps(exclude_tests),
                 "since": json.dumps(
-                    None if changed is None else {f: sorted(ls) for f, ls in changed.items()},
+                    None
+                    if changed is None
+                    else {source_key(f, project_dir): sorted(ls) for f, ls in changed.items()},
                     sort_keys=True,
                 ),
             },

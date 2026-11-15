@@ -63,6 +63,7 @@ from gdmutant.engine.runner import (
     SuiteResult,
     SuiteTimeout,
     allow_commands,
+    commands_stopping,
     stop_running_commands,
 )
 
@@ -1754,9 +1755,10 @@ class _Trust:
     """
 
     runner: FileSelecting
-    #: Where each answer is recorded, and where an earlier run's answers are read from.
+    #: Where an earlier run's answers are read from. New ones wait in `take_unrecorded`.
     journal: Journal | None = None
     _clean: dict[tuple[str, ...], bool] = field(default_factory=dict)
+    _unrecorded: list[tuple[tuple[str, ...], bool]] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
@@ -1778,9 +1780,14 @@ class _Trust:
             if files in self._clean:
                 return self._clean[files]
             self._clean[files] = clean
-        if self.journal is not None:
-            self.journal.confirm(files, clean)
+            self._unrecorded.append((files, clean))
         return clean
+
+    def take_unrecorded(self) -> list[tuple[tuple[str, ...], bool]]:
+        """The answers found since the last call, for the journal."""
+        with self._lock:
+            taken, self._unrecorded = self._unrecorded, []
+        return taken
 
     @property
     def coupled(self) -> tuple[tuple[str, ...], ...]:
@@ -1819,8 +1826,6 @@ class _Evaluation:
     runner: Runner
     budget: TimeBudget
     trust: _Trust | None
-    #: Where each verdict is recorded as it lands, if anywhere.
-    journal: Journal | None = None
 
     def once(self, mutated: str, files: tuple[str, ...] | None) -> _Ran:
         """Run `mutated` against `files` (``None`` = the whole suite), confirming any hang.
@@ -1924,9 +1929,41 @@ def _evaluate(ctx: _Evaluation, mutant: Mutant, mutated: str, plan: MutantPlan) 
         over_budget=over_budget,
         error=error,
     )
-    if ctx.journal is not None:
-        ctx.journal.record(mutant, _journal_entry(outcome, plan))
     return outcome
+
+
+@dataclass
+class _Recorder:
+    """Writes verdicts, and `trust`'s new answers, to `journal` one run behind.
+
+    A stopped run can kill the suites still going, and what a killed suite reports looks like a
+    verdict. So a verdict is written only once a later run has ended, and never once a stop began
+    (`commands_stopping`). The caller writes the last one with `flush` once the run ended normally.
+    """
+
+    journal: Journal | None
+    trust: _Trust | None
+    _held: list[tuple[MutantOutcome, MutantPlan]] = field(default_factory=list)
+
+    def hold(self, outcome: MutantOutcome, plan: MutantPlan) -> None:
+        """Write what was held, now that `outcome`'s run has ended too, then hold `outcome`."""
+        if self.journal is not None:
+            self.flush()
+            self._held.append((outcome, plan))
+
+    def flush(self) -> None:
+        """Write everything held, unless a stop has begun."""
+        if self.journal is None:
+            return
+        # Taken before the check: an answer from a stopped suite is only added after the stop began.
+        confirmations = [] if self.trust is None else self.trust.take_unrecorded()
+        held, self._held = self._held, []
+        if commands_stopping():
+            return
+        for files, clean in confirmations:
+            self.journal.confirm(files, clean)
+        for outcome, plan in held:
+            self.journal.record(outcome.mutant, _journal_entry(outcome, plan))
 
 
 def _failed_with(run: str, error: str | None) -> str:
@@ -2002,7 +2039,8 @@ def _run_mutants_serial(
     the pre-run plan line has already said it once; the heartbeat already answers "is this still
     going" without repeating a number nobody needs restated per mutant.
     """
-    ctx = _Evaluation(project_dir, path, source, runner, budget, trust, setup.journal)
+    ctx = _Evaluation(project_dir, path, source, runner, budget, trust)
+    recorder = _Recorder(setup.journal, trust)
     outcomes: list[MutantOutcome] = []
     for index, mutant in enumerate(setup.mutants):
         if index in setup.resumed:
@@ -2012,11 +2050,13 @@ def _run_mutants_serial(
         if outcome is None:
             started = time.monotonic()
             outcome = _evaluate(ctx, mutant, mutated, setup.plans(index))
+            recorder.hold(outcome, setup.plans(index))
             # Only a mutant that actually ran is a sample for the measured rate.
             clock.record(outcome.verdict, time.monotonic() - started)
         elif outcome.verdict is Verdict.INVALID and index not in setup.skip:
             clock.drop()  # a skipped one was never in the total
         outcomes.append(outcome)
+    recorder.flush()
     return outcomes
 
 
@@ -2196,6 +2236,8 @@ def _run_pool(
     errors: list[BaseException] = []
     lock = threading.Lock()
     stop = threading.Event()
+    journal = next((share.setup.journal for share in files if share.setup.journal), None)
+    recorders: list[_Recorder] = []
 
     def produce(put: Callable[[tuple[int, int, Mutant, str]], bool]) -> None:
         for file, share in enumerate(files):
@@ -2246,6 +2288,9 @@ def _run_pool(
         """Run mutants from `work` against this worker's own project copy at `worker_dir` until
         the end-of-work marker, or until any thread stops the pool with an error."""
         contexts: dict[int, _Evaluation] = {}
+        recorder = _Recorder(journal, trust)
+        with lock:
+            recorders.append(recorder)
         while not stop.is_set():
             try:
                 item = work.get(timeout=_POLL_SECS)
@@ -2258,11 +2303,12 @@ def _run_pool(
             if file not in contexts:
                 target = str(Path(worker_dir) / share.rel)
                 contexts[file] = _Evaluation(
-                    worker_dir, target, share.source, runner, budget, trust, share.setup.journal
+                    worker_dir, target, share.source, runner, budget, trust
                 )
             started = time.monotonic()
             try:
                 outcome = _evaluate(contexts[file], mutant, mutated, share.setup.plans(index))
+                recorder.hold(outcome, share.setup.plans(index))
             except BaseException as exc:  # noqa: BLE001 — capture + re-raise in the main thread
                 with lock:
                     errors.append(exc)
@@ -2324,6 +2370,8 @@ def _run_pool(
                     allow_commands()
     if errors:
         raise errors[0]
+    for recorder in recorders:  # each worker's last verdict, now that the run ended normally
+        recorder.flush()
     return outcomes
 
 
