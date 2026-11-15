@@ -12,22 +12,38 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- On Windows, gdmutant now stops every process a test command leaves running, once the command
+  finishes or times out, including one started on purpose to outlive it, such as a build server.
+  Under `--jobs`, turn off build-server reuse (for example MSBuild's node reuse). (#365)
+
 ### Fixed
 
-- A test run that floods its output no longer runs gdmutant out of memory under `--runner gdunit4`
-  or `--runner gut` either. 0.1.5 fixed this for `--runner command` only.
-- A mutant that times out now stops every process its test command started, not just the command
-  itself. A wrapper that starts Godot used to leave Godot running after a timeout, still using
-  the copy of the project gdmutant was about to delete. The same applies to Godot's one-time
-  `--import` step, and to a process whose parent has already exited. On Windows, a process a
-  test command leaves running after it finishes is stopped too, including one it starts on purpose
-  to outlive it, such as a build server. Elsewhere, such a process keeps running. So under
-  `--jobs` on Windows, a test command must not rely on a background server another worker
-  started: turn off build-server reuse (for example MSBuild's node reuse). Ctrl-C under `--jobs`
-  now stops the test commands still running too, and waits for them before deleting the workers'
-  copies. On Linux and macOS each test command now runs in its own session, so gdmutant stops it
-  on a timeout or Ctrl-C, but if gdmutant itself is killed or its terminal closes, the command
-  keeps running. (#365)
+- On Windows, a timed-out test command's child processes are now stopped even if the command
+  itself has already exited. (#365)
+
+## [0.1.7] - 2026-11-14
+
+Fixes for parallel runs and noisy test output.
+
+### Changed
+
+- `--jobs` workers no longer write Godot's log file. `--godot-file-logging` turns it back on.
+  (#370, thanks @normanthesquid)
+- A mutant scored `error` now says why in the report. (#361, thanks @normanthesquid)
+- Verified against GdUnit4 6.2.3. (#372, thanks @normanthesquid)
+- On Linux and macOS, each test command now runs in its own session, so it keeps running if
+  gdmutant itself is killed. (#367, thanks @normanthesquid)
+
+### Fixed
+
+- A mutant that floods GdUnit4 or GUT output no longer runs gdmutant out of memory. (#358,
+  thanks @normanthesquid)
+- A timed-out test command now stops its child processes too, such as a Godot started by a
+  wrapper. (#367, thanks @normanthesquid)
+- A temporary folder gdmutant can't delete no longer costs you the run's report. (#366,
+  thanks @normanthesquid)
 
 ## [0.1.6] - 2026-11-09
 
