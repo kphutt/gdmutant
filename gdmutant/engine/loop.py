@@ -380,7 +380,7 @@ class MutationRun:
 
     @property
     def ran(self) -> tuple[MutantOutcome, ...]:
-        """The mutants that really ran a suite. Ignored, invalid and no-coverage ones never did, so
+        """The mutants a suite really tested. Ignored, invalid and no-coverage ones were not, so
         they are neither a saving nor a cost, and the two places that report the saving read this
         one list rather than each deciding for themselves what counts."""
         return tuple(
@@ -976,9 +976,18 @@ def _run_baseline(
                 f"could not run the unmutated suite for {project_dir!r}: {error}{where}"
             ) from error
         baseline_secs = time.monotonic() - started
+        # Relative: `suite_dir` may be a copy, gone once this block ends.
+        uncompiled = [_relative_to(file, suite_dir) for file in baseline.uncompiled]
     if baseline.failed:
         detail = f":\n{baseline.detail}" if baseline.detail else ""
         raise BaselineFailed(f"the unmutated test suite failed for {project_dir!r}{detail}{where}")
+    if uncompiled:
+        # Else every mutant of these files would be scored invalid, and none of them tested.
+        raise BaselineFailed(
+            f"in the unmutated project {project_dir!r}, these files did not compile: "
+            f"{', '.join(uncompiled)}. The tests that load them did not run. Fix them, then run "
+            f"gdmutant again.{where}"
+        )
     # A baseline that ran ZERO tests is not a green baseline — it is no baseline at all, and it is
     # the quietest way this tool can lie. `SuiteResult(0, 0, 0).failed` is False, so a suite nobody
     # ran reads exactly like a suite that passed, and then every single mutant comes back SURVIVED:
@@ -1865,10 +1874,10 @@ def _self_check(outcomes: list[MutantOutcome], check: frozenset[int]) -> list[Mu
     """Compare each self-checked mutant's real verdict with the map's "no coverage".
 
     Only `SURVIVED` agrees, since that is what an unreached mutant must do. It becomes
-    `NO_COVERAGE`, marked `self_checked`. A mutant that turned out invalid or ignored never ran, so
-    it was not compared and is left as it is. Anything else, killed, timed out or errored, is a
-    disagreement: with markers off that mutant would have scored differently, so the run stops with
-    both verdicts shown rather than report a map it has just proved wrong."""
+    `NO_COVERAGE`, marked `self_checked`. A mutant that turned out invalid or ignored was never
+    tested, so it was not compared and is left as it is. Anything else, killed, timed out or
+    errored, is a disagreement: with markers off that mutant would have scored differently, so the
+    run stops with both verdicts shown rather than report a map it has just proved wrong."""
     checked = list(outcomes)
     for index in sorted(check):
         outcome = outcomes[index]
@@ -2582,6 +2591,13 @@ def _run_one(
         return (Verdict.KILLED if result.failed else Verdict.SURVIVED), None
     finally:
         _write_source(target, source, eol)  # never leave the project mutated
+
+
+def _relative_to(file: str, directory: str) -> str:
+    """`file` relative to `directory`, with forward slashes, or as given if it is outside it."""
+    with suppress(ValueError):
+        return Path(file).resolve().relative_to(Path(directory).resolve()).as_posix()
+    return file
 
 
 def _names(files: tuple[str, ...], target: Path) -> bool:

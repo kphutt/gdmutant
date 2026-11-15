@@ -179,13 +179,14 @@ class _CompileErrors:
         """What reads one stream's lines (`run_bounded` makes one per stream)."""
         found: dict[str, None] = {}
         self._streams.append(found)
-        previous = ""
+        after_error = False
 
         def read(line: str) -> None:
-            nonlocal previous
-            if _COMPILE_ERROR.search(previous) and (script := _ERROR_AT.match(line)):
+            nonlocal after_error
+            if after_error and (script := _ERROR_AT.match(line)):
                 found[str(self._project / script[1].removeprefix("res://"))] = None
-            previous = line
+            # `in` first: every line of a flood passes here, and most hold no error.
+            after_error = "SCRIPT ERROR" in line and _COMPILE_ERROR.search(line) is not None
 
         return read
 

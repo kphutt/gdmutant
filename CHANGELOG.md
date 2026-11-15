@@ -14,9 +14,10 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ### Fixed
 
-- A mutant whose own file Godot cannot compile is now scored `invalid`, not `error` or `killed`.
-  For example, a statement deletion can leave a parameter unused, and a project that treats that
-  warning as an error then refuses to load the file. (#359)
+- Under GdUnit4 and GUT, a mutant whose own file Godot cannot compile is now scored `invalid`,
+  not `error` or `killed`. For example, a statement deletion can leave a parameter unused, and a
+  project that treats that warning as an error then refuses to load the file. A baseline run in
+  which a file does not compile is now refused, since the tests that load it did not run. (#359)
 
 ## [0.1.7] - 2026-11-14
 

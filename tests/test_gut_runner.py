@@ -933,3 +933,38 @@ def test_the_scripts_godot_says_did_not_compile(stdout: str, stderr: str, named:
     errors = runner_mod._CompileErrors(project)
     bounded_output(1, stdout, stderr, lines=errors.stream)
     assert errors.scripts() == tuple(str(project / name) for name in named)
+
+
+def test_a_drop_below_the_baseline_names_the_scripts_that_did_not_compile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GUT skips a test script that did not compile, and its report counts fewer tests.
+    report = _report(tmp_path)
+    counts = iter(["4", "2"])
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if "--import" in args[0]:  # type: ignore[operator]
+            return subprocess.CompletedProcess([], 0, "", "")
+        report.write_text(
+            f'<testsuites><testsuite tests="{next(counts)}" failures="0"/></testsuites>',
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    patch_run(monkeypatch, runner_mod, fake_run)
+    runner = GutRunner()
+    assert runner.run(str(tmp_path)).passed
+    patch_run(monkeypatch, runner_mod, _with_output(fake_run, _DID_NOT_COMPILE))
+    with pytest.raises(CompileFailed, match="GUT ran 2 tests") as failed:
+        runner.run(str(tmp_path))
+    assert _names(failed.value.files) == ["turn_order.gd", "test_turn_order.gd"]
+
+
+def _with_output(
+    fake: Callable[..., subprocess.CompletedProcess[str]], stderr: str
+) -> Callable[..., subprocess.CompletedProcess[str]]:
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        done = fake(*args, **kwargs)
+        return subprocess.CompletedProcess(done.args, done.returncode, done.stdout, stderr)
+
+    return run

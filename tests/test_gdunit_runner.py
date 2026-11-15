@@ -855,3 +855,13 @@ def test_the_scripts_godot_says_did_not_compile(stdout: str, stderr: str, named:
     errors = runner_mod._CompileErrors(project)
     bounded_output(1, stdout, stderr, lines=errors.stream)
     assert errors.scripts() == tuple(str(project / name) for name in named)
+
+
+def test_a_zero_test_report_names_the_scripts_that_did_not_compile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = _report(tmp_path)
+    patch_run(monkeypatch, runner_mod, _reports_zero_tests(report, "", _DID_NOT_COMPILE))
+    with pytest.raises(CompileFailed, match="0 tests") as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert _names(failed.value.files) == ["turn_order.gd", "test_turn_order.gd"]

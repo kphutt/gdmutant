@@ -373,6 +373,32 @@ def test_a_mutant_whose_file_did_not_compile_is_invalid(tmp_path: Path, raised: 
     assert result.mutation_score is None
 
 
+@pytest.mark.parametrize("jobs", [1, 2])
+def test_a_baseline_with_files_that_did_not_compile_is_refused(tmp_path: Path, jobs: int) -> None:
+    # Their tests did not run, so every mutant of them would be scored invalid, untested.
+    path = _write(tmp_path, "f.gd", _ONE_MUTANT)
+
+    @dataclass
+    class BrokenBeforeMutation:
+        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+            named = (str(Path(project_dir) / "src" / "a.gd"), str(Path(project_dir) / "f.gd"))
+            return SuiteResult(tests=3, failures=0, errors=0, uncompiled=named)
+
+    with pytest.raises(
+        BaselineFailed, match=r"'.+', these files did not compile: src/a\.gd, f\.gd\. The tests"
+    ):
+        run(str(tmp_path), path, _ONE_MUTANT, BrokenBeforeMutation(), jobs=jobs)
+
+
+def test_a_baseline_names_a_file_outside_the_project_as_given(tmp_path: Path) -> None:
+    path = _write(tmp_path, "f.gd", _ONE_MUTANT)
+    outside = str(tmp_path.parent / "elsewhere.gd")
+    baseline = SuiteResult(tests=3, failures=0, errors=0, uncompiled=(outside,))
+    with pytest.raises(BaselineFailed) as refused:
+        run(str(tmp_path), path, _ONE_MUTANT, ScriptedRunner([baseline]))
+    assert f"did not compile: {outside}. The tests" in str(refused.value)
+
+
 def test_a_source_path_spelled_differently_still_matches_the_file_that_did_not_compile(
     tmp_path: Path,
 ) -> None:
