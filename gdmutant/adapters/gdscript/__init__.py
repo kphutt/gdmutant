@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
+from functools import partial
 from itertools import pairwise
 
 from gdtoolkit.parser import parser as _gdparser
@@ -563,4 +564,9 @@ ADAPTER = Adapter(
     apply_mutant=apply_mutant,
     isolate_copy=isolate_user_dir,
     release_copy=release_user_dir,
+)
+
+#: `ADAPTER`, but each ``--jobs`` worker keeps Godot's file log (``--godot-file-logging``).
+ADAPTER_WITH_GODOT_FILE_LOGGING = replace(
+    ADAPTER, isolate_copy=partial(isolate_user_dir, file_logging=True)
 )
