@@ -191,6 +191,8 @@ Two states worth knowing before you read a report:
    0.1.8 on are also immutable: once published, a release and its assets cannot be edited. That is
    a repo setting, which `scripts/harden_github.py` turns on and checks, failing when it does not
    read back as enabled.
+   Before pushing the tag, run `uv run python scripts/harden_github.py kphutt/gdmutant --check`
+   and stop if it fails.
 5. *Automatic.* `release.yml` runs its two guards (the tag matches the packaged version, and the
    tagged commit is on `main`) and then stages a draft Release with generated notes. A guard
    that fails leaves no Release at all, so nothing has shipped.
