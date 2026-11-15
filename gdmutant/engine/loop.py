@@ -35,6 +35,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.coverage import (
@@ -51,6 +52,7 @@ from gdmutant.engine.coverage import (
     uncovered,
     window_problems,
 )
+from gdmutant.engine.journal import Journal, JournalRefused
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import CATALOG, Operator
 from gdmutant.engine.runner import (
@@ -509,7 +511,9 @@ def _wait_for_load_capacity(threshold: float) -> None:
         time.sleep(_LOAD_THROTTLE_POLL_SECS)
 
 
-def _progress_plan(runnable: int, total: int, jobs: int, uncovered: int = 0) -> str:
+def _progress_plan(
+    runnable: int, total: int, jobs: int, uncovered: int = 0, resumed: int = 0
+) -> str:
     """The pre-run line: **what the run is**, with no prediction of how long it will take.
 
     gdmutant used to print ``estimated ≈ 24s`` here, from mutant count × baseline time. The
@@ -527,14 +531,17 @@ def _progress_plan(runnable: int, total: int, jobs: int, uncovered: int = 0) -> 
 
     `uncovered` is how many non-ignored mutants coverage analysis already decided as "no coverage"
     without a run. They are left out of the count and named in the note instead, so the number
-    announced is the number of suites that will actually run.
+    announced is the number of suites that will actually run. `resumed` is how many of the rest
+    already have a verdict from the run's journal, and is left out the same way.
     """
-    to_run = runnable - uncovered
+    to_run = runnable - uncovered - resumed
     unit = "mutant" if to_run == 1 else "mutants"
     ignored = total - runnable
     notes = [f"{ignored} ignored"] if ignored else []
     if uncovered:
         notes.append(f"{uncovered} with no coverage")
+    if resumed:
+        notes.append(f"{resumed} already in the journal")
     ignored_note = f" ({', '.join(notes)})" if notes else ""
     # Never more workers than mutants: `_run_mutants_parallel` starts `min(jobs, valid mutants)`, so
     # a 3-mutant file under a 16-worker `--jobs` must not announce 16. It is still "up to": a mutant
@@ -698,6 +705,7 @@ def run(
     coverage: CoverageAnalysis = CoverageAnalysis.OFF,
     marker: Marker | None = None,
     self_check: int | None = SELF_CHECK_SAMPLE,
+    journal: Journal | None = None,
 ) -> MutationRun:
     """Run the full mutation pass over `source` (the contents of `path`) using `runner`.
 
@@ -748,6 +756,9 @@ def run(
     reached gets `Verdict.NO_COVERAGE` without a run. `self_check` is how many of those are also
     run against the whole suite as a standing check (``None`` runs them all). Raises
     `CoverageRunFailed` when that cannot be trusted. See `_coverage_pass`.
+
+    `journal`, when given, records each verdict as it lands, and supplies the verdicts an earlier
+    run of the same sources already recorded, which are not run again. The baseline always runs.
     """
     if _runs_in_parallel(path, project_dir, jobs, jobs_auto):
         _project_relative(path, project_dir)  # refuse a source with no place in the copies, now
@@ -775,7 +786,9 @@ def run(
     clock = _Progress(emit=progress, style=progress_style)
     # One per run, not one per file: a set of test files confirmed while mutating one file is
     # still confirmed while mutating the next.
-    trust = _Trust(runner) if plans is not None and isinstance(runner, FileSelecting) else None
+    trust = (
+        _Trust(runner, journal) if plans is not None and isinstance(runner, FileSelecting) else None
+    )
     result = _mutate_file(
         project_dir,
         path,
@@ -793,6 +806,7 @@ def run(
         coverage=None if plans is None else plans.files[path],
         test_files=0 if plans is None else plans.test_files,
         order_dependent=0 if plans is None else plans.order_dependent,
+        journal=journal,
     )
     clock.finish()
     return result
@@ -1493,6 +1507,7 @@ def _mutate_file(
     trust: _Trust | None,
     test_files: int,
     order_dependent: int,
+    journal: Journal | None = None,
 ) -> MutationRun:
     """Generate and run every mutant for a single file (the baseline is assumed already green). The
     file at `path` must hold `source`; it is restored before returning. `jobs > 1` evaluates mutants
@@ -1520,12 +1535,14 @@ def _mutate_file(
     what confirms such a mutant's kill, and belongs to the whole run rather than to one file, so
     a set of test files is confirmed once however many of the run's files send mutants to it.
     """
-    setup = _file_setup(path, source, adapter, catalog, mutants, coverage)
+    setup = _file_setup(path, source, adapter, catalog, mutants, coverage, journal)
     clock.begin_file(setup.to_run)
     if not _runs_in_parallel(path, project_dir, jobs, jobs_auto):
         jobs = 1
     if progress is not None:
-        progress(_progress_plan(setup.valid, len(setup.mutants), jobs, setup.skipped))
+        progress(
+            _progress_plan(setup.valid, len(setup.mutants), jobs, setup.skipped, len(setup.resumed))
+        )
     if jobs > 1 and setup.mutants:
         outcomes = _run_mutants_parallel(
             project_dir, path, source, runner, adapter, setup, budget, jobs, jobs_auto, clock, trust
@@ -1542,17 +1559,21 @@ def _mutate_file(
 @dataclass(frozen=True)
 class _FileSetup:
     """One file's mutants and coverage analysis's decisions for them, before any of them runs.
-    `valid` counts the mutants not ignored, and `skipped` those of them no test reaches."""
+    `valid` counts the mutants not ignored, and `skipped` those of them no test reaches.
+    `resumed` holds the verdicts the journal already has, by index, and `journal` is where the
+    file's new verdicts go."""
 
     mutants: Sequence[Mutant]
     plans: Callable[[int], MutantPlan]
     skip: frozenset[int]
     valid: int
     skipped: int
+    resumed: Mapping[int, MutantOutcome] = field(default_factory=dict)
+    journal: Journal | None = None
 
     @property
     def to_run(self) -> int:
-        return self.valid - self.skipped
+        return self.valid - self.skipped - len(self.resumed)
 
 
 def _file_setup(
@@ -1562,6 +1583,7 @@ def _file_setup(
     catalog: tuple[Operator, ...],
     mutants: Sequence[Mutant] | None,
     coverage: _FileCoverage | None,
+    journal: Journal | None = None,
 ) -> _FileSetup:
     """`path`'s `_FileSetup`, generating its mutants unless coverage analysis already did."""
     generated = adapter.generate_mutants(path, source, catalog) if mutants is None else mutants
@@ -1569,13 +1591,66 @@ def _file_setup(
     plans: Callable[[int], MutantPlan] = (
         (lambda index: WHOLE_SUITE) if coverage is None else coverage.plan
     )
+    resumed: dict[int, MutantOutcome] = {}
+    if journal is not None:
+        for index, mutant in enumerate(generated):
+            if mutant.ignore_reason is None and index not in skip:
+                outcome = _resumed(journal, mutant, plans(index))
+                if outcome is not None:
+                    resumed[index] = outcome
     return _FileSetup(
         generated,
         plans,
         skip,
         sum(1 for m in generated if m.ignore_reason is None),
         sum(1 for index in skip if generated[index].ignore_reason is None),
+        resumed,
+        journal,
     )
+
+
+def _plan_entry(plan: MutantPlan) -> dict[str, Any]:
+    return {
+        "files": None if plan.files is None else list(plan.files),
+        "no_coverage": plan.no_coverage,
+        "self_check": plan.self_check,
+    }
+
+
+def _journal_entry(outcome: MutantOutcome, plan: MutantPlan) -> dict[str, Any]:
+    """What the journal keeps of a mutant's verdict, with the plan it was reached under."""
+    return {
+        "verdict": outcome.verdict.value,
+        "self_checked": outcome.self_checked,
+        "selected": outcome.selected,
+        "order_coupled": outcome.order_coupled,
+        "over_budget": outcome.over_budget,
+        "error": outcome.error,
+        "plan": _plan_entry(plan),
+    }
+
+
+def _resumed(journal: Journal, mutant: Mutant, plan: MutantPlan) -> MutantOutcome | None:
+    """The verdict the journal holds for `mutant`, if it was reached under the same `plan`.
+
+    A different plan means coverage analysis decided otherwise this time, so the mutant runs again.
+    """
+    entry = journal.recorded(mutant)
+    if entry is None or entry.get("plan") != _plan_entry(plan):
+        return None
+    try:
+        verdict = Verdict(entry["verdict"])
+        flags = {name: entry[name] for name in ("self_checked", "order_coupled", "over_budget")}
+        selected, error = entry["selected"], entry["error"]
+    except (KeyError, ValueError):
+        verdict, flags, selected, error = Verdict.ERROR, {"unreadable": None}, None, None
+    if (
+        any(type(flag) is not bool for flag in flags.values())
+        or not (selected is None or type(selected) is int)
+        or not (error is None or isinstance(error, str))
+    ):
+        raise JournalRefused(f"{journal.path} has a verdict this version cannot read: {entry}")
+    return MutantOutcome(mutant, verdict, selected=selected, error=error, **flags)
 
 
 def _file_run(
@@ -1619,6 +1694,7 @@ def _mutate_pooled(
     mutants: dict[str, list[Mutant]] | None,
     plans: _RunCoverage | None,
     trust: _Trust | None,
+    journal: Journal | None = None,
 ) -> dict[str, MutationRun]:
     """Run every file's mutants through one shared `_run_pool`, so no worker sits idle while
     another file's mutants are still waiting. Returns a `MutationRun` per file, in `sources` order.
@@ -1627,10 +1703,14 @@ def _mutate_pooled(
     for path, source in sources.items():
         coverage = None if plans is None else plans.files[path]
         given = None if mutants is None else mutants[path]
-        setup = _file_setup(path, source, adapter, catalog, given, coverage)
+        setup = _file_setup(path, source, adapter, catalog, given, coverage, journal)
         if progress is not None:
             progress(f"mutating {Path(path).as_posix()} ...")
-            progress(_progress_plan(setup.valid, len(setup.mutants), 1, setup.skipped))
+            progress(
+                _progress_plan(
+                    setup.valid, len(setup.mutants), 1, setup.skipped, len(setup.resumed)
+                )
+            )
         files.append(_PoolFile(_project_relative(path, project_dir), source, setup))
     to_run = sum(share.setup.to_run for share in files)
     workers = min(jobs, to_run)
@@ -1674,8 +1754,14 @@ class _Trust:
     """
 
     runner: FileSelecting
+    #: Where each answer is recorded, and where an earlier run's answers are read from.
+    journal: Journal | None = None
     _clean: dict[tuple[str, ...], bool] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def __post_init__(self) -> None:
+        if self.journal is not None:
+            self._clean.update(self.journal.confirmations)
 
     def confirms(self, project_dir: str, files: tuple[str, ...], timeout: float) -> bool:
         """True if `files` passes on the unmutated project at `project_dir`."""
@@ -1689,7 +1775,12 @@ class _Trust:
         except Exception:  # noqa: BLE001 - any failure to confirm means "not confirmed"
             clean = False
         with self._lock:
-            return self._clean.setdefault(files, clean)
+            if files in self._clean:
+                return self._clean[files]
+            self._clean[files] = clean
+        if self.journal is not None:
+            self.journal.confirm(files, clean)
+        return clean
 
     @property
     def coupled(self) -> tuple[tuple[str, ...], ...]:
@@ -1728,6 +1819,8 @@ class _Evaluation:
     runner: Runner
     budget: TimeBudget
     trust: _Trust | None
+    #: Where each verdict is recorded as it lands, if anywhere.
+    journal: Journal | None = None
 
     def once(self, mutated: str, files: tuple[str, ...] | None) -> _Ran:
         """Run `mutated` against `files` (``None`` = the whole suite), confirming any hang.
@@ -1822,23 +1915,18 @@ def _evaluate(ctx: _Evaluation, mutant: Mutant, mutated: str, plan: MutantPlan) 
                 + _failed_with("selected", error)
                 + _failed_with("whole-suite", whole_error)
             )
-        return MutantOutcome(
-            mutant,
-            verdict,
-            self_checked=True,
-            selected=None if files is None else len(files),
-            order_coupled=coupled,
-            over_budget=over_budget,
-            error=error,
-        )
-    return MutantOutcome(
+    outcome = MutantOutcome(
         mutant,
         verdict,
+        self_checked=plan.self_check and not plan.no_coverage,
         selected=None if files is None else len(files),
         order_coupled=coupled,
         over_budget=over_budget,
         error=error,
     )
+    if ctx.journal is not None:
+        ctx.journal.record(mutant, _journal_entry(outcome, plan))
+    return outcome
 
 
 def _failed_with(run: str, error: str | None) -> str:
@@ -1914,9 +2002,12 @@ def _run_mutants_serial(
     the pre-run plan line has already said it once; the heartbeat already answers "is this still
     going" without repeating a number nobody needs restated per mutant.
     """
-    ctx = _Evaluation(project_dir, path, source, runner, budget, trust)
+    ctx = _Evaluation(project_dir, path, source, runner, budget, trust, setup.journal)
     outcomes: list[MutantOutcome] = []
     for index, mutant in enumerate(setup.mutants):
+        if index in setup.resumed:
+            outcomes.append(setup.resumed[index])
+            continue
         outcome, mutated = _prepare(adapter, mutant, index, source, setup.skip)
         if outcome is None:
             started = time.monotonic()
@@ -2109,6 +2200,10 @@ def _run_pool(
     def produce(put: Callable[[tuple[int, int, Mutant, str]], bool]) -> None:
         for file, share in enumerate(files):
             for index, mutant in enumerate(share.setup.mutants):
+                if index in share.setup.resumed:
+                    with lock:
+                        outcomes[file, index] = share.setup.resumed[index]
+                    continue
                 outcome, mutated = _prepare(adapter, mutant, index, share.source, share.setup.skip)
                 if outcome is None:
                     if not put((file, index, mutant, mutated)):
@@ -2163,7 +2258,7 @@ def _run_pool(
             if file not in contexts:
                 target = str(Path(worker_dir) / share.rel)
                 contexts[file] = _Evaluation(
-                    worker_dir, target, share.source, runner, budget, trust
+                    worker_dir, target, share.source, runner, budget, trust, share.setup.journal
                 )
             started = time.monotonic()
             try:
@@ -2269,6 +2364,7 @@ def run_paths(
     coverage: CoverageAnalysis = CoverageAnalysis.OFF,
     marker: Marker | None = None,
     self_check: int | None = SELF_CHECK_SAMPLE,
+    journal: Journal | None = None,
 ) -> dict[str, MutationRun]:
     """Mutate several files against one project — the baseline runs **once**, then each file's
     mutants run in turn. `sources` maps each file path to its contents (each held on entry,
@@ -2276,7 +2372,8 @@ def run_paths(
     `jobs` (and `jobs_auto`) run every file's mutants through one shared pool
     (`_mutate_pooled`), and `coverage`, `marker` and `self_check` turn on coverage analysis exactly
     as they do for `run`,
-    with one marker run covering every file. Returns ``{path: MutationRun}`` in `sources` order.
+    with one marker run covering every file, and `journal` records and resumes verdicts as it
+    does for `run`. Returns ``{path: MutationRun}`` in `sources` order.
     Raises `BaselineFailed` (like `run`) if the baseline can't run or is red.
     """
     parallel = [path for path in sources if _runs_in_parallel(path, project_dir, jobs, jobs_auto)]
@@ -2306,7 +2403,9 @@ def run_paths(
     clock = _Progress(emit=progress, style=progress_style)
     # One per run, not one per file: a set of test files confirmed while mutating one file is
     # still confirmed while mutating the next.
-    trust = _Trust(runner) if plans is not None and isinstance(runner, FileSelecting) else None
+    trust = (
+        _Trust(runner, journal) if plans is not None and isinstance(runner, FileSelecting) else None
+    )
     pooled = {path: sources[path] for path in parallel}
     if len(pooled) < 2:
         pooled = {}
@@ -2334,6 +2433,7 @@ def run_paths(
             coverage=None if plans is None else plans.files[path],
             test_files=0 if plans is None else plans.test_files,
             order_dependent=0 if plans is None else plans.order_dependent,
+            journal=journal,
         )
     if pooled:
         runs |= _mutate_pooled(
@@ -2350,6 +2450,7 @@ def run_paths(
             mutants=mutants,
             plans=plans,
             trust=trust,
+            journal=journal,
         )
     # One closing line for the whole run, not one per file: the wall-clock a user takes away is
     # "how long did that take", and every file's mutants are part of the same wait.

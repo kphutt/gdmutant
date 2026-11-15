@@ -75,6 +75,7 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | `--exclude-tests <entry>` | *(none)* | Leave a test out of every run, as gdUnit4's `-i` takes it: a suite name, any part of a suite's `res://` path, or `suite:test` for one test (repeatable; `--runner gdunit4` only). |
 | `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. `auto` picks a worker count from your CPU count and throttles under load instead of a fixed N. |
 | `--godot-file-logging` | off | Under `--jobs`, let each worker's Godot write `user://logs/godot.log`. See [Parallelism](#parallelism). |
+| `--resume <file>` | off | Record each verdict in a journal file as it lands. Run the same command again after a run stops part way, and it picks up where that one stopped. See [Resuming a stopped run](#resuming-a-stopped-run). |
 | `--timeout <seconds>` | derived from the baseline | Per-mutant test timeout. See [How long a mutant gets](#how-long-a-mutant-gets). |
 | `--coverage-analysis {off,all,per-file}` | `off` | `all` finds the mutants no test reaches before any mutant runs, and reports them as `no coverage` without running them. `per-file` does that and runs every other mutant against only the test files that reach it, which is the setting that saves real time. See [Coverage analysis](#coverage-analysis). |
 | `--coverage-self-check N\|all` | `3` | How many of coverage analysis's own decisions are re-run against the whole suite to confirm them. `all` checks every mutant both ways. |
@@ -132,6 +133,26 @@ Each worker's copy also turns off Godot's log file, `user://logs/godot.log`. A m
 forever printing an error can grow that file until the disk is full, and a finished run deletes
 each worker's `user://` anyway. To read a worker's log while the run is still going, pass
 `--godot-file-logging`. A `--jobs 1` run keeps your project's own setting.
+
+#### Resuming a stopped run
+
+gdmutant writes its report only when a run ends. On a large project a run can take hours, and a
+run that stops part way (a killed process, a restarted machine) would otherwise lose every verdict
+so far. `--resume <file>` writes each verdict to `<file>` as it lands. Run the same command again
+and gdmutant skips every mutant the file already has a verdict for, runs the rest, and writes the
+report for the whole run.
+
+- The unmutated baseline runs again first, and so do coverage analysis's marker runs when it is
+  on. A red suite is still refused, and the time budget is measured afresh.
+- The file is refused, with exit 2, if it was written for different sources, a source has changed
+  since, or a setting that can change a verdict differs: the runner, `--command`, `--godot`,
+  `--tests`, `--timeout`, `--since`, `--exclude-tests`, the coverage analysis settings, or the
+  gdmutant version. `--jobs` may differ.
+- A serial run that is killed can leave a mutant in the file it was mutating (see
+  [How gdmutant writes to your files](#how-gdmutant-writes-to-your-files)). That file then counts as
+  changed, so restore it, for example with `git checkout -- <path>`, before you run again.
+- Delete the file to start over. A finished run's file still works: running the command again
+  runs no mutant and rewrites the report.
 
 The live test for this runs GdUnit4. GUT and the exit-code command runner get the same isolation
 from the same code, but no live run proves GUT's.
@@ -357,6 +378,8 @@ leads anywhere else. `command` and `godot` always need it.
   - the test-runner executable was not found: `godot`, or the program named by `--command`
   - `--runner command` with no `--command`, or a `--command` string that cannot be split into words
   - `--since` names a ref git cannot diff against
+  - `--resume` names a file that cannot be opened, is not a gdmutant journal, or was
+    written for different sources or settings
   - `--jobs` above 1, or `--coverage-analysis all`, with a source file that does not sit inside
     `--project`
   - `--jobs` below 1

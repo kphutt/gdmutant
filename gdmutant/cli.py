@@ -16,7 +16,7 @@ import shlex
 import subprocess
 import sys
 import tomllib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from importlib import resources
@@ -38,6 +38,7 @@ from gdmutant.adapters.gdscript.runner import (
 )
 from gdmutant.engine.adapter import Adapter
 from gdmutant.engine.coverage import SELF_CHECK_SAMPLE, CoverageAnalysis, Marker
+from gdmutant.engine.journal import Journal, JournalRefused
 from gdmutant.engine.loop import (
     BaselineFailed,
     MutationRun,
@@ -1021,6 +1022,26 @@ def _self_check_size(value: str) -> int | None:
     return int(value)
 
 
+def _open_journal(
+    resume: str | None,
+    project_dir: str,
+    sources: Mapping[str, str],
+    settings: Mapping[str, str] | None,
+) -> Journal | None:
+    """The ``--resume`` journal, opened before anything runs, or ``None`` without the flag.
+    Raises `JournalRefused` if it belongs to another run or cannot be opened."""
+    if resume is None:
+        return None
+    try:
+        journal = Journal.open(resume, project_dir, sources, settings or {}, __version__)
+    except OSError as error:
+        raise JournalRefused(f"could not open the journal {resume}: {error}") from error
+    if journal.resumed:
+        unit = "verdict" if journal.resumed == 1 else "verdicts"
+        print(f"Resuming {resume}: {journal.resumed} {unit} already recorded.", file=sys.stderr)
+    return journal
+
+
 def run_mutation(
     source_path: str,
     project_dir: str,
@@ -1039,10 +1060,14 @@ def run_mutation(
     marker: Marker | None = None,
     self_check: int | None = SELF_CHECK_SAMPLE,
     godot_file_logging: bool = False,
+    resume: str | None = None,
+    resume_settings: Mapping[str, str] | None = None,
 ) -> int:
     """Mutate `source_path`, run via `runner`, print the summary, optionally write a report file.
 
     `coverage` and `marker` turn on coverage analysis (docs/decisions/0017): see `loop.run`.
+    `resume` names the journal that records verdicts as they land and resumes an earlier run's,
+    which must have had the same source and `resume_settings`.
 
     Returns 0 on a completed pass — **survivors are report output, not a failure** (FG-6.2) — 1 if
     the unmutated baseline suite fails, and 2 if the source can't be read, isn't valid GDScript, the
@@ -1073,22 +1098,28 @@ def run_mutation(
     path = Path(source_path)
     adapter = _adapter(changed, godot_file_logging)
     try:
-        result = run(
-            project_dir,
-            str(path),
-            source,
-            runner,
-            adapter,
-            timeout=timeout,
-            progress=_progress_emitter(progress_style),
-            jobs=jobs,
-            jobs_auto=jobs_auto,
-            progress_style=progress_style,
-            coverage=coverage,
-            marker=marker,
-            self_check=self_check,
-        )
-    except (SourceOutsideProject, SourceWriteFailed) as error:
+        journal = _open_journal(resume, project_dir, {str(path): source}, resume_settings)
+        try:
+            result = run(
+                project_dir,
+                str(path),
+                source,
+                runner,
+                adapter,
+                timeout=timeout,
+                progress=_progress_emitter(progress_style),
+                jobs=jobs,
+                jobs_auto=jobs_auto,
+                progress_style=progress_style,
+                coverage=coverage,
+                marker=marker,
+                self_check=self_check,
+                journal=journal,
+            )
+        finally:
+            if journal is not None:
+                journal.close()
+    except (SourceOutsideProject, SourceWriteFailed, JournalRefused) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     except BaselineFailed as error:
@@ -1300,11 +1331,14 @@ def run_mutation_paths(
     marker: Marker | None = None,
     self_check: int | None = SELF_CHECK_SAMPLE,
     godot_file_logging: bool = False,
+    resume: str | None = None,
+    resume_settings: Mapping[str, str] | None = None,
 ) -> int:
     """Mutate several `.gd` files against one project in a single pass — the baseline runs **once**
     and the score is aggregated across every file, with one merged report. Same return
     codes as `run_mutation`. Every source is loaded/validated before anything runs (a bad file fails
-    fast). With `jobs`, every file's mutants share one pool of workers (see `run_mutation`)."""
+    fast). With `jobs`, every file's mutants share one pool of workers, and `resume` journals the
+    run, as `run_mutation` describes."""
     sources: dict[str, str] = {}
     for source_path in source_paths:
         source = _load_gdscript(source_path)
@@ -1324,21 +1358,27 @@ def run_mutation_paths(
                 return 2
     adapter = _adapter(changed, godot_file_logging)
     try:
-        runs = run_paths(
-            project_dir,
-            sources,
-            runner,
-            adapter,
-            timeout=timeout,
-            progress=_progress_emitter(progress_style),
-            jobs=jobs,
-            jobs_auto=jobs_auto,
-            progress_style=progress_style,
-            coverage=coverage,
-            marker=marker,
-            self_check=self_check,
-        )
-    except (SourceOutsideProject, SourceWriteFailed) as error:
+        journal = _open_journal(resume, project_dir, sources, resume_settings)
+        try:
+            runs = run_paths(
+                project_dir,
+                sources,
+                runner,
+                adapter,
+                timeout=timeout,
+                progress=_progress_emitter(progress_style),
+                jobs=jobs,
+                jobs_auto=jobs_auto,
+                progress_style=progress_style,
+                coverage=coverage,
+                marker=marker,
+                self_check=self_check,
+                journal=journal,
+            )
+        finally:
+            if journal is not None:
+                journal.close()
+    except (SourceOutsideProject, SourceWriteFailed, JournalRefused) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     except BaselineFailed as error:
@@ -1865,6 +1905,15 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         "per mutant. Ignored with --coverage-analysis off",
     )
     run_parser.add_argument(
+        "--resume",
+        metavar="FILE",
+        help="record each verdict in FILE as it lands, and skip every mutant FILE already has a "
+        "verdict for. Run the same command again after a run stops part way, and it picks up "
+        "where that one stopped (the unmutated baseline still runs first). FILE is refused if "
+        "it was written for different sources, a source has changed since, or a setting that "
+        "can change a verdict differs; --jobs may differ. Delete FILE to start over",
+    )
+    run_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="list the mutants without running any tests (no Godot needed)",
@@ -2098,6 +2147,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("--coverage-analysis", args.coverage_analysis, _COVERAGE_ANALYSIS_DEFAULT),
                     ("--coverage-self-check", args.coverage_self_check, str(SELF_CHECK_SAMPLE)),
                     ("--exclude-tests", exclude_tests, []),
+                    ("--resume", args.resume, None),
                 )
                 if value != default
             ]
@@ -2225,6 +2275,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             # Coverage analysis runs Godot once to register its recorder in the marked copy, with
             # every runner, so it takes the executable from --godot even under --runner command.
             "marker": GDScriptMarker(godot=args.godot),
+            "resume": args.resume,
+            # Whatever can change a verdict, so a journal is resumed only under the same.
+            "resume_settings": {
+                "runner": args.runner,
+                "tests": args.tests,
+                "godot": args.godot,
+                "command": args.test_command or "",
+                "timeout": str(args.timeout),
+                "coverage-analysis": args.coverage_analysis,
+                "coverage-self-check": args.coverage_self_check,
+                "exclude-tests": json.dumps(exclude_tests),
+                "since": json.dumps(
+                    None if changed is None else {f: sorted(ls) for f, ls in changed.items()},
+                    sort_keys=True,
+                ),
+            },
         }
         if len(files) == 1:
             return run_mutation(files[0], project_dir, runner, **common)
