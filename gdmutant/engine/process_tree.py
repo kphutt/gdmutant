@@ -206,8 +206,8 @@ def start(command: Sequence[str], cwd: str) -> ProcessTree:
     try:
         handle = int(getattr(process, "_handle"))  # noqa: B009 - private, so typeshed omits it
         if not api.assign(job, handle):  # e.g. a parent job that forbids nesting
+            tree.job = None  # first, so an interrupt here cannot close the handle twice
             api.close(job)
-            tree.job = None
         api.resume(handle)
     except BaseException:  # never leave the command suspended, or running outside any kill
         try:

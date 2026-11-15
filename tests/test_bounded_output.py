@@ -619,7 +619,7 @@ def test_a_command_a_stop_overtakes_while_it_starts_is_stopped_at_once(
     popen = subprocess.Popen
 
     def stop_while_starting(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
-        if started:  # taskkill, stopping the tree on Windows
+        if started:  # taskkill, when Windows could not give the command a job
             return popen(*args, **kwargs)
         runner_mod.stop_running_commands()  # after the check, before the command is tracked
         started.append(popen(*args, **kwargs))
