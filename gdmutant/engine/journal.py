@@ -17,7 +17,7 @@ import hashlib
 import json
 import os
 import threading
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import IO, Any
 
@@ -78,12 +78,15 @@ class Journal:
         handle: IO[str],
         outcomes: dict[str, dict[str, Any]],
         confirmations: dict[tuple[str, ...], bool],
+        files: tuple[dict[str, str] | None, Callable[[], Iterable[str]]] = (None, tuple),
     ) -> None:
         self.path = path
         self._project_dir = project_dir
         self._handle = handle
         self._outcomes = outcomes
         self._confirmations = confirmations
+        self._recorded_files, self._other_files = files
+        self._sources: frozenset[str] = frozenset()
         self._lock = threading.Lock()
         #: How many verdicts earlier runs left, for the CLI to say it is resuming.
         self.resumed = len(outcomes)
@@ -96,41 +99,71 @@ class Journal:
         sources: Mapping[str, str],
         settings: Mapping[str, str],
         version: str,
-        other_files: Iterable[str] = (),
+        other_files: Callable[[], Iterable[str]] = tuple,
     ) -> Journal:
         """Resume the journal at `path`, or start one there if it is missing or empty.
 
-        `sources` maps each source to mutate to its contents, `other_files` names the files the
-        tests may read, such as the tests themselves, and `settings` holds whatever else can change
-        a verdict, as strings. Raises `JournalRefused` if the file at `path` was written for
-        anything else, or is not a gdmutant journal, and then leaves that file as it was.
+        `sources` maps each source to mutate to its contents, and `settings` holds whatever else
+        can change a verdict, as strings. Raises `JournalRefused` if the file at `path` was written
+        for anything else, or is not a gdmutant journal, and then leaves that file as it was.
+        `other_files` lists the files the tests may read, which `check_files` compares later.
         """
-        files = {source_key(p, project_dir): _digest(Path(p).read_bytes()) for p in other_files}
-        files |= {source_key(p, project_dir): _digest(text.encode()) for p, text in sources.items()}
         header = {
             "journal": _KIND,
             "format": FORMAT,
             "gdmutant": version,
-            "mutate": sorted(source_key(p, project_dir) for p in sources),
-            "files": files,
+            "sources": {
+                source_key(p, project_dir): _digest(t.encode()) for p, t in sources.items()
+            },
             "settings": dict(settings),
         }
         target = Path(path)
         lines, cut = _lines(target)
         outcomes: dict[str, dict[str, Any]] = {}
         confirmations: dict[tuple[str, ...], bool] = {}
+        recorded_files: dict[str, str] | None = None
         if lines:
             _check_header(path, lines[0], header)
             for number, line in enumerate(lines[1:], start=2):
-                _read_entry(path, number, line, outcomes, confirmations)
+                recorded_files = _read_entry(
+                    path, number, line, outcomes, confirmations, recorded_files
+                )
             if cut is not None:  # only once the file is known to be a journal
                 with target.open("r+b") as cutting:
                     cutting.truncate(cut)
+        else:
+            _write_whole(target, json.dumps(header) + "\n")
         handle = target.open("a", encoding="utf-8", newline="\n")
-        journal = cls(path, project_dir, handle, outcomes, confirmations)
-        if not lines:
-            journal._append(header)
+        journal = cls(
+            path, project_dir, handle, outcomes, confirmations, (recorded_files, other_files)
+        )
+        journal._sources = frozenset(source_key(p, project_dir) for p in sources)
         return journal
+
+    def check_files(self) -> None:
+        """List and compare the `other_files` given to `open` with what the run that started the
+        journal found, or record them if no run got this far. Called once the baseline has run,
+        since a baseline that writes into the project writes the same files every time.
+
+        Raises `JournalRefused` if any differs."""
+        found = {
+            key: _file_digest(file)
+            for file in self._other_files()
+            if (key := source_key(file, self._project_dir)) not in self._sources
+        }
+        if self._recorded_files is None:
+            with self._lock:
+                self._recorded_files = found
+                self._append({"files": found})
+            return
+        differences = _file_differences(self._recorded_files, found)
+        if differences:
+            raise JournalRefused(
+                f"{self.path} was written when the project's files were different:\n"
+                + "".join(f"  {difference}\n" for difference in differences)
+                + "A verdict reached against other tests or scenes may not hold now. To start "
+                "over, delete the journal or name a new one."
+            )
 
     def recorded(self, mutant: Mutant) -> dict[str, Any] | None:
         """What an earlier run recorded for `mutant`, or ``None``."""
@@ -167,6 +200,26 @@ class Journal:
             os.fsync(self._handle.fileno())
         except OSError as error:
             raise JournalRefused(f"could not write to the journal {self.path}: {error}") from error
+
+
+def _file_digest(path: str) -> str:
+    try:
+        return _digest(Path(path).read_bytes())
+    except OSError:
+        return "unreadable"  # still a fact two runs can agree on
+
+
+def _write_whole(target: Path, text: str) -> None:
+    """Write `text` to a new `target` through a rename, so a kill leaves all of it or none."""
+    staged = target.with_name(target.name + ".new")
+    try:
+        with staged.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staged, target)
+    except OSError as error:
+        raise JournalRefused(f"could not write to the journal {target}: {error}") from error
 
 
 def _lines(target: Path) -> tuple[list[str], int | None]:
@@ -206,14 +259,16 @@ def _check_header(path: str, line: str, expected: dict[str, Any]) -> None:
             f"{expected['gdmutant']}. Its verdicts may not match this version's. Delete it, or "
             "name a new journal, to start over."
         )
+    sources = found.get("sources")
+    recorded: dict[str, str] = sources if isinstance(sources, dict) else {}
     differences = []
-    if found.get("mutate") != expected["mutate"]:
-        mutated = found.get("mutate")
-        before = ", ".join(map(str, mutated)) if isinstance(mutated, list) else "nothing"
+    if sorted(recorded) != sorted(expected["sources"]):
         differences.append(
-            f"it mutated {before}, and this run mutates {', '.join(expected['mutate'])}"
+            f"it mutated {', '.join(sorted(recorded))}, and this run mutates "
+            f"{', '.join(sorted(expected['sources']))}"
         )
-    differences += _file_differences(found.get("files"), expected["files"])
+    else:
+        differences += _file_differences(recorded, expected["sources"])
     differences += _setting_differences(found.get("settings"), expected["settings"])
     if differences:
         raise JournalRefused(
@@ -225,8 +280,7 @@ def _check_header(path: str, line: str, expected: dict[str, Any]) -> None:
         )
 
 
-def _file_differences(found: object, expected: dict[str, str]) -> list[str]:
-    recorded: dict[str, str] = found if isinstance(found, dict) else {}
+def _file_differences(recorded: dict[str, str], expected: dict[str, str]) -> list[str]:
     differences = []
     for file, digest in expected.items():
         if file not in recorded:
@@ -256,13 +310,20 @@ def _read_entry(
     line: str,
     outcomes: dict[str, dict[str, Any]],
     confirmations: dict[tuple[str, ...], bool],
-) -> None:
+    recorded_files: dict[str, str] | None,
+) -> dict[str, str] | None:
+    """Read one entry into `outcomes` or `confirmations`, and return the project files the run
+    recorded, which this entry may be."""
     entry = _parse(path, number, line)
     mutant, outcome = entry.get("mutant"), entry.get("outcome")
     files, clean = entry.get("confirmed"), entry.get("clean")
+    project_files = entry.get("files")
     if isinstance(mutant, list) and isinstance(outcome, dict):
         outcomes[json.dumps(mutant)] = outcome
     elif isinstance(files, list) and isinstance(clean, bool):
         confirmations[tuple(str(file) for file in files)] = clean
+    elif isinstance(project_files, dict) and recorded_files is None:
+        return {str(file): str(digest) for file, digest in project_files.items()}
     else:
         raise JournalRefused(f"{path} is not a gdmutant journal: line {number} could not be read")
+    return recorded_files

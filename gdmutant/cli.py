@@ -1057,7 +1057,7 @@ def _open_journal(
             sources,
             settings or {},
             __version__,
-            _project_inputs(project_dir),
+            lambda: _project_inputs(project_dir),
         )
     except OSError as error:
         raise JournalRefused(f"could not open the journal {resume}: {error}") from error

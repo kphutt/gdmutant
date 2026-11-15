@@ -134,33 +134,6 @@ forever printing an error can grow that file until the disk is full, and a finis
 each worker's `user://` anyway. To read a worker's log while the run is still going, pass
 `--godot-file-logging`. A `--jobs 1` run keeps your project's own setting.
 
-#### Resuming a stopped run
-
-gdmutant writes its report only when a run ends. On a large project a run can take hours, and a
-run that stops part way (a killed process, a restarted machine) would otherwise lose every verdict
-so far. `--resume <file>` writes each verdict to `<file>` as it lands. Run the same command again
-and gdmutant skips every mutant the file already has a verdict for, runs the rest, and writes the
-report for the whole run.
-
-- The unmutated baseline runs again first, and so do coverage analysis's marker runs when it is
-  on. A red suite is still refused, and the time budget is measured afresh.
-- The file is refused, with exit 2, if it was written for different sources, or if anything that
-  can change a verdict differs:
-  - a script, scene, resource or shader in the project, tests included, or `project.godot`
-    (folders whose names start with `.`, such as `.godot`, are not checked)
-  - the runner, `--command`, `--godot`, `--tests`, `--timeout`, `--since` or `--exclude-tests`
-  - the coverage analysis settings, or the gdmutant version
-
-  `--jobs` may differ.
-- A verdict is written once the run after it has finished, so a run that stops loses the last
-  verdict of each worker as well as the mutants still running. A suite stopped by Ctrl-C is never
-  written as a verdict.
-- A serial run that is killed can leave a mutant in the file it was mutating (see
-  [How gdmutant writes to your files](#how-gdmutant-writes-to-your-files)). That file then counts as
-  changed, so restore it, for example with `git checkout -- <path>`, before you run again.
-- Delete the file to start over. A finished run's file still works: running the command again
-  runs no mutant and rewrites the report.
-
 The live test for this runs GdUnit4. GUT and the exit-code command runner get the same isolation
 from the same code, but no live run proves GUT's.
 
@@ -181,6 +154,35 @@ The default stays `1` (serial) even though `auto` is available: the load-average
 watches CPU/IO contention, never disk, and disk (a full project copy per worker) is this tool's
 real binding constraint. Opt in with `--jobs auto` deliberately, especially on a machine with
 plenty of cores but a small or shared disk.
+
+#### Resuming a stopped run
+
+gdmutant writes its report only when a run ends. On a large project a run can take hours, and a
+run that stops part way (a killed process, a restarted machine) would otherwise lose every verdict
+so far. `--resume <file>` writes each verdict to `<file>` as it lands. Run the same command again
+and gdmutant skips every mutant the file already has a verdict for, runs the rest, and writes the
+report for the whole run.
+
+- The unmutated baseline runs again first, and so do coverage analysis's marker runs when it is
+  on. A red suite is still refused, and the time budget is measured afresh.
+- The file is refused, with exit 2, if it was written for different sources, or if anything that
+  can change a verdict differs:
+  - a source file being mutated
+  - after the baseline, a script, scene, resource or shader in the project, tests included, or
+    `project.godot`. Folders whose names start with `.`, such as `.godot`, are not checked. A
+    suite that saves files into the project saves the same ones each time, so it can still resume.
+  - the runner, `--command`, `--godot`, `--tests`, `--timeout`, `--since` or `--exclude-tests`
+  - the coverage analysis settings, or the gdmutant version
+
+  `--jobs` may differ.
+- A verdict is written only once the run after it has finished, and not at all once gdmutant has
+  begun to stop. So a run that stops loses the last verdict of each worker, as well as the mutants
+  still running, and a suite that Ctrl-C cut short is not written as a verdict.
+- A serial run that is killed can leave a mutant in the file it was mutating (see
+  [How gdmutant writes to your files](#how-gdmutant-writes-to-your-files)). That file then counts as
+  changed, so restore it, for example with `git checkout -- <path>`, before you run again.
+- Delete the file to start over. A finished run's file still works: running the command again
+  runs no mutant and rewrites the report.
 
 #### Coverage analysis
 

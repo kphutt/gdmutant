@@ -2,7 +2,6 @@
 
 import json
 import threading
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -132,7 +131,6 @@ def test_a_different_set_of_sources_refuses_the_journal(tmp_path: Path) -> None:
     with pytest.raises(JournalRefused) as dropped:
         _open(tmp_path, {p: t for p, t in both.items() if p.endswith("f.gd")})
     assert "it mutated f.gd, g.gd, and this run mutates f.gd" in str(dropped.value)
-    assert "g.gd is gone since" in str(dropped.value)
 
 
 def test_a_changed_test_file_refuses_the_journal(tmp_path: Path) -> None:
@@ -140,25 +138,32 @@ def test_a_changed_test_file_refuses_the_journal(tmp_path: Path) -> None:
     tests = tmp_path / "tests"
     tests.mkdir()
     (tests / "test_f.gd").write_text("extends Node\n", encoding="utf-8")
+    (tests / "gone.gd").write_text("extends Node\n", encoding="utf-8")
     journal = str(tmp_path / "run.journal")
-    others = [str(tests / "test_f.gd")]
-    Journal.open(journal, str(tmp_path), sources, _SETTINGS, __version__, others).close()
-    Journal.open(journal, str(tmp_path), sources, _SETTINGS, __version__, others).close()
-    (tests / "test_f.gd").write_text("extends Node\nfunc test_more():\n\tpass\n", encoding="utf-8")
-    with pytest.raises(JournalRefused) as changed:
-        Journal.open(journal, str(tmp_path), sources, _SETTINGS, __version__, others)
-    assert "tests/test_f.gd has changed since" in str(changed.value)
-    (tests / "test_g.gd").write_text("extends Node\n", encoding="utf-8")
-    with pytest.raises(JournalRefused) as added:
-        Journal.open(
-            journal,
-            str(tmp_path),
-            sources,
-            _SETTINGS,
-            __version__,
-            [*others, str(tests / "test_g.gd")],
+
+    def checked(*names: str) -> None:
+        # The mutated source is listed too, as the CLI lists it: its own hash covers it.
+        others = [str(tmp_path / "f.gd"), *(str(tests / name) for name in names)]
+        opened = Journal.open(
+            journal, str(tmp_path), sources, _SETTINGS, __version__, lambda: others
         )
-    assert "tests/test_g.gd is new since" in str(added.value)
+        try:
+            opened.check_files()
+        finally:
+            opened.close()
+
+    Journal.open(journal, str(tmp_path), sources, _SETTINGS, __version__).close()  # died early
+    checked("test_f.gd", "gone.gd", "missing.gd")  # the first run to get this far records them
+    checked("test_f.gd", "gone.gd", "missing.gd")  # an unreadable file reads the same each time
+    (tests / "test_f.gd").write_text("extends Node\nfunc test_more():\n\tpass\n", encoding="utf-8")
+    (tests / "test_g.gd").write_text("extends Node\n", encoding="utf-8")
+    with pytest.raises(JournalRefused) as changed:
+        checked("test_f.gd", "test_g.gd", "missing.gd")
+    message = str(changed.value)
+    assert "tests/test_f.gd has changed since" in message
+    assert "tests/test_g.gd is new since" in message
+    assert "tests/gone.gd is gone since" in message
+    assert "f.gd" not in message.replace("test_f.gd", "")
 
 
 def test_a_different_setting_refuses_the_journal(tmp_path: Path) -> None:
@@ -459,7 +464,7 @@ def test_an_ignored_mutant_is_neither_recorded_nor_resumed(tmp_path: Path) -> No
         assert Verdict.KILLED in {o.verdict for o in result.outcomes}
     ran = sum(o.verdict is not Verdict.IGNORED for o in result.outcomes)
     lines = (tmp_path / "run.journal").read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1 + ran  # the header, and each mutant that ran, once
+    assert len(lines) == 2 + ran  # the header, the project's files, and each mutant, once
 
 
 def test_a_resumed_multi_file_run_gives_every_file_its_verdicts(tmp_path: Path) -> None:
@@ -543,7 +548,9 @@ def test_a_journal_that_cannot_be_opened_is_a_setup_error(
     runner = MarkerRunner(str(path), ">=")
     missing = str(tmp_path / "no-such-dir" / "run.journal")
     assert run_mutation(str(path), str(tmp_path), runner, resume=missing) == 2
-    assert f"could not open the journal {missing}" in capsys.readouterr().err
+    assert f"could not write to the journal {missing}" in capsys.readouterr().err
+    assert run_mutation(str(path), str(tmp_path), runner, resume=str(tmp_path)) == 2
+    assert f"could not open the journal {tmp_path}" in capsys.readouterr().err  # a folder
 
 
 def test_a_journal_that_stops_taking_writes_ends_the_run_with_the_source_restored(
@@ -714,34 +721,46 @@ def test_a_suite_the_interrupt_killed_is_not_journaled_as_a_kill(tmp_path: Path)
 
 @dataclass
 class _StoppedUnderJobs:
-    """Every mutant survives, until run `stops_on` stops every command, as Ctrl-C does under
-    --jobs, and dies. From then on a run reports a failure, as a stopped suite does."""
+    """Every mutant survives until run `stops_on`. That run waits until another worker's run is
+    going, then stops every command, as Ctrl-C does under --jobs, and dies. The run it waited
+    for ends after the stop, and reports a failure, as a stopped suite does."""
 
     stops_on: int
     runs: int = 0
+    after_stop: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
+    going: threading.Event = field(default_factory=threading.Event)
+    stopped: threading.Event = field(default_factory=threading.Event)
 
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         with self.lock:
             self.runs += 1
-            stopping = self.runs == self.stops_on
-        if stopping:
+            number = self.runs
+        if number < self.stops_on:
+            return SuiteResult(tests=3, failures=0, errors=0)
+        if number == self.stops_on:
+            assert self.going.wait(5)
             stop_running_commands()
+            self.stopped.set()
             raise _Killed
-        time.sleep(0.01)
+        self.going.set()
+        assert self.stopped.wait(5)
+        with self.lock:
+            self.after_stop += 1
         return SuiteResult(tests=3, failures=int(commands_stopping()), errors=0)
 
 
 def test_suites_a_stop_killed_under_jobs_are_not_journaled_as_kills(tmp_path: Path) -> None:
     sources = _project(tmp_path, {"f.gd": _LONGER})
     journal = _open(tmp_path, sources)
+    runner = _StoppedUnderJobs(5)
     try:
         with pytest.raises(_Killed):
             _run(
                 str(tmp_path),
                 str(tmp_path / "f.gd"),
                 _LONGER,
-                _StoppedUnderJobs(5),
+                runner,
                 ADAPTER,
                 jobs=3,
                 journal=journal,
@@ -749,6 +768,7 @@ def test_suites_a_stop_killed_under_jobs_are_not_journaled_as_kills(tmp_path: Pa
     finally:
         allow_commands()
     journal.close()
+    assert runner.after_stop >= 1  # a suite did end after the stop, so there was one to keep out
     assert _killed_verdicts(str(tmp_path / "run.journal")) == 0
 
 
@@ -871,3 +891,27 @@ def test_run_mutation_refuses_a_journal_once_a_test_changed(
     capsys.readouterr()
     assert run_mutation(str(path), str(tmp_path), runner, resume=journal) == 2
     assert "tests/test_f.gd has changed since" in capsys.readouterr().err
+
+
+@dataclass
+class _WritesIntoTheProject(MarkerRunner):
+    """`MarkerRunner`, whose suite saves a resource into the project every time it runs."""
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        saved = Path(project_dir) / "test_out" / "state.tres"
+        saved.parent.mkdir(exist_ok=True)
+        saved.write_text("[resource]\n", encoding="utf-8")
+        return super().run(project_dir, timeout)
+
+
+def test_a_suite_that_writes_into_the_project_can_still_be_resumed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "f.gd"
+    path.write_text(_SOURCE, encoding="utf-8")
+    journal = str(tmp_path / "run.journal")
+    runner = _WritesIntoTheProject(str(path), ">=")
+    assert run_mutation(str(path), str(tmp_path), runner, resume=journal) == 0
+    capsys.readouterr()
+    assert run_mutation(str(path), str(tmp_path), runner, resume=journal) == 0
+    assert f"Resuming {journal}: " in capsys.readouterr().err
