@@ -570,18 +570,6 @@ class BoundedOutput:
     stdout: _StreamTail
     stderr: _StreamTail
 
-    @classmethod
-    def of(
-        cls, returncode: int, stdout: str = "", stderr: str = "", watch: Sequence[str] = ()
-    ) -> BoundedOutput:
-        """What `run_bounded` keeps of a command that printed `stdout` and `stderr`."""
-        out, err = _StreamTail(watch), _StreamTail(watch)
-        for stream, text in ((out, stdout), (err, stderr)):
-            stream._feed(text.replace("\r\n", "\n").replace("\r", "\n"))
-            if stream._line:
-                stream._take(stream._line, stream._continued)
-        return cls(returncode, out, err)
-
     def detail(self) -> str:
         """The end of stderr if it said anything, else of stdout, stripped."""
         return (self.stderr if self.stderr.seen else self.stdout).tail.strip()

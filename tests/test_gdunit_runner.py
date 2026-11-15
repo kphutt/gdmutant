@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
-from conftest import patch_run
+from conftest import bounded_output, patch_run
 
 import gdmutant.adapters.gdscript.runner as runner_mod
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner
@@ -366,9 +366,9 @@ def test_the_import_warm_up_ignores_its_exit_code_and_goes_through_run_bounded(
     ) -> BoundedOutput:
         bounded.append(command)
         if "--import" in command:
-            return BoundedOutput.of(1, "import chatter", "", watch)
+            return bounded_output(1, "import chatter", "", watch)
         report.write_text('<testsuite tests="1" failures="0"/>', encoding="utf-8")
-        return BoundedOutput.of(0, "", "", watch)
+        return bounded_output(0, "", "", watch)
 
     def no_run(*args: object, **kwargs: object) -> None:
         raise AssertionError("Godot was started without run_bounded")
