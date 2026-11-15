@@ -15,9 +15,29 @@ All notable changes to gdmutant are recorded here. The format follows
 ### Changed
 
 - A mutant scored `error` now says why its run failed. The `--json` report carries the reason as
-  the mutant's `statusReason`, and a coverage self-check that stops on an `error` quotes it. The
-  GdUnit4 and GUT "wrote no report" message now names the report's path inside the project, not
-  an absolute one. (#359)
+  the mutant's `statusReason`, and a coverage self-check that stops on an `error` quotes it. When
+  Godot printed a `SCRIPT ERROR`, the GdUnit4 and GUT reason quotes the first one, not only the
+  end of the output. The GdUnit4 and GUT "wrote no report" message now names the report's path
+  inside the project, not an absolute one. (#359)
+- gdmutant is now verified against GdUnit4 6.2.3, up from 6.2.2.
+
+### Fixed
+
+- A temporary folder gdmutant cannot delete no longer ends the run without a report. On Windows
+  that happened when something still held a file in it, such as a child of a timed-out test
+  command. gdmutant now leaves the folder, warns with its path on stderr (even under
+  `--progress none`), and writes the report. (#365)
+
+- A test run that floods its output no longer runs gdmutant out of memory under `--runner gdunit4`
+  or `--runner gut` either. 0.1.5 fixed this for `--runner command` only.
+- A mutant that times out now stops every process its test command started, not just the command
+  itself. A wrapper that starts Godot used to leave Godot running after a timeout, still using
+  the copy of the project gdmutant was about to delete. The same applies to Godot's one-time
+  `--import` step. On Windows, a process whose parent has already exited is still out of reach.
+  Ctrl-C under `--jobs` now stops the test commands still running too, and waits for them before
+  deleting the workers' copies. On Linux and macOS each test command now runs in its own session,
+  so gdmutant stops it on a timeout or Ctrl-C, but if gdmutant itself is killed or its terminal
+  closes, the command keeps running. (#365)
 
 ### Fixed
 

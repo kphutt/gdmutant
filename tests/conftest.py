@@ -1,28 +1,42 @@
 """Shared test fakes + session-wide test isolation."""
 
-import atexit
 import os
 import shutil
-import stat
+import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from gdmutant.engine.runner import SuiteResult
+from gdmutant.engine.runner import (
+    CAPTURE_ENCODING,
+    BoundedOutput,
+    LineReaders,
+    SuiteResult,
+    _StreamTail,
+)
 
 _TEMPLATES: dict[str, tuple[Path, Any]] = {}
 
 
-def _remove_read_only(func: Callable[[str], object], path: str, _exc: BaseException) -> None:
-    """`shutil.rmtree`'s retry for a read-only file. Git writes its object files read-only, and on
-    Windows removing one fails until it is made writable, so without this the cleanup fails
-    silently and leaves every template behind in the temp directory."""
-    os.chmod(path, stat.S_IWRITE)
-    func(path)
+#: Where `copy_of_template` builds its templates: pytest's own temporary directory for this run.
+#: pytest prunes it on a later run, and a killed run's within about 3 days (its lock's timeout).
+_TEMPLATE_ROOT: list[Path] = []
+
+
+def start_template_session(root: Path) -> None:
+    """Build templates under `root` from now on. A second pytest session in one process (mutmut
+    runs several) gets a new directory, so the templates built for the last one are forgotten."""
+    _TEMPLATE_ROOT[:] = [root]
+    _TEMPLATES.clear()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _template_root(tmp_path_factory: pytest.TempPathFactory) -> None:
+    start_template_session(tmp_path_factory.mktemp("templates"))
 
 
 def copy_of_template(dest: Path, key: str, build: Callable[[Path], Any]) -> Any:
@@ -38,8 +52,8 @@ def copy_of_template(dest: Path, key: str, build: Callable[[Path], Any]) -> Any:
     ever sees the copy. Anything that must point between the copied files, like a git remote, has to
     be relative for the same reason."""
     if key not in _TEMPLATES:
-        template = Path(tempfile.mkdtemp(prefix="gdmutant-test-template-"))
-        atexit.register(shutil.rmtree, template, onexc=_remove_read_only)
+        (root,) = _TEMPLATE_ROOT
+        template = Path(tempfile.mkdtemp(dir=root))
         _TEMPLATES[key] = (template, build(template))
     template, value = _TEMPLATES[key]
     shutil.copytree(template, dest, dirs_exist_ok=True)
@@ -135,3 +149,72 @@ class MarkerRunner:
     def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
         content = Path(self.target).read_text(encoding="utf-8")
         return SuiteResult(tests=self.tests, failures=int(self.kill_marker in content), errors=0)
+
+
+#: The file name `hold_files` makes undeletable, as a process still using it would on Windows.
+HELD = "held-by-a-leftover-process.lock"
+
+
+def hold_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make deleting any file named `HELD` fail as Windows does while a process still has it open
+    (WinError 32 is a `PermissionError`), on every platform."""
+    unlink = os.unlink
+
+    def held(path: Any, *args: Any, **kwargs: Any) -> None:
+        if os.path.basename(os.fsdecode(path)) == HELD:
+            raise PermissionError(32, "The process cannot access the file", os.fsdecode(path))
+        unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", held)
+
+
+def left_behind(stderr: str) -> list[Path]:
+    """The folders the cleanup warnings in `stderr` name, so a test can delete them itself."""
+    marker = "warning: could not delete the temporary folder "
+    return [
+        Path(line[len(marker) :].split(" (something may")[0])
+        for line in stderr.splitlines()
+        if line.startswith(marker)
+    ]
+
+
+def bounded_output(
+    returncode: int,
+    stdout: str = "",
+    stderr: str = "",
+    watch: Sequence[str] = (),
+    lines: LineReaders | None = None,
+) -> BoundedOutput:
+    """What `run_bounded` keeps of a command that printed `stdout` and `stderr`: each is read
+    through `_StreamTail.drain`, as a real run's pipe is."""
+    tails = []
+    for text in (stdout, stderr):
+        tail = _StreamTail(watch, lines() if lines else None)
+        with tempfile.TemporaryFile() as file:  # a file, not a pipe: a long text cannot block
+            file.write(text.encode(CAPTURE_ENCODING))
+            file.seek(0)
+            tail.drain(file)
+        if tail.error is not None:
+            raise tail.error
+        tails.append(tail)
+    return BoundedOutput(returncode, *tails)
+
+
+def patch_run(monkeypatch: pytest.MonkeyPatch, module: Any, fake: Callable[..., Any]) -> None:
+    """Route a fake `subprocess.run` through `run_bounded`, which `module` runs Godot with, and
+    through `subprocess.run` itself, which it uses for anything else."""
+
+    def bounded(
+        command: Sequence[str],
+        cwd: str,
+        timeout: float,
+        watch: Sequence[str] = (),
+        lines: LineReaders | None = None,
+    ) -> BoundedOutput:
+        done = fake(list(command), cwd=cwd, timeout=timeout)
+        if not isinstance(done, subprocess.CompletedProcess):  # a fake with nothing to print
+            done = subprocess.CompletedProcess(command, 0, "", "")
+        return bounded_output(done.returncode, done.stdout or "", done.stderr or "", watch, lines)
+
+    monkeypatch.setattr(module.subprocess, "run", fake)
+    monkeypatch.setattr(module, "run_bounded", bounded)

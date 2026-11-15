@@ -19,7 +19,7 @@
 ## What it is
 
 Coverage tells you a line *ran*. Mutations tell you if a bug there would be *caught*: a killed
-mutant means yes, a survivor means no. A standalone CLI, no AI required.
+mutant means yes, a survivor means no. A standalone CLI, no AI required. You can use it to check whether AI-generated tests catch deliberately introduced bugs.
 
 Same idea, other languages: [mutmut](https://github.com/boxed/mutmut) for Python, [Stryker](https://stryker-mutator.io/) for JS/TS, [PIT](https://pitest.org/) for Java.
 
@@ -217,7 +217,7 @@ Every input and output, and how to pin a version, is in
 | | Verified at every release | Expected to work |
 |---|---|---|
 | Godot | 4.7.2 | 4.3+ |
-| Runner | GUT 9.7.1, gdUnit4 6.2.2 | GUT 9.x, gdUnit4 6.x, any headless command |
+| Runner | GUT 9.7.1, gdUnit4 6.2.3 | GUT 9.x, gdUnit4 6.x, any headless command |
 
 ## Documentation
 

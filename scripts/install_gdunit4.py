@@ -16,9 +16,9 @@ from pathlib import Path
 from _addon_install import install_addon
 
 # --- the single pin -----------------------------------------------------------------------------
-PIN_VERSION = "v6.2.2"
-PIN_SHA = "0127a55f4543dfc24746f6e5c7ba6f94105d51f2"
-PIN_TREE_HASH = "df5bdd0efb77e08ba0d033dce9a19d1080264f82bf4413dab4cb008c79d72a62"
+PIN_VERSION = "v6.2.3"
+PIN_SHA = "f2e4f8679ebd28e27ef523a4fb7b09e8337bfce9"
+PIN_TREE_HASH = "c9e22a8e4cec0dc7d7a0130a857e1ae1fed7b920d8a57bd765473574308ceb87"
 # ------------------------------------------------------------------------------------------------
 
 

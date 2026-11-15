@@ -27,11 +27,12 @@ import math
 import os
 import queue
 import shutil
+import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -61,6 +62,8 @@ from gdmutant.engine.runner import (
     Runner,
     SuiteResult,
     SuiteTimeout,
+    allow_commands,
+    stop_running_commands,
 )
 
 # Per-mutant time budget, derived from the baseline run so a hanging mutant is cut off in seconds
@@ -846,7 +849,41 @@ _ISOLATED_BASELINE_NOTE = (
 
 
 @contextmanager
-def _baseline_project(project_dir: str, adapter: Adapter, isolated: bool) -> Iterator[str]:
+def _scratch_dir(prefix: str) -> Iterator[str]:
+    """A temporary directory whose failed cleanup is a warning, never the end of the run: a run's
+    results are worth more than its scratch space. Deleting fails while something still holds a
+    file in it, such as a timed-out command's child, or antivirus on Windows."""
+    tmp = ""
+    try:
+        with tempfile.TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True) as tmp:
+            yield tmp
+    finally:  # a failed run is when a leftover process is likeliest
+        if tmp:
+            warn_if_left_behind(tmp)
+
+
+def warn_if_left_behind(folder: str | Path) -> None:
+    """Name `folder` on stderr if it is still there, even under ``--progress none``, since nothing
+    else tells anyone. Never raises: it runs during cleanup, where an error would end the run."""
+    try:
+        there = Path(folder).exists()
+    except OSError:  # e.g. a folder Windows is still deleting: say so rather than guess
+        there = True
+    if there:
+        with suppress(OSError, ValueError):  # stderr gone or closed (ValueError)
+            print(
+                f"warning: could not delete the temporary folder {folder} (something may still "
+                "be using it). Delete it once nothing is.",
+                file=sys.stderr,
+            )
+
+
+@contextmanager
+def _baseline_project(
+    project_dir: str,
+    adapter: Adapter,
+    isolated: bool,
+) -> Iterator[str]:
     """Yield the directory the baseline suite runs in: the project itself, or an isolated copy.
 
     The baseline's job is to prove the suite is green **in the conditions the mutants will run in**
@@ -874,7 +911,7 @@ def _baseline_project(project_dir: str, adapter: Adapter, isolated: bool) -> Ite
     if not isolated:
         yield project_dir
         return
-    with tempfile.TemporaryDirectory(prefix="gdmutant-baseline-") as tmp:
+    with _scratch_dir("gdmutant-baseline-") as tmp:
         copy = str(Path(tmp) / "project")
         shutil.copytree(project_dir, copy)
         # `mkdtemp` picked `tmp`, so this token is unique on the machine and cannot collide with a
@@ -1303,8 +1340,8 @@ def _coverage_pass(
 
     Stops the run with `CoverageRunFailed` unless every clean-run rule holds
     (`engine.coverage.clean_run_problems`, plus `engine.coverage.window_problems` when selecting),
-    listing each one that failed. The copy is deleted before this returns, and the project itself is
-    never touched.
+    listing each one that failed. The copy is deleted before this returns unless something still
+    holds a file in it (`_scratch_dir`), and the project itself is never touched.
     """
     rel = {
         path: _project_relative(
@@ -1318,7 +1355,7 @@ def _coverage_pass(
     forward_label = _FORWARD if per_file else _ONE_PASS
     if progress is not None:
         progress("running the suite once with coverage markers ...")
-    with tempfile.TemporaryDirectory(prefix="gdmutant-markers-") as tmp:
+    with _scratch_dir("gdmutant-markers-") as tmp:
         copy = Path(tmp) / "project"
         # `.git` is left behind: nothing in a test run reads it, and on a real project it can be
         # the largest thing in the tree.
@@ -2148,15 +2185,16 @@ def _run_pool(
                 clock.record(outcome.verdict, ran)
 
     load_threshold = float(jobs)
-    with tempfile.TemporaryDirectory(prefix="gdmutant-jobs-") as tmp:
+    with _scratch_dir("gdmutant-jobs-") as tmp:
         # Unique per run on this machine (mkdtemp picked it), so two gdmutant runs going at once
         # cannot hand their workers the same isolation token.
         run_id = Path(tmp).name
         feeder = threading.Thread(target=feed)
-        feeder.start()
         threads: list[threading.Thread] = []
         isolated: list[str] = []
+        started_ok = True
         try:
+            feeder.start()  # inside the `try`: a Ctrl-C just after must still stop it
             for w in range(worker_count):
                 if stop.is_set():  # an error already: start no more workers
                     break
@@ -2168,28 +2206,55 @@ def _run_pool(
                 # returns, and a suite run against a copy that is not yet isolated is exactly the
                 # collision this prevents.
                 token = f"{run_id}-w{w}"
+                isolated.append(token)  # recorded first, so an interrupt cannot skip its release
                 adapter.isolate_copy(worker_dir, token)
-                isolated.append(token)
                 thread = threading.Thread(target=worker, args=(worker_dir,))
+                threads.append(thread)  # likewise for its join
                 thread.start()
-                threads.append(thread)
         except BaseException:
-            stop.set()
+            started_ok = False
             raise
         finally:
             # Join inside the `finally`, so a failure part way through starting the workers still
             # waits for the ones already running. Leaving this to the normal path meant an
             # exception here (a copy that would not copy) fell straight out of the `with`, which
             # then deleted the tree the running workers were reading from.
-            for thread in threads:
-                thread.join()
-            stop.set()  # no worker is left to take what the feeder still holds
-            feeder.join()
-            for token in isolated:
-                adapter.release_copy(token)
+            try:
+                _join_workers(threads, stop, stopping=not started_ok)
+            finally:
+                try:
+                    stop.set()  # no worker is left to take what the feeder still holds
+                    with suppress(RuntimeError):  # it never started
+                        feeder.join()
+                    for token in isolated:
+                        adapter.release_copy(token)
+                finally:
+                    allow_commands()
     if errors:
         raise errors[0]
     return outcomes
+
+
+def _join_workers(
+    threads: list[threading.Thread], stop: threading.Event, stopping: bool = False
+) -> None:
+    """Wait for every worker. On Ctrl-C (only this thread gets it), any other interrupt, or with
+    `stopping` set, stop the workers and every command they run, and keep waiting."""
+    interrupted: BaseException | None = None
+    while True:
+        try:
+            if stopping:  # inside the `try`, so a Ctrl-C here is caught too
+                stop.set()
+                stop_running_commands()
+            for thread in threads:
+                while thread.is_alive():
+                    thread.join(_POLL_SECS)  # in slices, so a Ctrl-C is noticed promptly
+            break
+        except BaseException as exc:  # their copies must outlive them, whatever ends the wait
+            interrupted = interrupted or exc
+            stopping = True
+    if interrupted is not None:
+        raise interrupted
 
 
 def run_paths(
