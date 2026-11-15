@@ -646,7 +646,7 @@ save as-is (see GitHub's [Quickstart for GitHub
 Actions](https://docs.github.com/en/actions/quickstart) too, if you haven't written one before):
 
 ```yaml
-- uses: kphutt/gdmutant@b210ecfa725d138bfdb2e29ac7e1266ea1052d66 # v0.1.7
+- uses: kphutt/gdmutant@v0.1.7
   with:
     godot-version: "4.7.0"   # the only required input
     project-path: ./
@@ -657,7 +657,7 @@ already matches gdmutant's own default, `res://test`. For GUT, whose stock layou
 `test/unit/` instead, set both `runner` and `tests` explicitly:
 
 ```yaml
-- uses: kphutt/gdmutant@b210ecfa725d138bfdb2e29ac7e1266ea1052d66 # v0.1.7
+- uses: kphutt/gdmutant@v0.1.7
   with:
     godot-version: "4.7.0"
     project-path: ./
@@ -751,7 +751,7 @@ one or the other.
 takes:
 
 ```yaml
-- uses: kphutt/gdmutant@b210ecfa725d138bfdb2e29ac7e1266ea1052d66 # v0.1.7
+- uses: kphutt/gdmutant@v0.1.7
   with:
     godot-version: "4.7.0"
     project-path: ./
@@ -787,7 +787,7 @@ config](#project-config-gdmutanttoml) above.
 Give the gdmutant step an `id` to reach its output from a later step:
 
 ```yaml
-- uses: kphutt/gdmutant@b210ecfa725d138bfdb2e29ac7e1266ea1052d66 # v0.1.7
+- uses: kphutt/gdmutant@v0.1.7
   id: gdmutant
   with:
     godot-version: "4.7.0"
@@ -801,14 +801,12 @@ Give the gdmutant step an `id` to reach its output from a later step:
 
 ### Pinning
 
-Pin the commit SHA shown above, or a full `vX.Y.Z` tag (e.g. `@v0.1.0`). Never `@v1` or `@v0`: a
-tag ruleset blocks deleting or re-pointing any tag for anyone acting normally, and the release
-guard rejects a tag that doesn't equal the packaged version, so a floating major tag is not
-something this repo can produce through ordinary use.
-Pinning `@v0.1.0` works and is just as stable, for the same reason.
+Pin the exact release tag, such as `@v0.1.7`. gdmutant's release tags cannot be moved or
+deleted, and releases from 0.1.8 on are also immutable. There are no major-version tags such as
+`@v1`. If your policy requires commit IDs, pin the release's commit instead, with the tag as a
+comment: `kphutt/gdmutant@<sha> # v0.1.7`.
 
-The bumps a floating tag would have handed you come from Dependabot instead, as PRs you review
-before taking:
+Dependabot can keep the pin up to date, as PRs you review before taking:
 
 ```yaml
 # .github/dependabot.yml

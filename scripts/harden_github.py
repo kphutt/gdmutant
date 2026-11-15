@@ -582,12 +582,33 @@ def live_environment_policy(repo: str, name: str) -> LiveEnvironmentPolicy:
     )
 
 
+def immutable_releases_enabled(repo: str) -> bool | None:
+    """Whether the repo's releases are immutable: True, False, or None when the API cannot say.
+
+    The docs pin the action by release tag (`kphutt/gdmutant@vX.Y.Z`), which is only as safe as
+    the tag and its release are fixed. The tag ruleset keeps the tag in place; this setting keeps
+    the published release from being edited or its assets swapped. A failed or unparseable read is
+    None, never False, so "could not ask" is not reported as a confirmed answer either way."""
+    succeeded, out = _gh(["api", f"repos/{repo}/immutable-releases"])
+    if not succeeded:
+        return None
+    try:
+        enabled = json.loads(out).get("enabled")
+    except (ValueError, AttributeError):
+        return None
+    return enabled if isinstance(enabled, bool) else None
+
+
 def report_state(
     repo: str,
     contexts: list[str] | None = None,
     derivation_error: ValueError | None = None,
-) -> None:
-    """Print live settings plus a two-way comparison against what this script would require."""
+) -> bool:
+    """Print live settings plus a two-way comparison against what this script would require.
+
+    Returns whether immutable releases read back as enabled. The docs pin the action by release
+    tag and rely on that setting, so both `--check` and a converge run fail when it is not
+    confirmed, unreadable included: a gate never passes on an answer it did not get."""
     succeeded, out = _gh(["api", f"repos/{repo}"])
     if succeeded:
         data = json.loads(out)
@@ -606,6 +627,13 @@ def report_state(
             print(f"    {key:34} {(security.get(key) or {}).get('status')}")
     else:
         _warn("Could not read repo settings.")
+
+    immutable = immutable_releases_enabled(repo)
+    shown = {True: "enabled", False: "DISABLED", None: "?"}[immutable]
+    print(f"    {'immutable releases':34} {shown}")
+    if immutable is not True:
+        _warn("Immutable releases are not confirmed on. The docs pin the action by release tag,")
+        print("         which is only safe while a published release cannot be changed.")
 
     succeeded, out = _gh(["api", f"repos/{repo}/branches/main/protection"])
     print(f"    {'branch protection (main)':34} {'ENABLED' if succeeded else 'not set'}")
@@ -678,6 +706,7 @@ def report_state(
             # Reported, never written away: an extra pattern may be a deliberate manual addition,
             # and silently deleting one would make this script reduce a control it exists to hold.
             _log(f"    '{environment}' also allows (not managed here): {extra}")
+    return immutable is True
 
 
 # ---------------------------------------------------------------------------------------------
@@ -774,8 +803,8 @@ def main(argv: list[str] | None = None) -> int:
     # failure is exactly what the operator needs to see, and hiding the live state behind it
     # would leave them guessing at what protection actually looks like.
     if args.check:
-        report_state(args.repo, contexts, derivation_error)
-        return 1 if derivation_error is not None else 0
+        immutable_confirmed = report_state(args.repo, contexts, derivation_error)
+        return 1 if derivation_error is not None or not immutable_confirmed else 0
 
     if derivation_error is not None or contexts is None:
         print(
@@ -832,6 +861,16 @@ def main(argv: list[str] | None = None) -> int:
             ["-X", "PUT", f"repos/{args.repo}/automated-security-fixes"],
             None,
             "Could not enable automated security fixes.",
+            args.dry_run,
+        )
+    )
+    # The docs pin the action by release tag, so a published release must not be editable.
+    applied.append(
+        _apply(
+            "Immutable releases enabled.",
+            ["-X", "PUT", f"repos/{args.repo}/immutable-releases"],
+            None,
+            "Could not enable immutable releases.",
             args.dry_run,
         )
     )
@@ -957,7 +996,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.dry_run:
         print()
-        report_state(args.repo, contexts)
+        # The read-back counts as a setting: a PUT that "succeeded" but left releases mutable has
+        # not converged, and the docs' tag pins depend on it.
+        applied.append(report_state(args.repo, contexts))
 
     failed = _failure_count(applied)
     if failed:

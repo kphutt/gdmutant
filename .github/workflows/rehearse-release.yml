@@ -1,8 +1,8 @@
 name: Release rehearsal
 
 # Walks the release path end to end on a throwaway copy, on every merge to main: the version bump,
-# the dated changelog, a local tag, the tag guard, the full suite on the tagged commit, `uv build` +
-# `twine check`, every image in the built long description, and the post-release pin bump. The
+# the action pins, the dated changelog, a local tag, the tag guard, the full suite on the tagged
+# commit, `uv build` + `twine check`, and every image in the built long description. The
 # script's own docstring (scripts/rehearse_release.py) says what each step is and what the
 # rehearsal cannot reach.
 #

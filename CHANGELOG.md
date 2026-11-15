@@ -12,6 +12,10 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The GitHub Action examples now use the release tag, such as `@v0.1.7`, instead of a commit ID.
+
 ### Fixed
 
 - Under GdUnit4 and GUT, a mutant whose own file Godot cannot compile is now scored `invalid`,
