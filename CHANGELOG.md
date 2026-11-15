@@ -14,6 +14,7 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ### Changed
 
+- The GitHub Action examples now use the release tag, such as `@v0.1.7`, instead of a commit ID.
 - On Windows, gdmutant now stops every process a test command leaves running, once the command
   finishes or times out, including one started on purpose to outlive it, such as a build server.
   Under `--jobs`, turn off build-server reuse (for example MSBuild's node reuse). (#365)

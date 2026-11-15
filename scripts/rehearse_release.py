@@ -3,8 +3,8 @@
 lands instead of the day a release is cut.
 
 WHY THIS EXISTS. The tag-shaped guards in docs/releasing.md run on a path nobody walks between
-releases: the version bump, the changelog rename, the tagged commit, the built long description,
-the post-release pin bump. Bugs there sat quiet until release day, over and over. The release gate
+releases: the version bump, the changelog rename, the action pins, the tagged commit, the built
+long description. Bugs there sat quiet until release day, over and over. The release gate
 could never pass `tests/test_action_pin.py` on a tagged commit (#286). The runbook drifted from the
 tree (#305). A pin bump was a hand edit (#290). This script does, on a copy, what the maintainer
 does at release time, and runs every check that path runs.
@@ -14,9 +14,9 @@ WHAT IT DOES, IN ORDER. Each step is one step of docs/releasing.md, done on a th
 
   1. Pick the version to rehearse: pyproject.toml's version if it is not tagged yet (a release in
      progress), otherwise the next patch version.
-  2. Runbook steps 1-2: set the version, re-lock, date the changelog. The pins are left alone:
-     the release commit never touches them. Each edit must find exactly what the runbook says it
-     will find, so a runbook that has drifted from the tree fails here.
+  2. Runbook steps 1-2: set the version, re-lock, point the action pins at the new tag
+     (scripts/bump_action_pins.py), date the changelog. Each edit must find exactly what the
+     runbook says it will find, so a runbook that has drifted from the tree fails here.
   3. The version-bump commit, before the tag exists: the suite (`pytest`), which is the only leg
      of Verify that the release commit can newly fail -- ci.yml already ran the whole `verify` job
      for real on the release pull request.
@@ -24,9 +24,7 @@ WHAT IT DOES, IN ORDER. Each step is one step of docs/releasing.md, done on a th
      guard (scripts/check_release_tag.py), ci.yml's whole `verify` job via
      scripts/verify_local.py, `uv build`, `twine check`, and every image in the built long
      description (scripts/check_readme_images.py).
-  5. Runbook step 10: scripts/bump_action_pins.py, committed, then tests/test_action_pin.py must
-     pass, now holding every pin to the new tag's commit and version.
-  6. ci.yml's `license-check` job, publish.yml's last non-upload gate. It runs last because it
+  5. ci.yml's `license-check` job, publish.yml's last non-upload gate. It runs last because it
      rebuilds the clone's environment without the dev group.
 
 WHAT THE REHEARSAL RUNS, AGAINST WHAT publish.yml RUNS, SO NEITHER LIST IS HELD IN SOMEONE'S HEAD.
@@ -288,9 +286,8 @@ def commit_args(message: str, allow_empty: bool = False) -> list[str]:
 
     `allow_empty` is for the version-bump commit only. When a release is already in progress every
     edit runbook steps 1-2 ask for has been made already, so the commit is genuinely empty and the
-    rehearsal must carry on rather than read git's "nothing to commit" as a failure. The step 10
-    pin bump never gets it: an empty commit there means `bump_action_pins.py` did nothing, which is
-    a finding, not a no-op."""
+    rehearsal must carry on rather than read git's "nothing to commit" as a failure. No other commit
+    gets it."""
     empty = ["--allow-empty"] if allow_empty else []
     return ["git", *COMMITTER, "commit", "--quiet", "--all", *empty, "-m", message]
 
@@ -311,7 +308,7 @@ def refuse_a_stored_identity(stored: str) -> None:
 
 
 def refuse_an_unchanged_version_bump(dirty: bool, last: str | None, tag: str) -> None:
-    """Runbook steps 1-2 asked for three edits and the tree did not move. Exactly one state explains
+    """Runbook steps 1-2 asked for four edits and the tree did not move. Exactly one state explains
     that innocently: the packaged version is not tagged yet, so a release of it is already in
     progress and its own release pull request made every edit already. Anything else means an edit
     found what it expected and then wrote back what was already there."""
@@ -319,7 +316,7 @@ def refuse_an_unchanged_version_bump(dirty: bool, last: str | None, tag: str) ->
         return
     raise StepFailed(
         f"{tag} is the next release after v{last}, so runbook steps 1-2 had a version to bump, a "
-        "lockfile to re-resolve and a changelog heading to date -- and "
+        "lockfile to re-resolve, action pins to move and a changelog heading to date -- and "
         "changed nothing at all. One of those edits no longer edits the file it names."
     )
 
@@ -517,7 +514,6 @@ def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
         f"tag {tag}: test suite",
         f"tag {tag}: uv build + twine check",
         f"tag {tag}: long-description images",
-        "runbook step 10: bump_action_pins.py + strict pin test",
         "license compliance (ci.yml's license-check job)",
     ]
 
@@ -536,6 +532,8 @@ def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
         pyproject = work / "pyproject.toml"
         rewrite_text(pyproject, lambda text: set_pyproject_version(text, version))
         run(["uv", "lock", "--quiet"], work)
+        bump = ["uv", "run", "--frozen", "python", "scripts/bump_action_pins.py"]
+        run([*bump, "--version", version], work)
         changelog = work / "CHANGELOG.md"
         today = datetime.date.today().isoformat()
         rewrite_text(changelog, lambda text: date_changelog(text, version, today))
@@ -618,14 +616,7 @@ def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
             raise StepFailed(f"check_readme_images.py exited {code}; its report is above")
         return "every image resolves (the banner checked at the rehearsed commit)"
 
-    def pins() -> str:
-        run(["uv", "run", "--frozen", "python", "scripts/bump_action_pins.py"], work)
-        # No --allow-empty, unlike the version-bump commit: if bump_action_pins.py left the tree
-        # untouched, git's "nothing to commit" is the finding, not an inconvenience.
-        run(commit_args(f"chore: bump action pins to {tag}"), work)
-        return pytest_summary(run([*PYTEST, "--no-cov", "tests/test_action_pin.py"], work))
-
-    actions = [clone, edit, suite, tag_guard, gate, build, images, pins, licenses]
+    actions = [clone, edit, suite, tag_guard, gate, build, images, licenses]
     try:
         for index, (name, action) in enumerate(zip(names, actions, strict=True)):
             if not rehearsal.run(name, action):
