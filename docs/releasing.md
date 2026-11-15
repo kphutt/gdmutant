@@ -187,9 +187,10 @@ Two states worth knowing before you read a report:
    itself (a separate, deliberate config change, not a bypass of the active rule), delete the tag,
    and re-enable it. Treat that as a rare, considered override, only for a tag nothing external
    has ever referenced (nothing published, no clone or consumer could have pinned to it), never as
-   a routine fix. Releases are immutable too (repo setting, enforced by
-   `scripts/harden_github.py`): once published, a release and its assets cannot be edited. That
-   pair is why the docs can pin a tag rather than a commit.
+   a routine fix. The ruleset is why the docs can pin a tag rather than a commit. Releases from
+   0.1.8 on are also immutable: once published, a release and its assets cannot be edited. That is
+   a repo setting, which `scripts/harden_github.py` turns on and checks, failing when it does not
+   read back as enabled.
 5. *Automatic.* `release.yml` runs its two guards (the tag matches the packaged version, and the
    tagged commit is on `main`) and then stages a draft Release with generated notes. A guard
    that fails leaves no Release at all, so nothing has shipped.

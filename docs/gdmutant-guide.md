@@ -804,8 +804,9 @@ Pin the full `vX.Y.Z` release tag shown above (e.g. `@v0.1.7`). Never `@v1` or `
 tag ruleset blocks deleting or re-pointing any tag for anyone acting normally, and the release
 guard rejects a tag that doesn't equal the packaged version, so a floating major tag is not
 something this repo can produce through ordinary use.
-gdmutant's release tags cannot be moved, so `@v0.1.7` always means the same code; if your policy
-requires commit IDs, pin that release's commit instead (`kphutt/gdmutant@<sha> # v0.1.7`).
+gdmutant's release tags cannot be moved or deleted, and releases from 0.1.8 on are also
+immutable. If your policy requires commit IDs, pin that release's commit instead
+(`kphutt/gdmutant@<sha> # v0.1.7`).
 
 The bumps a floating tag would have handed you come from Dependabot instead, as PRs you review
 before taking:

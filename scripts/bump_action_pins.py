@@ -3,8 +3,8 @@
 This is part of step 1 of docs/releasing.md, done by a command instead of by hand. It runs in the
 release commit itself, next to the version bump: the docs name the release tag, `vX.Y.Z`, and the
 tag's name is known before the tag exists, so the commit that cuts a release can already name it.
-The tag cannot move once pushed (a tag ruleset blocks deleting or re-pointing it, and releases are
-immutable), so a reader who copies the line gets exactly the release it names.
+The tag cannot move once pushed (a tag ruleset blocks deleting or re-pointing it), so a reader who
+copies the line gets exactly the release it names. Releases from 0.1.8 on are also immutable.
 
 Usage, from the repo root:
 

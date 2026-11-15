@@ -18,8 +18,8 @@ go wrong, each checked here:
   checked or bumped, so every tracked file is scanned for one.
 
 Tags are safe to show because they cannot move: the repo's tag ruleset blocks deleting or
-re-pointing any tag, and releases are immutable. A consumer whose policy requires commit IDs can
-still pin the release's commit, which the guide says.
+re-pointing any tag, and releases from 0.1.8 on are also immutable. A consumer whose policy
+requires commit IDs can still pin the release's commit, which the guide says.
 """
 
 from __future__ import annotations

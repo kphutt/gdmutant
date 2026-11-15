@@ -312,15 +312,19 @@ class _FakeGh:
         live_contexts: list[str] | None,
         environments_absent: bool = False,
         immutable: bool = True,
+        put_takes_effect: bool = True,
     ) -> None:
         self.live_contexts = live_contexts
         self.environments_absent = environments_absent
         self.immutable = immutable
+        self.put_takes_effect = put_takes_effect
         self.calls: list[list[str]] = []
 
     def __call__(self, args: list[str], *, stdin: str | None = None) -> tuple[bool, str]:
         self.calls.append(args)
         joined = " ".join(args)
+        if joined.endswith("/immutable-releases") and "PUT" in args and self.put_takes_effect:
+            self.immutable = True
         if "branches/main/protection" in joined and "-X" not in args:
             if self.live_contexts is None:
                 return True, '{"enforce_admins": {"enabled": false}}'
@@ -404,11 +408,11 @@ def test_main_fails_when_every_gh_api_write_fails(
     out = capsys.readouterr().out
     assert "Branch protection NOT set" in out
     # Pins the exact "N of M" wording (not just a substring), so a mutation that corrupts the
-    # literal joining them ("of") must change this exact count. Nine, not seven: the seven `_apply`
-    # writes, plus the two environment READS, which now count as failures too -- an environment
-    # this run could not read is one whose policy it never verified, and reporting success about
-    # that is the shape this script exists to close.
-    assert "9 of 9 setting(s) failed to apply" in out
+    # literal joining them ("of") must change this exact count. Ten, not seven: the seven `_apply`
+    # writes, plus the two environment READS and the immutable-releases read-back, which count as
+    # failures too -- a setting this run could not read is one it never verified, and reporting
+    # success about that is the shape this script exists to close.
+    assert "10 of 10 setting(s) failed to apply" in out
 
 
 @pytest.mark.usefixtures("_has_gh")
@@ -962,7 +966,7 @@ def test_immutable_releases_read_never_guesses(
 
 @pytest.mark.usefixtures("_has_gh")
 @pytest.mark.parametrize(("immutable", "warned"), [(True, False), (False, True)])
-def test_check_warns_when_releases_are_not_immutable(
+def test_check_fails_and_warns_when_releases_are_not_immutable(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     immutable: bool,
@@ -970,14 +974,14 @@ def test_check_warns_when_releases_are_not_immutable(
 ) -> None:
     monkeypatch.setattr(harden_github, "_gh", _FakeGh(list(EXPECTED_CONTEXTS), immutable=immutable))
 
-    assert harden_github.main(["kphutt/gdmutant", "--check"]) == 0
+    assert harden_github.main(["kphutt/gdmutant", "--check"]) == (1 if warned else 0)
     out = capsys.readouterr().out
     assert ("Immutable releases are not confirmed on" in out) is warned
     assert ("DISABLED" in out) is warned
 
 
 @pytest.mark.usefixtures("_has_gh")
-def test_check_warns_when_immutable_releases_cannot_be_read(
+def test_check_fails_when_immutable_releases_cannot_be_read(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # An unreadable setting is not a confirmed one: --check must say so, not stay quiet.
@@ -990,5 +994,33 @@ def test_check_warns_when_immutable_releases_cannot_be_read(
 
     monkeypatch.setattr(harden_github, "_gh", unreadable)
 
-    assert harden_github.main(["kphutt/gdmutant", "--check"]) == 0
+    assert harden_github.main(["kphutt/gdmutant", "--check"]) == 1
     assert "Immutable releases are not confirmed on" in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_a_run_fails_when_the_write_lands_but_releases_read_back_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The PUT reports success, yet the setting is still off (an org policy, a changed API). A run
+    # that trusted the write alone would exit 0 about a control that is not there.
+    fake = _FakeGh(list(EXPECTED_CONTEXTS), immutable=False, put_takes_effect=False)
+    monkeypatch.setattr(harden_github, "_gh", fake)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 1
+
+
+@pytest.mark.usefixtures("_has_gh")
+def test_a_run_fails_when_immutable_releases_cannot_be_read_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeGh(list(EXPECTED_CONTEXTS))
+
+    def unreadable(args: list[str], *, stdin: str | None = None) -> tuple[bool, str]:
+        if " ".join(args).endswith("/immutable-releases") and "-X" not in args:
+            return False, "HTTP 403"
+        return fake(args, stdin=stdin)
+
+    monkeypatch.setattr(harden_github, "_gh", unreadable)
+
+    assert harden_github.main(["kphutt/gdmutant"]) == 1

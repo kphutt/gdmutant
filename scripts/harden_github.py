@@ -603,8 +603,12 @@ def report_state(
     repo: str,
     contexts: list[str] | None = None,
     derivation_error: ValueError | None = None,
-) -> None:
-    """Print live settings plus a two-way comparison against what this script would require."""
+) -> bool:
+    """Print live settings plus a two-way comparison against what this script would require.
+
+    Returns whether immutable releases read back as enabled. The docs pin the action by release
+    tag and rely on that setting, so both `--check` and a converge run fail when it is not
+    confirmed, unreadable included: a gate never passes on an answer it did not get."""
     succeeded, out = _gh(["api", f"repos/{repo}"])
     if succeeded:
         data = json.loads(out)
@@ -702,6 +706,7 @@ def report_state(
             # Reported, never written away: an extra pattern may be a deliberate manual addition,
             # and silently deleting one would make this script reduce a control it exists to hold.
             _log(f"    '{environment}' also allows (not managed here): {extra}")
+    return immutable is True
 
 
 # ---------------------------------------------------------------------------------------------
@@ -798,8 +803,8 @@ def main(argv: list[str] | None = None) -> int:
     # failure is exactly what the operator needs to see, and hiding the live state behind it
     # would leave them guessing at what protection actually looks like.
     if args.check:
-        report_state(args.repo, contexts, derivation_error)
-        return 1 if derivation_error is not None else 0
+        immutable_confirmed = report_state(args.repo, contexts, derivation_error)
+        return 1 if derivation_error is not None or not immutable_confirmed else 0
 
     if derivation_error is not None or contexts is None:
         print(
@@ -991,7 +996,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.dry_run:
         print()
-        report_state(args.repo, contexts)
+        # The read-back counts as a setting: a PUT that "succeeded" but left releases mutable has
+        # not converged, and the docs' tag pins depend on it.
+        applied.append(report_state(args.repo, contexts))
 
     failed = _failure_count(applied)
     if failed:
