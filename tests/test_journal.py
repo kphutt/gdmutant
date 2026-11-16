@@ -143,17 +143,10 @@ def test_a_changed_test_file_refuses_the_journal(tmp_path: Path) -> None:
 
     def checked(*names: str) -> None:
         # The mutated source is listed too, as the CLI lists it: its own hash covers it.
-        others = [str(tmp_path / "f.gd"), *(str(tests / name) for name in names)]
-        opened = Journal.open(
-            journal, str(tmp_path), sources, _SETTINGS, __version__, lambda: others
-        )
-        try:
-            opened.check_files()
-        finally:
-            opened.close()
+        scripts = [str(tmp_path / "f.gd"), *(str(tests / name) for name in names)]
+        Journal.open(journal, str(tmp_path), sources, _SETTINGS, __version__, scripts).close()
 
-    Journal.open(journal, str(tmp_path), sources, _SETTINGS, __version__).close()  # died early
-    checked("test_f.gd", "gone.gd", "missing.gd")  # the first run to get this far records them
+    checked("test_f.gd", "gone.gd", "missing.gd")
     checked("test_f.gd", "gone.gd", "missing.gd")  # an unreadable file reads the same each time
     (tests / "test_f.gd").write_text("extends Node\nfunc test_more():\n\tpass\n", encoding="utf-8")
     (tests / "test_g.gd").write_text("extends Node\n", encoding="utf-8")
@@ -243,8 +236,7 @@ def test_a_file_that_is_not_a_journal_is_refused(tmp_path: Path, content: bytes)
         "garbage",
         '{"something": 1}',
         '{"confirmed": ["a"]}',
-        '{"files": {}}',
-        '{"written": ["a.tres"]}',  # only ever follows the files it adds to
+        '{"mutant": "f.gd", "outcome": {}}',
     ],
 )
 def test_an_unreadable_entry_refuses_the_journal(tmp_path: Path, entry: str) -> None:
@@ -490,7 +482,7 @@ def test_an_ignored_mutant_is_neither_recorded_nor_resumed(tmp_path: Path) -> No
         assert Verdict.KILLED in {o.verdict for o in result.outcomes}
     ran = sum(o.verdict is not Verdict.IGNORED for o in result.outcomes)
     lines = (tmp_path / "run.journal").read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 2 + ran  # the header, the project's files, and each mutant, once
+    assert len(lines) == 1 + ran  # the header, and each mutant, once
 
 
 def test_a_resumed_multi_file_run_gives_every_file_its_verdicts(tmp_path: Path) -> None:
@@ -551,7 +543,7 @@ def test_run_mutation_resumes_and_refuses_a_changed_source(
         run_mutation(str(path), str(tmp_path), MarkerRunner(str(path), ">="), resume=journal) == 0
     )
     again = capsys.readouterr()
-    assert f"Resuming {journal}: " in again.err
+    assert f"Resuming {journal}." in again.err
     assert again.out.split("Mutation score:")[1] == first.out.split("Mutation score:")[1]
     path.write_text(_SOURCE.replace("a > b", "a >= b"), encoding="utf-8")
     assert (
@@ -569,7 +561,7 @@ def test_run_mutation_paths_resumes_and_refuses_a_changed_source(
     assert run_mutation_paths(paths, str(tmp_path), runner, resume=journal) == 0
     capsys.readouterr()
     assert run_mutation_paths(paths, str(tmp_path), runner, resume=journal) == 0
-    assert f"Resuming {journal}: " in capsys.readouterr().err
+    assert f"Resuming {journal}." in capsys.readouterr().err
     Path(paths[1]).write_text(_OTHER + "\n", encoding="utf-8")
     assert run_mutation_paths(paths, str(tmp_path), runner, resume=journal) == 2
     assert "g.gd has changed since" in capsys.readouterr().err
@@ -597,17 +589,16 @@ def test_a_journal_that_stops_taking_writes_ends_the_run_with_the_source_restore
     Journal.open(journal, str(tmp_path), {str(path): _SOURCE}, {}, __version__).close()
     synced: list[int] = []
 
-    def fills_after_the_project_files(fd: int) -> None:
+    def full(fd: int) -> None:
         synced.append(fd)
-        if len(synced) > 1:  # the project's files go in; the first verdict does not
-            raise OSError(28, "No space left on device")
+        raise OSError(28, "No space left on device")
 
     # Only the journal's own view of `os`: the source file's restore must still work.
-    monkeypatch.setattr(journal_mod, "os", SimpleNamespace(fsync=fills_after_the_project_files))
+    monkeypatch.setattr(journal_mod, "os", SimpleNamespace(fsync=full))
     runner = MarkerRunner(str(path), ">=")
     assert run_mutation(str(path), str(tmp_path), runner, resume=journal, resume_settings={}) == 2
     assert f"could not write to the journal {journal}" in capsys.readouterr().err
-    assert len(synced) == 2  # it failed on a verdict, mid-run
+    assert len(synced) == 1  # it failed on a verdict, mid-run
     assert path.read_text(encoding="utf-8") == _SOURCE
 
 
@@ -926,7 +917,7 @@ def test_a_resumed_per_file_run_gives_the_report_an_unbroken_one_gives(tmp_path:
 # --- the files a resumed run checks -------------------------------------------------------------
 
 
-def test_the_project_files_a_journal_checks_are_what_a_test_run_can_read(tmp_path: Path) -> None:
+def test_the_project_files_a_journal_checks_are_its_scripts(tmp_path: Path) -> None:
     names = (
         "project.godot",
         "a.gd",
@@ -941,8 +932,8 @@ def test_the_project_files_a_journal_checks_are_what_a_test_run_can_read(tmp_pat
     for name in names:
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / name).write_text("", encoding="utf-8")
-    found = {Path(p).relative_to(tmp_path).as_posix() for p in cli._project_inputs(str(tmp_path))}
-    assert found == {"project.godot", "a.gd", "scenes/s.tscn", "data/r.tres", "fx/x.gdshader"}
+    found = {Path(p).relative_to(tmp_path).as_posix() for p in cli._project_scripts(str(tmp_path))}
+    assert found == {"a.gd", "fx/x.gdshader"}
 
 
 def test_run_mutation_refuses_a_journal_once_a_test_changed(
@@ -996,7 +987,7 @@ def test_a_suite_that_writes_into_the_project_can_still_be_resumed(
     # Under --jobs the suite writes only into copies, so the project is left as it was.
     for run_jobs in (*jobs, 1, 1):
         assert run_mutation(str(path), str(tmp_path), runner, resume=journal, jobs=run_jobs) == 0
-    assert capsys.readouterr().err.count(f"Resuming {journal}: ") == 3
+    assert capsys.readouterr().err.count(f"Resuming {journal}.") == 3
     test.write_text("extends Node\nfunc test_more():\n\tpass\n", encoding="utf-8")
     assert run_mutation(str(path), str(tmp_path), runner, resume=journal) == 2
     err = capsys.readouterr().err
@@ -1015,8 +1006,9 @@ class _SavesTheSource:
         return SuiteResult(tests=3, failures=int(">=" in text), errors=0)
 
 
-def test_a_file_a_mutant_left_behind_is_one_the_resumed_baseline_rewrites(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("jobs", [1, 2])
+def test_a_resource_a_mutant_left_behind_does_not_refuse_the_journal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], jobs: int
 ) -> None:
     path = tmp_path / "f.gd"
     path.write_text(_SOURCE, encoding="utf-8")
@@ -1024,5 +1016,6 @@ def test_a_file_a_mutant_left_behind_is_one_the_resumed_baseline_rewrites(
     journal = str(tmp_path / "run.journal")
     assert run_mutation(str(path), str(tmp_path), _SavesTheSource(), resume=journal) == 0
     assert (tmp_path / "saved.tres").read_text(encoding="utf-8") != _SOURCE  # the last mutant's
-    assert run_mutation(str(path), str(tmp_path), _SavesTheSource(), resume=journal) == 0
-    assert f"Resuming {journal}: " in capsys.readouterr().err
+    runner = _SavesTheSource()
+    assert run_mutation(str(path), str(tmp_path), runner, resume=journal, jobs=jobs) == 0
+    assert f"Resuming {journal}." in capsys.readouterr().err

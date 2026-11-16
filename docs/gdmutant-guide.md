@@ -168,9 +168,10 @@ report for the whole run.
 - The file is refused, with exit 2, if it was written for different sources, or if anything that
   can change a verdict differs:
   - a source file being mutated
-  - a script, scene, resource or shader in the project, tests included, or `project.godot`.
-    Folders whose names start with `.`, such as `.godot`, are not checked, and neither is a file
-    the baseline changes, since that is one the suite writes itself.
+  - any other script or shader in the project, tests included. Folders whose names start with `.`,
+    such as `.godot`, are not checked. Scenes, resources and `project.godot` are not checked
+    either, since suites and Godot itself rewrite them, so start a new journal after you change
+    one.
   - the runner, `--command`, `--godot`, `--tests`, `--timeout`, `--since` or `--exclude-tests`
   - the coverage analysis settings, or the gdmutant version
 

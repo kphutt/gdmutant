@@ -1023,11 +1023,12 @@ def _self_check_size(value: str) -> int | None:
 
 
 #: The kinds of project file a test run can read: a change to one can change a verdict.
-_PROJECT_INPUTS = frozenset({".gd", ".tscn", ".tres", ".scn", ".res", ".gdshader", ".gdshaderinc"})
+#: Scripts, which neither a suite nor Godot rewrites, unlike scenes and resources.
+_PROJECT_SCRIPTS = frozenset({".gd", ".gdshader", ".gdshaderinc"})
 
 
-def _project_inputs(project_dir: str) -> list[str]:
-    """Every file under `project_dir` a resumed journal must find unchanged, leaving out hidden
+def _project_scripts(project_dir: str) -> list[str]:
+    """Every script under `project_dir` a resumed journal must find unchanged, leaving out hidden
     folders such as Godot's own `.godot` cache."""
     found = []
     for directory, folders, names in os.walk(project_dir):
@@ -1035,7 +1036,7 @@ def _project_inputs(project_dir: str) -> list[str]:
         found += [
             os.path.join(directory, name)
             for name in sorted(names)
-            if Path(name).suffix in _PROJECT_INPUTS or name == "project.godot"
+            if Path(name).suffix in _PROJECT_SCRIPTS
         ]
     return found
 
@@ -1057,13 +1058,12 @@ def _open_journal(
             sources,
             settings or {},
             __version__,
-            lambda: _project_inputs(project_dir),
+            _project_scripts(project_dir),
         )
     except OSError as error:
         raise JournalRefused(f"could not open the journal {resume}: {error}") from error
-    if journal.resumed:
-        unit = "verdict" if journal.resumed == 1 else "verdicts"
-        print(f"Resuming {resume}: {journal.resumed} {unit} already recorded.", file=sys.stderr)
+    if journal.resumed:  # how many it reuses is the plan line's to say: some may run again
+        print(f"Resuming {resume}.", file=sys.stderr)
     return journal
 
 

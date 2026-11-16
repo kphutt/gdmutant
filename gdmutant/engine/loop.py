@@ -771,8 +771,6 @@ def run(
         adapter,
         isolated=_baseline_needs_isolation(project_dir, (path,), jobs, jobs_auto),
     )
-    if journal is not None:
-        journal.check_files()  # after the baseline: one that writes project files writes them again
     mutants, plans = _coverage_plans(
         project_dir,
         {path: source},
@@ -2440,8 +2438,6 @@ def run_paths(
         adapter,
         isolated=_baseline_needs_isolation(project_dir, sources, jobs, jobs_auto),
     )
-    if journal is not None:
-        journal.check_files()  # after the baseline: one that writes project files writes them again
     mutants, plans = _coverage_plans(
         project_dir,
         sources,
