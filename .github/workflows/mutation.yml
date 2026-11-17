@@ -190,15 +190,21 @@ jobs:
             exit 1
           fi
 
-      - name: Summarize — score can't have moved
+      - name: Summarize — full mutation sweep skipped
         if: always() && steps.scope.outputs.run_full == 'false'
         run: |
           {
             echo "## Mutation testing (mutmut) — skipped"
             echo
-            echo "No changes under \`gdmutant/\`, \`tests/\`, \`corpus/\`, \`pyproject.toml\`, or"
-            echo "\`uv.lock\` — the mutation score cannot have moved, so the full mutmut sweep was"
-            echo "skipped. \`uv run pytest\` ran instead to confirm the suite still passes."
+            if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+              echo "A pull request never runs the full mutmut sweep, even when it changes"
+              echo "\`gdmutant/\` or \`tests/\`. The mutation score is measured on \`main\` after the"
+              echo "merge. \`uv run pytest\` ran instead to confirm the suite still passes."
+            else
+              echo "No changes under \`gdmutant/\`, \`tests/\`, \`corpus/\`, \`pyproject.toml\`, or"
+              echo "\`uv.lock\` — the mutation score cannot have moved, so the full mutmut sweep was"
+              echo "skipped. \`uv run pytest\` ran instead to confirm the suite still passes."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Summarize the mutation score
