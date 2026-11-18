@@ -172,7 +172,8 @@ report for the whole run.
     such as `.godot`, are not checked. Scenes, resources and `project.godot` are not checked
     either, since suites and Godot itself rewrite them, so start a new journal after you change
     one.
-  - the runner, `--command`, `--godot`, `--tests`, `--timeout`, `--since` or `--exclude-tests`
+  - the runner, `--command`, `--godot` or the version of Godot it names, `--tests`, `--timeout`,
+    `--since` or `--exclude-tests`
   - the coverage analysis settings, or the gdmutant version
 
   `--jobs` may differ.

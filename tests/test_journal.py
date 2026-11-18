@@ -1,6 +1,7 @@
 """Tests for ``--resume``: the journal file, and a run that picks up where another stopped."""
 
 import json
+import subprocess
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -644,6 +645,7 @@ def test_main_hands_the_journal_and_every_verdict_changing_setting_to_the_run(
         return 0
 
     monkeypatch.setattr(cli, "run_mutation", fake_run_mutation)
+    monkeypatch.setattr(cli, "_godot_version", lambda godot: f"4.7 at {godot}")
     argv = ["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4"]
     assert main([*argv, "--resume", "j.jsonl", "--timeout", "30", "--jobs", "2"]) == 0
     assert captured["resume"] == "j.jsonl"
@@ -651,10 +653,12 @@ def test_main_hands_the_journal_and_every_verdict_changing_setting_to_the_run(
     assert isinstance(settings, dict)
     assert settings["runner"] == "gdunit4"
     assert settings["timeout"] == "30.0"
+    assert settings["godot-version"] == "4.7 at godot"
     assert set(settings) == {
         "runner",
         "tests",
         "godot",
+        "godot-version",
         "command",
         "timeout",
         "coverage-analysis",
@@ -665,6 +669,66 @@ def test_main_hands_the_journal_and_every_verdict_changing_setting_to_the_run(
     assert "jobs" not in settings  # verdicts do not depend on it, so a resume may change it
     assert main(argv) == 0
     assert captured["resume"] is None
+
+
+@pytest.mark.parametrize(
+    ("extra", "asked"),
+    [
+        (["--resume", "j.jsonl", "--runner", "gdunit4"], ["godot"]),
+        (["--resume", "j.jsonl", "--runner", "command", "--command", "x"], []),
+        (
+            [
+                "--resume",
+                "j.jsonl",
+                "--runner",
+                "command",
+                "--command",
+                "x",
+                "--coverage-analysis",
+                "all",
+            ],
+            ["godot"],
+        ),
+        (["--runner", "gdunit4"], []),
+    ],
+    ids=["godot runner", "command runner", "command with coverage", "no resume"],
+)
+def test_godot_is_asked_its_version_only_for_a_resumed_run_that_uses_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: list[str], asked: list[str]
+) -> None:
+    path = tmp_path / "f.gd"
+    path.write_text(_SOURCE, encoding="utf-8")
+    calls: list[str] = []
+    monkeypatch.setattr(cli, "run_mutation", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(cli, "_godot_version", lambda godot: calls.append(godot) or "4.7")
+    assert main(["run", str(path), "--project", str(tmp_path), *extra]) == 0
+    assert calls == asked
+
+
+@pytest.mark.parametrize(
+    ("outcome", "version"),
+    [
+        (subprocess.CompletedProcess([], 0, "4.7.stable.official\n", ""), "4.7.stable.official"),
+        (subprocess.CompletedProcess([], 1, "", "no"), "unknown"),
+        (FileNotFoundError("godot"), "unknown"),
+        (subprocess.TimeoutExpired("godot", 60), "unknown"),
+    ],
+    ids=["prints it", "prints nothing", "missing", "hangs"],
+)
+def test_the_godot_version_is_what_godot_prints_or_unknown(
+    monkeypatch: pytest.MonkeyPatch, outcome: object, version: str
+) -> None:
+    seen: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> object:
+        seen.append(command)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    assert cli._godot_version("/opt/godot") == version
+    assert seen == [["/opt/godot", "--version"]]
 
 
 def test_dry_run_says_it_ignores_resume(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

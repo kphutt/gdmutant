@@ -1027,6 +1027,23 @@ def _self_check_size(value: str) -> int | None:
 _PROJECT_SCRIPTS = frozenset({".gd", ".gdshader", ".gdshaderinc"})
 
 
+def _godot_version(godot: str) -> str:
+    """What ``godot --version`` prints, so a journal from another Godot at the same path is refused.
+    ``unknown`` if it cannot be run: a run that needs Godot then fails on its own."""
+    try:
+        done = subprocess.run(
+            [godot, "--version"],
+            capture_output=True,
+            encoding=CAPTURE_ENCODING,
+            errors=CAPTURE_ERRORS,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return done.stdout.strip() or "unknown"
+
+
 def _project_scripts(project_dir: str) -> list[str]:
     """Every script under `project_dir` a resumed journal must find unchanged, leaving out hidden
     folders such as Godot's own `.godot` cache."""
@@ -1935,9 +1952,9 @@ def build_parser(config: dict[str, object] | None = None) -> argparse.ArgumentPa
         help="record each verdict in FILE as it lands, and skip every mutant FILE already has a "
         "verdict for. Run the same command again after a run stops part way, and it picks up "
         "where that one stopped (the unmutated baseline still runs first). FILE is refused if "
-        "it was written for different sources, a script, scene or resource in the project has "
-        "changed since, or a setting that can change a verdict differs; --jobs may differ. "
-        "Delete FILE to start over",
+        "it was written for different sources, a script or shader in the project has changed "
+        "since FILE was written (scenes, resources and project.godot are not checked), or a "
+        "setting that can change a verdict differs; --jobs may differ. Delete FILE to start over",
     )
     run_parser.add_argument(
         "--dry-run",
@@ -2307,6 +2324,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "runner": args.runner,
                 "tests": args.tests,
                 "godot": args.godot,
+                # Only when Godot runs at all: `--runner command` users may not have one.
+                "godot-version": _godot_version(args.godot)
+                if args.resume is not None
+                and (args.runner != "command" or args.coverage_analysis != "off")
+                else "",
                 "command": args.test_command or "",
                 "timeout": str(args.timeout),
                 "coverage-analysis": args.coverage_analysis,
