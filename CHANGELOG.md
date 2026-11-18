@@ -12,6 +12,11 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `--resume <file>` records each verdict as it lands, so a run that stops part way can pick
+  up where it stopped. (#378)
+
 ### Changed
 
 - The GitHub Action examples now use the release tag, such as `@v0.1.7`, instead of a commit ID.
