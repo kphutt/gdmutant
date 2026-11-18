@@ -157,7 +157,7 @@ jobs:
             echo "run_full=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run tests only (full mutation sweep not needed)
+      - name: Run tests only (full mutation sweep skipped)
         if: steps.scope.outputs.run_full == 'false'
         run: uv run pytest
 
