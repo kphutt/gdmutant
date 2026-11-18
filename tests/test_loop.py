@@ -373,30 +373,59 @@ def test_a_mutant_whose_file_did_not_compile_is_invalid(tmp_path: Path, raised: 
     assert result.mutation_score is None
 
 
+@dataclass
+class _BrokenBeforeMutation:
+    """A baseline whose output says `files` (relative to the project it ran in) did not compile."""
+
+    files: tuple[str, ...]
+
+    def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
+        named = tuple(str(Path(project_dir) / file) for file in self.files)
+        return SuiteResult(tests=3, failures=0, errors=0, uncompiled=named)
+
+
 @pytest.mark.parametrize("jobs", [1, 2])
-def test_a_baseline_with_files_that_did_not_compile_is_refused(tmp_path: Path, jobs: int) -> None:
-    # Their tests did not run, so every mutant of them would be scored invalid, untested.
+def test_a_baseline_in_which_a_file_to_mutate_did_not_compile_is_refused(
+    tmp_path: Path, jobs: int, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Every mutant of it would be scored invalid, and none of them tested.
     path = _write(tmp_path, "f.gd", _ONE_MUTANT)
-
-    @dataclass
-    class BrokenBeforeMutation:
-        def run(self, project_dir: str, timeout: float | None = None) -> SuiteResult:
-            named = (str(Path(project_dir) / "src" / "a.gd"), str(Path(project_dir) / "f.gd"))
-            return SuiteResult(tests=3, failures=0, errors=0, uncompiled=named)
-
+    runner = _BrokenBeforeMutation(("src/a.gd", "f.gd", "g.gd"))
     with pytest.raises(
-        BaselineFailed, match=r"'.+', these files did not compile: src/a\.gd, f\.gd\. The tests"
+        BaselineFailed, match=r"'.+', these files to mutate did not compile: f\.gd, g\.gd\. Fix"
     ):
-        run(str(tmp_path), path, _ONE_MUTANT, BrokenBeforeMutation(), jobs=jobs)
+        run_paths(
+            str(tmp_path),
+            {path: _ONE_MUTANT, str(tmp_path / "g.gd"): _ONE_MUTANT},
+            runner,
+            jobs=jobs,
+        )
+    assert "src/a.gd" not in capsys.readouterr().err
 
 
-def test_a_baseline_names_a_file_outside_the_project_as_given(tmp_path: Path) -> None:
+@pytest.mark.parametrize("jobs", [1, 2])
+def test_other_files_that_did_not_compile_in_the_baseline_are_warned_about(
+    tmp_path: Path, jobs: int, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A broken addon nobody can fix must not stop the run, but its tests did not run.
     path = _write(tmp_path, "f.gd", _ONE_MUTANT)
     outside = str(tmp_path.parent / "elsewhere.gd")
-    baseline = SuiteResult(tests=3, failures=0, errors=0, uncompiled=(outside,))
-    with pytest.raises(BaselineFailed) as refused:
-        run(str(tmp_path), path, _ONE_MUTANT, ScriptedRunner([baseline]))
-    assert f"did not compile: {outside}. The tests" in str(refused.value)
+    runner = _BrokenBeforeMutation(("addons/x/a.gd", "b.gd", outside))
+    result = run(str(tmp_path), path, _ONE_MUTANT, runner, jobs=jobs)
+    assert [o.verdict for o in result.outcomes] == [Verdict.SURVIVED]
+    err = capsys.readouterr().err
+    assert (
+        f"warning: in the unmutated project, these files did not compile: addons/x/a.gd, b.gd, "
+        f"{outside}. The tests that load them did not run" in err
+    )
+
+
+def test_a_baseline_with_every_file_compiled_warns_of_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _write(tmp_path, "f.gd", _ONE_MUTANT)
+    run(str(tmp_path), path, _ONE_MUTANT, _BrokenBeforeMutation(()))
+    assert "did not compile" not in capsys.readouterr().err
 
 
 def test_a_source_path_spelled_differently_still_matches_the_file_that_did_not_compile(

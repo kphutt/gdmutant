@@ -714,10 +714,10 @@ def test_line_readers_see_every_line_of_each_stream_however_much_is_trimmed(
     )
     seen: list[list[str]] = []
 
-    def reader() -> Callable[[str], None]:
+    def reader() -> Callable[[str, bool], None]:
         lines: list[str] = []
         seen.append(lines)
-        return lines.append
+        return lambda line, continued: lines.append(line)
 
     output = runner_mod.run_bounded(_runs(script), str(tmp_path), 30, lines=reader)
     assert seen == [
@@ -725,3 +725,14 @@ def test_line_readers_see_every_line_of_each_stream_however_much_is_trimmed(
         ["err 1", "err 2"],
     ]
     assert "line 0" not in output.stdout.tail
+
+
+def test_line_readers_are_told_which_pieces_go_on_with_a_long_line(tmp_path: Path) -> None:
+    script = f"print('a' * {runner_mod._READ_BYTES * 2})\nprint('b')\n"
+    seen: list[tuple[str, bool]] = []
+    runner_mod.run_bounded(
+        _runs(script), str(tmp_path), 30, lines=lambda: lambda *piece: seen.append(piece)
+    )
+    flags = [continued for _, continued in seen]
+    assert flags[0] is False and all(flags[1:-1]) and len(flags) > 3
+    assert seen[-1] == ("b", False)

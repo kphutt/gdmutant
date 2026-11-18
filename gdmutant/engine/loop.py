@@ -318,8 +318,8 @@ class MutationRun:
 
     @property
     def invalid(self) -> int:
-        """Count of mutants dropped without a run because they failed the re-parse guard (NF-5) —
-        the mutation would not have compiled in Godot."""
+        """Count of mutants no test ran: they failed the re-parse guard (NF-5), or the run's output
+        said Godot could not compile the mutated file."""
         return self._count(Verdict.INVALID)
 
     @property
@@ -756,6 +756,7 @@ def run(
         _project_relative(path, project_dir)  # refuse a source with no place in the copies, now
     budget, baseline_tests = _run_baseline(
         project_dir,
+        (path,),
         runner,
         timeout,
         progress,
@@ -928,6 +929,7 @@ def _baseline_project(
 
 def _run_baseline(
     project_dir: str,
+    sources: tuple[str, ...],
     runner: Runner,
     timeout: float | None,
     progress: Callable[[str], None] | None,
@@ -938,7 +940,8 @@ def _run_baseline(
     """Run the unmutated suite once. Returns ``(budget, baseline_tests)``: the per-mutant time
     budget (derived from this run unless `timeout` overrides) and the number of tests the baseline
     ran, which the coverage marker run must match.
-    Raises `BaselineFailed` if the suite can't run or is red (FG-3.3).
+    Raises `BaselineFailed` if the suite can't run or is red (FG-3.3), or if one of `sources`, the
+    files to mutate, did not compile. Any other file that did not compile is only warned about.
 
     `isolated` runs the suite in an isolated copy of the project rather than in the project
     directory, because that is where the mutants will run — see `_baseline_project` for what the
@@ -981,12 +984,12 @@ def _run_baseline(
     if baseline.failed:
         detail = f":\n{baseline.detail}" if baseline.detail else ""
         raise BaselineFailed(f"the unmutated test suite failed for {project_dir!r}{detail}{where}")
-    if uncompiled:
+    mutated = {_relative_to(path, project_dir) for path in sources}
+    if broken := [file for file in uncompiled if file in mutated]:
         # Else every mutant of these files would be scored invalid, and none of them tested.
         raise BaselineFailed(
-            f"in the unmutated project {project_dir!r}, these files did not compile: "
-            f"{', '.join(uncompiled)}. The tests that load them did not run. Fix them, then run "
-            f"gdmutant again.{where}"
+            f"in the unmutated project {project_dir!r}, these files to mutate did not compile: "
+            f"{', '.join(broken)}. Fix them, then run gdmutant again.{where}"
         )
     # A baseline that ran ZERO tests is not a green baseline — it is no baseline at all, and it is
     # the quietest way this tool can lie. `SuiteResult(0, 0, 0).failed` is False, so a suite nobody
@@ -1016,6 +1019,15 @@ def _run_baseline(
             "check that the runner is pointed at your tests (--tests, or --command for a "
             f"custom harness) and that the suite runs on its own.{where}"
         )
+    if others := [file for file in uncompiled if file not in mutated]:
+        # Not refused: a broken addon may be one nobody can fix. Printed even under --progress none.
+        with suppress(OSError, ValueError):  # stderr gone or closed (ValueError)
+            print(
+                f"warning: in the unmutated project, these files did not compile: "
+                f"{', '.join(others)}. The tests that load them did not run, so a mutant only "
+                "they would catch is reported as surviving.",
+                file=sys.stderr,
+            )
     return _baseline_budget(baseline, baseline_secs, timeout), baseline.tests
 
 
@@ -2296,6 +2308,7 @@ def run_paths(
         _project_relative(path, project_dir)  # refuse a source with no place in the copies, now
     budget, baseline_tests = _run_baseline(
         project_dir,
+        tuple(sources),
         runner,
         timeout,
         progress,

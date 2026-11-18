@@ -173,7 +173,8 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
   in the report), never counted as `killed`. A wrong mutant means a silently wrong survivor report,
   the worst failure. Under GdUnit4 and GUT, a mutant that parses but that Godot refuses to compile
   (a type error, or a warning the project treats as an error) is also `invalid`, when Godot's output
-  names its file. A baseline whose output names a file that did not compile is refused.
+  names its file. A baseline whose output says a file to mutate did not compile is refused, and
+  any other file that did not compile is named in a warning.
 
   Oracle boundary: the validity check is gdtoolkit's parser, not Godot itself. A mutant gdtoolkit
   accepts but Godot rejects at load is `invalid` under GdUnit4 and GUT when Godot names its file.

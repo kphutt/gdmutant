@@ -477,7 +477,7 @@ def test_the_legend_names_each_unscored_state_and_never_calls_an_errored_mutant_
     # opposite of what happened to the third.
     unscored = observed["legend"]["unscored"]
     assert "ignored: a <code># gdmutant: ignore</code> annotation, so it never ran" in unscored
-    assert "invalid: the mutation did not parse, so it never ran" in unscored
+    assert "invalid: the mutation did not parse or compile, so no test ran it" in unscored
     assert "errored: the runner failed while running it" in unscored
     assert "never run" not in unscored
 

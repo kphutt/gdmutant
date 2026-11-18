@@ -475,7 +475,7 @@ class _StreamTail:
     appeared anywhere in the stream."""
 
     def __init__(
-        self, watch: Sequence[str] = (), lines: Callable[[str], None] | None = None
+        self, watch: Sequence[str] = (), lines: Callable[[str, bool], None] | None = None
     ) -> None:
         self.seen = False
         #: Given every line as it is read, so a caller can find what the bounded part may not keep.
@@ -556,7 +556,7 @@ class _StreamTail:
             pieces.append("")
         for piece in pieces:
             if self._lines is not None:
-                self._lines(piece)
+                self._lines(piece, continued)
             if continued:  # more of a line already kept, so it can only start the excerpt
                 continued = False
                 if self.excerpt is None and _SCRIPT_ERROR_MARKER in piece:
@@ -656,8 +656,9 @@ def allow_commands() -> None:
 
 
 #: Called once per stream, stdout first, before it is read. What it returns is given each line of
-#: that stream in order; a line longer than `_LINE_CHARS` arrives in overlapping pieces.
-LineReaders = Callable[[], Callable[[str], None]]
+#: that stream in order; a line longer than `_LINE_CHARS` arrives in overlapping pieces, each after
+#: the first flagged as going on with the line before it.
+LineReaders = Callable[[], Callable[[str, bool], None]]
 
 
 def run_bounded(
