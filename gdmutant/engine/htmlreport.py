@@ -72,7 +72,7 @@ _OUTCOME: dict[str, tuple[str, str, str]] = {
     "Killed": ("caught", "kd", "a test failed"),
     "Timeout": ("caught", "kd", "the suite timed out, which counts as caught"),
     "Ignored": ("ignored", "ot", "suppressed by an ignore annotation, so it never ran"),
-    "CompileError": ("invalid", "ot", "it did not parse, so it never ran"),
+    "CompileError": ("invalid", "ot", "it did not parse or compile, so no test ran it"),
     "RuntimeError": ("error", "ot", "the run errored"),
     # Actionable like a survivor, so the same colour and the same default filter, but its own tag
     # word: "no test reaches this line" calls for a different fix than "no test checks it".
@@ -1222,7 +1222,7 @@ function paintSource(){
 // entry names exactly the ones this pane contains.
 const UNSCORED = {
   ignored: 'ignored: a <code># gdmutant: ignore</code> annotation, so it never ran',
-  invalid: 'invalid: the mutation did not parse, so it never ran',
+  invalid: 'invalid: the mutation did not parse or compile, so no test ran it',
   error: 'errored: the runner failed while running it',
 };
 const UNSCORED_ORDER = ['ignored', 'invalid', 'error'];

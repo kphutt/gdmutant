@@ -16,6 +16,15 @@ All notable changes to gdmutant are recorded here. The format follows
 
 - The GitHub Action examples now use the release tag, such as `@v0.1.7`, instead of a commit ID.
 
+### Fixed
+
+- Under GdUnit4 and GUT, a mutant whose own file Godot cannot compile is now scored `invalid`,
+  not `error` or `killed`. For example, a statement deletion can leave a parameter unused, and a
+  project that treats that warning as an error then refuses to load the file. A baseline run in
+  which a file to mutate does not compile is now refused. Any other file that does not compile is
+  named in a warning, since the tests that load it did not run, if the suite still wrote its
+  report. (#359)
+
 ## [0.1.7] - 2026-11-14
 
 Fixes for parallel runs and noisy test output.

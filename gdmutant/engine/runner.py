@@ -120,6 +120,15 @@ class SuiteTimeout(Exception):
     """
 
 
+class CompileFailed(RuntimeError):
+    """A run that failed after its output said `files` (absolute paths) did not compile. A mutant
+    whose own file is among them never ran, so the engine scores it invalid, not an error."""
+
+    def __init__(self, message: str, files: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.files = files
+
+
 @dataclass(frozen=True)
 class SuiteResult:
     """The aggregate outcome of running a test suite once."""
@@ -145,6 +154,9 @@ class SuiteResult:
     #: the same empty tuple: what reads this runs only for a runner that selects test files, and
     #: such a runner always has a report.
     suites: tuple[ReportedSuite, ...] = ()
+    #: Source files the run's output said did not compile, as absolute paths. A mutant whose own
+    #: file is among them never ran, so the engine scores it invalid whatever the tests reported.
+    uncompiled: tuple[str, ...] = ()
 
     @property
     def failed(self) -> bool:
@@ -462,8 +474,12 @@ class _StreamTail:
     Lines are split the way `script_error_excerpt` splits them. `found` holds each of `watch` that
     appeared anywhere in the stream."""
 
-    def __init__(self, watch: Sequence[str] = ()) -> None:
+    def __init__(
+        self, watch: Sequence[str] = (), lines: Callable[[str, bool], None] | None = None
+    ) -> None:
         self.seen = False
+        #: Given every line as it is read, so a caller can find what the bounded part may not keep.
+        self._lines = lines
         self.found: set[str] = set()
         self._watch = tuple(watch)
         #: The end of what was read, long enough to find a watched string cut by a read.
@@ -513,7 +529,7 @@ class _StreamTail:
             self.found.update(needle for needle in self._watch if needle in window)
             keep = max(map(len, self._watch)) - 1
             self._carry = window[max(0, len(window) - keep) :]
-        if self.excerpt is not None and len(self.excerpt) == _EXCERPT_LINES:
+        if self._lines is None and self.excerpt is not None and len(self.excerpt) == _EXCERPT_LINES:
             return  # the excerpt is complete, and so is `head`: from here only the tail changes
         *lines, self._line = (self._line + text).split("\n")
         for line in lines:
@@ -539,6 +555,8 @@ class _StreamTail:
         if terminated and _ends_with_break(line):
             pieces.append("")
         for piece in pieces:
+            if self._lines is not None:
+                self._lines(piece, continued)
             if continued:  # more of a line already kept, so it can only start the excerpt
                 continued = False
                 if self.excerpt is None and _SCRIPT_ERROR_MARKER in piece:
@@ -637,13 +655,24 @@ def allow_commands() -> None:
         _stopping = False
 
 
+#: Called once per stream, stdout first, before it is read. What it returns is given each line of
+#: that stream in order; a line longer than `_LINE_CHARS` arrives in overlapping pieces, each after
+#: the first flagged as going on with the line before it.
+LineReaders = Callable[[], Callable[[str, bool], None]]
+
+
 def run_bounded(
-    command: Sequence[str], cwd: str, timeout: float, watch: Sequence[str] = ()
+    command: Sequence[str],
+    cwd: str,
+    timeout: float,
+    watch: Sequence[str] = (),
+    lines: LineReaders | None = None,
 ) -> BoundedOutput:
     """Run `command` in `cwd`, keeping a bounded part of each stream, and noting which of `watch`
-    either one printed. Raises ``TimeoutExpired`` after stopping the child and what it started
-    (see `_kill_tree`), also when a grandchild holds the pipes past `timeout`, and
-    ``RuntimeError`` if a stream could not be read, since it could hide a marker."""
+    either one printed. `lines`, if given, sees every line of both. Raises ``TimeoutExpired``
+    after stopping the child and what it started (see `_kill_tree`), also when a grandchild holds
+    the pipes past `timeout`, and ``RuntimeError`` if a stream could not be read, since it could
+    hide a marker."""
     command = list(command)
     refused = CommandsStopped(f"gdmutant is stopping, so {command[0]} was not run")
     with _RUNNING_LOCK:
@@ -667,16 +696,24 @@ def run_bounded(
             pipe.close()  # not read: a grandchild may still hold them
         raise refused
     try:
-        return _wait_bounded(process, command, timeout, watch)
+        return _wait_bounded(process, command, timeout, watch, lines)
     finally:
         with _RUNNING_LOCK:
             _RUNNING.discard(process)
 
 
 def _wait_bounded(
-    process: subprocess.Popen[bytes], command: list[str], timeout: float, watch: Sequence[str]
+    process: subprocess.Popen[bytes],
+    command: list[str],
+    timeout: float,
+    watch: Sequence[str],
+    lines: LineReaders | None,
 ) -> BoundedOutput:
-    streams = (_StreamTail(watch), _StreamTail(watch))
+    # Made in order, so `lines` is called for stdout first.
+    streams = (
+        _StreamTail(watch, lines() if lines else None),
+        _StreamTail(watch, lines() if lines else None),
+    )
     readers: list[threading.Thread] = []
     deadline = time.monotonic() + timeout
     try:

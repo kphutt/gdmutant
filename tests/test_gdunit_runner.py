@@ -9,7 +9,14 @@ from conftest import bounded_output, patch_run
 
 import gdmutant.adapters.gdscript.runner as runner_mod
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner
-from gdmutant.engine.runner import BoundedOutput, Runner, SuiteTimeout, with_filename
+from gdmutant.engine.runner import (
+    BoundedOutput,
+    CompileFailed,
+    LineReaders,
+    Runner,
+    SuiteTimeout,
+    with_filename,
+)
 
 
 def _report(tmp_path: Path) -> Path:
@@ -366,13 +373,17 @@ def test_the_import_warm_up_ignores_its_exit_code_and_goes_through_run_bounded(
     bounded: list[list[str]] = []
 
     def fake_bounded(
-        command: list[str], cwd: str, timeout: float, watch: Sequence[str] = ()
+        command: list[str],
+        cwd: str,
+        timeout: float,
+        watch: Sequence[str] = (),
+        lines: LineReaders | None = None,
     ) -> BoundedOutput:
         bounded.append(command)
         if "--import" in command:
-            return bounded_output(1, "import chatter", "", watch)
+            return bounded_output(1, "import chatter", "", watch, lines)
         report.write_text('<testsuite tests="1" failures="0"/>', encoding="utf-8")
-        return bounded_output(0, "", "", watch)
+        return bounded_output(0, "", "", watch, lines)
 
     def no_run(*args: object, **kwargs: object) -> None:
         raise AssertionError("Godot was started without run_bounded")
@@ -733,3 +744,149 @@ def test_a_failed_run_quotes_at_most_the_start_of_a_long_script_error(
     with pytest.raises(RuntimeError) as failed:
         GdUnit4Runner().run(str(tmp_path))
     assert str(failed.value).endswith(":\n" + error[:1000])
+
+
+#: What Godot printed when the tests loaded a source with a type error: its own error, the test
+#: script that loads it failing in turn, then a runtime error that is not a compile error.
+_DID_NOT_COMPILE = (
+    'SCRIPT ERROR: Parse Error: Cannot return a value of type "String" as "int".\n'
+    "   at: GDScript::reload (res://src/turn_order.gd:36)\n"
+    "   GDScript backtrace (most recent call first):\n"
+    "SCRIPT ERROR: Compile Error: Failed to compile depended scripts.\n"
+    "   at: GDScript::reload (res://test/test_turn_order.gd:0)\n"
+    "SCRIPT ERROR: Invalid call. Nonexistent function 'f' in base 'GDScript'.\n"
+    "   at: test_f (res://test/test_other.gd:10)\n"
+)
+#: Another script's compile error first, and more output after than the bounded part keeps.
+_LATE_IN_A_FLOOD = (
+    "SCRIPT ERROR: Parse Error: Unexpected token.\n"
+    "   at: GDScript::reload (res://src/other.gd:1)\n"
+    + "   GDScript backtrace (most recent call first):\n" * 3
+    + _DID_NOT_COMPILE
+    + "later output\n" * 1000
+)
+
+
+def _names(files: tuple[str, ...]) -> list[str]:
+    return [Path(file).name for file in files]
+
+
+def test_a_failed_run_names_the_scripts_that_did_not_compile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_run(monkeypatch, runner_mod, _fails("", _DID_NOT_COMPILE))
+    with pytest.raises(CompileFailed, match="wrote no report") as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    project = tmp_path.resolve()
+    assert failed.value.files == (
+        str(project / "src" / "turn_order.gd"),
+        str(project / "test" / "test_turn_order.gd"),
+    )
+
+
+def test_a_failed_run_with_no_compile_error_raises_as_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_only = "SCRIPT ERROR: Invalid call.\n   at: f (res://src/a.gd:3)\n"
+    patch_run(monkeypatch, runner_mod, _fails("", runtime_only))
+    with pytest.raises(RuntimeError) as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert not isinstance(failed.value, CompileFailed)
+
+
+def test_a_report_carries_the_scripts_that_did_not_compile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = _report(tmp_path)
+    xml = '<testsuites><testsuite tests="3" failures="3" errors="0"/></testsuites>'
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if "--import" not in args[0]:  # type: ignore[operator]
+            report.write_text(xml, encoding="utf-8")
+        return subprocess.CompletedProcess([], 1, "", _DID_NOT_COMPILE)
+
+    patch_run(monkeypatch, runner_mod, fake_run)
+    result = GdUnit4Runner().run(str(tmp_path))
+    assert _names(result.uncompiled) == ["turn_order.gd", "test_turn_order.gd"]
+
+
+def test_a_compile_error_is_found_after_another_and_before_a_flood(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert len(_LATE_IN_A_FLOOD) - _LATE_IN_A_FLOOD.index("turn_order.gd") > 2 * 4000
+    patch_run(monkeypatch, runner_mod, _fails("", _LATE_IN_A_FLOOD))
+    with pytest.raises(CompileFailed) as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert _names(failed.value.files) == ["other.gd", "turn_order.gd", "test_turn_order.gd"]
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "named"),
+    [
+        ("", "", []),
+        # The same script twice, as Godot reports each error in it: named once.
+        ("", _DID_NOT_COMPILE * 2, ["src/turn_order.gd", "test/test_turn_order.gd"]),
+        # A warning treated as an error is a parse error too.
+        (
+            "",
+            'SCRIPT ERROR: Parse Error: The parameter "x" is never used. (Warning treated as '
+            "error.)\n   at: GDScript::reload (res://a b/c(1).gd:3)\n",
+            ["a b/c(1).gd"],
+        ),
+        # The message with no line naming a script after it, and a lone line naming one.
+        ("", "SCRIPT ERROR: Parse Error: x\n", []),
+        ("", "   at: GDScript::reload (res://a.gd:3)\n", []),
+        # Each stream is read on its own, stdout's scripts first.
+        (
+            "SCRIPT ERROR: Parse Error: x\n",
+            "   at: GDScript::reload (res://a.gd:3)\n" + _DID_NOT_COMPILE,
+            ["src/turn_order.gd", "test/test_turn_order.gd"],
+        ),
+        (
+            "SCRIPT ERROR: Parse Error: x\n   at: GDScript::reload (res://b.gd:1)\n",
+            "SCRIPT ERROR: Parse Error: x\n   at: GDScript::reload (res://a.gd:1)\n",
+            ["b.gd", "a.gd"],
+        ),
+        # A message longer than one read, so it arrives in pieces.
+        (
+            "",
+            "SCRIPT ERROR: Parse Error: "
+            + "x" * 200_000
+            + "\n   at: GDScript::reload (res://a.gd:3)\n",
+            ["a.gd"],
+        ),
+        # The message far into a line longer than one read, so in a later piece.
+        (
+            "",
+            "x" * 200_000
+            + "SCRIPT ERROR: Parse Error: x\n   at: GDScript::reload (res://a.gd:3)\n",
+            ["a.gd"],
+        ),
+    ],
+    ids=[
+        "empty",
+        "repeated",
+        "warning",
+        "no script",
+        "no message",
+        "split",
+        "both",
+        "long",
+        "late",
+    ],
+)
+def test_the_scripts_godot_says_did_not_compile(stdout: str, stderr: str, named: list[str]) -> None:
+    project = Path("/project")
+    errors = runner_mod._CompileErrors(project)
+    bounded_output(1, stdout, stderr, lines=errors.stream)
+    assert errors.scripts() == tuple(str(project / name) for name in named)
+
+
+def test_a_zero_test_report_names_the_scripts_that_did_not_compile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = _report(tmp_path)
+    patch_run(monkeypatch, runner_mod, _reports_zero_tests(report, "", _DID_NOT_COMPILE))
+    with pytest.raises(CompileFailed, match="0 tests") as failed:
+        GdUnit4Runner().run(str(tmp_path))
+    assert _names(failed.value.files) == ["turn_order.gd", "test_turn_order.gd"]

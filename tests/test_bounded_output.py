@@ -699,3 +699,40 @@ def test_a_command_a_stop_overtakes_while_it_starts_is_stopped_at_once(
     assert process.stdout is not None and process.stdout.closed
     assert not runner_mod._RUNNING
     assert runner_mod.run_bounded(_runs("print('ok')"), str(tmp_path), 30.0).returncode == 0
+
+
+def test_line_readers_see_every_line_of_each_stream_however_much_is_trimmed(
+    tmp_path: Path,
+) -> None:
+    # Past a complete excerpt and far past the tail: what the bounded part keeps no longer says.
+    count = runner_mod._TAIL_CHARS
+    script = (
+        "import sys\n"
+        "print('SCRIPT ERROR: first')\n"
+        f"for n in range({count}): print(f'line {{n}}')\n"
+        "sys.stderr.write('err 1\\nerr 2')\n"
+    )
+    seen: list[list[str]] = []
+
+    def reader() -> Callable[[str, bool], None]:
+        lines: list[str] = []
+        seen.append(lines)
+        return lambda line, continued: lines.append(line)
+
+    output = runner_mod.run_bounded(_runs(script), str(tmp_path), 30, lines=reader)
+    assert seen == [
+        ["SCRIPT ERROR: first", *(f"line {n}" for n in range(count))],
+        ["err 1", "err 2"],
+    ]
+    assert "line 0" not in output.stdout.tail
+
+
+def test_line_readers_are_told_which_pieces_go_on_with_a_long_line(tmp_path: Path) -> None:
+    script = f"print('a' * {runner_mod._READ_BYTES * 2})\nprint('b')\n"
+    seen: list[tuple[str, bool]] = []
+    runner_mod.run_bounded(
+        _runs(script), str(tmp_path), 30, lines=lambda: lambda *piece: seen.append(piece)
+    )
+    flags = [continued for _, continued in seen]
+    assert flags[0] is False and all(flags[1:-1]) and len(flags) > 3
+    assert seen[-1] == ("b", False)
