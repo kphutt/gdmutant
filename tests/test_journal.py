@@ -645,7 +645,7 @@ def test_main_hands_the_journal_and_every_verdict_changing_setting_to_the_run(
         return 0
 
     monkeypatch.setattr(cli, "run_mutation", fake_run_mutation)
-    monkeypatch.setattr(cli, "_godot_version", lambda godot: f"4.7 at {godot}")
+    monkeypatch.setattr(cli, "_godot_version", lambda godot, project: f"4.7 at {godot}")
     argv = ["run", str(path), "--project", str(tmp_path), "--runner", "gdunit4"]
     assert main([*argv, "--resume", "j.jsonl", "--timeout", "30", "--jobs", "2"]) == 0
     assert captured["resume"] == "j.jsonl"
@@ -700,7 +700,7 @@ def test_godot_is_asked_its_version_only_for_a_resumed_run_that_uses_it(
     path.write_text(_SOURCE, encoding="utf-8")
     calls: list[str] = []
     monkeypatch.setattr(cli, "run_mutation", lambda *args, **kwargs: 0)
-    monkeypatch.setattr(cli, "_godot_version", lambda godot: calls.append(godot) or "4.7")
+    monkeypatch.setattr(cli, "_godot_version", lambda godot, project: calls.append(godot) or "4.7")
     assert main(["run", str(path), "--project", str(tmp_path), *extra]) == 0
     assert calls == asked
 
@@ -709,26 +709,28 @@ def test_godot_is_asked_its_version_only_for_a_resumed_run_that_uses_it(
     ("outcome", "version"),
     [
         (subprocess.CompletedProcess([], 0, "4.7.stable.official\n", ""), "4.7.stable.official"),
-        (subprocess.CompletedProcess([], 1, "", "no"), "unknown"),
+        (subprocess.CompletedProcess([], 0, "", "4.7 on stderr\r\n"), "4.7 on stderr"),
+        (subprocess.CompletedProcess([], 1, "", ""), "unknown"),
         (FileNotFoundError("godot"), "unknown"),
         (subprocess.TimeoutExpired("godot", 60), "unknown"),
     ],
-    ids=["prints it", "prints nothing", "missing", "hangs"],
+    ids=["prints it", "on stderr", "prints nothing", "missing", "hangs"],
 )
 def test_the_godot_version_is_what_godot_prints_or_unknown(
     monkeypatch: pytest.MonkeyPatch, outcome: object, version: str
 ) -> None:
-    seen: list[list[str]] = []
+    seen: list[tuple[list[str], object]] = []
 
     def fake_run(command: list[str], **kwargs: object) -> object:
-        seen.append(command)
+        seen.append((command, kwargs["cwd"]))
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
-    assert cli._godot_version("/opt/godot") == version
-    assert seen == [["/opt/godot", "--version"]]
+    # In the project, where the runners run it: a relative --godot names a file there.
+    assert cli._godot_version("bin/godot", "/game") == version
+    assert seen == [(["bin/godot", "--version"], "/game")]
 
 
 def test_dry_run_says_it_ignores_resume(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

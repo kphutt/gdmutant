@@ -1027,12 +1027,13 @@ def _self_check_size(value: str) -> int | None:
 _PROJECT_SCRIPTS = frozenset({".gd", ".gdshader", ".gdshaderinc"})
 
 
-def _godot_version(godot: str) -> str:
+def _godot_version(godot: str, project_dir: str) -> str:
     """What ``godot --version`` prints, so a journal from another Godot at the same path is refused.
-    ``unknown`` if it cannot be run: a run that needs Godot then fails on its own."""
+    Run in `project_dir`, as the runners run it. ``unknown`` if it cannot be run."""
     try:
         done = subprocess.run(
             [godot, "--version"],
+            cwd=project_dir,
             capture_output=True,
             encoding=CAPTURE_ENCODING,
             errors=CAPTURE_ERRORS,
@@ -1041,7 +1042,7 @@ def _godot_version(godot: str) -> str:
         )
     except (OSError, subprocess.SubprocessError):
         return "unknown"
-    return done.stdout.strip() or "unknown"
+    return done.stdout.strip() or done.stderr.strip() or "unknown"
 
 
 def _project_scripts(project_dir: str) -> list[str]:
@@ -2325,10 +2326,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "tests": args.tests,
                 "godot": args.godot,
                 # Only when Godot runs at all: `--runner command` users may not have one.
-                "godot-version": _godot_version(args.godot)
+                "godot-version": _godot_version(args.godot, project_dir)
                 if args.resume is not None
                 and (args.runner != "command" or args.coverage_analysis != "off")
-                else "",
+                else "not used",
                 "command": args.test_command or "",
                 "timeout": str(args.timeout),
                 "coverage-analysis": args.coverage_analysis,
