@@ -855,8 +855,25 @@ def test_a_compile_error_is_found_after_another_and_before_a_flood(
             + "\n   at: GDScript::reload (res://a.gd:3)\n",
             ["a.gd"],
         ),
+        # The message far into a line longer than one read, so in a later piece.
+        (
+            "",
+            "x" * 200_000
+            + "SCRIPT ERROR: Parse Error: x\n   at: GDScript::reload (res://a.gd:3)\n",
+            ["a.gd"],
+        ),
     ],
-    ids=["empty", "repeated", "warning", "no script", "no message", "split", "both", "long"],
+    ids=[
+        "empty",
+        "repeated",
+        "warning",
+        "no script",
+        "no message",
+        "split",
+        "both",
+        "long",
+        "late",
+    ],
 )
 def test_the_scripts_godot_says_did_not_compile(stdout: str, stderr: str, named: list[str]) -> None:
     project = Path("/project")

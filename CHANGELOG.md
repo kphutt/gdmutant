@@ -22,7 +22,8 @@ All notable changes to gdmutant are recorded here. The format follows
   not `error` or `killed`. For example, a statement deletion can leave a parameter unused, and a
   project that treats that warning as an error then refuses to load the file. A baseline run in
   which a file to mutate does not compile is now refused. Any other file that does not compile is
-  named in a warning, since the tests that load it did not run. (#359)
+  named in a warning, since the tests that load it did not run, if the suite still wrote its
+  report. (#359)
 
 ## [0.1.7] - 2026-11-14
 

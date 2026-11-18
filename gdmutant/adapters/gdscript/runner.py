@@ -183,14 +183,14 @@ class _CompileErrors:
 
         def read(line: str, continued: bool) -> None:
             nonlocal after_error
-            if (
-                continued
-            ):  # more of a long line: the error it holds, if any, was read from its start
+            # `in` first: every line of a flood passes here, and most hold no error.
+            error = "SCRIPT ERROR" in line and _COMPILE_ERROR.search(line) is not None
+            if continued:  # more of the same line: it cannot name the script, only hold the error
+                after_error = after_error or error
                 return
             if after_error and (script := _ERROR_AT.match(line)):
                 found[str(self._project / script[1].removeprefix("res://"))] = None
-            # `in` first: every line of a flood passes here, and most hold no error.
-            after_error = "SCRIPT ERROR" in line and _COMPILE_ERROR.search(line) is not None
+            after_error = error
 
         return read
 
