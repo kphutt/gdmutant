@@ -630,6 +630,13 @@ def stop_running_commands() -> None:
             _kill_tree(process)
 
 
+def commands_stopping() -> bool:
+    """True from `stop_running_commands` until `allow_commands`. It is set before any command is
+    stopped, so a result read after a stopped command ended always finds it set."""
+    with _RUNNING_LOCK:
+        return _stopping
+
+
 def allow_commands() -> None:
     """Let `run_bounded` run commands again after `stop_running_commands`."""
     global _stopping
