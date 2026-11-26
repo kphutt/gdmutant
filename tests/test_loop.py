@@ -6,6 +6,7 @@ import itertools
 import os
 import shutil
 import stat
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -1271,6 +1272,48 @@ def test_a_temporary_folder_whose_own_removal_fails_is_named(
     (folder,) = left_behind(capsys.readouterr().err)
     shutil.rmtree(folder)
     assert held and str(folder) == tmp
+
+
+def test_a_temporary_folder_whose_permissions_cannot_be_reset_is_named(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `TemporaryDirectory` answers a refused removal by resetting the folder's permissions. When
+    # that is refused too (a folder another user owns), it raises despite ignore_cleanup_errors.
+    rmdir = os.rmdir
+
+    def held_open(path: Any, *args: Any, **kwargs: Any) -> None:
+        if os.path.basename(os.fsdecode(path)).startswith("gdmutant-probe-"):
+            raise PermissionError(32, "The process cannot access the file", os.fsdecode(path))
+        rmdir(path, *args, **kwargs)
+
+    def not_yours(path: Any, *args: Any, **kwargs: Any) -> None:
+        raise PermissionError(1, "Operation not permitted", os.fsdecode(path))
+
+    monkeypatch.setattr(os, "rmdir", held_open)
+    monkeypatch.setattr(os, "chmod", not_yours)
+    with loop_mod._scratch_dir("gdmutant-probe-") as tmp:
+        pass
+    monkeypatch.undo()
+    (folder,) = left_behind(capsys.readouterr().err)
+    shutil.rmtree(folder)
+    assert str(folder) == tmp
+
+
+def test_a_cleanup_that_recurses_forever_does_not_end_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Stands in for CPython gh-157579 on the Pythons that have its fix, so this is pinned on
+    # every interpreter, not only on Linux before 3.12.16 (where the test above hits it for real).
+    cleanup = tempfile.TemporaryDirectory.cleanup
+
+    def recurses(self: tempfile.TemporaryDirectory[str]) -> None:
+        cleanup(self)
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(tempfile.TemporaryDirectory, "cleanup", recurses)
+    with loop_mod._scratch_dir("gdmutant-probe-") as tmp:
+        pass
+    assert not os.path.exists(tmp)
 
 
 @pytest.mark.parametrize("failure", ["exists", "stderr", "closed"])

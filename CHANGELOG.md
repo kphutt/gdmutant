@@ -12,10 +12,6 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
-### Changed
-
-- The GitHub Action examples now use the release tag, such as `@v0.1.7`, instead of a commit ID.
-
 ### Fixed
 
 - Under GdUnit4 and GUT, a mutant whose own file Godot cannot compile is now scored `invalid`,
@@ -24,6 +20,30 @@ All notable changes to gdmutant are recorded here. The format follows
   which a file to mutate does not compile is now refused. Any other file that does not compile is
   named in a warning, since the tests that load it did not run, if the suite still wrote its
   report. (#359)
+
+## [0.1.8] - 2026-11-26
+
+Resumable runs with `--resume`, and two cases that 0.1.7's temporary-folder fix missed. Nothing
+changes how runs are scored.
+
+### Added
+
+- `--resume FILE` saves verdicts to FILE, so running the same command again finishes a stopped
+  run. FILE is refused if a project script or shader, a setting that can change a verdict, or the
+  gdmutant version changed. Scenes, resources and `project.godot` are not checked.
+  [See the guide](docs/gdmutant-guide.md#resuming-a-stopped-run). (#379, thanks @normanthesquid)
+
+### Changed
+
+- The GitHub Action examples use the release tag, such as `@v0.1.8`, instead of a commit ID.
+  Commit-ID pins still work. (#377)
+
+### Fixed
+
+- A temporary folder gdmutant can't delete no longer ends the run in two cases 0.1.7 missed. They
+  are Linux with Python older than 3.12.16, and a folder whose permissions can't be reset.
+  gdmutant prints `warning: could not delete the temporary folder <path> (something may still be
+  using it). Delete it once nothing is.` and carries on. (#382)
 
 ## [0.1.7] - 2026-11-14
 

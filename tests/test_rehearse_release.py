@@ -338,8 +338,70 @@ def test_a_checkout_with_tags_plans_the_next_release(tmp_path: Path) -> None:
     # The positive control: the two refusals below mean nothing if the happy path never runs.
     work = _repo(tmp_path / "ok")
     subprocess.run(["git", "tag", "v0.1.3"], cwd=work, check=True)
+    subprocess.run(
+        ["git", *rehearse_release.COMMITTER, "commit", "--quiet", "--allow-empty", "-m", "next"],
+        cwd=work,
+        check=True,
+    )
     plan = rehearse_release.plan_rehearsal(work)
     assert (plan.version, plan.last, plan.tag) == ("0.1.4", "0.1.3", "v0.1.4")
+    assert not plan.released_here
+
+
+def test_a_commit_carrying_its_own_versions_tag_is_rehearsed_as_that_release(
+    tmp_path: Path,
+) -> None:
+    """Release day: the tag is pushed, and the release guard wants a green rehearsal of this commit.
+    Planning the next patch here can never pass (the changelog is already dated for this version),
+    so a re-run after the tag would be red forever. It is the release in progress instead."""
+    work = _repo(tmp_path / "released")
+    subprocess.run(["git", "tag", "v0.1.2", "HEAD"], cwd=work, check=True)
+    subprocess.run(["git", "tag", "v0.1.3"], cwd=work, check=True)
+    plan = rehearse_release.plan_rehearsal(work)
+    assert (plan.version, plan.last, plan.tag, plan.released_here) == (
+        "0.1.3",
+        None,
+        "v0.1.3",
+        True,
+    )
+
+
+@pytest.mark.parametrize("released_here", [True, False])
+def test_the_throwaway_origin_drops_only_a_released_commits_own_tag(
+    tmp_path: Path, released_here: bool
+) -> None:
+    """The other half of the release-day fix. A kept tag makes the rehearsal's own `git tag`
+    fail, so every re-run after the tag push would be red. An earlier release's tag must stay:
+    it is what tells the rehearsal which version comes next."""
+    work = _repo(tmp_path / "src")
+    subprocess.run(["git", "tag", "v0.1.2"], cwd=work, check=True)
+    if released_here:
+        subprocess.run(["git", "tag", "v0.1.3"], cwd=work, check=True)
+    plan = rehearse_release.plan_rehearsal(work)
+    assert plan.released_here is released_here
+    origin = tmp_path / "origin.git"
+    rehearse_release.make_origin(work, origin, plan)
+    tags = subprocess.run(
+        ["git", "tag", "--list"],
+        cwd=origin,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    ).stdout.split()
+    assert tags == ["v0.1.2"]
+
+
+def test_only_the_packaged_versions_own_tag_counts_as_this_release(tmp_path: Path) -> None:
+    work = _repo(tmp_path / "other-tag")  # packaged 0.1.3
+    subprocess.run(["git", "tag", "v0.1.3"], cwd=work, check=True)
+    subprocess.run(["git", "tag", "v9.9.9"], cwd=work, check=True)  # another tag on HEAD
+    assert rehearse_release.plan_rehearsal(work).released_here
+    work = _repo(tmp_path / "older", version="0.1.4")
+    subprocess.run(["git", "tag", "v0.1.3"], cwd=work, check=True)  # not 0.1.4's own tag
+    plan = rehearse_release.plan_rehearsal(work)
+    assert (plan.version, plan.released_here) == ("0.1.4", False)
 
 
 def test_a_tagless_checkout_refuses_rather_than_rehearsing_a_shipped_version(
@@ -562,6 +624,28 @@ def test_the_tagged_commit_runs_what_publish_yml_gates_the_upload_on(
         f"publish.yml's {job} job no longer runs `{wanted}`, so the rehearsal is now checking "
         "something other than the gate it exists to rehearse"
     )
+
+
+def _toolchain(steps: list[dict[str, typing.Any]]) -> list[tuple[str, dict[str, typing.Any]]]:
+    """Every action a job sets up, with its settings. Checkout is left out: the rehearsal needs
+    full history and the gate checks out one commit, so their checkouts differ on purpose."""
+    return [
+        (step["uses"], step.get("with", {}))
+        for step in steps
+        if "uses" in step and not step["uses"].startswith("actions/checkout@")
+    ]
+
+
+def test_the_rehearsal_sets_up_the_toolchain_publish_yml_gates_the_upload_on() -> None:
+    """The same pair, one layer down. With no setup-python step, uv took the runner image's own
+    Python 3.12.3, while publish.yml's verify-ubuntu got the newest 3.12 (3.12.16 at the time),
+    so the two disagreed about one commit's suite: CPython gh-157579 is a fix 3.12.3 lacks. Node
+    had the same gap, so this compares every setup step, not one."""
+    rehearsal = REPO / ".github" / "workflows" / "rehearse-release.yml"
+    (job,) = yaml.safe_load(rehearsal.read_text(encoding="utf-8"))["jobs"].values()
+    publish = yaml.safe_load(PUBLISH_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    wanted = _toolchain(publish["verify-ubuntu"]["steps"])
+    assert len(wanted) >= 3 and _toolchain(job["steps"]) == wanted
 
 
 def test_the_quick_run_never_claims_the_gate_it_skipped() -> None:
