@@ -25,7 +25,7 @@ All notable changes to gdmutant are recorded here. The format follows
 
 - A temporary folder gdmutant can't delete no longer ends the run on Linux with Python older than
   3.12.16, or when its permissions can't be reset. gdmutant names it in a warning and carries on,
-  as 0.1.7 already did elsewhere.
+  as 0.1.7 already did elsewhere. (#382)
 
 ## [0.1.7] - 2026-11-14
 
