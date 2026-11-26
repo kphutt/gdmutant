@@ -382,7 +382,13 @@ def test_the_throwaway_origin_drops_only_a_released_commits_own_tag(
     origin = tmp_path / "origin.git"
     rehearse_release.make_origin(work, origin, plan)
     tags = subprocess.run(
-        ["git", "tag", "--list"], cwd=origin, capture_output=True, text=True, check=True
+        ["git", "tag", "--list"],
+        cwd=origin,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
     ).stdout.split()
     assert tags == ["v0.1.2"]
 
