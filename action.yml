@@ -8,7 +8,7 @@
 #         project-path: ./
 #         paths: scripts            # the source to mutate (default: the whole project)
 #
-# Consumers pin a full release tag such as `@v0.1.7` (or that release's commit SHA). There is no
+# Consumers pin a full release tag such as `@v0.1.8` (or that release's commit SHA). There is no
 # floating `@v1` or `@v0` tag: every published tag names a full version and cannot be moved, so this
 # repo cannot produce a moving major tag. See docs/gdmutant-guide.md's "GitHub Actions" section.
 #

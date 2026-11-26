@@ -835,10 +835,10 @@ Give the gdmutant step an `id` to reach its output from a later step:
 
 ### Pinning
 
-Pin the exact release tag, such as `@v0.1.7`. gdmutant's release tags cannot be moved or
+Pin the exact release tag, such as `@v0.1.8`. gdmutant's release tags cannot be moved or
 deleted, and releases from 0.1.8 on are also immutable. There are no major-version tags such as
 `@v1`. If your policy requires commit IDs, pin the release's commit instead, with the tag as a
-comment: `kphutt/gdmutant@<sha> # v0.1.7`.
+comment: `kphutt/gdmutant@<sha> # v0.1.8`.
 
 Dependabot can keep the pin up to date, as PRs you review before taking:
 
