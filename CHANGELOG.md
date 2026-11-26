@@ -10,22 +10,29 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.8] - 2026-11-26
+
+Resumable runs with `--resume`, and two cases that 0.1.7's temporary-folder fix missed. Nothing
+changes how runs are scored.
 
 ### Added
 
-- `--resume <file>` records each verdict as it lands, so a run that stops part way can pick
-  up where it stopped. (#378)
+- `--resume FILE` saves verdicts to FILE, so running the same command again finishes a stopped
+  run. FILE is refused if a project script or shader, a setting that can change a verdict, or the
+  gdmutant version changed. Scenes, resources and `project.godot` are not checked.
+  [See the guide](docs/gdmutant-guide.md#resuming-a-stopped-run). (#379, thanks @normanthesquid)
 
 ### Changed
 
-- The GitHub Action examples now use the release tag, such as `@v0.1.7`, instead of a commit ID.
+- The GitHub Action examples use the release tag, such as `@v0.1.8`, instead of a commit ID.
+  Commit-ID pins still work. (#377)
 
 ### Fixed
 
-- A temporary folder gdmutant can't delete no longer ends the run on Linux with Python older than
-  3.12.16, or when its permissions can't be reset. gdmutant names it in a warning and carries on,
-  as 0.1.7 already did elsewhere. (#382)
+- A temporary folder gdmutant can't delete no longer ends the run in two cases 0.1.7 missed. They
+  are Linux with Python older than 3.12.16, and a folder whose permissions can't be reset.
+  gdmutant prints `warning: could not delete the temporary folder <path> (something may still be
+  using it). Delete it once nothing is.` and carries on. (#382)
 
 ## [0.1.7] - 2026-11-14
 
