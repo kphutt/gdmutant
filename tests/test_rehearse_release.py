@@ -338,8 +338,43 @@ def test_a_checkout_with_tags_plans_the_next_release(tmp_path: Path) -> None:
     # The positive control: the two refusals below mean nothing if the happy path never runs.
     work = _repo(tmp_path / "ok")
     subprocess.run(["git", "tag", "v0.1.3"], cwd=work, check=True)
+    subprocess.run(
+        ["git", *rehearse_release.COMMITTER, "commit", "--quiet", "--allow-empty", "-m", "next"],
+        cwd=work,
+        check=True,
+    )
     plan = rehearse_release.plan_rehearsal(work)
     assert (plan.version, plan.last, plan.tag) == ("0.1.4", "0.1.3", "v0.1.4")
+    assert not plan.released_here
+
+
+def test_a_commit_carrying_its_own_versions_tag_is_rehearsed_as_that_release(
+    tmp_path: Path,
+) -> None:
+    """Release day: the tag is pushed, and the release guard wants a green rehearsal of this commit.
+    Planning the next patch here can never pass (the changelog is already dated for this version),
+    so a re-run after the tag would be red forever. It is the release in progress instead."""
+    work = _repo(tmp_path / "released")
+    subprocess.run(["git", "tag", "v0.1.2", "HEAD"], cwd=work, check=True)
+    subprocess.run(["git", "tag", "v0.1.3"], cwd=work, check=True)
+    plan = rehearse_release.plan_rehearsal(work)
+    assert (plan.version, plan.last, plan.tag, plan.released_here) == (
+        "0.1.3",
+        None,
+        "v0.1.3",
+        True,
+    )
+
+
+def test_only_the_packaged_versions_own_tag_counts_as_this_release(tmp_path: Path) -> None:
+    work = _repo(tmp_path / "other-tag")  # packaged 0.1.3
+    subprocess.run(["git", "tag", "v0.1.3"], cwd=work, check=True)
+    subprocess.run(["git", "tag", "v9.9.9"], cwd=work, check=True)  # another tag on HEAD
+    assert rehearse_release.plan_rehearsal(work).released_here
+    work = _repo(tmp_path / "older", version="0.1.4")
+    subprocess.run(["git", "tag", "v0.1.3"], cwd=work, check=True)  # not 0.1.4's own tag
+    plan = rehearse_release.plan_rehearsal(work)
+    assert (plan.version, plan.released_here) == ("0.1.4", False)
 
 
 def test_a_tagless_checkout_refuses_rather_than_rehearsing_a_shipped_version(

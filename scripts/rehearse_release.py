@@ -440,6 +440,9 @@ class Plan:
     #: The last released version, or None when the packaged version is not tagged yet, which means
     #: a release of it is already in progress.
     last: str | None
+    #: The packaged version's tag already points at this commit: this commit IS that release, so
+    #: it is rehearsed as the release in progress (see `plan_rehearsal`).
+    released_here: bool = False
 
     @property
     def tag(self) -> str:
@@ -479,10 +482,20 @@ def plan_rehearsal(repo: Path = REPO) -> Plan:
     packaged = str(
         tomllib.loads((repo / "pyproject.toml").read_text("utf-8"))["project"]["version"]
     )
+    # A commit that already carries its own version's tag is that release, not the start of the
+    # next one. Rehearsing the next patch there could never pass, because the changelog's top
+    # heading is already dated for the tagged version. That is the state a re-run lands in after
+    # the tag is pushed, which is exactly when the release guard (scripts/check_rehearsal.py) asks
+    # for a green rehearsal. So it is rehearsed as the release in progress instead.
+    own_tag = f"v{packaged}"
+    released_here = own_tag in run(["git", "tag", "--points-at", "HEAD"], repo).stdout.split()
+    if released_here:
+        tags = tags - {own_tag}
     return Plan(
         source_sha=run(["git", "rev-parse", "HEAD"], repo).stdout.strip(),
         version=rehearsal_version(packaged, tags),
-        last=packaged if f"v{packaged}" in tags else None,
+        last=packaged if own_tag in tags else None,
+        released_here=released_here,
     )
 
 
@@ -503,6 +516,7 @@ def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
     if plan is None:
         return rehearsal
     source_sha, version, last, tag = plan.source_sha, plan.version, plan.last, plan.tag
+    released_here = plan.released_here
 
     scratch = Path(tempfile.mkdtemp(prefix="gdmutant-rehearsal-"))
     origin, work = scratch / "origin.git", scratch / "work"
@@ -521,6 +535,8 @@ def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
         run(["git", "clone", "--quiet", "--bare", "--no-local", str(REPO), str(origin)], scratch)
         run(["git", "update-ref", "refs/heads/main", source_sha], origin)
         run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], origin)
+        if released_here:  # the rehearsal makes this tag itself, as a release would
+            run(["git", "tag", "--delete", tag], origin)
         run(["git", "clone", "--quiet", str(origin), str(work)], scratch)
         # Deliberately no `git config user.name`: see COMMITTER. Checked rather than assumed.
         refuse_a_stored_identity(
