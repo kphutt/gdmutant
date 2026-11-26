@@ -140,7 +140,7 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   allowed-empty.
   `tests/test_gates_fail_on_empty_input.py` holds the offline probes for the gate scripts
   `check_mutation_baseline`, `verify_local`, `license_check_local`, `check_licenses`,
-  `check_release_tag`, `check_published_package`, `check_readme_images`, `harden_github` (offline
+  `check_release_tag`, `check_rehearsal`, `check_published_package`, `check_readme_images`, `harden_github` (offline
   paths only) and `run_gitleaks`. The other scripts in `scripts/` have no probe there.
 - **Recurring bug two: two paths that should agree, and one checks less.** A second entry point
   running fewer checks than the first. A message fixed in one place but not its twin. Two things

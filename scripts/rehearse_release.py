@@ -440,6 +440,9 @@ class Plan:
     #: The last released version, or None when the packaged version is not tagged yet, which means
     #: a release of it is already in progress.
     last: str | None
+    #: The packaged version's tag already points at this commit: this commit IS that release, so
+    #: it is rehearsed as the release in progress (see `plan_rehearsal`).
+    released_here: bool = False
 
     @property
     def tag(self) -> str:
@@ -479,11 +482,34 @@ def plan_rehearsal(repo: Path = REPO) -> Plan:
     packaged = str(
         tomllib.loads((repo / "pyproject.toml").read_text("utf-8"))["project"]["version"]
     )
+    # A commit that already carries its own version's tag is that release, not the start of the
+    # next one. Rehearsing the next patch there could never pass, because the changelog's top
+    # heading is already dated for the tagged version. That is the state a re-run lands in after
+    # the tag is pushed, which is exactly when the release guard (scripts/check_rehearsal.py) asks
+    # for a green rehearsal. So it is rehearsed as the release in progress instead.
+    own_tag = f"v{packaged}"
+    released_here = own_tag in run(["git", "tag", "--points-at", "HEAD"], repo).stdout.split()
+    if released_here:
+        tags = tags - {own_tag}
     return Plan(
         source_sha=run(["git", "rev-parse", "HEAD"], repo).stdout.strip(),
         version=rehearsal_version(packaged, tags),
-        last=packaged if f"v{packaged}" in tags else None,
+        last=packaged if own_tag in tags else None,
+        released_here=released_here,
     )
+
+
+def make_origin(repo: Path, origin: Path, plan: Plan) -> None:
+    """The throwaway bare `origin`: `repo`'s refs, with `main` at the rehearsed commit.
+
+    For a commit that is already its own release (`Plan.released_here`), that release's tag is
+    dropped here, because the rehearsal makes the tag itself, as a release would. Kept, it makes
+    the rehearsal's own `git tag` fail, so a re-run after the tag push would be red forever."""
+    run(["git", "clone", "--quiet", "--bare", "--no-local", str(repo), str(origin)], origin.parent)
+    run(["git", "update-ref", "refs/heads/main", plan.source_sha], origin)
+    run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], origin)
+    if plan.released_here:
+        run(["git", "tag", "--delete", plan.tag], origin)
 
 
 def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
@@ -518,9 +544,7 @@ def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
     ]
 
     def clone() -> str:
-        run(["git", "clone", "--quiet", "--bare", "--no-local", str(REPO), str(origin)], scratch)
-        run(["git", "update-ref", "refs/heads/main", source_sha], origin)
-        run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], origin)
+        make_origin(REPO, origin, plan)
         run(["git", "clone", "--quiet", str(origin), str(work)], scratch)
         # Deliberately no `git config user.name`: see COMMITTER. Checked rather than assumed.
         refuse_a_stored_identity(
