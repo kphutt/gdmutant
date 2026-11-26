@@ -864,14 +864,19 @@ _ISOLATED_BASELINE_NOTE = (
 def _scratch_dir(prefix: str) -> Iterator[str]:
     """A temporary directory whose failed cleanup is a warning, never the end of the run: a run's
     results are worth more than its scratch space. Deleting fails while something still holds a
-    file in it, such as a timed-out command's child, or antivirus on Windows."""
-    tmp = ""
+    file in it, such as a timed-out command's child, or antivirus on Windows.
+
+    ``ignore_cleanup_errors=True`` alone does not keep that promise, so the cleanup is guarded
+    here too. It still raises `OSError` when it cannot reset a permission, on every Python. And on
+    Linux, before Python 3.12.16, a folder whose own removal is refused sends it into a loop that
+    ends in `RecursionError` (CPython gh-157579). Ubuntu 24.04's own Python is 3.12.3."""
+    scratch = tempfile.TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True)
     try:
-        with tempfile.TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True) as tmp:
-            yield tmp
+        yield scratch.name
     finally:  # a failed run is when a leftover process is likeliest
-        if tmp:
-            warn_if_left_behind(tmp)
+        with suppress(OSError, RecursionError):
+            scratch.cleanup()
+        warn_if_left_behind(scratch.name)
 
 
 def warn_if_left_behind(folder: str | Path) -> None:

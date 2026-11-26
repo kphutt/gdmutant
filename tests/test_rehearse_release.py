@@ -564,6 +564,28 @@ def test_the_tagged_commit_runs_what_publish_yml_gates_the_upload_on(
     )
 
 
+def _toolchain(steps: list[dict[str, typing.Any]]) -> list[tuple[str, dict[str, typing.Any]]]:
+    """Every action a job sets up, with its settings. Checkout is left out: the rehearsal needs
+    full history and the gate checks out one commit, so their checkouts differ on purpose."""
+    return [
+        (step["uses"], step.get("with", {}))
+        for step in steps
+        if "uses" in step and not step["uses"].startswith("actions/checkout@")
+    ]
+
+
+def test_the_rehearsal_sets_up_the_toolchain_publish_yml_gates_the_upload_on() -> None:
+    """The same pair, one layer down. With no setup-python step, uv took the runner image's own
+    Python 3.12.3, while publish.yml's verify-ubuntu got the newest 3.12 (3.12.16 at the time),
+    so the two disagreed about one commit's suite: CPython gh-157579 is a fix 3.12.3 lacks. Node
+    had the same gap, so this compares every setup step, not one."""
+    rehearsal = REPO / ".github" / "workflows" / "rehearse-release.yml"
+    (job,) = yaml.safe_load(rehearsal.read_text(encoding="utf-8"))["jobs"].values()
+    publish = yaml.safe_load(PUBLISH_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    wanted = _toolchain(publish["verify-ubuntu"]["steps"])
+    assert len(wanted) >= 3 and _toolchain(job["steps"]) == wanted
+
+
 def test_the_quick_run_never_claims_the_gate_it_skipped() -> None:
     quick = rehearse_release.gate_args(quick=True)
     assert "scripts/verify_local.py" not in quick and "--no-cov" in quick
