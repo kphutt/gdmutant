@@ -118,9 +118,9 @@ run on `main` is green (`gh run list --workflow rehearse-release.yml --branch ma
 and 7 enforce it: `scripts/check_rehearsal.py` refuses a commit with no successful run, and waits
 up to 20 minutes for one still going. A later merge cancels a run still going. If that happened
 to the tagged commit's run, the refusal names it: re-run it with `gh run rerun <run-id>`, which
-keeps its commit, then re-run the failed job. Rehearsing the tag instead cannot pass, because on
-the tag's tree the version is already tagged and the changelog already dated. You can also run it
-by hand:
+keeps its commit, then re-run the failed job. With no run at all, rehearse the tag with
+`gh workflow run rehearse-release.yml --ref vX.Y.Z`. Either way the rehearsal sees a commit that
+carries its own version's tag and rehearses it as that release. You can also run it by hand:
 
 ```sh
 uv run python scripts/rehearse_release.py            # what CI runs
@@ -139,11 +139,12 @@ Two states worth knowing before you read a report:
   cannot tell which version a release would cut, and guessing would rehearse a version that already
   shipped -- every edit a no-op, and a green run that walked nothing. It prints `NOTRUN` and exits
   2. Same for a tree that is not a git checkout at all.
-- **Between a release PR merging and its tag being pushed, steps 1 and 2 have nothing left to do.**
-  The rehearsal says so (`nothing left to edit: a release of vX.Y.Z is already in progress`) and
-  carries on walking the rest of the path. It does not read that as a failure. If the packaged
-  version *is* tagged, though, those edits had real work to do, and a tree they left unchanged is a
-  failure: one of them no longer edits the file it names.
+- **Once a release PR has merged, steps 1 and 2 have nothing left to do.** That holds before the
+  tag is pushed and on the tagged commit itself. The rehearsal says so (`nothing left to edit: a
+  release of vX.Y.Z is already in progress`) and carries on walking the rest of the path. It does
+  not read that as a failure. If the packaged version is tagged on an earlier commit, though, those
+  edits had real work to do, and a tree they left unchanged is a failure: one of them no longer
+  edits the file it names.
 
 1. Set the version in `pyproject.toml`. The tag must match it exactly.
    `scripts/check_release_tag.py` fails the release if it doesn't.

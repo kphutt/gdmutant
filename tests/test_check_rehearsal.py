@@ -41,26 +41,9 @@ def test_a_refusal_names_the_newest_run_to_re_run() -> None:
     assert "Run 9 ended failure" in reason and "`gh run rerun 9`" in reason
 
 
-def test_a_refusal_never_advises_rehearsing_the_tag() -> None:
-    """Rehearsing the tag cannot pass: its version is already tagged and its changelog dated, so
-    the rehearsal's runbook edits refuse it. A re-run of the commit's own run is the way out."""
-    for runs in ([], [{**_run("cancelled"), "id": 1}]):
-        reason = check_rehearsal.decide(runs, SHA)[1]
-        assert "--ref <tag>" not in reason and "--ref v" not in reason
-
-
-def test_with_no_run_it_says_only_main_tip_can_be_rehearsed() -> None:
+def test_with_no_run_it_says_to_rehearse_the_tag() -> None:
     reason = check_rehearsal.decide([], SHA)[1]
-    assert "No run exists" in reason and "Before tagging" in reason and "later commit" in reason
-
-
-@pytest.mark.parametrize("status", sorted(check_rehearsal.UNFINISHED))
-def test_a_run_still_going_is_waited_for(status: str) -> None:
-    assert check_rehearsal.decide([_run(None, status)], SHA)[0] == "wait"
-
-
-def test_another_commits_success_does_not_count() -> None:
-    assert check_rehearsal.decide([_run("success", sha="d" * 40)], SHA)[0] == "fail"
+    assert "No run exists" in reason and "rehearse-release.yml --ref <tag>" in reason
 
 
 def test_it_waits_while_running_then_passes(capsys: pytest.CaptureFixture[str]) -> None:

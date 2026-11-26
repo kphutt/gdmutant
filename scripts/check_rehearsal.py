@@ -17,8 +17,9 @@ this guard failed in. The refusal names the run:
 
     gh run rerun <run-id>
 
-Rehearsing the tag instead cannot pass: on the tag's tree the version is already tagged and the
-changelog already dated, so the rehearsal's runbook edits refuse it.
+With no run at all, rehearse the tag: `gh workflow run rehearse-release.yml --ref vX.Y.Z`. Either
+way the rehearsal finds the commit carrying its own version's tag and rehearses it as that release
+(scripts/rehearse_release.py, `plan_rehearsal`).
 
 Usage::
 
@@ -54,9 +55,8 @@ def decide(runs: list[dict[str, Any]], sha: str) -> tuple[str, str]:
     refused = f"no successful release rehearsal for {sha}. A release needs one on its exact commit."
     if not mine:
         return FAIL, (
-            f"{refused} No run exists to re-run. Before tagging, `gh workflow run "
-            "rehearse-release.yml --ref main` rehearses main's tip. Once the tag exists that "
-            "cannot pass (the version is already tagged), so release a later commit instead."
+            f"{refused} No run exists to re-run, so rehearse the tag: `gh workflow run "
+            "rehearse-release.yml --ref <tag>`, then re-run this job."
         )
     latest = max(mine, key=lambda run: int(run.get("id", 0)))
     return FAIL, (
