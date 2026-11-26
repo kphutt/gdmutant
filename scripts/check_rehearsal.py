@@ -12,9 +12,13 @@ success fails, including no run at all and an API answer this cannot read: a gua
 when it saw nothing is the bug this repository keeps finding.
 
 The usual reason for no successful run is that a later merge cancelled it (the workflow cancels a
-superseded run on the same branch). Rehearse the tag itself, then re-run the failed job:
+superseded run on the same branch). Re-run that run, which keeps its commit, then re-run the job
+this guard failed in. The refusal names the run:
 
-    gh workflow run rehearse-release.yml --ref vX.Y.Z
+    gh run rerun <run-id>
+
+Rehearsing the tag instead cannot pass: on the tag's tree the version is already tagged and the
+changelog already dated, so the rehearsal's runbook edits refuse it.
 
 Usage::
 
@@ -47,11 +51,18 @@ def decide(runs: list[dict[str, Any]], sha: str) -> tuple[str, str]:
         return PASS, f"the release rehearsal passed on {sha}"
     if any(run.get("status") in UNFINISHED for run in mine):
         return WAIT, f"the release rehearsal on {sha} is still running"
-    seen = ", ".join(sorted({str(run.get("conclusion")) for run in mine})) or "no run at all"
+    refused = f"no successful release rehearsal for {sha}. A release needs one on its exact commit."
+    if not mine:
+        return FAIL, (
+            f"{refused} No run exists to re-run. Before tagging, `gh workflow run "
+            "rehearse-release.yml --ref main` rehearses main's tip. Once the tag exists that "
+            "cannot pass (the version is already tagged), so release a later commit instead."
+        )
+    latest = max(mine, key=lambda run: int(run.get("id", 0)))
     return FAIL, (
-        f"no successful release rehearsal for {sha} (found: {seen}). A release ships only a "
-        "commit the rehearsal passed on. If a later merge cancelled it, rehearse the tag with "
-        "`gh workflow run rehearse-release.yml --ref <tag>` and re-run this job."
+        f"{refused} Run {latest.get('id')} ended {latest.get('conclusion')}. Re-run it with "
+        f"`gh run rerun {latest.get('id')}` (a re-run keeps this commit), then re-run this job. "
+        "If it fails again, the release path is broken at this commit."
     )
 
 

@@ -116,10 +116,11 @@ fail today, found weeks before the release that would have hit it.
 A release needs a green rehearsal on the exact commit it ships. Start step 1 only when the latest
 run on `main` is green (`gh run list --workflow rehearse-release.yml --branch main -L 1`). Steps 5
 and 7 enforce it: `scripts/check_rehearsal.py` refuses a commit with no successful run, and waits
-up to 20 minutes for one still going. A later merge cancels a run still going, so if the tagged
-commit's run was cancelled, rehearse the tag itself with
-`gh workflow run rehearse-release.yml --ref vX.Y.Z`, then re-run the failed job. You can also run
-it by hand:
+up to 20 minutes for one still going. A later merge cancels a run still going. If that happened
+to the tagged commit's run, the refusal names it: re-run it with `gh run rerun <run-id>`, which
+keeps its commit, then re-run the failed job. Rehearsing the tag instead cannot pass, because on
+the tag's tree the version is already tagged and the changelog already dated. You can also run it
+by hand:
 
 ```sh
 uv run python scripts/rehearse_release.py            # what CI runs

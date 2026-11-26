@@ -32,8 +32,26 @@ def test_a_success_passes_even_beside_a_failed_or_cancelled_run() -> None:
 
 @pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out", None])
 def test_anything_but_a_finished_success_fails(conclusion: str | None) -> None:
-    verdict, reason = check_rehearsal.decide([_run(conclusion)], SHA)
-    assert verdict == "fail" and "gh workflow run rehearse-release.yml --ref" in reason
+    assert check_rehearsal.decide([_run(conclusion)], SHA)[0] == "fail"
+
+
+def test_a_refusal_names_the_newest_run_to_re_run() -> None:
+    runs = [{**_run("cancelled"), "id": 7}, {**_run("failure"), "id": 9}, {**_run(None), "id": 8}]
+    reason = check_rehearsal.decide(runs, SHA)[1]
+    assert "Run 9 ended failure" in reason and "`gh run rerun 9`" in reason
+
+
+def test_a_refusal_never_advises_rehearsing_the_tag() -> None:
+    """Rehearsing the tag cannot pass: its version is already tagged and its changelog dated, so
+    the rehearsal's runbook edits refuse it. A re-run of the commit's own run is the way out."""
+    for runs in ([], [{**_run("cancelled"), "id": 1}]):
+        reason = check_rehearsal.decide(runs, SHA)[1]
+        assert "--ref <tag>" not in reason and "--ref v" not in reason
+
+
+def test_with_no_run_it_says_only_main_tip_can_be_rehearsed() -> None:
+    reason = check_rehearsal.decide([], SHA)[1]
+    assert "No run exists" in reason and "Before tagging" in reason and "later commit" in reason
 
 
 @pytest.mark.parametrize("status", sorted(check_rehearsal.UNFINISHED))
