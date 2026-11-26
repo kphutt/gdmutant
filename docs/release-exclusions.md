@@ -14,3 +14,4 @@ this list.
 - #380: wording of a note in this repository's own CI workflow.
 - #381: wcmatch security update. wcmatch is used only by poodle, a development tool, so installs
   of gdmutant never had it.
+- #383: the release workflows now require a green release rehearsal. Maintainers only.
