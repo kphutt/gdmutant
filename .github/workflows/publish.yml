@@ -63,7 +63,7 @@ name: Publish
 # step comments for the full story. `ci.yml`'s secret-scan job runs the same direct-CLI approach,
 # pinned to the same v8.30.1, so the two paths can't quietly diverge again.
 #
-# Eight guards, all fail-closed, all before `publish-pypi` gets `id-token: write`. Guard 3 is the
+# Nine guards, all fail-closed, all before `publish-pypi` gets `id-token: write`. Guard 3 is the
 # only one that also gates the TestPyPI dry-run; the rest need a tag, which a rehearsal has not got:
 #   1. the tag matches the version in pyproject.toml      (scripts/check_release_tag.py)
 #   2. the released commit is an ancestor of main          (git merge-base --is-ancestor)
@@ -73,6 +73,7 @@ name: Publish
 #   6. license compliance                     (scripts/verify_local.py --job license-check)
 #   7. both Godot self-tests, real Godot        (scripts/run_selftest.py / run_selftest_gut.py)
 #   8. every image in the BUILT long description resolves  (scripts/check_readme_images.py)
+#   9. the release rehearsal passed on the released commit (scripts/check_rehearsal.py)
 #
 # ...and one check AFTER the upload, which is not a guard and does not pretend to be:
 #   `verify-published` installs the released version from PyPI into a clean environment and runs
@@ -206,9 +207,10 @@ jobs:
     name: Gate - the right version, the right commit
     if: github.event_name == 'release'
     runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so a runner-image migration can't silently break us
-    timeout-minutes: 10
+    timeout-minutes: 30 # guard 9 waits up to 20 minutes for a rehearsal still running
     permissions:
-      contents: read # checkout only
+      contents: read # checkout
+      actions: read # guard 9 reads this commit's Release rehearsal runs
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
@@ -263,6 +265,14 @@ jobs:
             exit 1
           fi
           echo "tag $TAG_NAME is on main ($commit)"
+
+      # Guard 9 - the rehearsal passed on this exact commit. It lives in this job, a hard need of
+      # publish-pypi, so a release published from the web UI meets it too. 0.1.7 shipped from a
+      # commit whose rehearsal was red while every other guard here was green.
+      - name: Verify the release rehearsal passed on the released commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/check_rehearsal.py "$(git rev-parse HEAD)"
 
       - name: Summarize the gate decision
         if: always()

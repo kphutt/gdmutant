@@ -111,8 +111,15 @@ runs the suite on the version-bump commit, tags it locally, and then on the tagg
 `scripts/verify_local.py`, the build, `twine check` and the image check, with `ci.yml`'s
 `license-check` job last. Its `origin` is a bare repo in a temp
 directory, so nothing it does can reach GitHub or an index. A red rehearsal means this runbook would
-fail today, found weeks before the release that would have hit it. Run it by hand before cutting a
-real release:
+fail today, found weeks before the release that would have hit it.
+
+A release needs a green rehearsal on the exact commit it ships. Start step 1 only when the latest
+run on `main` is green (`gh run list --workflow rehearse-release.yml --branch main -L 1`). Steps 5
+and 7 enforce it: `scripts/check_rehearsal.py` refuses a commit with no successful run, and waits
+up to 20 minutes for one still going. A later merge cancels a run still going, so if the tagged
+commit's run was cancelled, rehearse the tag itself with
+`gh workflow run rehearse-release.yml --ref vX.Y.Z`, then re-run the failed job. You can also run
+it by hand:
 
 ```sh
 uv run python scripts/rehearse_release.py            # what CI runs
@@ -193,8 +200,9 @@ Two states worth knowing before you read a report:
    read back as enabled.
    Before pushing the tag, run `uv run python scripts/harden_github.py kphutt/gdmutant --check`
    and stop if it fails.
-5. *Automatic.* `release.yml` runs its two guards (the tag matches the packaged version, and the
-   tagged commit is on `main`) and then stages a draft Release with generated notes. A guard
+5. *Automatic.* `release.yml` runs its three guards (the tag matches the packaged version, the
+   tagged commit is on `main`, and the release rehearsal passed on it) and then stages a draft
+   Release with generated notes. A guard
    that fails leaves no Release at all, so nothing has shipped.
 6. Review the draft on GitHub and press Publish. The generated notes are a raw commit list. Edit
    them into something worth reading, with this version's `CHANGELOG.md` entry as the source.

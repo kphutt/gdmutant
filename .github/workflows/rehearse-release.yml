@@ -9,8 +9,10 @@ name: Release rehearsal
 # WHY ON MERGE, NOT ON A PULL REQUEST. The bugs this catches live on the path between merge and
 # release, and they used to surface only on release day (#286, #290, #305). Running on push to main
 # finds them the day the change that caused them lands, which is still weeks before a release.
-# It is not a required check: nothing reports it on a pull request, so requiring it would block
-# every PR forever (scripts/harden_github.py refuses to require a job no pull request triggers).
+# It is not a required check on pull requests: nothing reports it on one, so requiring it there
+# would block every PR forever (scripts/harden_github.py refuses to require a job no pull request
+# triggers). It is required for a release: release.yml and publish.yml both run
+# scripts/check_rehearsal.py, which refuses a commit this workflow did not pass on.
 #
 # NOTHING HERE CAN PUBLISH. The rehearsal's `origin` is a bare repo in a temp directory, the tag it
 # makes never leaves the runner, and this job holds no id-token and no write permission.
