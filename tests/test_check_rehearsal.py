@@ -46,6 +46,16 @@ def test_with_no_run_it_says_to_rehearse_the_tag() -> None:
     assert "No run exists" in reason and "rehearse-release.yml --ref <tag>" in reason
 
 
+@pytest.mark.parametrize("status", ["queued", "in_progress", "waiting", "requested", "pending"])
+def test_a_run_still_going_is_waited_for(status: str) -> None:
+    # A literal list, not the set under test: dropping a member from it must fail a case here.
+    assert check_rehearsal.decide([_run(None, status)], SHA)[0] == "wait"
+
+
+def test_another_commits_success_does_not_count() -> None:
+    assert check_rehearsal.decide([_run("success", sha="d" * 40)], SHA)[0] == "fail"
+
+
 def test_it_waits_while_running_then_passes(capsys: pytest.CaptureFixture[str]) -> None:
     answers = iter([[_run(None, "in_progress")], [_run("success")]])
     naps: list[float] = []

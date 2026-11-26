@@ -366,6 +366,27 @@ def test_a_commit_carrying_its_own_versions_tag_is_rehearsed_as_that_release(
     )
 
 
+@pytest.mark.parametrize("released_here", [True, False])
+def test_the_throwaway_origin_drops_only_a_released_commits_own_tag(
+    tmp_path: Path, released_here: bool
+) -> None:
+    """The other half of the release-day fix. A kept tag makes the rehearsal's own `git tag`
+    fail, so every re-run after the tag push would be red. An earlier release's tag must stay:
+    it is what tells the rehearsal which version comes next."""
+    work = _repo(tmp_path / "src")
+    subprocess.run(["git", "tag", "v0.1.2"], cwd=work, check=True)
+    if released_here:
+        subprocess.run(["git", "tag", "v0.1.3"], cwd=work, check=True)
+    plan = rehearse_release.plan_rehearsal(work)
+    assert plan.released_here is released_here
+    origin = tmp_path / "origin.git"
+    rehearse_release.make_origin(work, origin, plan)
+    tags = subprocess.run(
+        ["git", "tag", "--list"], cwd=origin, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert tags == ["v0.1.2"]
+
+
 def test_only_the_packaged_versions_own_tag_counts_as_this_release(tmp_path: Path) -> None:
     work = _repo(tmp_path / "other-tag")  # packaged 0.1.3
     subprocess.run(["git", "tag", "v0.1.3"], cwd=work, check=True)

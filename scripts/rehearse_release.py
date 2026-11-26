@@ -499,6 +499,19 @@ def plan_rehearsal(repo: Path = REPO) -> Plan:
     )
 
 
+def make_origin(repo: Path, origin: Path, plan: Plan) -> None:
+    """The throwaway bare `origin`: `repo`'s refs, with `main` at the rehearsed commit.
+
+    For a commit that is already its own release (`Plan.released_here`), that release's tag is
+    dropped here, because the rehearsal makes the tag itself, as a release would. Kept, it makes
+    the rehearsal's own `git tag` fail, so a re-run after the tag push would be red forever."""
+    run(["git", "clone", "--quiet", "--bare", "--no-local", str(repo), str(origin)], origin.parent)
+    run(["git", "update-ref", "refs/heads/main", plan.source_sha], origin)
+    run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], origin)
+    if plan.released_here:
+        run(["git", "tag", "--delete", plan.tag], origin)
+
+
 def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
     rehearsal = Rehearsal()
     # Deciding what to rehearse is itself a step, so a checkout this cannot start from reports a
@@ -516,7 +529,6 @@ def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
     if plan is None:
         return rehearsal
     source_sha, version, last, tag = plan.source_sha, plan.version, plan.last, plan.tag
-    released_here = plan.released_here
 
     scratch = Path(tempfile.mkdtemp(prefix="gdmutant-rehearsal-"))
     origin, work = scratch / "origin.git", scratch / "work"
@@ -532,11 +544,7 @@ def rehearse(quick: bool, keep: bool, offline: bool = False) -> Rehearsal:
     ]
 
     def clone() -> str:
-        run(["git", "clone", "--quiet", "--bare", "--no-local", str(REPO), str(origin)], scratch)
-        run(["git", "update-ref", "refs/heads/main", source_sha], origin)
-        run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], origin)
-        if released_here:  # the rehearsal makes this tag itself, as a release would
-            run(["git", "tag", "--delete", tag], origin)
+        make_origin(REPO, origin, plan)
         run(["git", "clone", "--quiet", str(origin), str(work)], scratch)
         # Deliberately no `git config user.name`: see COMMITTER. Checked rather than assumed.
         refuse_a_stored_identity(
