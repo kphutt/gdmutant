@@ -216,3 +216,11 @@ Facts about this repo for the scripts that check release notes and CHANGELOG ent
 says users will notice nothing has to give its reason.
 
 - output-sources: gdmutant/
+- changelog: CHANGELOG.md
+- version-source: pyproject.toml
+- help-command: uv run gdmutant run --help
+- artifact-glob: dist/*
+- exclusions: docs/release-exclusions.md
+- opt-out-trailer: Release-note: none
+- upgrade-heading: Before you upgrade
+- date-staleness-days: 3
