@@ -564,6 +564,25 @@ def test_the_tagged_commit_runs_what_publish_yml_gates_the_upload_on(
     )
 
 
+def _python_setup(steps: list[dict[str, typing.Any]]) -> list[tuple[str, str]]:
+    return [
+        (step["uses"], str(step["with"]["python-version"]))
+        for step in steps
+        if step.get("uses", "").startswith("actions/setup-python@")
+    ]
+
+
+def test_the_rehearsal_runs_on_the_python_publish_yml_gates_the_upload_on() -> None:
+    """The same pair, one layer down. With no setup-python step, uv took the runner image's own
+    Python 3.12.3, while publish.yml's verify-ubuntu got the newest 3.12 (3.12.16 at the time),
+    so the two disagreed about one commit's suite: CPython gh-157579 is a fix 3.12.3 lacks."""
+    rehearsal = REPO / ".github" / "workflows" / "rehearse-release.yml"
+    (job,) = yaml.safe_load(rehearsal.read_text(encoding="utf-8"))["jobs"].values()
+    publish = yaml.safe_load(PUBLISH_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    wanted = _python_setup(publish["verify-ubuntu"]["steps"])
+    assert wanted and _python_setup(job["steps"]) == wanted
+
+
 def test_the_quick_run_never_claims_the_gate_it_skipped() -> None:
     quick = rehearse_release.gate_args(quick=True)
     assert "scripts/verify_local.py" not in quick and "--no-cov" in quick
