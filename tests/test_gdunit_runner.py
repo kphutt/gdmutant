@@ -8,6 +8,7 @@ import pytest
 from conftest import bounded_output, patch_run
 
 import gdmutant.adapters.gdscript.runner as runner_mod
+import gdmutant.engine.runner as engine_runner
 from gdmutant.adapters.gdscript.runner import GdUnit4Runner
 from gdmutant.engine.runner import (
     BoundedOutput,
@@ -862,6 +863,14 @@ def test_a_compile_error_is_found_after_another_and_before_a_flood(
             + "SCRIPT ERROR: Parse Error: x\n   at: GDScript::reload (res://a.gd:3)\n",
             ["a.gd"],
         ),
+        # A line longer than one read with no message in it, after one with, names no script.
+        (
+            "",
+            "SCRIPT ERROR: Parse Error: x\n"
+            + "x" * 200_000
+            + "\n   at: GDScript::reload (res://a.gd:3)\n",
+            [],
+        ),
     ],
     ids=[
         "empty",
@@ -873,6 +882,7 @@ def test_a_compile_error_is_found_after_another_and_before_a_flood(
         "both",
         "long",
         "late",
+        "long, no message",
     ],
 )
 def test_the_scripts_godot_says_did_not_compile(stdout: str, stderr: str, named: list[str]) -> None:
@@ -880,6 +890,19 @@ def test_the_scripts_godot_says_did_not_compile(stdout: str, stderr: str, named:
     errors = runner_mod._CompileErrors(project)
     bounded_output(1, stdout, stderr, lines=errors.stream)
     assert errors.scripts() == tuple(str(project / name) for name in named)
+
+
+def test_a_message_cut_between_two_pieces_of_a_long_line_is_found() -> None:
+    message = "SCRIPT ERROR: Compile Error: x"
+    assert runner_mod._COMPILE_ERROR.search(message)
+    assert len(message) <= engine_runner._LINE_OVERLAP
+    for start in range(engine_runner._LINE_CHARS - len(message), engine_runner._LINE_CHARS + 1):
+        errors = runner_mod._CompileErrors(Path("/project"))
+        tail = engine_runner._StreamTail(lines=errors.stream())
+        # A read that ends mid-line, so the line is cut into pieces.
+        tail._feed("x" * start + message + "x" * engine_runner._LINE_CHARS)
+        tail._feed("\n   at: GDScript::reload (res://a.gd:3)\n")
+        assert errors.scripts() == (str(Path("/project/a.gd")),), start
 
 
 def test_a_zero_test_report_names_the_scripts_that_did_not_compile(

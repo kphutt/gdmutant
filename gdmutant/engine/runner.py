@@ -450,6 +450,9 @@ def script_error_excerpt(output: str) -> str:
 #: trailing whitespace cannot push out the text a message shows.
 _TAIL_CHARS: Final = 4000
 _LINE_CHARS: Final = 4000
+#: How much of a long line each piece repeats from the end of the one before it, so text shorter
+#: than this that a cut splits is whole in one piece. Longer than any text a line reader looks for.
+_LINE_OVERLAP: Final = 64
 _EXCERPT_LINES: Final = 4
 _READ_BYTES: Final = 64 * 1024
 #: How long to wait for the pipes after a kill: a grandchild can hold them open for good.
@@ -536,7 +539,7 @@ class _StreamTail:
             self._take(line, self._continued, terminated=True)
             self._continued = False
         # A line with no end in sight is taken a piece at a time, the pieces counting as one line.
-        # Each overlaps the next by one character less than the marker, so a cut marker is found.
+        # Each overlaps the next by `_LINE_OVERLAP` characters, so text a cut splits is found.
         while len(self._line) > _LINE_CHARS:
             piece = self._line[:_LINE_CHARS]
             self._take(piece, self._continued)
@@ -545,7 +548,7 @@ class _StreamTail:
             self._continued = not _ends_with_break(piece)
             # The overlap stops at the last line break in it: a marker cannot span one, and the text
             # before it was already counted with the piece above, so repeating it would count twice.
-            keep = _LINE_CHARS - len(_SCRIPT_ERROR_MARKER) + 1
+            keep = _LINE_CHARS - _LINE_OVERLAP
             self._line = _after_last_break(self._line[keep:_LINE_CHARS]) + self._line[_LINE_CHARS:]
 
     def _take(self, line: str, continued: bool, terminated: bool = False) -> None:
@@ -656,8 +659,8 @@ def allow_commands() -> None:
 
 
 #: Called once per stream, stdout first, before it is read. What it returns is given each line of
-#: that stream in order; a line longer than `_LINE_CHARS` arrives in overlapping pieces, each after
-#: the first flagged as going on with the line before it.
+#: that stream in order; a line longer than `_LINE_CHARS` arrives in pieces overlapping by
+#: `_LINE_OVERLAP` characters, each after the first flagged as going on with the line before it.
 LineReaders = Callable[[], Callable[[str, bool], None]]
 
 

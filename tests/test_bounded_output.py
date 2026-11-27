@@ -371,10 +371,10 @@ def _long_line_cases(brk: str) -> list[tuple[str, str]]:
         (f"marker after break at {n}", "y" * n + brk + "SCRIPT ERROR" + "y" * 6000)
         for n in range(size - 22, size - 8)
     ]
-    # A marker and a break both at the edge of the overlap, so one more or one fewer character of
-    # overlap changes what is kept. The overlap is `len(marker) - 1` characters wide.
+    # A marker and a break both at the edge of the overlap, so the marker is in two pieces or the
+    # break moves where the next piece starts. Either way each line must be counted once.
     marker = runner_mod._SCRIPT_ERROR_MARKER
-    edge = size - (len(marker) - 1)
+    edge = size - runner_mod._LINE_OVERLAP
     for at_marker in range(edge - 3, edge + 3):
         for at_break in range(edge - 4, edge + 4):
             if at_break + 1 <= at_marker or at_break >= at_marker + len(marker):
@@ -426,11 +426,11 @@ def test_stream_tail_excerpt_is_the_same_however_the_output_is_read(brk: str) ->
 @pytest.mark.parametrize("brk", [None, *_SPLITLINES_BREAKS])
 def test_stream_tail_marker_line_starts_where_the_overlap_does(brk: str | None) -> None:
     """A marker found after the first cut of a long line is kept from the start of the overlap (the
-    last `len(marker) - 1` characters of the piece before it), or from just after the last line
+    last `_LINE_OVERLAP` characters of the piece before it), or from just after the last line
     break in them. So the overlap's width shows in the kept line: a wider or narrower one fails."""
     size = runner_mod._LINE_CHARS
     marker = runner_mod._SCRIPT_ERROR_MARKER
-    overlap_start = size - (len(marker) - 1)
+    overlap_start = size - runner_mod._LINE_OVERLAP
     for pos in range(overlap_start - 3, size + 3):
         line = "a" * pos + (brk or "a") + "a" * (size + 50 - pos - 1) + marker + " boom"
         starts_at = pos + 1 if brk and pos >= overlap_start else overlap_start
