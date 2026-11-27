@@ -27,8 +27,8 @@ was written for.
 
 The first line of the journal is a header. It holds a hash or value for each input below. On
 resume, any difference refuses the journal with exit code 2. The message names each difference,
-except that a different gdmutant version or journal format is reported alone, before anything else
-is compared.
+except that a different gdmutant version or journal format refuses it before anything else is
+compared, with a message that names only the two versions.
 `--jobs` is not recorded, so it may differ.
 
 ### What is checked
@@ -95,6 +95,9 @@ made in review:
   notice. It can reuse a verdict that the change would have altered, and the report mixes two
   project states. The guide tells users to start a new journal after changing one of those files.
   Nothing enforces that.
+- Known gap: a mismatch in the journal format alone prints the version message, which then names
+  the same gdmutant version twice and does not say the format changed. It needs a format bump
+  without a version bump, so it mostly affects development builds.
 - A killed serial run can leave a mutant in the source file it was mutating. That file then counts
   as changed, so the journal is refused until the file is restored. The refusal message says so.
 - The check hashes every script in the project on each resume, so the cost grows with project size.
