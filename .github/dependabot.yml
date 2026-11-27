@@ -31,6 +31,11 @@ updates:
         patterns: ["*"]
     cooldown:
       default-days: 7
+    # lark is locked by gdtoolkit, which pins `lark[regex]==1.2.2` exactly, so Dependabot's lark
+    # bump (`uv lock --upgrade-package lark==...`) can never resolve and fails every job in the
+    # group. The lark that ships is chosen by gdtoolkit; drop this when gdtoolkit relaxes its pin.
+    ignore:
+      - dependency-name: "lark"
     commit-message:
       prefix: "deps"
     labels: ["dependencies"]
