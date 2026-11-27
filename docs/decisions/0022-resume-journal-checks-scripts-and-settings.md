@@ -26,7 +26,9 @@ was written for.
 ## Decision
 
 The first line of the journal is a header. It holds a hash or value for each input below. On
-resume, any difference refuses the journal with exit code 2. The message names each difference.
+resume, any difference refuses the journal with exit code 2. The message names each difference,
+except that a different gdmutant version or journal format is reported alone, before anything else
+is compared.
 `--jobs` is not recorded, so it may differ.
 
 ### What is checked
@@ -68,6 +70,9 @@ verdict of each worker, as well as the mutants still running.
 
 - The baseline runs again on every resume, and so do coverage analysis's marker runs.
 - A mutant whose run failed (`error`) runs again.
+- With coverage analysis on, a verdict is reused only if the mutant gets the same plan as when it
+  was recorded. Otherwise it runs again. The answers coverage analysis gets when it checks a set of
+  test files against the unmutated project (`_Trust`) are journaled too.
 - The header is written through a rename. A half-written last line is dropped, but only after the
   file is known to be a journal.
 
