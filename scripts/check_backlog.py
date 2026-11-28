@@ -21,7 +21,7 @@ raw text, HTML comments included, is scanned for text matching `--private-id`, a
 `--private-host` or a built-in hosted-tracker host (minus `--allow-host`). Those are findings. A
 phrase such as "see the private ticket" only prints a `check:` note and never changes the exit
 code. Columns are looked up by their header name, never by counting from either end. Digits
-are ASCII only, and lines are split on "\n" only.
+are ASCII only, and lines are split on "\\n" only.
 
 `main` takes the full argv, program name first, so `main(sys.argv)` is the whole entry point and
 tests can call it directly. The script is lint-clean under ruff's default rules plus E, B and E501,
@@ -302,6 +302,17 @@ def check_links(rows: dict, open_ids: set, prefix: str, problems: list[str]) -> 
                 )
 
 
+def host_problem(host: str) -> str | None:
+    """Why `host` can never match a bare host name, or None. Never quotes the host."""
+    if "://" in host:
+        return "not a scheme"
+    if "*" in host:
+        return "not a wildcard (a name already matches its subdomains)"
+    if ":" in host:
+        return "not a port"
+    return None
+
+
 def host_in(host: str, domains) -> bool:
     return any(host == d or host.endswith("." + d) for d in domains)
 
@@ -363,6 +374,7 @@ def load_private_file(path: str, opts: dict, root: Path) -> str | None:
         text = Path(path).read_text(encoding="utf-8-sig")
     except (OSError, ValueError):  # ValueError covers UnicodeDecodeError
         return "--private-file could not be read"
+    before = len(opts["file_id"]) + len(opts["file_host"])
     for line_no, line in enumerate(text.split("\n"), start=1):
         line = line.strip()
         if not line or line.startswith("#"):
@@ -374,11 +386,32 @@ def load_private_file(path: str, opts: dict, root: Path) -> str | None:
                 opts["file_id"].append((re.compile(value), line_no))
             except re.error:
                 return f"--private-file line {line_no} has an invalid regular expression"
+        elif kind == "host" and value and (problem := host_problem(value)):
+            return f"--private-file line {line_no} needs a host name such as example.com, {problem}"
         elif kind == "host" and value and "/" not in value and " " not in value:
             opts["file_host"].append((value.lower(), line_no))
         else:
             return f"--private-file line {line_no} must be id:REGEX or host:HOST"
+    if len(opts["file_id"]) + len(opts["file_host"]) == before:
+        return "--private-file has no rules, so it would check nothing; add id: or host: lines"
     return None
+
+
+HELP = """usage: check_backlog.py <project> <PREFIX> [root] [options]
+
+Checks <project>-backlog.md, <project>-archive.md and <project>-notes.md in [root] (default .).
+Exit 0 when clean, 1 on findings, 2 on a usage or input error.
+
+options:
+  -h, --help           print this help and exit 0
+  --private-id REGEX   fail on text matching REGEX; may repeat
+  --private-host HOST  fail on a URL on HOST (a bare name such as example.com); may repeat
+  --allow-host HOST    exempt a public page on HOST; may repeat
+  --private-file PATH  read id:REGEX and host:HOST lines from a file outside the repository;
+                       a file with no rules is an error
+
+environment:
+  CHECK_BACKLOG_PRIVATE_FILE  the --private-file path, used when the flag is not given"""
 
 
 def parse_args(argv: list[str]) -> tuple[list[str], dict] | str:
@@ -394,6 +427,8 @@ def parse_args(argv: list[str]) -> tuple[list[str], dict] | str:
     names = {"--private-id": "private_id", "--private-host": "private_host"}
     names["--allow-host"] = "allow_host"
     names["--private-file"] = "private_file"
+    if any(a in ("-h", "--help") for a in argv[1:]):
+        return HELP
     positional = [argv[0]] if argv else []
     rest = iter(argv[1:])
     for arg in rest:
@@ -419,6 +454,9 @@ def parse_args(argv: list[str]) -> tuple[list[str], dict] | str:
             opts[key].append(value)
         else:
             host = (value or "").strip().lower()
+            problem = host_problem(host)
+            if problem:
+                return f"{flag} needs a host name such as example.com, {problem}"
             if not host or "/" in host or " " in host:
                 return f"{flag} needs a host name such as example.com"
             opts[key].append(host)
@@ -430,6 +468,9 @@ def main(argv: list[str]) -> int:
     with contextlib.suppress(AttributeError, OSError, ValueError):
         sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
     parsed = parse_args(argv)
+    if parsed == HELP:
+        print(HELP)
+        return 0
     if isinstance(parsed, str):
         print(parsed)
         return 2
