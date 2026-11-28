@@ -187,6 +187,9 @@ report for the whole run.
 - Delete the file to start over. A finished run's file still works: running the command again
   runs no mutant and rewrites the report.
 
+Why these inputs are checked and the others are not:
+[`docs/decisions/0022`](decisions/0022-resume-journal-checks-scripts-and-settings.md).
+
 #### Coverage analysis
 
 `--coverage-analysis all` runs the whole suite once, before any mutant, on a throwaway copy of the

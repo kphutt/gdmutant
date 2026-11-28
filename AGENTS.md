@@ -95,7 +95,8 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
 
 - `main` is protected, and new behavior comes with tests: this is a testing tool, so we hold
   ourselves to it.
-- CI gate: `ruff` + `mypy` + `pytest` + `pip-audit`, plus a gitleaks secret scan and zizmor
+- CI gate: `ruff` + `mypy` + `pytest` + `pip-audit` + the backlog check
+  (`scripts/check_backlog.py`), plus a gitleaks secret scan and zizmor
   (workflow security). GitHub Actions are SHA-pinned (Dependabot bumps them).
 - Windows is a deployment target, not just a dev machine. gdmutant is a cross-platform Python
   CLI people run on Windows, so test on Windows for real, not just Linux. Two concrete traps to
@@ -141,7 +142,7 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   `tests/test_gates_fail_on_empty_input.py` holds the offline probes for the gate scripts
   `check_mutation_baseline`, `verify_local`, `license_check_local`, `check_licenses`,
   `check_release_tag`, `check_rehearsal`, `check_published_package`, `check_readme_images`, `harden_github` (offline
-  paths only) and `run_gitleaks`. The other scripts in `scripts/` have no probe there.
+  paths only), `run_gitleaks` and `check_backlog`. The other scripts in `scripts/` have no probe there.
 - **Recurring bug two: two paths that should agree, and one checks less.** A second entry point
   running fewer checks than the first. A message fixed in one place but not its twin. Two things
   writing to stdout at once. Coverage and mutation testing cannot catch these. Both ask "is this
@@ -182,12 +183,64 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
 - `docs/decisions/NNNN-*.md`: append-only ADRs (`ls` is the index).
 - [`docs/releasing.md`](docs/releasing.md): the maintainer runbook for cutting a release to PyPI.
 - [`docs/credits.md`](docs/credits.md): third-party licenses.
+- [`gdmutant-backlog.md`](gdmutant-backlog.md): open work, in order. Closed work is in
+  [`gdmutant-archive.md`](gdmutant-archive.md), and facts git can't show are in
+  [`gdmutant-notes.md`](gdmutant-notes.md). Only the maintainer's `chore(backlog):` PRs edit all
+  three.
+- `Closes: GM-NN`: the line a pull request body uses to name the backlog item it finishes (see
+  "The backlog" below).
 
 Live docs open with YAML frontmatter (`type` / `status` / `created`). Build only from
 `status: active`. Two files are deliberately exempt, because they are rendered somewhere that has
 no frontmatter support and would print it as a visible heading: `README.md` (it is the package's
 PyPI description) and `.github/PULL_REQUEST_TEMPLATE.md` (it is pasted verbatim into every new pull
 request's body). `tests/test_docs_frontmatter.py` pins both halves of that rule.
+
+## The backlog
+
+Open work lives in `gdmutant-backlog.md`, closed work in `gdmutant-archive.md`, and facts git can't
+show in `gdmutant-notes.md`. Only the maintainer's `chore(backlog):` PRs change them (setup, seed,
+sync and rule changes), so a feature PR (a contributor's included) never edits them.
+`scripts/check_backlog.py gdmutant GM` checks their structure and runs in `ci.yml`'s `verify` job
+and the pre-push hooks.
+
+**PR format.** The PR body becomes the squash commit body. It ends with trailer lines, and `Closes:`
+comes last of them, after `Release-note: none` when the PR uses that opt-out (see "Release notes"):
+
+```text
+Release-note: none
+Closes: GM-12
+Closes #377
+```
+
+- `Closes: GM-12` (with a colon) names backlog items, comma-separated, or `none`.
+- `Closes #NNN` (no colon) is GitHub's own keyword for closing an issue, on its own line.
+- A hand-written squash message keeps these lines, so merge with `gh merge-safe <pr> --squash --body …`
+  and copy them over.
+
+**The backlog step.** Any agent can run it cold:
+
+1. `git fetch origin`, then branch from `origin/main`.
+2. Find the last sync, the newest commit titled `chore(backlog): sync to <hash>`. List the PRs merged
+   since, and read each one's `Closes:` line from its squash commit body.
+3. Move each closed row to the top of the archive, with the PR number and the full commit hash. A PR
+   with no `Closes:` line at all is a finding: report it in the sync PR body.
+4. If a tag now contains a row's commit (`git merge-base --is-ancestor <commit> <tag>`), set the
+   row's Release cell to that version's CHANGELOG heading.
+5. Mirror In progress from open PRs: read `gh pr list --state open --json number,body` and pick out
+   each `Closes:` line with a script. A row with an open PR moves to In progress. An outside
+   contributor's PR has no `Closes: GM-NN` line, so its row stays in In progress while its Item
+   cell cites that open PR (`#NNN`), and the maintainer adds the `Closes:` line in the squash body
+   at merge. When an outside PR opens whose body links an issue an existing row cites (`Fixes #NNN`,
+   `Closes #NNN`, `Resolves #NNN` or `Refs #NNN`), add the PR's `#NNN` to that row's Item cell and
+   move the row to In progress; a PR that links no cited issue gets a new row. A row in In progress
+   with no open PR claiming it moves back to Ready to build.
+6. Turn accepted issues into rows. Each new row takes the `Next ID`, and the same commit raises it.
+7. Run `uv run python scripts/check_backlog.py gdmutant GM` and the public-readiness scan on the
+   three files. Run the checker locally a second time with the maintainer's private file, by
+   setting `CHECK_BACKLOG_PRIVATE_FILE` to a file kept outside the repo.
+8. Open the sync PR, titled `chore(backlog): sync to <short hash of main>`, with `Release-note: none`
+   and `Closes: none`. Only one sync PR is open at a time.
 
 ## Non-goals (v0.1)
 
