@@ -26,7 +26,7 @@ class _FakeProcess:
 
 @dataclass
 class _FakeWin32:
-    """Records every Job Object call, in order, with whether the process was killed yet."""
+    """Records every Job Object call, in order."""
 
     job: int | None = 9
     assigns: bool = True
@@ -136,6 +136,27 @@ def test_on_windows_a_failed_stop_after_a_failed_start_still_releases_the_job(
     with pytest.raises(OSError, match="failed"):
         process_tree.start(["x"], ".")
     assert windows.calls[-1] == "close 9"
+
+
+def test_on_windows_an_interrupt_before_the_job_is_joined_stops_the_command_and_releases_it(
+    monkeypatch: pytest.MonkeyPatch, windows: _FakeWin32
+) -> None:
+    # Ctrl-C right after the command starts, while it is still suspended and outside its job.
+    real = process_tree.ProcessTree
+    interrupts = [KeyboardInterrupt()]
+
+    def interrupted_once(*args: object, **kwargs: object) -> ProcessTree:
+        if interrupts:
+            raise interrupts.pop()
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(process_tree, "ProcessTree", interrupted_once)
+    _no_taskkill(monkeypatch)
+    process = _fake_popen(monkeypatch, {}, windows)
+    with pytest.raises(KeyboardInterrupt):
+        process_tree.start(["x"], ".")
+    assert windows.calls == ["new_job", "popen", "terminate 9", "close 9"]
+    assert process.killed
 
 
 def test_on_windows_a_command_that_cannot_resume_is_stopped(

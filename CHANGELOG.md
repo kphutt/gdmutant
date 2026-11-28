@@ -16,12 +16,13 @@ All notable changes to gdmutant are recorded here. The format follows
 
 - On Windows, gdmutant now stops every process a test command leaves running, once the command
   finishes or times out, including one started on purpose to outlive it, such as a build server.
-  Under `--jobs`, turn off build-server reuse (for example MSBuild's node reuse). (#365)
+  Under `--jobs`, turn off build-server reuse (for example MSBuild's node reuse). (#368, thanks
+  @normanthesquid)
 
 ### Fixed
 
 - On Windows, a timed-out test command's child processes are now stopped even if the command
-  itself has already exited. (#365)
+  itself has already exited. (#368, thanks @normanthesquid)
 
 ## [0.1.8] - 2026-11-26
 

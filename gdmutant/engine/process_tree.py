@@ -200,19 +200,22 @@ def start(command: Sequence[str], cwd: str) -> ProcessTree:
         if api is not None and job is not None:
             api.close(job)
         raise
-    tree = ProcessTree(process, job)
-    if api is None or job is None:
-        return tree
-    try:
+    tree: ProcessTree | None = None
+    try:  # from the moment the command exists, so an interrupt anywhere here is cleaned up
+        tree = ProcessTree(process, job)
+        if api is None or job is None:
+            return tree
         handle = int(getattr(process, "_handle"))  # noqa: B009 - private, so typeshed omits it
         if not api.assign(job, handle):  # e.g. a parent job that forbids nesting
             tree.job = None  # first, so an interrupt here cannot close the handle twice
             api.close(job)
         api.resume(handle)
+        return tree
     except BaseException:  # never leave the command suspended, or running outside any kill
+        if tree is None:  # interrupted before the tree was built
+            tree = ProcessTree(process, job)
         try:
             tree.kill()
         finally:
             tree.close()
         raise
-    return tree
