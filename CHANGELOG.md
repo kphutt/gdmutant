@@ -10,6 +10,17 @@ All notable changes to gdmutant are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Under GdUnit4 and GUT, a mutant whose own file Godot cannot compile is now scored `invalid`,
+  not `error` or `killed`. For example, a statement deletion can leave a parameter unused, and a
+  project that treats that warning as an error then refuses to load the file. A baseline run in
+  which a file to mutate does not compile is now refused. Any other file that does not compile is
+  named in a warning, since the tests that load it did not run, if the suite still wrote its
+  report. (#359)
+
 ## [0.1.8] - 2026-11-26
 
 Resumable runs with `--resume`, and two cases that 0.1.7's temporary-folder fix missed. Nothing

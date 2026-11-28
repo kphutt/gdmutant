@@ -11,7 +11,13 @@ from typing import Any
 
 import pytest
 
-from gdmutant.engine.runner import CAPTURE_ENCODING, BoundedOutput, SuiteResult, _StreamTail
+from gdmutant.engine.runner import (
+    CAPTURE_ENCODING,
+    BoundedOutput,
+    LineReaders,
+    SuiteResult,
+    _StreamTail,
+)
 
 _TEMPLATES: dict[str, tuple[Path, Any]] = {}
 
@@ -173,13 +179,17 @@ def left_behind(stderr: str) -> list[Path]:
 
 
 def bounded_output(
-    returncode: int, stdout: str = "", stderr: str = "", watch: Sequence[str] = ()
+    returncode: int,
+    stdout: str = "",
+    stderr: str = "",
+    watch: Sequence[str] = (),
+    lines: LineReaders | None = None,
 ) -> BoundedOutput:
     """What `run_bounded` keeps of a command that printed `stdout` and `stderr`: each is read
     through `_StreamTail.drain`, as a real run's pipe is."""
     tails = []
     for text in (stdout, stderr):
-        tail = _StreamTail(watch)
+        tail = _StreamTail(watch, lines() if lines else None)
         with tempfile.TemporaryFile() as file:  # a file, not a pipe: a long text cannot block
             file.write(text.encode(CAPTURE_ENCODING))
             file.seek(0)
@@ -195,12 +205,16 @@ def patch_run(monkeypatch: pytest.MonkeyPatch, module: Any, fake: Callable[..., 
     through `subprocess.run` itself, which it uses for anything else."""
 
     def bounded(
-        command: Sequence[str], cwd: str, timeout: float, watch: Sequence[str] = ()
+        command: Sequence[str],
+        cwd: str,
+        timeout: float,
+        watch: Sequence[str] = (),
+        lines: LineReaders | None = None,
     ) -> BoundedOutput:
         done = fake(list(command), cwd=cwd, timeout=timeout)
         if not isinstance(done, subprocess.CompletedProcess):  # a fake with nothing to print
             done = subprocess.CompletedProcess(command, 0, "", "")
-        return bounded_output(done.returncode, done.stdout or "", done.stderr or "", watch)
+        return bounded_output(done.returncode, done.stdout or "", done.stderr or "", watch, lines)
 
     monkeypatch.setattr(module.subprocess, "run", fake)
     monkeypatch.setattr(module, "run_bounded", bounded)

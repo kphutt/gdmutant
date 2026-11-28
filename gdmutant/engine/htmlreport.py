@@ -72,7 +72,7 @@ _OUTCOME: dict[str, tuple[str, str, str]] = {
     "Killed": ("caught", "kd", "a test failed"),
     "Timeout": ("caught", "kd", "the suite timed out, which counts as caught"),
     "Ignored": ("ignored", "ot", "suppressed by an ignore annotation, so it never ran"),
-    "CompileError": ("invalid", "ot", "it did not parse, so it never ran"),
+    "CompileError": ("invalid", "ot", "it did not parse or compile, so no test ran it"),
     "RuntimeError": ("error", "ot", "the run errored"),
     # Actionable like a survivor, so the same colour and the same default filter, but its own tag
     # word: "no test reaches this line" calls for a different fix than "no test checks it".
@@ -85,10 +85,10 @@ _OUTCOME: dict[str, tuple[str, str, str]] = {
 #:
 #: Each header count is also a filter: the reader can click "204 runtime errors" and land on the
 #: mutants behind it. Those three numbers are not one thing, and the page must not let them read as
-#: one. A *timeout* is a kill and only ever a performance signal, a *compile error* is the re-parse
-#: guard working and the mutant never ran, but a *runtime error* is a mutant that was valid, did
-#: run, and whose harness then fell over. That last one measured nothing, so a big count there is a
-#: blind spot in the score, and it is the one a reader most needs to be able to reach.
+#: one. A *timeout* is a kill and only ever a performance signal, a *compile error* is a mutant
+#: that did not parse or compile, so no test ran it, but a *runtime error* is a mutant that was
+#: valid, did run, and whose harness then fell over. That last one measured nothing, so a big count
+#: there is a blind spot in the score, and it is the one a reader most needs to be able to reach.
 _RARE: tuple[tuple[str, str], ...] = (
     ("no coverage", _NO_COVERAGE),
     ("timeout", "Timeout"),
@@ -1213,8 +1213,8 @@ function paintSource(){
 // used to call all three "never run", which is wrong for the third:
 //   * ignored: a `# gdmutant: ignore` annotation suppresses it. Generated for the report, never
 //     run at all (no validity check, no suite run), excluded from the score.
-//   * invalid: the mutation did not survive the re-parse guard, so it was discarded before any
-//     test ran. Also never run.
+//   * invalid: the mutation failed the re-parse guard, or the test run's output said the mutated
+//     file did not compile, so no test ran it. The mutated code never ran.
 //   * error: the runner FAILED WHILE EXECUTING IT (a Godot crash, say). This one was run, or at
 //     least attempted; calling it "never run" states the opposite of what happened.
 // (Definitions taken from `Verdict` in `gdmutant/engine/loop.py`, which is where they are decided.)
@@ -1222,7 +1222,7 @@ function paintSource(){
 // entry names exactly the ones this pane contains.
 const UNSCORED = {
   ignored: 'ignored: a <code># gdmutant: ignore</code> annotation, so it never ran',
-  invalid: 'invalid: the mutation did not parse, so it never ran',
+  invalid: 'invalid: the mutation did not parse or compile, so no test ran it',
   error: 'errored: the runner failed while running it',
 };
 const UNSCORED_ORDER = ['ignored', 'invalid', 'error'];
