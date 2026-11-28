@@ -223,16 +223,18 @@ Closes #377
 1. `git fetch origin`, then branch from `origin/main`.
 2. Find the last sync, the newest commit titled `chore(backlog): sync to <hash>`. List the PRs merged
    since, and read each one's `Closes:` line from its squash commit body.
-3. Move each closed row to the top of the archive, with the PR number and the full commit hash. A PR
-   with no `Closes:` line at all is a finding: report it in the sync PR body.
+3. Move each closed row to the top of the archive, with the PR number and the full commit hash. For an
+   outside contributor's PR, also credit them by @handle in What wrapped up. A PR with no `Closes:`
+   line at all is a finding: report it in the sync PR body.
 4. If a tag now contains a row's commit (`git merge-base --is-ancestor <commit> <tag>`), set the
    row's Release cell to that version's CHANGELOG heading.
 5. Mirror In progress from open PRs: read `gh pr list --state open --json number,body` and pick out
    each `Closes:` line with a script. A row with an open PR of the maintainer's own that carries its
-   `Closes: GM-NN` line moves to In progress. An outside contributor's PR never moves or edits a row (see "Outside contributors"
-   in the rules of `gdmutant-backlog.md`): the maintainer adds `Closes: GM-NN` to its squash body at
-   merge, and the next sync archives that row with the PR and credits the contributor by @handle. A row
-   in In progress with no open PR claiming it moves back to Ready to build.
+   `Closes: GM-NN` line moves to In progress. An outside contributor's PR never moves or edits a row
+   (see "Outside contributors" in the rules of `gdmutant-backlog.md`): the maintainer adds
+   `Closes: GM-NN` to its squash body at merge, and the next sync archives that row with the PR and
+   credits the contributor by @handle. A row in In progress with no open PR claiming it moves back to
+   Ready to build.
 6. Turn accepted issues into rows. Each new row takes the `Next ID`, and the same commit raises it.
 7. Run `uv run python scripts/check_backlog.py gdmutant GM` and the public-readiness scan on the
    three files. Run the checker locally a second time with the maintainer's private file, by
