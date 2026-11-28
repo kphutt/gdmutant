@@ -6,7 +6,7 @@ created: 2026-11-27
 
 # gdmutant archive
 
-Closed work, newest first. Open work is in [gdmutant-backlog.md](gdmutant-backlog.md). Written only by the backlog step.
+Closed work, newest first. Open work is in [gdmutant-backlog.md](gdmutant-backlog.md). Written only by `chore(backlog):` PRs.
 
 | # | Closed | Item | What wrapped up | Shipped in | Release |
 |---|---|---|---|---|---|
