@@ -1145,6 +1145,17 @@ def test_help_as_the_only_argument_exits_zero(capsys: pytest.CaptureFixture[str]
     assert "CHECK_BACKLOG_PRIVATE_FILE" in capsys.readouterr().out
 
 
+def test_a_file_named_by_the_variable_and_a_flag_keeps_the_label_of_its_first_mention(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, private = _repo_with_private_file(tmp_path, "PRIV-12\n")
+    monkeypatch.setenv("CHECK_BACKLOG_PRIVATE_FILE", str(private))
+    assert run(repo, flags=("--private-file", str(private))) == 2
+    out = capsys.readouterr().out
+    assert "CHECK_BACKLOG_PRIVATE_FILE line 1" in out
+    assert "--private-file #1" not in out
+
+
 @pytest.mark.parametrize("pattern", ["^PRIV-[0-9]+", "PRIV-[0-9]+$", "(PRIV)?", " PRIV-[0-9]+"])
 def test_a_private_id_that_is_anchored_empty_matching_or_padded_exits_two(
     tmp_path: Path, pattern: str
