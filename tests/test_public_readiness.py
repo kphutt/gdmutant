@@ -167,6 +167,7 @@ _PUBLIC_ID_PREFIXES = (
     "BLE",
     "RUF",  # ruff rule codes
     "WDG",  # the invented prefix this module's own tests use
+    "GM",  # backlog item ids, in gdmutant-backlog.md and its archive
 )
 
 #: A tracker id is a shape, not a word: a short uppercase prefix and a number. Writing the rule

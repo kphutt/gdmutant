@@ -56,6 +56,9 @@ LIVE_DOCS = sorted(REPO.glob("docs/**/*.md")) + [
     REPO / "CHANGELOG.md",
     REPO / "CODE_OF_CONDUCT.md",
     REPO / ".github" / "SECURITY.md",
+    REPO / "gdmutant-backlog.md",
+    REPO / "gdmutant-archive.md",
+    REPO / "gdmutant-notes.md",
 ]
 
 #: Docs that must NOT carry frontmatter — see the module docstring for why each is exempt.

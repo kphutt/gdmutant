@@ -19,3 +19,6 @@
 - [ ] Any new dependency is recorded in `docs/credits.md`
 - [ ] A design change is captured as an ADR in `docs/decisions/` (if applicable)
 - [ ] New pure logic got a local mutation-test pass, `uv run pre-commit run gdmutant-mutation --hook-stage manual` (if applicable)
+
+Closes: none
+<!-- Replace `none` with the backlog ID (`GM-12`) if you know it. The maintainer sets it at merge otherwise. -->
