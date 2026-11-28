@@ -75,6 +75,7 @@ gdmutant run <file.gd> --project <godot-project-dir> --runner gdunit4 --json -
 | `--exclude-tests <entry>` | *(none)* | Leave a test out of every run, as gdUnit4's `-i` takes it: a suite name, any part of a suite's `res://` path, or `suite:test` for one test (repeatable; `--runner gdunit4` only). |
 | `--jobs N` / `-j N` | `1` | Run N mutants in parallel, each in its own project copy. `auto` picks a worker count from your CPU count and throttles under load instead of a fixed N. |
 | `--godot-file-logging` | off | Under `--jobs`, let each worker's Godot write `user://logs/godot.log`. See [Parallelism](#parallelism). |
+| `--resume <file>` | off | Record each verdict in a journal file as it lands. Run the same command again after a run stops part way, and it picks up where that one stopped. See [Resuming a stopped run](#resuming-a-stopped-run). |
 | `--timeout <seconds>` | derived from the baseline | Per-mutant test timeout. See [How long a mutant gets](#how-long-a-mutant-gets). |
 | `--coverage-analysis {off,all,per-file}` | `off` | `all` finds the mutants no test reaches before any mutant runs, and reports them as `no coverage` without running them. `per-file` does that and runs every other mutant against only the test files that reach it, which is the setting that saves real time. See [Coverage analysis](#coverage-analysis). |
 | `--coverage-self-check N\|all` | `3` | How many of coverage analysis's own decisions are re-run against the whole suite to confirm them. `all` checks every mutant both ways. |
@@ -159,6 +160,41 @@ The default stays `1` (serial) even though `auto` is available: the load-average
 watches CPU/IO contention, never disk, and disk (a full project copy per worker) is this tool's
 real binding constraint. Opt in with `--jobs auto` deliberately, especially on a machine with
 plenty of cores but a small or shared disk.
+
+#### Resuming a stopped run
+
+gdmutant writes its report only when a run ends. On a large project a run can take hours, and a
+run that stops part way (a killed process, a restarted machine) would otherwise lose every verdict
+so far. `--resume <file>` writes each verdict to `<file>` as it lands. Run the same command again
+and gdmutant skips every mutant the file already has a verdict for, runs the rest, and writes the
+report for the whole run.
+
+- The unmutated baseline runs again first, and so do coverage analysis's marker runs when it is
+  on. A red suite is still refused, and the time budget is measured afresh.
+- The file is refused, with exit 2, if it was written for different sources, or if anything that
+  can change a verdict differs:
+  - a source file being mutated
+  - any other script or shader in the project, tests included. Folders whose names start with `.`,
+    such as `.godot`, are not checked. Scenes, resources and `project.godot` are not checked
+    either, since suites and Godot itself rewrite them, so start a new journal after you change
+    one.
+  - the runner, `--command`, `--godot`, `--tests`, `--timeout`, `--since` or `--exclude-tests`
+  - the version of Godot `--godot` names, when gdmutant runs Godot itself
+  - the coverage analysis settings, or the gdmutant version
+
+  `--jobs` may differ.
+- A mutant whose run failed (an `error` verdict) runs again.
+- A verdict is written only once the run after it has finished, and not at all once gdmutant has
+  begun to stop. So a run that stops loses the last verdict of each worker, as well as the mutants
+  still running, and a suite that Ctrl-C cut short is not written as a verdict.
+- A serial run that is killed can leave a mutant in the file it was mutating (see
+  [How gdmutant writes to your files](#how-gdmutant-writes-to-your-files)). That file then counts as
+  changed, so restore it, for example with `git checkout -- <path>`, before you run again.
+- Delete the file to start over. A finished run's file still works: running the command again
+  runs no mutant and rewrites the report.
+
+Why these inputs are checked and the others are not:
+[`docs/decisions/0022`](decisions/0022-resume-journal-checks-scripts-and-settings.md).
 
 #### Coverage analysis
 
@@ -363,6 +399,8 @@ leads anywhere else. `command` and `godot` always need it.
   - the test-runner executable was not found: `godot`, or the program named by `--command`
   - `--runner command` with no `--command`, or a `--command` string that cannot be split into words
   - `--since` names a ref git cannot diff against
+  - `--resume` names a file that cannot be opened, is not a gdmutant journal, or was
+    written for different sources or settings
   - `--jobs` above 1, or `--coverage-analysis all`, with a source file that does not sit inside
     `--project`
   - `--jobs` below 1
@@ -651,7 +689,7 @@ save as-is (see GitHub's [Quickstart for GitHub
 Actions](https://docs.github.com/en/actions/quickstart) too, if you haven't written one before):
 
 ```yaml
-- uses: kphutt/gdmutant@v0.1.7
+- uses: kphutt/gdmutant@v0.1.8
   with:
     godot-version: "4.7.0"   # the only required input
     project-path: ./
@@ -662,7 +700,7 @@ already matches gdmutant's own default, `res://test`. For GUT, whose stock layou
 `test/unit/` instead, set both `runner` and `tests` explicitly:
 
 ```yaml
-- uses: kphutt/gdmutant@v0.1.7
+- uses: kphutt/gdmutant@v0.1.8
   with:
     godot-version: "4.7.0"
     project-path: ./
@@ -756,7 +794,7 @@ one or the other.
 takes:
 
 ```yaml
-- uses: kphutt/gdmutant@v0.1.7
+- uses: kphutt/gdmutant@v0.1.8
   with:
     godot-version: "4.7.0"
     project-path: ./
@@ -792,7 +830,7 @@ config](#project-config-gdmutanttoml) above.
 Give the gdmutant step an `id` to reach its output from a later step:
 
 ```yaml
-- uses: kphutt/gdmutant@v0.1.7
+- uses: kphutt/gdmutant@v0.1.8
   id: gdmutant
   with:
     godot-version: "4.7.0"
@@ -806,10 +844,10 @@ Give the gdmutant step an `id` to reach its output from a later step:
 
 ### Pinning
 
-Pin the exact release tag, such as `@v0.1.7`. gdmutant's release tags cannot be moved or
+Pin the exact release tag, such as `@v0.1.8`. gdmutant's release tags cannot be moved or
 deleted, and releases from 0.1.8 on are also immutable. There are no major-version tags such as
 `@v1`. If your policy requires commit IDs, pin the release's commit instead, with the tag as a
-comment: `kphutt/gdmutant@<sha> # v0.1.7`.
+comment: `kphutt/gdmutant@<sha> # v0.1.8`.
 
 Dependabot can keep the pin up to date, as PRs you review before taking:
 

@@ -4,7 +4,7 @@
 
 [project]
 name = "gdmutant"
-version = "0.1.7"                       # the packaged version (see CHANGELOG.md). A release tag
+version = "0.1.8"                       # the packaged version (see CHANGELOG.md). A release tag
                                         # must declare the same number — scripts/check_release_tag.py
                                         # fails the release path otherwise.
 description = "Mutation testing for GDScript and Godot: find the bugs your green tests would miss."
@@ -145,7 +145,9 @@ packages = ["gdmutant"]
 # distribution: only these paths ship (plus hatchling's own force-included `.gitignore`, a tracked,
 # harmless file), so no local agent/editor state leaks in and no tooling directory has to be named.
 # Contributor docs stay because `docs/gdmutant-guide.md` links to AGENTS.md and the in-repo
-# link-resolution test asserts it exists.
+# link-resolution test asserts it exists. The three `gdmutant-*.md` backlog files ship for the
+# same reason: AGENTS.md and CONTRIBUTING.md link to them, and those links must resolve in an
+# unpacked sdist.
 # The README's mascot image (`.github/assets/frank.{svg,png}`) is deliberately NOT here: PyPI reads
 # the raw README source for its project-page render and fetches the image itself from an absolute
 # GitHub URL, never from the installed package's own files — so shipping it in the sdist would only
@@ -161,6 +163,9 @@ include = [
   "/CONTRIBUTING.md",
   "/CODE_OF_CONDUCT.md",
   "/AGENTS.md",
+  "/gdmutant-backlog.md",
+  "/gdmutant-archive.md",
+  "/gdmutant-notes.md",
   "/LICENSE",
   "/pyproject.toml",
   "/uv.lock",
@@ -230,6 +235,9 @@ also_copy = [
     "CONTRIBUTING.md",
     "CHANGELOG.md",
     "CODE_OF_CONDUCT.md",
+    "gdmutant-backlog.md",
+    "gdmutant-archive.md",
+    "gdmutant-notes.md",
     "CLAUDE.md",
 ]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]

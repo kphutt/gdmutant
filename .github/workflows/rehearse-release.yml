@@ -9,8 +9,10 @@ name: Release rehearsal
 # WHY ON MERGE, NOT ON A PULL REQUEST. The bugs this catches live on the path between merge and
 # release, and they used to surface only on release day (#286, #290, #305). Running on push to main
 # finds them the day the change that caused them lands, which is still weeks before a release.
-# It is not a required check: nothing reports it on a pull request, so requiring it would block
-# every PR forever (scripts/harden_github.py refuses to require a job no pull request triggers).
+# It is not a required check on pull requests: nothing reports it on one, so requiring it there
+# would block every PR forever (scripts/harden_github.py refuses to require a job no pull request
+# triggers). It is required for a release: release.yml and publish.yml both run
+# scripts/check_rehearsal.py, which refuses a commit this workflow did not pass on.
 #
 # NOTHING HERE CAN PUBLISH. The rehearsal's `origin` is a bare repo in a temp directory, the tag it
 # makes never leaves the runner, and this job holds no id-token and no write permission.
@@ -38,6 +40,18 @@ jobs:
           # that exist, and checks the commit is on origin/main before fetching its assets.
           fetch-depth: 0
           persist-credentials: false # the rehearsal pushes only to a local bare repo, never to GitHub
+
+      # The same toolchain publish.yml's verify-ubuntu sets up, step for step. Without setup-python
+      # uv falls back to the runner image's own python3.12 (3.12.3 on ubuntu-24.04), and without
+      # setup-node tests/test_htmlreport_behaviour.py runs on whatever Node the image ships: either
+      # way the rehearsal tests something other than the release gate it rehearses.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.14.0"
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:

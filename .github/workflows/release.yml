@@ -28,9 +28,9 @@ name: Release
 # duplicated Godot-runner cost on every tag push. See publish.yml's header comment for the full
 # design.
 #
-# What DOES still gate here, and always has: the two guards in the `release` job below answer
-# "is this the right version number?" and "is this the right commit?" — cheap, git-only checks that
-# make sense to run early, before even a draft exists.
+# What DOES still gate here: the three guards in the `release` job below answer "is this the right
+# version number?", "is this the right commit?" and "did the release rehearsal pass on it?" — cheap
+# checks that make sense to run early, before even a draft exists. publish.yml runs all three again.
 on:
   push:
     tags: ["v*.*.*"]
@@ -47,9 +47,10 @@ jobs:
   release:
     name: Create GitHub Release
     runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so a runner-image migration can't silently break us
-    timeout-minutes: 10
+    timeout-minutes: 30 # the rehearsal guard waits up to 20 minutes for a rehearsal still running
     permissions:
-      contents: write # the only elevation: creating a Release is a write to the repo
+      contents: write # creating a Release is a write to the repo
+      actions: read # the rehearsal guard reads this commit's Release rehearsal runs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,6 +113,13 @@ jobs:
           echo "tag $GITHUB_REF_NAME is on main ($commit)"
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The third guard: a release ships only a commit the release rehearsal passed on. 0.1.7
+      # shipped from a commit whose rehearsal was red, while every check here was green.
+      - name: Verify the release rehearsal passed on the tagged commit
+        run: python3 scripts/check_rehearsal.py "$(git rev-parse HEAD)"
+        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # `gh` ships on the runner, so this needs no third-party action and adds no supply-chain

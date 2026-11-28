@@ -251,6 +251,9 @@ jobs:
       - name: Supply-chain audit (pip-audit)
         run: uv run pip-audit
 
+      - name: Backlog check
+        run: uv run python scripts/check_backlog.py gdmutant GM
+
   # --- License compliance: what we SHIP must stay redistributable under MIT ---
   # Its own job, not a `verify` step, because the gate must see only the *shipped* dependency
   # closure and so installs with `--no-dev`. Doing that inside verify would tear out the very dev
