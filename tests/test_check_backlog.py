@@ -1103,3 +1103,174 @@ def test_help_lists_every_option_and_the_environment_variable(
         "CHECK_BACKLOG_PRIVATE_FILE",
     ):
         assert word in out
+
+
+_MALFORMED_HOSTS = [
+    "tracker.example.com.",
+    "user" + "@" + "tracker.example.com",  # assembled: not a real address
+    "tracker.example.com?x=1",
+    "tracker_x.example.com",
+]
+
+
+@pytest.mark.parametrize("host", _MALFORMED_HOSTS)
+@pytest.mark.parametrize("flag", ["--private-host", "--allow-host"])
+def test_a_malformed_host_is_refused_by_a_flag(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], flag: str, host: str
+) -> None:
+    assert run(tmp_path) == 0
+    capsys.readouterr()
+    assert run(tmp_path, flags=(flag, host)) == 2
+    out = capsys.readouterr().out
+    assert flag in out
+    assert host not in out
+
+
+@pytest.mark.parametrize("host", _MALFORMED_HOSTS)
+def test_a_malformed_host_is_refused_in_the_private_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str
+) -> None:
+    repo, private = _repo_with_private_file(tmp_path, f"host:{host}\n")
+    assert run(repo, flags=("--private-file", str(private))) == 2
+    out = capsys.readouterr().out
+    assert "--private-file line 1" in out
+    assert host not in out
+
+
+@pytest.mark.parametrize("argv", [["--private-id", "-h"], ["--bogus", "-h"], ["-h", "--bogus"]])
+def test_help_is_not_read_as_a_value_or_beside_other_arguments(
+    capsys: pytest.CaptureFixture[str], argv: list[str]
+) -> None:
+    assert check_backlog.main(["check_backlog.py", *argv]) != 0
+    assert "CHECK_BACKLOG_PRIVATE_FILE" not in capsys.readouterr().out
+
+
+def test_help_as_the_only_argument_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
+    assert check_backlog.main(["check_backlog.py", "-h"]) == 0
+    assert "CHECK_BACKLOG_PRIVATE_FILE" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("pattern", ["^PRIV-[0-9]+", "PRIV-[0-9]+$", "(PRIV)?", " PRIV-[0-9]+"])
+def test_a_private_id_that_is_anchored_empty_matching_or_padded_exits_two(
+    tmp_path: Path, pattern: str
+) -> None:
+    assert run(tmp_path, flags=(f"--private-id={pattern}",)) == 2
+
+
+def test_a_private_host_that_an_allowed_host_covers_exits_two(tmp_path: Path) -> None:
+    flags = ("--private-host", "tickets.corp.example", "--allow-host", "corp.example")
+    assert run(tmp_path, flags=flags) == 2
+
+
+def test_an_empty_private_file_variable_exits_two(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CHECK_BACKLOG_PRIVATE_FILE", "")
+    assert run(tmp_path) == 2
+
+
+def test_the_variable_and_the_option_load_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, from_env = _repo_with_private_file(tmp_path, "id:PRIV-[0-9]+\n")
+    other = tmp_path / "other.txt"
+    other.write_text("host:tickets.corp.example\n", encoding="utf-8")
+    monkeypatch.setenv("CHECK_BACKLOG_PRIVATE_FILE", str(from_env))
+    flags = ("--private-file", str(other))
+    assert run(repo, saying("Follows " + PRIV_ID), flags=flags) == 1
+    assert run(repo, saying("See https://tickets.corp.example/x"), flags=flags) == 1
+
+
+@pytest.mark.parametrize(
+    "line", ["See https://tickets.corp.example/x", "See https:/tickets.corp.example/x"]
+)
+def test_a_private_host_is_found_in_the_odd_spellings_of_a_url(tmp_path: Path, line: str) -> None:
+    flags = ("--private-host", "corp.example")
+    assert run(tmp_path, saying(line), flags=flags) == 1
+    assert run(tmp_path, saying(line.replace(".", "．")), flags=flags) == 1
+    assert run(tmp_path, saying(line.replace("corp", "co​rp")), flags=flags) == 1
+
+
+@pytest.mark.parametrize(
+    "host", ["-x.example.com", "x-.example.com", "localhost", "a..example.com"]
+)
+def test_a_host_with_a_bad_label_or_one_label_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str
+) -> None:
+    assert run(tmp_path, flags=("--private-host", host)) == 2
+    assert "--private-host needs a host name" in capsys.readouterr().out
+    repo, private = _repo_with_private_file(tmp_path / "f", f"host:{host}\n")
+    assert run(repo, flags=("--private-file", str(private))) == 2
+
+
+@pytest.mark.parametrize("dot", ["．", "。", "｡"])
+def test_every_idna_dot_reads_as_a_dot(tmp_path: Path, dot: str) -> None:
+    text = saying("See https://tickets.corp.example/x".replace(".", dot))
+    assert run(tmp_path, text, flags=("--private-host", "corp.example")) == 1
+
+
+@pytest.mark.parametrize("hidden", ["​", "‌", "‍", "⁠", "﻿", "­"])
+def test_every_hidden_character_is_dropped_before_the_host_scan(
+    tmp_path: Path, hidden: str
+) -> None:
+    text = saying(f"See https://tickets.corp{hidden}.example/x")
+    assert run(tmp_path, text, flags=("--private-host", "corp.example")) == 1
+
+
+@pytest.mark.parametrize(
+    "flag", ["--private-host", "--private-id", "--allow-host", "--private-file"]
+)
+@pytest.mark.parametrize("next_arg", ["--allow-host", "-x"])
+def test_a_flag_followed_by_another_flag_is_missing_its_value(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], flag: str, next_arg: str
+) -> None:
+    assert run(tmp_path, flags=(flag, next_arg, "x.example")) == 2
+    assert "needs" in capsys.readouterr().out
+
+
+def test_a_pattern_that_matches_empty_text_is_refused_at_load_time(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run(tmp_path, flags=("--private-id", "(PRIV)?")) == 2
+    out = capsys.readouterr().out
+    assert "matches empty text" in out
+    assert "it does at" not in out
+
+
+def test_a_pattern_that_only_matches_empty_in_the_files_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run(tmp_path, flags=("--private-id", r"\b")) == 2
+    assert "it does at" in capsys.readouterr().out
+
+
+def test_a_private_file_host_that_an_allowed_host_covers_exits_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo, private = _repo_with_private_file(tmp_path, "host:tickets.corp.example\n")
+    flags = ("--private-file", str(private), "--allow-host", "corp.example")
+    assert run(repo, flags=flags) == 2
+    assert "--private-file line 1 names a host" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("root", ["", "no-such-directory"])
+def test_a_root_that_is_not_a_directory_exits_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], root: str
+) -> None:
+    assert run(tmp_path) == 0
+    capsys.readouterr()
+    assert (
+        check_backlog.main(["check_backlog.py", "p", "GM", str(tmp_path / root) if root else ""])
+        == 2
+    )
+    assert "root must be an existing directory" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("project", ["../p", ".p", "p/q", "p q", ""])
+def test_a_project_name_that_is_not_a_plain_name_exits_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], project: str
+) -> None:
+    assert run(tmp_path) == 0
+    capsys.readouterr()
+    assert check_backlog.main(["check_backlog.py", project, "GM", str(tmp_path)]) == 2
+    assert "project must be" in capsys.readouterr().out
