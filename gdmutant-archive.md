@@ -10,6 +10,7 @@ Closed work, newest first. Open work is in [gdmutant-backlog.md](gdmutant-backlo
 
 | # | Closed | Item | What wrapped up | Shipped in | Release |
 |---|---|---|---|---|---|
+| <a id="gm-1"></a>GM-1 | 2026-11-28 | Start the backlog | The three backlog files were set up and seeded with the open work. | [#391](https://github.com/kphutt/gdmutant/pull/391) ([62f4024](https://github.com/kphutt/gdmutant/commit/62f40242d547d73d0027e19a4fa59f91c6fc3d98)) | Unreleased |
 
 <!-- sample
 Sample row (copy it for the first closed item; its anchor is the lowercase ID):
