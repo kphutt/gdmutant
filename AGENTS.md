@@ -229,7 +229,10 @@ Closes #377
    each `Closes:` line with a script. A row with an open PR moves to In progress. An outside
    contributor's PR has no `Closes: GM-NN` line, so its row stays in In progress while its Item
    cell cites that open PR (`#NNN`), and the maintainer adds the `Closes:` line in the squash body
-   at merge. When an outside PR opens that fixes an issue an existing row cites, add the PR's `#NNN` to that row's Item cell and move the row to In progress; a PR that matches no row gets a new row. A row in In progress with no open PR claiming it moves back to Ready to build.
+   at merge. When an outside PR opens that names an issue an existing row cites (`Fixes #NNN`,
+   `Refs #NNN` or similar), add the PR's `#NNN` to that row's Item cell and move the row to In
+   progress; a PR that names no cited issue gets a new row. A row in In progress with no open PR
+   claiming it moves back to Ready to build.
 6. Turn accepted issues into rows. Each new row takes the `Next ID`, and the same commit raises it.
 7. Run `uv run python scripts/check_backlog.py gdmutant GM` and the public-readiness scan on the
    three files.
