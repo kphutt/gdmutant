@@ -232,7 +232,8 @@ Closes #377
    at merge. When an outside PR opens that fixes an issue an existing row cites, add the PR's `#NNN` to that row's Item cell and move the row to In progress; a PR that matches no row gets a new row. A row in In progress with no open PR claiming it moves back to Ready to build.
 6. Turn accepted issues into rows. Each new row takes the `Next ID`, and the same commit raises it.
 7. Run `uv run python scripts/check_backlog.py gdmutant GM` and the public-readiness scan on the
-   three files.
+   three files. Run the checker locally a second time with the maintainer's private file, by
+   setting `CHECK_BACKLOG_PRIVATE_FILE` to a file kept outside the repo.
 8. Open the sync PR, titled `chore(backlog): sync to <short hash of main>`, with `Release-note: none`
    and `Closes: none`. Only one sync PR is open at a time.
 
