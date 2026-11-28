@@ -35,26 +35,24 @@ def _load():  # type: ignore[no-untyped-def]
 
 check_backlog = _load()
 
-HEAD = (
-    "| # | Item | Who | Effort | Description | Next step | Done when |\n"
-    "|---|---|---|---|---|---|---|\n"
-)
+HEAD = "| # | Item | Who | Description | Next step | Done when |\n|---|---|---|---|---|---|\n"
 BLOCKED_HEAD = (
-    "| # | Item | Who | Effort | Description | Next step | Done when | Since |\n"
-    "|---|---|---|---|---|---|---|---|\n"
+    "| # | Item | Who | Description | Next step | Done when | Since |\n"
+    "|---|---|---|---|---|---|---|\n"
 )
 ARCHIVE_HEAD = (
     "| # | Closed | Item | What wrapped up | Shipped in | Release |\n|---|---|---|---|---|---|\n"
 )
-NOTES = "- **One fact.** The reason.\n"
+MARKER = "<!-- backlog-format: 3 -->\n"
+NOTES = MARKER + "- **One fact.** The reason.\n"
 
 
 def orow(num: int, done: str = "it works", desc: str = "d") -> str:
-    return f"| GM-{num} | a | agent | S | {desc} | n | {done} |\n"
+    return f"| GM-{num} | a | agent | {desc} | n | {done} |\n"
 
 
 def brow(num: int, done: str = "it works", since: str = "2026-11-27", desc: str = "d") -> str:
-    return f"| GM-{num} | a | agent | S | {desc} | Waiting on: x | {done} | {since} |\n"
+    return f"| GM-{num} | a | agent | {desc} | Waiting on: x | {done} | {since} |\n"
 
 
 def arow(num: int, anchor: str | None = None, closed: str = "2026-11-01") -> str:
@@ -63,7 +61,7 @@ def arow(num: int, anchor: str | None = None, closed: str = "2026-11-01") -> str
 
 
 READY_TWO = orow(2)
-ARCHIVE_ONE = ARCHIVE_HEAD + arow(1)
+ARCHIVE_ONE = MARKER + ARCHIVE_HEAD + arow(1)
 
 
 def backlog(
@@ -75,7 +73,7 @@ def backlog(
     head: str = HEAD,
 ) -> str:
     return (
-        f"Next ID: {next_id}\n\n## In progress\n\n{head}{progress}\n"
+        f"{MARKER}Next ID: {next_id}\n\n## In progress\n\n{head}{progress}\n"
         f"## Blocked\n\n{BLOCKED_HEAD}{blocked}\n"
         f"## Ready to build\n\n{head}{ready}\n## Needs definition\n\n{head}{needs}"
     )
@@ -138,7 +136,7 @@ def test_two_and_three_letter_prefixes_are_accepted(tmp_path: Path, prefix: str)
 
 
 def test_only_the_given_prefix_is_read(tmp_path: Path) -> None:
-    other = "| " + "XY" + "-7 | a | agent | S | d | n | ok |\n"  # assembled: not a real id
+    other = "| " + "XY" + "-7 | a | agent | d | n | ok |\n"  # assembled: not a real id
     assert run(tmp_path, backlog(ready=READY_TWO + other)) == 1
 
 
@@ -250,21 +248,21 @@ def test_a_row_without_a_valid_id_is_a_finding(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = findings(
-        tmp_path, capsys, backlog(ready=READY_TWO + "| TBD | a | agent | S | d | n | ok |\n")
+        tmp_path, capsys, backlog(ready=READY_TWO + "| TBD | a | agent | d | n | ok |\n")
     )
     assert "has no valid ID" in out
 
 
 def test_fullwidth_digits_are_not_an_id(tmp_path: Path) -> None:
-    assert run(tmp_path, backlog(ready=READY_TWO + "| GM-３ | a | agent | S | d | n | ok |\n")) == 1
+    assert run(tmp_path, backlog(ready=READY_TWO + "| GM-３ | a | agent | d | n | ok |\n")) == 1
 
 
 def test_a_leading_zero_id_is_not_an_id(tmp_path: Path) -> None:
-    assert run(tmp_path, backlog(ready=READY_TWO + "| GM-03 | a | agent | S | d | n | ok |\n")) == 1
+    assert run(tmp_path, backlog(ready=READY_TWO + "| GM-03 | a | agent | d | n | ok |\n")) == 1
 
 
 def test_no_rows_at_all_with_next_id_one_is_clean(tmp_path: Path) -> None:
-    empty = "# t\n\n" + ARCHIVE_HEAD
+    empty = MARKER + "# t\n\n" + ARCHIVE_HEAD
     assert run(tmp_path, backlog(next_id="GM-1", ready=""), archive=empty) == 0
 
 
@@ -337,12 +335,12 @@ def test_a_section_with_no_table_is_a_finding(
     text = backlog(next_id="GM-1", ready="", needs="")
     text = text[: text.index("## Needs definition")] + "## Needs definition\n\nnothing here\n"
     assert "'Needs definition' has 0 tables" in findings(
-        tmp_path, capsys, text, archive="# t\n\n" + ARCHIVE_HEAD
+        tmp_path, capsys, text, archive=MARKER + "# t\n\n" + ARCHIVE_HEAD
     )
 
 
 def test_renamed_column(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    out = findings(tmp_path, capsys, backlog().replace("Effort", "Size", 1))
+    out = findings(tmp_path, capsys, backlog().replace("Description", "Details", 1))
     assert "has columns" in out
 
 
@@ -377,31 +375,29 @@ def test_a_separator_row_of_the_wrong_width_is_a_finding(
 def test_a_short_row_is_a_finding_not_a_crash(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], section: str
 ) -> None:
-    out = findings(tmp_path, capsys, backlog(**{section: "| GM-2 | a | agent | S | d |\n"}))
-    assert "GM-2 in" in out and "has 5 cells, its header has 7" in out
+    out = findings(tmp_path, capsys, backlog(**{section: "| GM-2 | a | agent | d |\n"}))
+    assert "GM-2 in" in out and "has 4 cells, its header has 6" in out
 
 
 def test_a_short_ready_row_does_not_read_the_wrong_column(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Six cells: counting from the end would read `n` as Done when and call this row fine.
-    out = findings(tmp_path, capsys, backlog(ready="| GM-2 | a | agent | S | n | it works |\n"))
-    assert "has 6 cells, its header has 7" in out
+    # Five cells: counting from the end would read `n` as Done when and call this row fine.
+    out = findings(tmp_path, capsys, backlog(ready="| GM-2 | a | agent | n | it works |\n"))
+    assert "has 5 cells, its header has 6" in out
 
 
 def test_a_short_blocked_row_is_a_finding(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    text = backlog(blocked="| GM-2 | a | agent | S | d | Waiting on: x | 2026-11-27 |\n", ready="")
+    text = backlog(blocked="| GM-2 | a | agent | d | Waiting on: x | 2026-11-27 |\n", ready="")
     out = findings(tmp_path, capsys, text)
-    assert "GM-2 in Blocked has 7 cells, its header has 8" in out
+    assert "GM-2 in Blocked has 6 cells, its header has 7" in out
 
 
 def test_a_long_row_is_a_finding(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    out = findings(
-        tmp_path, capsys, backlog(ready="| GM-2 | a | agent | S | d | n | ok | extra |\n")
-    )
-    assert "has 8 cells" in out
+    out = findings(tmp_path, capsys, backlog(ready="| GM-2 | a | agent | d | n | ok | extra |\n"))
+    assert "has 7 cells" in out
 
 
 def test_an_escaped_pipe_is_one_cell(tmp_path: Path) -> None:
@@ -441,8 +437,8 @@ def test_needs_definition_row_may_lack_done_when(tmp_path: Path) -> None:
 
 
 def test_placeholder_rows_are_fine_in_their_own_sections(tmp_path: Path) -> None:
-    progress = "| | Nothing in progress | | | | | |\n"
-    blocked = "| | Nothing blocked | | | | Waiting on: ... | | |\n"
+    progress = "| | Nothing in progress | | | | |\n"
+    blocked = "| | Nothing blocked | | | Waiting on: ... | | |\n"
     assert run(tmp_path, backlog(progress=progress, blocked=blocked)) == 0
 
 
@@ -501,7 +497,7 @@ def test_an_archive_row_needs_a_closed_date(
 def test_the_archive_release_column_is_optional(tmp_path: Path) -> None:
     head = "| # | Closed | Item | What wrapped up | Shipped in |\n|---|---|---|---|---|\n"
     row = '| <a id="gm-1"></a>GM-1 | 2026-11-01 | done | w | s |\n'
-    assert run(tmp_path, archive=head + row) == 0
+    assert run(tmp_path, archive=MARKER + head + row) == 0
 
 
 def test_an_archive_with_the_wrong_columns_is_a_finding(
@@ -647,7 +643,7 @@ def test_the_hidden_row_is_reported_at_its_line(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = findings(tmp_path, capsys, archive=ARCHIVE_ONE + "<!--\n| GM-9 |\n-->\n")
-    assert "line 4" in out
+    assert "line 5" in out
 
 
 def test_a_sample_row_set_apart_by_blank_lines_is_fine(tmp_path: Path) -> None:
@@ -762,7 +758,7 @@ def test_a_row_with_trailing_spaces_after_its_last_pipe_is_fine(tmp_path: Path) 
 
 
 def test_a_row_without_its_closing_pipe_keeps_its_last_cell(tmp_path: Path) -> None:
-    assert run(tmp_path, backlog(ready="| GM-2 | a | agent | S | d | n | x\n")) == 0
+    assert run(tmp_path, backlog(ready="| GM-2 | a | agent | d | n | x\n")) == 0
 
 
 # --- line numbers in findings ------------------------------------------------------------------
@@ -816,9 +812,7 @@ def test_comments_hiding_rows_reports_exact_lines(raw: str, expected: list[int])
 def test_a_row_with_an_empty_first_cell_in_an_open_section_is_a_finding(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    out = findings(
-        tmp_path, capsys, backlog(ready=READY_TWO + "| | a | agent | S | d | n | ok |\n")
-    )
+    out = findings(tmp_path, capsys, backlog(ready=READY_TWO + "| | a | agent | d | n | ok |\n"))
     assert "has no valid ID" in out
 
 
@@ -951,12 +945,12 @@ def test_a_private_id_in_a_comment_is_still_a_finding(tmp_path: Path) -> None:
     ("flags", "message"),
     [
         (("--private-id",), "--private-id needs a valid regular expression"),
-        (("--private-id", "("), "--private-id needs a valid regular expression"),
-        (("--private-id=",), "--private-id needs a valid regular expression"),
+        (("--private-id", "("), "--private-id #1 needs a valid regular expression"),
+        (("--private-id=",), "--private-id #1 needs a valid regular expression"),
         (("--private-host",), "--private-host needs a host name"),
-        (("--private-host=https://x.example/",), "--private-host needs a host name"),
-        (("--private-host", "a b"), "--private-host needs a host name"),
-        (("--private-host", "x.example/path"), "--private-host needs a host name"),
+        (("--private-host=https://x.example/",), "--private-host #1 needs a host name"),
+        (("--private-host", "a b"), "--private-host #1 needs a host name"),
+        (("--private-host", "x.example/path"), "--private-host #1 needs a host name"),
         (("--allow-host=x.example/path",), "--allow-host needs a host name"),
         (("--allow-host",), "--allow-host needs a host name"),
         (("--allow-host=",), "--allow-host needs a host name"),
@@ -1027,7 +1021,7 @@ def test_a_bad_private_file_line_exits_two(
     repo, private = _repo_with_private_file(tmp_path, lines)
     assert run(repo, flags=("--private-file", str(private))) == 2
     out = capsys.readouterr().out
-    assert "--private-file line 1" in out
+    assert "--private-file #1 line 1" in out
     assert "PRIV" not in out  # the line is the private pattern, so it is never echoed
 
 
@@ -1072,7 +1066,8 @@ def test_a_host_that_can_never_match_is_refused_by_a_flag(
 ) -> None:
     assert run(tmp_path, flags=(flag, host)) == 2
     out = capsys.readouterr().out
-    assert f"{flag} needs a host name" in out
+    ordinal = " #1" if flag == "--private-host" else ""  # only a private rule is numbered
+    assert f"{flag}{ordinal} needs a host name" in out
     assert why in out
     assert host not in out
 
@@ -1084,7 +1079,7 @@ def test_a_host_that_can_never_match_is_refused_in_the_private_file(
     repo, private = _repo_with_private_file(tmp_path, f"host:{host}\n")
     assert run(repo, flags=("--private-file", str(private))) == 2
     out = capsys.readouterr().out
-    assert "--private-file line 1 needs a host name" in out
+    assert "--private-file #1 line 1 needs a host name" in out
     assert why in out
     assert host not in out
 
@@ -1133,7 +1128,7 @@ def test_a_malformed_host_is_refused_in_the_private_file(
     repo, private = _repo_with_private_file(tmp_path, f"host:{host}\n")
     assert run(repo, flags=("--private-file", str(private))) == 2
     out = capsys.readouterr().out
-    assert "--private-file line 1" in out
+    assert "--private-file #1 line 1" in out
     assert host not in out
 
 
@@ -1197,8 +1192,10 @@ def test_a_private_host_is_found_in_the_odd_spellings_of_a_url(tmp_path: Path, l
 def test_a_host_with_a_bad_label_or_one_label_is_refused(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str
 ) -> None:
-    assert run(tmp_path, flags=("--private-host", host)) == 2
-    assert "--private-host needs a host name" in capsys.readouterr().out
+    assert (
+        run(tmp_path, flags=(f"--private-host={host}",)) == 2
+    )  # `=` form: a value may start with "-"
+    assert "--private-host #1 needs a host name" in capsys.readouterr().out
     repo, private = _repo_with_private_file(tmp_path / "f", f"host:{host}\n")
     assert run(repo, flags=("--private-file", str(private))) == 2
 
@@ -1250,7 +1247,7 @@ def test_a_private_file_host_that_an_allowed_host_covers_exits_two(
     repo, private = _repo_with_private_file(tmp_path, "host:tickets.corp.example\n")
     flags = ("--private-file", str(private), "--allow-host", "corp.example")
     assert run(repo, flags=flags) == 2
-    assert "--private-file line 1 names a host" in capsys.readouterr().out
+    assert "--private-file #1 line 1 names a host" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("root", ["", "no-such-directory"])
@@ -1274,3 +1271,238 @@ def test_a_project_name_that_is_not_a_plain_name_exits_two(
     capsys.readouterr()
     assert check_backlog.main(["check_backlog.py", project, "GM", str(tmp_path)]) == 2
     assert "project must be" in capsys.readouterr().out
+
+
+# --- backlog format 3: no Effort column, the format marker, the row bar, no PR in Item ---------
+
+
+def _marker_case(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], kind: str, first_line: str | None
+) -> str:
+    """Replace the marker line of one file (`None` removes it), run, and return what was printed."""
+    files = {"text": backlog(), "archive": ARCHIVE_ONE, "notes": NOTES}
+    key = "text" if kind == "backlog" else kind
+    rest = files[key].replace(MARKER, "", 1)
+    files[key] = rest if first_line is None else first_line + "\n" + rest
+    assert run(tmp_path, **files) == 1
+    return capsys.readouterr().out
+
+
+def test_a_table_that_still_has_an_effort_column_is_a_finding_in_every_table(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    old_head = HEAD.replace("| Who |", "| Who | Effort |").replace("|---|", "|---|---|", 1)
+    old_blocked = BLOCKED_HEAD.replace("| Who |", "| Who | Effort |").replace(
+        "|---|", "|---|---|", 1
+    )
+    text = backlog().replace(HEAD, old_head).replace(BLOCKED_HEAD, old_blocked)
+    out = findings(tmp_path, capsys, text)
+    assert out.count("has columns") == 4 and out.count("'Effort'") == 4
+
+
+def test_an_effort_cell_in_a_row_of_the_new_layout_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, backlog(ready="| GM-2 | a | agent | S | d | n | ok |\n"))
+    assert "GM-2 in Ready to build has 7 cells, its header has 6" in out
+
+
+@pytest.mark.parametrize("kind", ["backlog", "archive", "notes"])
+def test_a_missing_format_marker_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], kind: str
+) -> None:
+    out = _marker_case(tmp_path, capsys, kind, None)
+    assert f"p-{kind}.md: backlog-format marker missing: add `<!-- backlog-format: 3 -->`" in out
+    assert "1 finding(s)" in out
+
+
+@pytest.mark.parametrize("kind", ["backlog", "archive", "notes"])
+@pytest.mark.parametrize("version", ["1", "2", "4", "20"])
+def test_an_unknown_format_version_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], kind: str, version: str
+) -> None:
+    out = _marker_case(tmp_path, capsys, kind, f"<!-- backlog-format: {version} -->")
+    assert f"p-{kind}.md: unknown backlog format {version}" in out
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "<!-- backlog-format: two -->",
+        "<!-- backlog-format: -->",
+        "<!-- backlog-format: 2.0 -->",
+        "<!-- backlog-format: 02 -->",
+        "<!-- backlog-format: 0 -->",
+        "<!--backlog-format: 3-->",
+        "<!-- backlog-format 3 -->",
+        "<!-- Backlog-Format: 3 -->",
+        "<!--  backlog-format: 3 -->",
+        "<!-- backlog-format: 3 --> trailing",
+    ],
+)
+def test_a_malformed_format_marker_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], bad: str
+) -> None:
+    assert "p-backlog.md: malformed backlog-format marker" in _marker_case(
+        tmp_path, capsys, "backlog", bad
+    )
+
+
+def test_two_format_markers_are_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = _marker_case(tmp_path, capsys, "backlog", MARKER.strip() + "\n" + MARKER.strip())
+    assert "p-backlog.md: 2 backlog-format markers, expected exactly 1" in out
+
+
+def test_a_format_marker_past_the_fifth_line_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run(tmp_path, "a\nb\nc\nd\n" + backlog()) == 0  # the marker lands on line 5
+    assert run(tmp_path, "a\nb\nc\nd\ne\n" + backlog()) == 1
+    assert "backlog-format marker is on line 6" in capsys.readouterr().out
+
+
+def test_a_bom_before_the_format_marker_is_clean(tmp_path: Path) -> None:
+    assert run(tmp_path, "﻿" + backlog()) == 0
+
+
+def test_a_marker_shown_in_a_code_span_is_not_a_second_marker(tmp_path: Path) -> None:
+    notes = NOTES + "\nWrite `<!-- backlog-format: 3 -->` first.\n"
+    assert run(tmp_path, notes=notes) == 0
+
+
+def test_a_marker_only_inside_a_code_span_is_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = backlog().replace(MARKER, "`" + MARKER.strip() + "`\n", 1)
+    assert "backlog-format marker missing" in findings(tmp_path, capsys, text)
+
+
+def test_help_prints_the_kit_version(capsys: pytest.CaptureFixture[str]) -> None:
+    assert check_backlog.main(["check_backlog.py", "--help"]) == 0
+    assert capsys.readouterr().out.startswith("backlogs kit, backlog format 3")
+
+
+_LEAD = "A long lead-in that keeps this row over the length gate " + "word " * 40
+
+
+def _described(text: str, section: str = "ready") -> str:
+    return backlog(**{section: f"| GM-2 | a | agent | {text} | n | ok |\n"})
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "One sentence",
+        "What it is. Why it matters.",
+        "Why? Because.",
+        "Use e.g. Foo or bar. Then stop",
+        "Bump to v1.2.3 now. It is old",
+        "Read [the ADR](https://example.com/a.b/C) first. Then go",
+        "Run `a. B. C. D` first. Then go",
+        "Ship at 3 p.m. Monday. Then stop.",
+        "Fix the build. Needs Prof. Lee to review.",
+        "Fix the build. Due Jan. 5 per Mr. Lee.",
+        "One. Two. Three.",
+        "",
+    ],
+)
+def test_a_description_of_at_most_two_sentences_is_clean(tmp_path: Path, text: str) -> None:
+    assert run(tmp_path, _described(text)) == 0
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "One. Two. Three.",
+        "One. Two! Three? Four",
+        "One. Two.  Three",
+        "Fix the bug. Test the fix. Ship the fix",
+    ],
+)
+def test_a_description_of_three_sentences_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str
+) -> None:
+    out = findings(tmp_path, capsys, _described(_LEAD + text))
+    assert "GM-2 in Ready to build has a Description of more than 2 sentences" in out
+
+
+def test_the_sentence_cap_covers_blocked_and_needs_definition(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = _LEAD + "One. Two. Three."
+    blocked = f"| GM-2 | a | agent | {text} | Waiting on: x | ok | 2026-01-02 |\n"
+    out = findings(tmp_path, capsys, backlog(blocked=blocked, ready=""))
+    assert "GM-2 in Blocked has a Description of more than 2 sentences" in out
+    out = findings(
+        tmp_path, capsys, backlog(needs=f"| GM-2 | a | agent | {text} | n | ok |\n", ready="")
+    )
+    assert "GM-2 in Needs definition has a Description of more than 2" in out
+
+
+def test_a_closing_bracket_after_a_full_stop_still_ends_the_sentence(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = _LEAD + "It is done (see the doc.) Then more. Then stop"
+    assert "more than 2 sentences" in findings(tmp_path, capsys, _described(text))
+
+
+def test_a_short_row_is_never_flagged_whatever_its_punctuation(tmp_path: Path) -> None:
+    assert run(tmp_path, _described("One. Two. Three. Four. Five.")) == 0
+
+
+def test_the_length_gate_is_a_strict_greater_than(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    base = "One. Two. Three."
+    at_gate = base + "x" * (200 - len(base))
+    assert len(at_gate) == 200 and run(tmp_path, _described(at_gate)) == 0
+    assert "more than 2 sentences" in findings(tmp_path, capsys, _described(at_gate + "x"))
+
+
+def _in_progress(item: str) -> str:
+    return backlog(progress=f"| GM-2 | {item} | agent | d | n | ok |\n", ready="")
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        "Fix it (PR #41)",
+        "PR #7 for the fix",
+        "Fix it (pr #4)",
+        "Fix it (PR#4)",
+        "Fix it (PR 4)",
+        "Fix it (PR: #4)",
+        "Fix it (PRs #4, #5)",
+        "Fix it (Pull Request 4)",
+        "Fix it (pull requests #4 and #5)",
+        "Fix it https://github.com/o/r/pull/4",
+        "Fix it o/r/pull/4/files",
+    ],
+)
+def test_an_in_progress_row_citing_a_pr_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], item: str
+) -> None:
+    out = findings(tmp_path, capsys, _in_progress(item))
+    assert "GM-2 in In progress cites a PR in its Item cell" in out
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        "Fix it",
+        "Fix it for issue #41",
+        "Fix the PRNG",
+        "#41",
+        "Pull 4 levers",
+        "Rework PR 2FA flow",
+        "Add pull request 3-way merge",
+    ],
+)
+def test_an_in_progress_row_without_a_pr_citation_is_clean(tmp_path: Path, item: str) -> None:
+    assert run(tmp_path, _in_progress(item)) == 0
+
+
+def test_a_pr_citation_outside_in_progress_is_left_alone(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready="| GM-2 | Fix it (PR #41) | agent | d | n | ok |\n")) == 0

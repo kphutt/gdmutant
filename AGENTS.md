@@ -191,10 +191,11 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
   "The backlog" below).
 
 Live docs open with YAML frontmatter (`type` / `status` / `created`). Build only from
-`status: active`. Two files are deliberately exempt, because they are rendered somewhere that has
-no frontmatter support and would print it as a visible heading: `README.md` (it is the package's
-PyPI description) and `.github/PULL_REQUEST_TEMPLATE.md` (it is pasted verbatim into every new pull
-request's body). `tests/test_docs_frontmatter.py` pins both halves of that rule.
+`status: active`. The three backlog files carry `type` and `status` only, so that their format
+marker stays within the first five lines. Two files are deliberately exempt, because they are
+rendered somewhere that has no frontmatter support and would print it as a visible heading:
+`README.md` (it is the package's PyPI description) and `.github/PULL_REQUEST_TEMPLATE.md` (it is
+pasted verbatim into every new pull request's body). `tests/test_docs_frontmatter.py` pins both halves of that rule.
 
 ## The backlog
 
@@ -228,13 +229,14 @@ Closes #377
    line at all is a finding: report it in the sync PR body.
 4. If a tag now contains a row's commit (`git merge-base --is-ancestor <commit> <tag>`), set the
    row's Release cell to that version's CHANGELOG heading.
-5. Mirror In progress from open PRs: read `gh pr list --state open --json number,body` and pick out
-   each `Closes:` line with a script. A row with an open PR of the maintainer's own that carries its
-   `Closes: GM-NN` line moves to In progress. An outside contributor's PR never moves or edits a row
-   (see "Outside contributors" in the rules of `gdmutant-backlog.md`): the maintainer adds
-   `Closes: GM-NN` to its squash body at merge, and the next sync archives that row with the PR and
-   credits the contributor by @handle. A row in In progress with no open PR claiming it moves back to
-   Ready to build.
+5. Mirror In progress from our own open PRs: read `gh pr list --state open --json number,body,author`
+   and match each of our PRs to a row by its `Closes: GM-NN` line, with a script. Our PRs are the
+   ones whose author is the maintainer, @kphutt; a bot is ours only if it is named here too. A row
+   whose ID that line names moves to In progress. A row in In progress that none of our open PRs
+   claims moves back to Ready to build. An outside contributor's PR is never matched: it stays off
+   the board while open (see "Outside pull requests" in the rules of `gdmutant-backlog.md`). At merge
+   the maintainer adds `Closes: GM-NN` to its squash body, and the next sync archives that row with
+   the PR and credits the contributor by @handle.
 6. Turn accepted issues into rows. Each new row takes the `Next ID`, and the same commit raises it.
 7. Run `uv run python scripts/check_backlog.py gdmutant GM` and the public-readiness scan on the
    three files. Run the checker locally a second time with the maintainer's private file, by

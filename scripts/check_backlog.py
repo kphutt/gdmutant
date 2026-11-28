@@ -25,6 +25,10 @@ is an error. Every file named, by the variable or by the option, adds to `--priv
 refused. An unreadable file or a bad line exits 2. A finding from a file entry names the file
 line and never prints the pattern or the text it matched.
 
+Each of the three files must carry one `<!-- backlog-format: N -->` line in its first five
+lines, with N in SUPPORTED_FORMATS. A Description may hold at most two sentences. `--help` prints
+the kit version.
+
 Every structural assumption the checks rely on is itself checked, so a missing, renamed or
 misshapen part is a finding, never a silent skip: section names and counts, table headers and
 separator rows, each row's cell count, each row's ID and anchor, the Next ID line, the
@@ -49,7 +53,36 @@ from pathlib import Path
 
 ID_NUMBER = r"[1-9][0-9]*"  # ASCII only: `\d` also matches fullwidth and other digits
 ANCHORED_ID = r"(?:<a id=\"([^\"]*)\"></a>)?({prefix}-" + ID_NUMBER + ")"
-OPEN_COLUMNS = ["#", "Item", "Who", "Effort", "Description", "Next step", "Done when"]
+OPEN_COLUMNS = ["#", "Item", "Who", "Description", "Next step", "Done when"]
+# The layout version each of the three files declares in a `<!-- backlog-format: N -->` line.
+# Bump it only for a change that makes an old file fail this script. 1 was the layout with an
+# Effort column and the rules block above the tables; 2 drops Effort and puts the rules last;
+# 3 keeps outside PRs off the board (they reach a row only through a cited issue).
+SUPPORTED_FORMATS = {3}
+KIT_VERSION = f"backlogs kit, backlog format {max(SUPPORTED_FORMATS)}"
+FORMAT_MARKER = re.compile(rf"<!-- backlog-format: ({ID_NUMBER}) -->")
+FORMAT_LIKE = re.compile(r"<!--.*backlog[\s_-]*format", re.I)
+FORMAT_WINDOW = 5  # the marker must sit within the first lines of the file
+# A Description holds at most this many sentences; the rest belongs in the linked issue or ADR.
+MAX_SENTENCES = 2
+# A full stop ends a sentence only after a word of at least MIN_WORD letters that is not one of
+# these. Fail safe: "U.S.", "p.m." and "No." are never counted, so a good row is never flagged,
+# and a short word such as "it." before a new sentence is an accepted miss.
+MIN_WORD = 3
+SHORT_ABBREVIATIONS = {
+    *("etc", "approx", "inc", "ltd", "fig", "corp", "est", "dept", "ave"),
+    *("mrs", "prof", "gen", "sen", "rep", "gov", "capt", "sgt", "col", "rev", "hon"),
+    *("jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec"),
+    *("mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun"),
+    *("sec", "vol", "ver", "ref", "esp", "incl", "avg", "min", "max"),
+}
+# Only a Description longer than this is flagged, whatever its punctuation: a short row is never
+# a false positive, and a row that is really long still is.
+MIN_FLAG_CHARS = 200
+SENTENCE_END = re.compile(r"[.!?][)\]\"']*(?=\s+[A-Z0-9\"'(\[])")
+# Format 2 let an outside PR hold a row in In progress by citing it in the Item cell; 3 does not.
+_NUM = r"[0-9]+(?![0-9A-Za-z-])"  # no trailing word or hyphen: "PR 2FA", "3-way" are not numbers
+OUTSIDE_PR = re.compile(rf"\b(?:PRs?|pull\s+requests?)\b[\s:#-]*#?{_NUM}|/pull/{_NUM}", re.I)
 ARCHIVE_COLUMNS = ["#", "Closed", "Item", "What wrapped up", "Shipped in", "Release"]
 ACTIVE = ("In progress", "Blocked", "Ready to build")
 REQUIRED = (*ACTIVE, "Needs definition")
@@ -107,6 +140,50 @@ PRIVATE_POINTER = re.compile(
     r")\b",
     re.I,
 )
+
+
+def check_format(raw: str, name: str, problems: list[str]) -> None:
+    """Every kit file declares its layout version once, near the top, in the one allowed form."""
+    want = f"`<!-- backlog-format: {max(SUPPORTED_FORMATS)} -->`"
+    raw = mask_code_spans(raw.removeprefix("﻿"))  # a BOM is not part of the marker line
+    lines = [ln.rstrip("\r") for ln in raw.split("\n")]
+    found = [(i, ln) for i, ln in enumerate(lines, start=1) if FORMAT_LIKE.search(ln)]
+    if not found:
+        problems.append(f"{name}: backlog-format marker missing: add {want} near the top")
+        return
+    if len(found) > 1:
+        problems.append(f"{name}: {len(found)} backlog-format markers, expected exactly 1")
+        return
+    line_no, line = found[0]
+    m = FORMAT_MARKER.fullmatch(line)
+    if m is None:
+        problems.append(f"{name}: malformed backlog-format marker {line.strip()!r}; write {want}")
+    elif int(m.group(1)) not in SUPPORTED_FORMATS:
+        problems.append(
+            f"{name}: unknown backlog format {m.group(1)}; this script supports "
+            f"{sorted(SUPPORTED_FORMATS)}. Re-sync the script or the files from the same kit"
+        )
+    elif line_no > FORMAT_WINDOW:
+        problems.append(
+            f"{name}: backlog-format marker is on line {line_no}; "
+            f"move it into the first {FORMAT_WINDOW} lines"
+        )
+
+
+def sentence_count(text: str) -> int:
+    """Count sentences in a cell, ignoring links, code spans and doubtful full stops."""
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = CODE_SPAN.sub(" x ", text)
+    if not text.strip():
+        return 0
+    ends = 1
+    for m in SENTENCE_END.finditer(text):
+        if text[m.start()] == ".":
+            word = re.search("[A-Za-z]+$", text[: m.start()])
+            if not word or len(word[0]) < MIN_WORD or word[0].lower() in SHORT_ABBREVIATIONS:
+                continue
+        ends += 1
+    return ends
 
 
 def mask_code_spans(text: str) -> str:
@@ -429,8 +506,8 @@ def check_private_pointers(raw: str, name: str, opts: dict, problems: list[str],
     hosts = [*TRACKER_HOSTS, *opts["private_host"]]
     for line_no, line in enumerate(raw.split("\n"), start=1):
         found = [m.group(0) for r in opts["private_id"] for m in r.finditer(line)]
-        # A rule from the private file is named by its line there, never by what it matched.
-        found += [f"private file line {n}" for r, n in opts["file_id"] if r.search(line)]
+        # A rule from a private file is named by its source and line, never by what it matched.
+        found += [f"{label} line {n}" for r, n, label in opts["file_id"] if r.search(line)]
         seen = line.translate(HOST_SPELLING)  # what a browser would read as the host
         for m in HOSTLIKE.finditer(seen):
             before = seen[: m.start()]
@@ -441,7 +518,7 @@ def check_private_pointers(raw: str, name: str, opts: dict, problems: list[str],
                 continue
             if host_in(host, hosts):
                 found.append(host)
-            found += [f"private file line {n}" for h, n in opts["file_host"] if host_in(host, [h])]
+            found += [f"{lb} line {n}" for h, n, lb in opts["file_host"] if host_in(host, [h])]
         for what in found:
             problems.append(
                 f"{name}: line {line_no} points at a private tracker item ({what!r}); "
@@ -461,45 +538,47 @@ def repo_top(root: Path) -> Path | None:
     return next((d for d in (here, *here.parents) if (d / ".git").exists()), None)
 
 
-def load_private_file(path: str, opts: dict, root: Path) -> str | None:
+def load_private_file(path: str, label: str, opts: dict, root: Path) -> str | None:
     """Add the entries of a private file to `opts`, or return the error to print (exit 2).
 
     A file inside the checked repo is refused, since a committed pattern file is the leak this
-    option exists to prevent. Errors name the file line and never quote it: the line is the
-    private pattern.
+    option exists to prevent. Errors name the source (`label`) and the line, never the path and
+    never the line's text: the path may be private and the line is the private pattern.
     """
     top = repo_top(root)
     try:
         if top is not None and Path(path).resolve().is_relative_to(top):
-            return "--private-file must be outside the repository, so the list is never committed"
+            return f"{label} must be outside the repository, so the list is never committed"
     except (OSError, ValueError):
-        return "--private-file could not be read"
+        return f"{label} could not be read"
     try:
         text = Path(path).read_text(encoding="utf-8-sig")
     except (OSError, ValueError):  # ValueError covers UnicodeDecodeError
-        return "--private-file could not be read"
+        return f"{label} could not be read"
     before = len(opts["file_id"]) + len(opts["file_host"])
     for line_no, line in enumerate(text.split("\n"), start=1):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         kind, _, value = line.partition(":")
-        where = f"--private-file line {line_no}"
+        where = f"{label} line {line_no}"
         if kind not in ("id", "host"):
             return f"{where} must be id:REGEX or host:HOST, with nothing before or after it"
         if kind == "id":
             if problem := id_problem(value):
                 return f"{where} {problem}"
-            opts["file_id"].append((re.compile(value), line_no))
+            opts["file_id"].append((re.compile(value), line_no, label))
         elif problem := host_problem(value):
             return f"{where} needs a host name such as example.com, {problem}"
         else:
-            opts["file_host"].append((value.lower(), line_no))
+            opts["file_host"].append((value.lower(), line_no, label))
     if len(opts["file_id"]) + len(opts["file_host"]) == before:
-        return "--private-file has no rules, so it would check nothing; add id: or host: lines"
+        return f"{label} has no rules, so it would check nothing; add id: or host: lines"
     return None
 
 
-HELP = """usage: check_backlog.py <project> <PREFIX> [root] [options]
+HELP = f"""{KIT_VERSION}
+
+usage: check_backlog.py <project> <PREFIX> [root] [options]
 
 Checks <project>-backlog.md, <project>-archive.md and <project>-notes.md in [root] (default .).
 Exit 0 when clean, 1 on findings, 2 on a usage or input error.
@@ -529,7 +608,12 @@ which is an error. Write a value that starts with '-' as --option=value.
 
 environment:
   CHECK_BACKLOG_PRIVATE_FILE  one more --private-file, read as well as every flag;
-                              set but empty is an error"""
+                              set but empty is an error
+
+A finding or an error about a private rule names where the rule came from, never the file's
+path or name and never the pattern: CHECK_BACKLOG_PRIVATE_FILE, or `--private-file #N` for the
+Nth --private-file in argument order, with `line L` for a line in it. A rule from the command
+line is `--private-id #N` or `--private-host #N`."""
 USAGE = (
     "usage: check_backlog.py <project> <PREFIX> [root] [--private-id REGEX] "
     "[--private-host HOST] [--allow-host HOST] [--private-file PATH]"
@@ -578,14 +662,15 @@ def parse_args(argv: list[str]) -> tuple[list[str], dict] | str:
         key = OPTIONS[flag]
         if key == "private_id":
             if problem := id_problem(value):
-                return f"--private-id {problem}"
+                return f"--private-id #{len(opts[key]) + 1} {problem}"
             opts[key].append(re.compile(value))
         elif key == "private_file":
             if not value:
                 return "--private-file needs a path"
             opts[key].append(value)
         elif problem := host_problem(value):
-            return f"{flag} needs a host name such as example.com, {problem}"
+            nth = f" #{len(opts[key]) + 1}" if key == "private_host" else ""
+            return f"{flag}{nth} needs a host name such as example.com, {problem}"
         else:
             opts[key].append(value.lower())
     return positional, opts
@@ -627,15 +712,21 @@ def main(argv: list[str]) -> int:
         print("CHECK_BACKLOG_PRIVATE_FILE is set but empty; unset it or name a file")
         return 2
     # The variable and every --private-file all apply; a path named twice is read once.
-    paths = [*([env_file] if env_file else []), *opts["private_file"]]
-    for path in dict.fromkeys(str(Path(x).resolve()) for x in paths):
-        error = load_private_file(path, opts, root)
+    # Each is labelled by its source, never its path: `--private-file #n` counts the flags in
+    # argument order, so a path named twice keeps the label of its first mention.
+    sources = [("CHECK_BACKLOG_PRIVATE_FILE", env_file)] if env_file else []
+    sources += [(f"--private-file #{i}", x) for i, x in enumerate(opts["private_file"], start=1)]
+    labelled: dict[str, str] = {}
+    for label, x in sources:
+        labelled.setdefault(str(Path(x).resolve()), label)
+    for path, label in labelled.items():
+        error = load_private_file(path, label, opts, root)
         if error:
             print(error)
             return 2
     # A private host inside an allowed one is exempted before it is checked, so it never matches.
-    pairs = [("a --private-host value", h) for h in opts["private_host"]]
-    pairs += [(f"--private-file line {n}", h) for h, n in opts["file_host"]]
+    pairs = [(f"--private-host #{i}", h) for i, h in enumerate(opts["private_host"], start=1)]
+    pairs += [(f"{lb} line {n}", h) for h, n, lb in opts["file_host"]]
     for where, host in pairs:
         if host_in(host, opts["allow_host"]):
             print(f"{where} names a host an --allow-host covers, so it could never match")
@@ -653,8 +744,8 @@ def main(argv: list[str]) -> int:
         except UnicodeDecodeError:
             print(f"{p.name} is not valid UTF-8")
             return 2
-    rules = [("--private-id", r) for r in opts["private_id"]]
-    rules += [(f"--private-file line {n}", r) for r, n in opts["file_id"]]
+    rules = [(f"--private-id #{i}", r) for i, r in enumerate(opts["private_id"], start=1)]
+    rules += [(f"{lb} line {n}", r) for r, n, lb in opts["file_id"]]
     for where, rule in rules:
         if spot := empty_match_line(rule, {files[k].name: raw[k] for k in raw}):
             print(f"{where} {EMPTY_MATCH} (it does at {spot})")
@@ -671,6 +762,8 @@ def main(argv: list[str]) -> int:
                 f"{p.name}: the HTML comment at line {line_no} never closes, which hides "
                 "everything after it"
             )
+    for k, p in files.items():
+        check_format(raw[k], p.name, problems)
     for k in ("backlog", "archive"):
         for line_no in comments_hiding_rows(raw[k]):
             problems.append(
@@ -718,6 +811,22 @@ def main(argv: list[str]) -> int:
             placeholder = PLACEHOLDERS.get(section)
             found = check_rows(table, section, prefix, placeholder, False, problems)
             rows += found
+            for rid, cells in found:
+                if (
+                    cells is not None
+                    and len(cells.get("Description", "")) > MIN_FLAG_CHARS
+                    and sentence_count(cells.get("Description", "")) > MAX_SENTENCES
+                ):
+                    problems.append(
+                        f"{rid} in {section} has a Description of more than "
+                        f"{MAX_SENTENCES} sentences; move the detail to the issue or ADR"
+                    )
+            for rid, cells in found:
+                if section == "In progress" and cells and OUTSIDE_PR.search(cells.get("Item", "")):
+                    problems.append(
+                        f"{rid} in In progress cites a PR in its Item cell; only our own open "
+                        "PRs put a row there, through their Closes: line"
+                    )
             if section not in ACTIVE:
                 continue
             # Every active row needs a Done when with words in it, and a Blocked row its Since.
