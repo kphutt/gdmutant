@@ -9,7 +9,8 @@ suite via a `Runner`, and classifies the outcome:
   detection, so it counts as killed (Stryker's ``Timeout`` status),
 * **ignored** — a ``# gdmutant: ignore`` annotation suppresses it (an equivalent/unkillable mutant);
   generated for the report but never run, and excluded from the score (Stryker's ``Ignored``),
-* **invalid** — the mutant didn't parse (NF-5); never counted as killed, never run,
+* **invalid** — the mutant didn't parse (NF-5), or the run's output said its file did not
+  compile; never counted as killed,
 * **error** — the runner failed to execute the mutant (e.g. a Godot crash); tallied so one bad run
   doesn't discard the whole pass, and excluded from the score.
 * **no coverage**: only with coverage analysis on (``--coverage-analysis all``): the marker run
@@ -56,6 +57,7 @@ from gdmutant.engine.journal import Journal, JournalRefused
 from gdmutant.engine.mutants import Mutant
 from gdmutant.engine.operators import CATALOG, Operator
 from gdmutant.engine.runner import (
+    CompileFailed,
     FileSelecting,
     MarkerRunnable,
     Preparable,
@@ -228,7 +230,8 @@ class SourceOutsideProject(Exception):
 class Verdict(Enum):
     """What happened when one mutant's suite ran: caught (`KILLED`, including a suite `TIMEOUT`,
     which counts as caught — see `SuiteTimeout`), missed (`SURVIVED`), skipped without a run
-    (`IGNORED`, `INVALID`), or the run itself failed (`ERROR`)."""
+    (`IGNORED`), never run as written (`INVALID`: it did not parse, or did not compile), or the
+    run itself failed (`ERROR`)."""
 
     KILLED = "killed"
     SURVIVED = "survived"
@@ -318,8 +321,8 @@ class MutationRun:
 
     @property
     def invalid(self) -> int:
-        """Count of mutants dropped without a run because they failed the re-parse guard (NF-5) —
-        the mutation would not have compiled in Godot."""
+        """Count of mutants no test ran: they failed the re-parse guard (NF-5), or the run's output
+        said Godot could not compile the mutated file."""
         return self._count(Verdict.INVALID)
 
     @property
@@ -380,7 +383,7 @@ class MutationRun:
 
     @property
     def ran(self) -> tuple[MutantOutcome, ...]:
-        """The mutants that really ran a suite. Ignored, invalid and no-coverage ones never did, so
+        """The mutants a suite really tested. Ignored, invalid and no-coverage ones were not, so
         they are neither a saving nor a cost, and the two places that report the saving read this
         one list rather than each deciding for themselves what counts."""
         return tuple(
@@ -765,6 +768,7 @@ def run(
         _project_relative(path, project_dir)  # refuse a source with no place in the copies, now
     budget, baseline_tests = _run_baseline(
         project_dir,
+        (path,),
         runner,
         timeout,
         progress,
@@ -945,6 +949,7 @@ def _baseline_project(
 
 def _run_baseline(
     project_dir: str,
+    sources: tuple[str, ...],
     runner: Runner,
     timeout: float | None,
     progress: Callable[[str], None] | None,
@@ -955,7 +960,8 @@ def _run_baseline(
     """Run the unmutated suite once. Returns ``(budget, baseline_tests)``: the per-mutant time
     budget (derived from this run unless `timeout` overrides) and the number of tests the baseline
     ran, which the coverage marker run must match.
-    Raises `BaselineFailed` if the suite can't run or is red (FG-3.3).
+    Raises `BaselineFailed` if the suite can't run or is red (FG-3.3), or if one of `sources`, the
+    files to mutate, did not compile. Any other file that did not compile is only warned about.
 
     `isolated` runs the suite in an isolated copy of the project rather than in the project
     directory, because that is where the mutants will run — see `_baseline_project` for what the
@@ -993,9 +999,18 @@ def _run_baseline(
                 f"could not run the unmutated suite for {project_dir!r}: {error}{where}"
             ) from error
         baseline_secs = time.monotonic() - started
+        # Relative: `suite_dir` may be a copy, gone once this block ends.
+        uncompiled = [_relative_to(file, suite_dir) for file in baseline.uncompiled]
     if baseline.failed:
         detail = f":\n{baseline.detail}" if baseline.detail else ""
         raise BaselineFailed(f"the unmutated test suite failed for {project_dir!r}{detail}{where}")
+    mutated = {_relative_to(path, project_dir) for path in sources}
+    if broken := [file for file in uncompiled if file in mutated]:
+        # Else every mutant of these files would be scored invalid, and none of them tested.
+        raise BaselineFailed(
+            f"in the unmutated project {project_dir!r}, these files to mutate did not compile: "
+            f"{', '.join(broken)}. Fix them, then run gdmutant again.{where}"
+        )
     # A baseline that ran ZERO tests is not a green baseline — it is no baseline at all, and it is
     # the quietest way this tool can lie. `SuiteResult(0, 0, 0).failed` is False, so a suite nobody
     # ran reads exactly like a suite that passed, and then every single mutant comes back SURVIVED:
@@ -1024,6 +1039,15 @@ def _run_baseline(
             "check that the runner is pointed at your tests (--tests, or --command for a "
             f"custom harness) and that the suite runs on its own.{where}"
         )
+    if others := [file for file in uncompiled if file not in mutated]:
+        # Not refused: a broken addon may be one nobody can fix. Printed even under --progress none.
+        with suppress(OSError, ValueError):  # stderr gone or closed (ValueError)
+            print(
+                f"warning: in the unmutated project, these files did not compile: "
+                f"{', '.join(others)}. The tests that load them did not run, so a mutant only "
+                "they would catch is reported as surviving.",
+                file=sys.stderr,
+            )
     return _baseline_budget(baseline, baseline_secs, timeout), baseline.tests
 
 
@@ -1995,10 +2019,10 @@ def _self_check(outcomes: list[MutantOutcome], check: frozenset[int]) -> list[Mu
     """Compare each self-checked mutant's real verdict with the map's "no coverage".
 
     Only `SURVIVED` agrees, since that is what an unreached mutant must do. It becomes
-    `NO_COVERAGE`, marked `self_checked`. A mutant that turned out invalid or ignored never ran, so
-    it was not compared and is left as it is. Anything else, killed, timed out or errored, is a
-    disagreement: with markers off that mutant would have scored differently, so the run stops with
-    both verdicts shown rather than report a map it has just proved wrong."""
+    `NO_COVERAGE`, marked `self_checked`. A mutant that turned out invalid or ignored was never
+    tested, so it was not compared and is left as it is. Anything else, killed, timed out or
+    errored, is a disagreement: with markers off that mutant would have scored differently, so the
+    run stops with both verdicts shown rather than report a map it has just proved wrong."""
     checked = list(outcomes)
     for index in sorted(check):
         outcome = outcomes[index]
@@ -2437,6 +2461,7 @@ def run_paths(
         _project_relative(path, project_dir)  # refuse a source with no place in the copies, now
     budget, baseline_tests = _run_baseline(
         project_dir,
+        tuple(sources),
         runner,
         timeout,
         progress,
@@ -2707,9 +2732,13 @@ def _run_one(
             # (Stryker's Timeout status), distinct from ERROR below.
             return Verdict.TIMEOUT, None
         except Exception as failure:
+            if isinstance(failure, CompileFailed) and _names(failure.files, target):
+                return Verdict.INVALID, None
             # The runner failed to execute this mutant (e.g. a Godot crash). Tally it as ERROR and
             # carry on — one bad run must not discard the whole pass (FG-4.1).
             return Verdict.ERROR, str(failure) or type(failure).__name__
+        if _names(result.uncompiled, target):
+            return Verdict.INVALID, None  # the tests ran without it, so they say nothing about it
         if result.tests == 0 and not result.failed:
             # Zero tests, no failures — the same silent lie the baseline guard refuses, one mutant
             # at a time. The baseline already proved this project collects tests (`_run_baseline`
@@ -2732,3 +2761,16 @@ def _run_one(
         return (Verdict.KILLED if result.failed else Verdict.SURVIVED), None
     finally:
         _write_source(target, source, eol)  # never leave the project mutated
+
+
+def _relative_to(file: str, directory: str) -> str:
+    """`file` relative to `directory`, with forward slashes, or as given if it is outside it."""
+    with suppress(ValueError):
+        return Path(file).resolve().relative_to(Path(directory).resolve()).as_posix()
+    return file
+
+
+def _names(files: tuple[str, ...], target: Path) -> bool:
+    """Whether `files` (absolute paths) include `target`."""
+    resolved = target.resolve()
+    return any(Path(file).resolve() == resolved for file in files)

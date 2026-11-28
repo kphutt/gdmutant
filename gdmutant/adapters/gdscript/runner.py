@@ -24,8 +24,9 @@ and report parsing with the subprocess mocked.
 from __future__ import annotations
 
 import contextlib
+import re
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import ClassVar
@@ -35,6 +36,7 @@ from gdmutant.adapters.gdscript.markers import MARKER_AUTOLOAD
 from gdmutant.engine.loop import SourceOutsideProject
 from gdmutant.engine.runner import (
     BoundedOutput,
+    CompileFailed,
     ReportedSuite,
     SuiteResult,
     SuiteTimeout,
@@ -59,6 +61,11 @@ _GUT_WINDOW_HOOK_NAME = "gut_windows.gd"
 #: **fail-safe**: if a future GdUnit4 reworded this, the hint simply stops appearing and the generic
 #: no-report error is raised as before — the run still fails, it is only diagnosed less precisely.
 _GDUNIT_NO_TESTS_MARKER = "No test cases found"
+
+#: Godot's report of a script that did not compile: this line, then one naming the script. A
+#: script that loads a broken one gets its own "Failed to compile depended scripts" error.
+_COMPILE_ERROR = re.compile(r"SCRIPT ERROR: (?:Parse|Compile) Error: ")
+_ERROR_AT = re.compile(r"^\s*at: .*\((res://.+):\d+\)\s*$")
 
 #: How much of a failed run's output its message quotes: of a ``SCRIPT ERROR`` from its start,
 #: else from the end of the output.
@@ -158,6 +165,38 @@ def _failure_detail(completed: BoundedOutput) -> str:
         if stream.excerpt is not None:
             return "\n".join(stream.excerpt).strip()[:_DETAIL_CHARS]
     return completed.detail()[-_DETAIL_CHARS:]
+
+
+class _CompileErrors:
+    """The scripts Godot's output says did not compile, read as each line streams in, before any
+    of the output is trimmed."""
+
+    def __init__(self, project: Path) -> None:
+        self._project = project
+        self._streams: list[dict[str, None]] = []
+
+    def stream(self) -> Callable[[str, bool], None]:
+        """What reads one stream's lines (`run_bounded` makes one per stream)."""
+        found: dict[str, None] = {}
+        self._streams.append(found)
+        after_error = False
+
+        def read(line: str, continued: bool) -> None:
+            nonlocal after_error
+            # `in` first: every line of a flood passes here, and most hold no error.
+            error = "SCRIPT ERROR" in line and _COMPILE_ERROR.search(line) is not None
+            if continued:  # more of the same line: it cannot name the script, only hold the error
+                after_error = after_error or error
+                return
+            if after_error and (script := _ERROR_AT.match(line)):
+                found[str(self._project / script[1].removeprefix("res://"))] = None
+            after_error = error
+
+        return read
+
+    def scripts(self) -> tuple[str, ...]:
+        """Each script once, as an absolute path, stdout's first, in the order first named."""
+        return tuple(dict.fromkeys(file for found in self._streams for file in found))
 
 
 @dataclass
@@ -391,12 +430,14 @@ class _GodotJUnitRunner:
         # The exit code is not checked: both frameworks exit non-zero on test failures, and the
         # report decides. The output is kept off the console, and its bounded tail is kept so a
         # failed run can be diagnosed without a flooding mutant filling memory.
+        compile_errors = _CompileErrors(project)
         try:
             completed = run_bounded(
                 self.command(project_dir, markers=markers, files=files),
                 project_dir,
                 budget,
                 self._watch,
+                compile_errors.stream,
             )
         except subprocess.TimeoutExpired as expired:
             # A mutation that makes the suite hang is a detection — surface it as a timeout so the
@@ -404,11 +445,18 @@ class _GodotJUnitRunner:
             raise SuiteTimeout(f"{self._framework} run exceeded {budget:g}s") from expired
         except FileNotFoundError as error:
             raise with_filename(error, self.godot) from error
-        if not report.exists():
-            raise self._missing_report_error(report, completed)
-        # Parse under the adapter's crash-safety contract — both adapters reject a zero-test report
-        # rather than returning a pass; GUT additionally rejects a drop below its baseline count.
-        result = self._result_from_report(report.read_text(encoding="utf-8"), completed, files)
+        uncompiled = compile_errors.scripts()
+        try:
+            if not report.exists():
+                raise self._missing_report_error(report, completed)
+            # Parse under the adapter's crash-safety contract: both adapters reject a zero-test
+            # report rather than returning a pass; GUT also rejects a drop below its baseline count.
+            result = self._result_from_report(report.read_text(encoding="utf-8"), completed, files)
+        except Exception as failure:
+            if not uncompiled:
+                raise
+            raise CompileFailed(str(failure), uncompiled) from failure
+        result = replace(result, uncompiled=uncompiled)
         if not markers:
             return result
         return replace(result, runtime_error=completed.script_error())

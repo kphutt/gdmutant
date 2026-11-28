@@ -129,6 +129,12 @@ fix it, make the suite create what it reads, or pass `--jobs 1`, which runs the 
 every mutant in your own project folder. The baseline copy is made and removed before the
 workers start, so it adds copy time but no extra disk at the peak.
 
+On Windows, once a worker's test command finishes or times out, gdmutant stops every process
+that command started, including one started on purpose to outlive it, such as a build server.
+So a test command must not rely on a background server another worker started. If it did, that
+server could stop partway through, and the mutant would count as killed for a reason unrelated
+to it. Turn off build-server reuse (for example MSBuild's node reuse) when running with `--jobs`.
+
 Each worker's copy also turns off Godot's log file, `user://logs/godot.log`. A mutant that loops
 forever printing an error can grow that file until the disk is full, and a finished run deletes
 each worker's `user://` anyway. To read a worker's log while the run is still going, pass
@@ -505,7 +511,8 @@ two comes back entirely CRLF.
 
 - `status` is one of `Killed`, `Survived`, `Timeout` (the mutation hung the suite: a detection, so
   it counts as killed), `Ignored` (a `# gdmutant: ignore` annotation suppressed it, excluded
-  from the score), `CompileError` (the mutant didn't parse, never counted as killed), or
+  from the score), `CompileError` (the mutant didn't parse, or, under GdUnit4 and GUT, Godot
+  could not compile it; never counted as killed), or
   `RuntimeError` (the runner failed to execute it, e.g. a Godot crash), or, only with
   `--coverage-analysis all`, `NoCoverage` (no test reaches it, so it never ran, and it is scored
   like `Survived`). The console summary and

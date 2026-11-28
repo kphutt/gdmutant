@@ -112,7 +112,8 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
     never run, Stryker's `Ignored` status, see
     [ADR-0004](../decisions/0004-equivalent-mutant-ignore-annotation.md) and
     [ADR-0006](../decisions/0006-operator-scoped-ignore-and-ignored-status.md))
-  - invalid (the mutant didn't parse, per NF-5)
+  - invalid (the mutant didn't parse, per NF-5, or, under GdUnit4 and GUT, Godot's output said
+    its file did not compile)
   - error (the runner failed to execute it, e.g. a crash)
   - no coverage (only with `--coverage-analysis all` or `per-file`: a marker run showed no test reaches the
     mutant's statement, so it is decided without running the suite, Stryker's `NoCoverage` status,
@@ -170,16 +171,21 @@ reports survivors, the mutants no test killed. Three goals shape every decision 
 - NF-5: Mutant validity. The adapter must never hand the runner un-parseable source. A mutation that
   would produce invalid GDScript is detected (re-parse check) and classified `invalid` (→ `CompileError`
   in the report), never counted as `killed`. A wrong mutant means a silently wrong survivor report,
-  the worst failure.
+  the worst failure. Under GdUnit4 and GUT, a mutant that parses but that Godot refuses to compile
+  (a type error, or a warning the project treats as an error) is also `invalid`, when Godot's output
+  names its file. A baseline whose output says a file to mutate did not compile is refused. Any
+  other file that did not compile is named in a warning when the run still wrote its report; when
+  it did not (GdUnit4 writes none once a test file fails to compile), the baseline is refused.
 
-  Oracle boundary: the validity check is gdtoolkit's parser, not Godot itself. A
-  mutant gdtoolkit accepts but Godot rejects at load fails toward score-*inflation* (the suite errors →
-  `error`, or writes no report → `error` via the runner's freshness guard), never toward a false
-  survivor. The live self-test (`tests/test_selftest_live.py`) bounds this for the corpus: it boots
-  all 18 gdtoolkit-accepted mutants (16 token swaps plus 2 statement deletions) into real Godot and
-  asserts zero `RuntimeError` outcomes, so for that mutant set, gdtoolkit and Godot's parsers are
-  confirmed to agree (a Godot-rejected mutant would surface as `error`, failing the assertion). A
-  dedicated `godot --check-only` parse-agreement probe over arbitrary mutants is a fast-follow.
+  Oracle boundary: the validity check is gdtoolkit's parser, not Godot itself. A mutant gdtoolkit
+  accepts but Godot rejects at load is `invalid` under GdUnit4 and GUT when Godot names its file.
+  Otherwise, and under `--runner command`, it fails toward score-*inflation* (the suite errors →
+  `error` or `killed`, or writes no report → `error` via the runner's freshness guard), never toward
+  a false survivor. The live self-test (`tests/test_selftest_live.py`) bounds this for the corpus:
+  it boots all 18 gdtoolkit-accepted mutants (16 token swaps plus 2 statement deletions) into real
+  Godot and asserts zero `RuntimeError` and `CompileError` outcomes, so for that mutant set,
+  gdtoolkit and Godot's parsers are confirmed to agree (a Godot-rejected mutant would surface as
+  `invalid` or `error`, failing the assertion). A dedicated `godot --check-only` parse-agreement probe over arbitrary mutants is a fast-follow.
 
   Generation-time exclusions: the re-parse check is only the second half of the validity story, and
   it cannot see the first. gdtoolkit's grammar carries no type information, and it carries no

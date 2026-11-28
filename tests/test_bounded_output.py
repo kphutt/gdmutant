@@ -11,7 +11,6 @@ import threading
 import time
 import tracemalloc
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -20,6 +19,7 @@ import pytest
 from conftest import bounded_output
 
 import gdmutant.engine.runner as runner_mod
+from gdmutant.engine import process_tree
 from gdmutant.engine.runner import (
     CommandRunner,
     SuiteResult,
@@ -371,10 +371,10 @@ def _long_line_cases(brk: str) -> list[tuple[str, str]]:
         (f"marker after break at {n}", "y" * n + brk + "SCRIPT ERROR" + "y" * 6000)
         for n in range(size - 22, size - 8)
     ]
-    # A marker and a break both at the edge of the overlap, so one more or one fewer character of
-    # overlap changes what is kept. The overlap is `len(marker) - 1` characters wide.
+    # A marker and a break both at the edge of the overlap, so the marker is in two pieces or the
+    # break moves where the next piece starts. Either way each line must be counted once.
     marker = runner_mod._SCRIPT_ERROR_MARKER
-    edge = size - (len(marker) - 1)
+    edge = size - runner_mod._LINE_OVERLAP
     for at_marker in range(edge - 3, edge + 3):
         for at_break in range(edge - 4, edge + 4):
             if at_break + 1 <= at_marker or at_break >= at_marker + len(marker):
@@ -426,11 +426,11 @@ def test_stream_tail_excerpt_is_the_same_however_the_output_is_read(brk: str) ->
 @pytest.mark.parametrize("brk", [None, *_SPLITLINES_BREAKS])
 def test_stream_tail_marker_line_starts_where_the_overlap_does(brk: str | None) -> None:
     """A marker found after the first cut of a long line is kept from the start of the overlap (the
-    last `len(marker) - 1` characters of the piece before it), or from just after the last line
+    last `_LINE_OVERLAP` characters of the piece before it), or from just after the last line
     break in them. So the overlap's width shows in the kept line: a wider or narrower one fails."""
     size = runner_mod._LINE_CHARS
     marker = runner_mod._SCRIPT_ERROR_MARKER
-    overlap_start = size - (len(marker) - 1)
+    overlap_start = size - runner_mod._LINE_OVERLAP
     for pos in range(overlap_start - 3, size + 3):
         line = "a" * pos + (brk or "a") + "a" * (size + 50 - pos - 1) + marker + " boom"
         starts_at = pos + 1 if brk and pos >= overlap_start else overlap_start
@@ -443,111 +443,22 @@ def test_stream_tail_marker_line_starts_where_the_overlap_does(brk: str | None) 
 # --- a timeout stops everything the command started -------------------------------------------
 
 
-@dataclass
-class _FakeProcess:
-    pid: int = 4242
-    killed: bool = False
-
-    def kill(self) -> None:
-        self.killed = True
-
-
-def test_on_windows_a_timeout_kills_the_tree_before_the_process(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[object] = []
-    process = _FakeProcess()
-    monkeypatch.setattr(runner_mod.sys, "platform", "win32")
-    monkeypatch.setattr(
-        runner_mod.subprocess,
-        "run",
-        lambda command, **kwargs: calls.append((command, process.killed)),
-    )
-    runner_mod._kill_tree(process)  # type: ignore[arg-type]
-    # Before the kill: taskkill walks the tree from a process that is still alive.
-    assert calls == [(["taskkill", "/T", "/F", "/PID", "4242"], False)]
-    assert process.killed
-
-
 @pytest.mark.parametrize(
-    "failure",
-    [FileNotFoundError("taskkill"), subprocess.TimeoutExpired("taskkill", 5.0)],
-    ids=["missing", "hung"],
+    ("script", "timeout"), [("pass", 30.0), ("import time; time.sleep(60)", 1.0)]
 )
-def test_on_windows_a_failed_taskkill_still_kills_the_process(
-    monkeypatch: pytest.MonkeyPatch, failure: Exception
+def test_the_process_tree_is_released_however_the_command_ends(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, script: str, timeout: float
 ) -> None:
-    timeouts: list[object] = []
-
-    def failing_taskkill(*args: object, **kwargs: object) -> None:
-        timeouts.append(kwargs.get("timeout"))
-        raise failure
-
-    process = _FakeProcess()
-    monkeypatch.setattr(runner_mod.sys, "platform", "win32")
-    monkeypatch.setattr(runner_mod.subprocess, "run", failing_taskkill)
-    runner_mod._kill_tree(process)  # type: ignore[arg-type]
-    assert timeouts == [runner_mod._KILL_GRACE_SECS]  # a hung taskkill cannot hang the run
-    assert process.killed
+    closed: list[bool] = []
+    monkeypatch.setattr(process_tree.ProcessTree, "close", lambda tree: closed.append(True))
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        runner_mod.run_bounded(_runs(script), str(tmp_path), timeout)
+    assert closed == [True]
 
 
-def test_on_windows_a_ctrl_c_during_taskkill_still_kills_the_process(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def interrupted(*args: object, **kwargs: object) -> None:
-        raise KeyboardInterrupt
-
-    process = _FakeProcess()
-    monkeypatch.setattr(runner_mod.sys, "platform", "win32")
-    monkeypatch.setattr(runner_mod.subprocess, "run", interrupted)
-    with pytest.raises(KeyboardInterrupt):
-        runner_mod._kill_tree(process)  # type: ignore[arg-type]
-    assert process.killed
-
-
-@pytest.mark.parametrize(
-    "failure", [None, ProcessLookupError(4242), PermissionError(1, "Operation not permitted")]
-)
-def test_elsewhere_a_timeout_kills_the_process_group(
-    monkeypatch: pytest.MonkeyPatch, failure: OSError | None
-) -> None:
-    # A group that already exited, or one with a member we may not signal, still kills the command.
-    groups: list[tuple[int, int]] = []
-
-    def killpg(pid: int, sig: int) -> None:
-        groups.append((pid, sig))
-        if failure is not None:
-            raise failure
-
-    process = _FakeProcess()
-    monkeypatch.setattr(runner_mod.sys, "platform", "linux")
-    monkeypatch.setattr(runner_mod.os, "killpg", killpg, raising=False)
-    monkeypatch.setattr(runner_mod.signal, "SIGKILL", 9, raising=False)
-    runner_mod._kill_tree(process)  # type: ignore[arg-type]
-    assert groups == [(4242, 9)]
-    assert process.killed
-
-
-@pytest.mark.parametrize(("platform", "own_group"), [("win32", False), ("linux", True)])
-def test_the_command_gets_a_process_group_of_its_own_off_windows(
-    monkeypatch: pytest.MonkeyPatch, platform: str, own_group: bool
-) -> None:
-    seen: dict[str, object] = {}
-
-    def popen(command: list[str], **kwargs: object) -> None:
-        seen.update(kwargs)
-        raise FileNotFoundError(command[0])
-
-    monkeypatch.setattr(runner_mod.sys, "platform", platform)
-    monkeypatch.setattr(runner_mod.subprocess, "Popen", popen)
-    with pytest.raises(FileNotFoundError):
-        runner_mod.run_bounded(["x"], ".", 1.0)
-    assert seen["start_new_session"] is own_group
-
-
-def test_a_timed_out_commands_children_are_stopped_too(tmp_path: Path) -> None:
-    # The grandchild appends to `beats` until something stops it. Real processes, so on Windows
-    # this runs taskkill and elsewhere killpg.
+@pytest.mark.skipif(sys.platform != "win32", reason="a Job Object exists only on Windows")
+def test_on_windows_a_child_left_behind_by_a_finished_command_is_stopped(tmp_path: Path) -> None:
+    # The child holds no pipe, so the command finishes normally, and closing its job ends the child.
     beats = tmp_path / "beats"
     pid_file = tmp_path / "pid"
     beat = (
@@ -559,12 +470,40 @@ def test_a_timed_out_commands_children_are_stopped_too(tmp_path: Path) -> None:
     )
     script = (
         "import os, subprocess, sys, time\n"
-        f"subprocess.Popen([sys.executable, '-c', {beat!r}], "
+        f"subprocess.Popen([sys.executable, '-c', {beat!r}], stdin=subprocess.DEVNULL, "
         "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"while not os.path.exists({str(beats)!r}):\n"
+        "    time.sleep(0.05)\n"
+    )
+    try:
+        assert runner_mod.run_bounded(_runs(script), str(tmp_path), 30.0).returncode == 0
+        time.sleep(0.5)
+        before = beats.stat().st_size
+        time.sleep(1.0)
+        assert beats.stat().st_size == before, "the command's child is still running"
+    finally:
+        _stop_if_still_beating(beats, pid_file)
+
+
+@pytest.mark.parametrize("parent", ["waits", "exits"])
+def test_a_timed_out_commands_children_are_stopped_too(tmp_path: Path, parent: str) -> None:
+    # The grandchild appends to `beats` until something stops it, and holds the pipes, so a parent
+    # that exits still times out. Real processes: a Job Object on Windows, killpg elsewhere.
+    beats = tmp_path / "beats"
+    pid_file = tmp_path / "pid"
+    beat = (
+        "import os, time\n"
+        f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        "while True:\n"
+        f"    open({str(beats)!r}, 'a').write('.')\n"
+        "    time.sleep(0.05)\n"
+    )
+    script = (
+        "import os, subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {beat!r}])\n"
         f"while not os.path.exists({str(beats)!r}):\n"  # time out only once the child is beating
         "    time.sleep(0.05)\n"
-        "time.sleep(60)\n"
-    )
+    ) + ("time.sleep(60)\n" if parent == "waits" else "")
     try:
         with pytest.raises(SuiteTimeout):
             CommandRunner(_runs(script), timeout=5).run(str(tmp_path))
@@ -680,12 +619,17 @@ def test_a_command_a_stop_overtakes_while_it_starts_is_stopped_at_once(
     popen = subprocess.Popen
 
     def stop_while_starting(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
-        if started:  # taskkill, stopping the tree on Windows
+        if started:  # taskkill, when Windows could not give the command a job
             return popen(*args, **kwargs)
         runner_mod.stop_running_commands()  # after the check, before the command is tracked
         started.append(popen(*args, **kwargs))
         return started[0]
 
+    closed: list[bool] = []
+    close = process_tree.ProcessTree.close
+    monkeypatch.setattr(
+        process_tree.ProcessTree, "close", lambda tree: (closed.append(True), close(tree))[1]
+    )
     monkeypatch.setattr(runner_mod.subprocess, "Popen", stop_while_starting)
     begun = time.monotonic()
     try:
@@ -697,5 +641,43 @@ def test_a_command_a_stop_overtakes_while_it_starts_is_stopped_at_once(
     (process,) = started
     assert process.returncode is not None, "the command is still running"
     assert process.stdout is not None and process.stdout.closed
+    assert closed == [True], "the refused command's job was not released"
     assert not runner_mod._RUNNING
     assert runner_mod.run_bounded(_runs("print('ok')"), str(tmp_path), 30.0).returncode == 0
+
+
+def test_line_readers_see_every_line_of_each_stream_however_much_is_trimmed(
+    tmp_path: Path,
+) -> None:
+    # Past a complete excerpt and far past the tail: what the bounded part keeps no longer says.
+    count = runner_mod._TAIL_CHARS
+    script = (
+        "import sys\n"
+        "print('SCRIPT ERROR: first')\n"
+        f"for n in range({count}): print(f'line {{n}}')\n"
+        "sys.stderr.write('err 1\\nerr 2')\n"
+    )
+    seen: list[list[str]] = []
+
+    def reader() -> Callable[[str, bool], None]:
+        lines: list[str] = []
+        seen.append(lines)
+        return lambda line, continued: lines.append(line)
+
+    output = runner_mod.run_bounded(_runs(script), str(tmp_path), 30, lines=reader)
+    assert seen == [
+        ["SCRIPT ERROR: first", *(f"line {n}" for n in range(count))],
+        ["err 1", "err 2"],
+    ]
+    assert "line 0" not in output.stdout.tail
+
+
+def test_line_readers_are_told_which_pieces_go_on_with_a_long_line(tmp_path: Path) -> None:
+    script = f"print('a' * {runner_mod._READ_BYTES * 2})\nprint('b')\n"
+    seen: list[tuple[str, bool]] = []
+    runner_mod.run_bounded(
+        _runs(script), str(tmp_path), 30, lines=lambda: lambda *piece: seen.append(piece)
+    )
+    flags = [continued for _, continued in seen]
+    assert flags[0] is False and all(flags[1:-1]) and len(flags) > 3
+    assert seen[-1] == ("b", False)
