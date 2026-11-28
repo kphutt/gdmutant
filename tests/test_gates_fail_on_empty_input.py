@@ -53,6 +53,7 @@ readme_images = _load("check_readme_images", register=True)
 harden_github = _load("harden_github", register=True)
 run_gitleaks = _load("run_gitleaks")
 check_rehearsal = _load("check_rehearsal")
+check_backlog = _load("check_backlog")
 
 
 class _Done:
@@ -457,3 +458,34 @@ def test_rehearsal_gate_fails_when_the_api_answer_is_unreadable() -> None:
 def test_rehearsal_gate_refuses_a_missing_sha_or_repo() -> None:
     assert check_rehearsal.main(["", "--repo", "o/r"]) == 2
     assert check_rehearsal.main([_SHA, "--repo", ""]) == 2
+
+
+# --- scripts/check_backlog.py (ci.yml verify job) -------------------------------------------------
+# `main` takes the whole argv, program name first. Empty files fail by design: no `Next ID` line
+# and no tables, so no allowed-empty exception is needed here.
+
+_BACKLOG_KINDS = ("backlog", "archive", "notes")
+
+
+def test_backlog_gate_fails_with_no_arguments() -> None:
+    assert check_backlog.main([]) != 0
+
+
+def test_backlog_gate_fails_when_every_file_is_missing(tmp_path: Path) -> None:
+    assert check_backlog.main(["check_backlog.py", "gdmutant", "GM", str(tmp_path)]) == 2
+
+
+@pytest.mark.parametrize("missing", _BACKLOG_KINDS)
+def test_backlog_gate_fails_when_one_of_the_three_files_is_missing(
+    tmp_path: Path, missing: str
+) -> None:
+    for kind in _BACKLOG_KINDS:
+        if kind != missing:
+            (tmp_path / f"gdmutant-{kind}.md").write_text("", encoding="utf-8")
+    assert check_backlog.main(["check_backlog.py", "gdmutant", "GM", str(tmp_path)]) == 2
+
+
+def test_backlog_gate_fails_on_three_empty_files(tmp_path: Path) -> None:
+    for kind in _BACKLOG_KINDS:
+        (tmp_path / f"gdmutant-{kind}.md").write_text("", encoding="utf-8")
+    assert check_backlog.main(["check_backlog.py", "gdmutant", "GM", str(tmp_path)]) == 1

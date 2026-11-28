@@ -1,0 +1,840 @@
+"""Tests for `scripts/check_backlog.py`, the structural check on the three backlog files.
+
+The script sits outside the coverage and mutation gates (both cover only `gdmutant/`), so these
+tests are the only thing pinning its logic. Each check in the script has a case here that fails
+when that check is dropped or its comparison is flipped.
+
+`scripts/` is deliberately left out of the sdist, so the whole module skips when it runs from an
+unpacked source distribution.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parent.parent
+SCRIPT = REPO / "scripts" / "check_backlog.py"
+
+pytestmark = pytest.mark.skipif(
+    not SCRIPT.is_file(), reason="scripts/ is not in the sdist, so there is nothing to load"
+)
+
+
+def _load():  # type: ignore[no-untyped-def]
+    spec = importlib.util.spec_from_file_location("check_backlog_under_test", SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+check_backlog = _load()
+
+HEAD = (
+    "| # | Item | Who | Effort | Description | Next step | Done when |\n"
+    "|---|---|---|---|---|---|---|\n"
+)
+BLOCKED_HEAD = (
+    "| # | Item | Who | Effort | Description | Next step | Done when | Since |\n"
+    "|---|---|---|---|---|---|---|---|\n"
+)
+ARCHIVE_HEAD = (
+    "| # | Closed | Item | What wrapped up | Shipped in | Release |\n|---|---|---|---|---|---|\n"
+)
+NOTES = "- **One fact.** The reason.\n"
+
+
+def orow(num: int, done: str = "it works", desc: str = "d") -> str:
+    return f"| GM-{num} | a | agent | S | {desc} | n | {done} |\n"
+
+
+def brow(num: int, done: str = "it works", since: str = "2026-11-27", desc: str = "d") -> str:
+    return f"| GM-{num} | a | agent | S | {desc} | Waiting on: x | {done} | {since} |\n"
+
+
+def arow(num: int, anchor: str | None = None, closed: str = "2026-11-01") -> str:
+    a = f'<a id="{anchor if anchor is not None else f"gm-{num}"}"></a>'
+    return f"| {a}GM-{num} | {closed} | done | w | s | r |\n"
+
+
+READY_TWO = orow(2)
+ARCHIVE_ONE = ARCHIVE_HEAD + arow(1)
+
+
+def backlog(
+    next_id: str = "GM-3",
+    progress: str = "",
+    blocked: str = "",
+    ready: str = READY_TWO,
+    needs: str = "",
+    head: str = HEAD,
+) -> str:
+    return (
+        f"Next ID: {next_id}\n\n## In progress\n\n{head}{progress}\n"
+        f"## Blocked\n\n{BLOCKED_HEAD}{blocked}\n"
+        f"## Ready to build\n\n{head}{ready}\n## Needs definition\n\n{head}{needs}"
+    )
+
+
+def run(
+    tmp_path: Path,
+    text: str | None = None,
+    archive: str = ARCHIVE_ONE,
+    notes: str = NOTES,
+    prefix: str = "GM",
+) -> int:
+    (tmp_path / "p-backlog.md").write_text(backlog() if text is None else text, encoding="utf-8")
+    (tmp_path / "p-archive.md").write_text(archive, encoding="utf-8")
+    (tmp_path / "p-notes.md").write_text(notes, encoding="utf-8")
+    return check_backlog.main(["check_backlog.py", "p", prefix, str(tmp_path)])
+
+
+def findings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str | None = None, **kw
+) -> str:  # type: ignore[no-untyped-def]
+    """Run and require exit 1, then return what was printed."""
+    assert run(tmp_path, text, **kw) == 1
+    return capsys.readouterr().out
+
+
+# --- clean files, arguments and missing files --------------------------------------------------
+
+
+def test_clean(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert run(tmp_path) == 0
+    assert capsys.readouterr().out.strip() == "clean"
+
+
+def test_this_repos_own_backlog_files_are_clean() -> None:
+    assert check_backlog.main(["check_backlog.py", "gdmutant", "GM", str(REPO)]) == 0
+
+
+def test_no_arguments_prints_usage(capsys: pytest.CaptureFixture[str]) -> None:
+    assert check_backlog.main([]) == 2
+    assert "usage" in capsys.readouterr().out
+
+
+def test_one_argument_prints_usage() -> None:
+    assert check_backlog.main(["check_backlog.py", "p"]) == 2
+
+
+@pytest.mark.parametrize("prefix", ["g", "G", "GMMM", "gm", "G1", ""])
+def test_a_bad_prefix_is_refused(tmp_path: Path, prefix: str) -> None:
+    assert run(tmp_path) == 0  # the files exist, so only the prefix is wrong
+    assert check_backlog.main(["check_backlog.py", "p", prefix, str(tmp_path)]) == 2
+
+
+@pytest.mark.parametrize("prefix", ["GM", "GMX"])
+def test_two_and_three_letter_prefixes_are_accepted(tmp_path: Path, prefix: str) -> None:
+    text = backlog().replace("GM-", f"{prefix}-")
+    archive = ARCHIVE_ONE.replace("GM-", f"{prefix}-").replace("gm-", f"{prefix.lower()}-")
+    assert run(tmp_path, text, archive=archive, prefix=prefix) == 0
+
+
+def test_only_the_given_prefix_is_read(tmp_path: Path) -> None:
+    other = "| " + "XY" + "-7 | a | agent | S | d | n | ok |\n"  # assembled: not a real id
+    assert run(tmp_path, backlog(ready=READY_TWO + other)) == 1
+
+
+@pytest.mark.parametrize("which", ["backlog", "archive", "notes"])
+def test_missing_file_is_exit_two(tmp_path: Path, which: str) -> None:
+    assert run(tmp_path) == 0
+    (tmp_path / f"p-{which}.md").unlink()
+    assert check_backlog.main(["check_backlog.py", "p", "GM", str(tmp_path)]) == 2
+
+
+def test_missing_file_is_named(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert check_backlog.main(["check_backlog.py", "p", "GM", str(tmp_path)]) == 2
+    assert "p-backlog.md" in capsys.readouterr().out
+
+
+def test_a_file_that_is_not_utf8_is_exit_two(tmp_path: Path) -> None:
+    assert run(tmp_path) == 0
+    (tmp_path / "p-notes.md").write_bytes(b"\xff\xfe\x00bad")
+    assert check_backlog.main(["check_backlog.py", "p", "GM", str(tmp_path)]) == 2
+
+
+@pytest.mark.parametrize("which", ["backlog", "archive", "notes"])
+def test_an_empty_file_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], which: str
+) -> None:
+    kw = {"backlog": "text", "archive": "archive", "notes": "notes"}[which]
+    out = findings(tmp_path, capsys, **{kw: "  \n"})
+    assert f"p-{which}.md is empty" in out
+
+
+def test_root_defaults_to_the_current_directory(tmp_path: Path) -> None:
+    """Run as a subprocess with its own cwd: a test must not chdir the pytest process itself."""
+    assert run(tmp_path) == 0
+    done = subprocess.run(
+        [sys.executable, str(SCRIPT), "p", "GM"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert (done.returncode, done.stdout.strip()) == (0, "clean")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    done = subprocess.run(
+        [sys.executable, str(SCRIPT), "p", "GM"],
+        cwd=empty,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert done.returncode == 2
+
+
+# --- IDs and Next ID ---------------------------------------------------------------------------
+
+
+def test_reused_id(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = findings(tmp_path, capsys, backlog(ready=orow(1) + READY_TWO))
+    assert "used twice" in out
+
+
+def test_a_gap_in_the_sequence_is_named(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = findings(tmp_path, capsys, backlog(next_id="GM-4", ready=orow(3)))
+    assert "missing from both backlog and archive: [2]" in out
+
+
+def test_next_id_equal_to_the_highest_id(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert "not above" in findings(tmp_path, capsys, backlog(next_id="GM-2"))
+
+
+def test_next_id_far_below_the_highest_id(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(next_id="GM-1")) == 1
+
+
+def test_next_id_two_above_the_highest_id(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert "should be 3" in findings(tmp_path, capsys, backlog(next_id="GM-4"))
+
+
+def test_no_next_id_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = findings(tmp_path, capsys, backlog().replace("Next ID: GM-3\n", ""))
+    assert "no 'Next ID'" in out
+
+
+def test_next_id_lines_disagree(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert "disagree" in findings(tmp_path, capsys, backlog() + "\nNext ID: GM-9\n")
+
+
+def test_next_id_lines_that_agree_are_fine(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog() + "\nNext ID: GM-3\n") == 0
+
+
+@pytest.mark.parametrize(
+    "line", ["next id: GM-3", "Next ID: GM-03", "Next ID:GM-3", "Next ID: GM-3."]
+)
+def test_a_malformed_next_id_line_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], line: str
+) -> None:
+    out = findings(tmp_path, capsys, backlog().replace("Next ID: GM-3", line))
+    assert "malformed Next ID" in out
+
+
+def test_a_row_without_a_valid_id_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(
+        tmp_path, capsys, backlog(ready=READY_TWO + "| TBD | a | agent | S | d | n | ok |\n")
+    )
+    assert "has no valid ID" in out
+
+
+def test_fullwidth_digits_are_not_an_id(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready=READY_TWO + "| GM-３ | a | agent | S | d | n | ok |\n")) == 1
+
+
+def test_a_leading_zero_id_is_not_an_id(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready=READY_TWO + "| GM-03 | a | agent | S | d | n | ok |\n")) == 1
+
+
+def test_no_rows_at_all_with_next_id_one_is_clean(tmp_path: Path) -> None:
+    empty = "# t\n\n" + ARCHIVE_HEAD
+    assert run(tmp_path, backlog(next_id="GM-1", ready=""), archive=empty) == 0
+
+
+# --- sections and tables -----------------------------------------------------------------------
+
+_SECTIONS = ["In progress", "Blocked", "Ready to build", "Needs definition"]
+
+
+@pytest.mark.parametrize("section", _SECTIONS)
+def test_a_renamed_required_section_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], section: str
+) -> None:
+    out = findings(tmp_path, capsys, backlog().replace(f"## {section}", f"## {section} (old)"))
+    assert f"required section '{section}' is missing or renamed" in out
+
+
+@pytest.mark.parametrize("section", _SECTIONS)
+def test_a_removed_required_section_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], section: str
+) -> None:
+    out = findings(tmp_path, capsys, backlog().replace(f"## {section}\n", ""))
+    assert f"required section '{section}' is missing or renamed" in out
+
+
+def test_trailing_spaces_after_a_section_name_are_fine(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog().replace("## Blocked\n", "## Blocked  \n")) == 0
+
+
+def test_a_section_that_appears_twice_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, backlog() + "\n## Blocked\n\n" + BLOCKED_HEAD)
+    assert "appears 2 times" in out
+
+
+def test_a_renamed_active_section_cannot_hide_a_row_without_done_when(tmp_path: Path) -> None:
+    text = backlog(ready=orow(2, done="")).replace("## Ready to build", "## Ready")
+    assert run(tmp_path, text) == 1
+
+
+def test_an_optional_research_section_is_allowed(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog() + "\n## Research\n\n" + HEAD) == 0
+
+
+def test_a_table_outside_the_open_sections_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert "outside the open sections" in findings(
+        tmp_path, capsys, backlog() + "\n## Misc\n\n" + HEAD
+    )
+
+
+def test_a_table_before_the_first_section_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, HEAD + "\n" + backlog())
+    assert "before the first section" in out
+
+
+def test_two_tables_in_one_section_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, backlog(ready=READY_TWO + "\n" + HEAD))
+    assert "has 2 tables, expected 1" in out
+
+
+def test_a_section_with_no_table_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = backlog(next_id="GM-1", ready="", needs="")
+    text = text[: text.index("## Needs definition")] + "## Needs definition\n\nnothing here\n"
+    assert "'Needs definition' has 0 tables" in findings(
+        tmp_path, capsys, text, archive="# t\n\n" + ARCHIVE_HEAD
+    )
+
+
+def test_renamed_column(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = findings(tmp_path, capsys, backlog().replace("Effort", "Size", 1))
+    assert "has columns" in out
+
+
+def test_blocked_table_without_since_is_a_finding(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog().replace(" Since |", " When |")) == 1
+
+
+def test_blocked_table_that_is_missing_its_since_column(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog().replace(BLOCKED_HEAD, HEAD)) == 1
+
+
+def test_a_missing_separator_row_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, backlog().replace(HEAD, HEAD.split("\n")[0] + "\n", 1))
+    assert "no separator row" in out
+
+
+def test_a_separator_row_of_the_wrong_width_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(
+        tmp_path, capsys, backlog().replace("|---|---|---|---|---|---|---|\n", "|---|---|\n", 1)
+    )
+    assert "separator row has 2 cells" in out
+
+
+# --- row shape ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("section", ["ready", "progress", "needs"])
+def test_a_short_row_is_a_finding_not_a_crash(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], section: str
+) -> None:
+    out = findings(tmp_path, capsys, backlog(**{section: "| GM-2 | a | agent | S | d |\n"}))
+    assert "GM-2 in" in out and "has 5 cells, its header has 7" in out
+
+
+def test_a_short_ready_row_does_not_read_the_wrong_column(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Six cells: counting from the end would read `n` as Done when and call this row fine.
+    out = findings(tmp_path, capsys, backlog(ready="| GM-2 | a | agent | S | n | it works |\n"))
+    assert "has 6 cells, its header has 7" in out
+
+
+def test_a_short_blocked_row_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = backlog(blocked="| GM-2 | a | agent | S | d | Waiting on: x | 2026-11-27 |\n", ready="")
+    out = findings(tmp_path, capsys, text)
+    assert "GM-2 in Blocked has 7 cells, its header has 8" in out
+
+
+def test_a_long_row_is_a_finding(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = findings(
+        tmp_path, capsys, backlog(ready="| GM-2 | a | agent | S | d | n | ok | extra |\n")
+    )
+    assert "has 8 cells" in out
+
+
+def test_an_escaped_pipe_is_one_cell(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready=orow(2, desc="a \\| b"))) == 0
+
+
+@pytest.mark.parametrize("done", ["", "   ", "-", "..."])
+def test_active_row_without_words_in_done_when(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], done: str
+) -> None:
+    out = findings(tmp_path, capsys, backlog(ready=orow(2, done=done)))
+    assert "has no Done when" in out
+
+
+def test_in_progress_row_without_done_when(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(progress=orow(2, done=""), ready="")) == 1
+
+
+def test_blocked_row_without_done_when(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(blocked=brow(2, done=""), ready="")) == 1
+
+
+def test_blocked_row_with_done_when_is_fine(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(blocked=brow(2), ready="")) == 0
+
+
+@pytest.mark.parametrize("since", ["", "soon", "2026-13-01", "27-11-2026"])
+def test_a_blocked_row_needs_a_real_since_date(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], since: str
+) -> None:
+    out = findings(tmp_path, capsys, backlog(blocked=brow(2, since=since), ready=""))
+    assert "has no Since date" in out
+
+
+def test_needs_definition_row_may_lack_done_when(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready="", needs=orow(2, done=""))) == 0
+
+
+def test_placeholder_rows_are_fine_in_their_own_sections(tmp_path: Path) -> None:
+    progress = "| | Nothing in progress | | | | | |\n"
+    blocked = "| | Nothing blocked | | | | Waiting on: ... | | |\n"
+    assert run(tmp_path, backlog(progress=progress, blocked=blocked)) == 0
+
+
+def test_a_placeholder_beside_real_rows_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = backlog(progress="| | Nothing in progress | | | | | |\n" + orow(2), ready="")
+    assert "placeholder row beside real rows" in findings(tmp_path, capsys, text)
+
+
+def test_a_placeholder_in_the_wrong_section_is_a_finding(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready=READY_TWO + "| | Nothing in progress | | | | | |\n")) == 1
+
+
+def test_a_placeholder_of_the_wrong_width_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, backlog(progress="| | Nothing in progress | |\n"))
+    assert "placeholder row in In progress has 3 cells" in out
+
+
+# --- the archive -------------------------------------------------------------------------------
+
+
+def test_bad_archive_anchor(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = findings(tmp_path, capsys, archive=ARCHIVE_HEAD + arow(1, anchor="gm-7"))
+    assert "does not match" in out
+
+
+def test_a_missing_archive_anchor_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(
+        tmp_path, capsys, archive=ARCHIVE_HEAD + arow(1).replace('<a id="gm-1"></a>', "")
+    )
+    assert 'needs the anchor <a id="gm-1"></a>' in out
+
+
+def test_a_backlog_row_may_carry_a_matching_anchor(tmp_path: Path) -> None:
+    ready = READY_TWO.replace("| GM-2 |", '| <a id="gm-2"></a>GM-2 |')
+    assert run(tmp_path, backlog(ready=ready)) == 0
+
+
+def test_a_backlog_row_with_a_wrong_anchor_is_a_finding(tmp_path: Path) -> None:
+    ready = READY_TWO.replace("| GM-2 |", '| <a id="gm-9"></a>GM-2 |')
+    assert run(tmp_path, backlog(ready=ready)) == 1
+
+
+def test_an_archive_row_needs_a_closed_date(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, archive=ARCHIVE_HEAD + arow(1, closed="yesterday"))
+    assert "has no Closed date" in out
+
+
+def test_the_archive_release_column_is_optional(tmp_path: Path) -> None:
+    head = "| # | Closed | Item | What wrapped up | Shipped in |\n|---|---|---|---|---|\n"
+    row = '| <a id="gm-1"></a>GM-1 | 2026-11-01 | done | w | s |\n'
+    assert run(tmp_path, archive=head + row) == 0
+
+
+def test_an_archive_with_the_wrong_columns_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, archive=ARCHIVE_ONE.replace("Closed", "Date"))
+    assert "p-archive.md has columns" in out
+
+
+def test_an_archive_with_two_tables_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, archive=ARCHIVE_ONE + "\n" + ARCHIVE_HEAD)
+    assert "has 2 tables, expected 1" in out
+
+
+def test_an_archive_with_no_table_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, backlog(next_id="GM-1", ready=""), archive="# archive\n")
+    assert "has 0 tables, expected 1" in out
+
+
+# --- Blocks and Blocked by ---------------------------------------------------------------------
+
+
+def _pair(blocks: str = "Blocks GM-3", blocked: str = "Blocked by GM-2") -> str:
+    return orow(2, desc=blocks) + orow(3, desc=blocked)
+
+
+def test_blocks_with_blocked_by(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(next_id="GM-4", ready=_pair()), archive=ARCHIVE_ONE) == 0
+
+
+def test_blocks_without_blocked_by(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    text = backlog(next_id="GM-4", ready=_pair(blocked="d"))
+    assert "no matching 'Blocked by GM-2'" in findings(tmp_path, capsys, text)
+
+
+def test_blocked_by_without_blocks(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    text = backlog(next_id="GM-4", ready=_pair(blocks="d"))
+    assert "no matching 'Blocks GM-3'" in findings(tmp_path, capsys, text)
+
+
+def test_blocks_naming_an_id_that_does_not_exist(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = backlog(ready=orow(2, desc="Blocks GM-9"))
+    assert "GM-9, which is not an open row" in findings(tmp_path, capsys, text)
+
+
+def test_blocked_by_naming_an_archived_id(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = backlog(ready=orow(2, desc="Blocked by GM-1"))
+    assert "GM-1, which is not an open row" in findings(tmp_path, capsys, text)
+
+
+def test_a_list_of_ids_is_checked_each_way(tmp_path: Path) -> None:
+    ready = orow(2, desc="Blocks GM-3, GM-4") + orow(3, desc="Blocked by GM-2")
+    ready += orow(4, desc="Blocked by GM-2")
+    assert run(tmp_path, backlog(next_id="GM-5", ready=ready)) == 0
+    assert (
+        run(tmp_path, backlog(next_id="GM-5", ready=ready.replace("Blocked by GM-2", "d", 1))) == 1
+    )
+
+
+def test_a_link_clause_may_end_a_sentence_or_brackets(tmp_path: Path) -> None:
+    ready = orow(2, desc="Needs it (Blocks GM-3). Later.") + orow(3, desc="Blocked by GM-2.")
+    assert run(tmp_path, backlog(next_id="GM-4", ready=ready)) == 0
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "blocks GM-3",
+        "Blocks: GM-3",
+        "Blocks GM-3 and GM-4",
+        "Blocked-by GM-3",
+        "Blocked on GM-3",
+        "Depends on GM-3",
+        "Blocks GM-3 soon",
+    ],
+)
+def test_a_near_miss_link_spelling_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], spelling: str
+) -> None:
+    out = findings(
+        tmp_path, capsys, backlog(next_id="GM-4", ready=orow(2, desc=spelling) + orow(3))
+    )
+    assert "is not 'Blocks <ID>, <ID>'" in out
+
+
+def test_the_word_blocks_in_prose_is_not_a_link(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready=orow(2, desc="Fixes the code blocks in the guide"))) == 0
+
+
+def test_links_in_a_commented_out_row_do_not_count(tmp_path: Path) -> None:
+    text = backlog() + "\n<!-- sample\n\n" + orow(2, desc="Blocks GM-9") + "\n-->\n"
+    assert run(tmp_path, text) == 0
+
+
+# --- HTML comments -----------------------------------------------------------------------------
+
+COMMENT = "<!-- sample\n| GM-9 | x |\n\n-->\n"  # marked, so only touching a table can fault it
+
+
+def _apart(opening: str) -> str:
+    """A comment holding one table row, set apart from every table by blank lines."""
+    return f"\n{opening}\n\n| GM-9 | x |\n\n-->\n"
+
+
+def test_a_comment_that_hides_a_table_row(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = backlog().replace(READY_TWO, "<!--\n" + READY_TWO + "-->\n")
+    assert "without a leading" in findings(tmp_path, capsys, text)
+
+
+def test_a_comment_touching_a_table_row_from_below(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready="\n" + COMMENT + READY_TWO)) == 1
+
+
+def test_a_comment_touching_a_table_row_from_above(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready=READY_TWO + COMMENT)) == 1
+
+
+def test_a_comment_with_two_rows_side_by_side_and_no_neighbours(tmp_path: Path) -> None:
+    archive = ARCHIVE_ONE + "\n<!-- sample\n| GM-8 | x |\n| GM-9 | y |\n-->\n\n"
+    assert run(tmp_path, archive=archive) == 1
+
+
+def test_a_row_on_the_last_line_of_a_comment(tmp_path: Path) -> None:
+    archive = ARCHIVE_ONE + "\n<!-- sample\n| GM-9 | y | -->\n| GM-8 | z |\n"
+    assert run(tmp_path, archive=archive) == 1
+
+
+def test_a_comment_inside_the_first_line_of_a_file(tmp_path: Path) -> None:
+    assert run(tmp_path, archive="| GM-1 | <!-- x --> |\n| GM-2 | y |\n") == 1
+
+
+def test_the_hidden_row_is_reported_at_its_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, archive=ARCHIVE_ONE + "<!--\n| GM-9 |\n-->\n")
+    assert "line 4" in out
+
+
+def test_a_sample_row_set_apart_by_blank_lines_is_fine(tmp_path: Path) -> None:
+    assert run(tmp_path, archive=ARCHIVE_ONE + _apart("<!-- sample\nSample:")) == 0
+
+
+def test_ids_inside_comments_do_not_count(tmp_path: Path) -> None:
+    archive = ARCHIVE_ONE + "\n<!-- sample\nSample:\n\n| GM-1 | x |\n\n-->\n"
+    assert run(tmp_path, archive=archive) == 0
+
+
+def test_an_unmarked_comment_holding_a_row_is_a_finding_even_when_set_apart(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, archive=ARCHIVE_ONE + _apart("<!--\nNot a sample:"))
+    assert "'<!-- sample' marker" in out
+
+
+def test_the_word_sample_on_the_next_line_is_not_a_marker(tmp_path: Path) -> None:
+    assert run(tmp_path, archive=ARCHIVE_ONE + _apart("<!--\nSample:")) == 1
+
+
+def test_the_sample_marker_ignores_case_and_needs_a_word_boundary(tmp_path: Path) -> None:
+    assert run(tmp_path, archive=ARCHIVE_ONE + _apart("<!-- SAMPLE row")) == 0
+    assert run(tmp_path, archive=ARCHIVE_ONE + _apart("<!-- sampled")) == 1
+
+
+def test_a_marked_sample_comment_that_touches_a_table_is_still_a_finding(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready=READY_TWO + COMMENT)) == 1
+
+
+def test_a_comment_finding_does_not_hide_the_other_findings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(
+        tmp_path, capsys, backlog(next_id="GM-1"), archive=ARCHIVE_ONE + _apart("<!--\nx")
+    )
+    assert "without a leading" in out and "not above" in out and "2 finding(s)" in out
+
+
+def test_findings_in_both_files_are_each_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bad = _apart("<!--\nx")
+    out = findings(tmp_path, capsys, backlog() + bad, archive=ARCHIVE_ONE + bad)
+    assert "p-backlog.md" in out and "p-archive.md" in out
+
+
+def test_an_unclosed_comment_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, backlog() + "\n<!-- never closed\n")
+    assert "never closes" in out
+
+
+@pytest.mark.parametrize("opener", ["<!-->", "<!--->"])
+def test_a_comment_that_closes_itself_is_not_unclosed(tmp_path: Path, opener: str) -> None:
+    assert run(tmp_path, backlog() + f"\n{opener}\n") == 0
+
+
+def test_a_comment_opener_inside_a_code_span_is_not_a_comment(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog() + "\nWrite `<!--` to open a comment.\n") == 0
+
+
+def test_a_notes_file_with_an_unclosed_comment_is_a_finding(tmp_path: Path) -> None:
+    assert run(tmp_path, notes=NOTES + "<!-- oops\n") == 1
+
+
+# --- table shapes the checks would otherwise skip ----------------------------------------------
+
+
+def test_an_indented_table_row_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(
+        tmp_path, capsys, backlog(ready=READY_TWO + " " + orow(2).replace("GM-2", "GM-3"))
+    )
+    assert "starts with spaces before its '|'" in out
+
+
+def test_a_table_without_leading_pipes_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, backlog() + "\na | b\n--- | ---\n1 | 2\n")
+    assert "does not start with '|'" in out
+
+
+def test_a_code_fence_is_a_finding(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = findings(tmp_path, capsys, backlog() + "\n```\n## Blocked\n```\n")
+    assert "starts a code fence" in out
+
+
+def test_an_html_table_is_a_finding(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert "has an HTML table" in findings(
+        tmp_path, capsys, backlog() + "\n<table><tr></tr></table>\n"
+    )
+
+
+def test_a_line_right_after_a_table_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(tmp_path, capsys, backlog(ready=READY_TWO + "stray text\n"))
+    assert "continues the table above it" in out
+
+
+def test_a_blank_looking_line_after_a_table_is_fine(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready=READY_TWO + "   \n")) == 0
+
+
+def test_a_row_with_trailing_spaces_after_its_last_pipe_is_fine(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready=READY_TWO.rstrip("\n") + "   \n")) == 0
+
+
+def test_a_row_without_its_closing_pipe_keeps_its_last_cell(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(ready="| GM-2 | a | agent | S | d | n | x\n")) == 0
+
+
+# --- line numbers in findings ------------------------------------------------------------------
+
+
+def _line_of(text: str, wanted: str) -> int:
+    return text.split("\n").index(wanted) + 1
+
+
+def test_findings_name_the_right_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    text = backlog() + "\n## Misc\n\n" + HEAD
+    out = findings(tmp_path, capsys, text)
+    assert f"outside the open sections (line {_line_of(text, '## Misc') + 2})" in out
+    text = backlog() + "\n<table><tr></tr></table>\n"
+    out = findings(tmp_path, capsys, text)
+    assert f"line {_line_of(text, '<table><tr></tr></table>')} has an HTML table" in out
+    indented = " " + orow(3).rstrip("\n")
+    text = backlog(ready=READY_TWO + indented + "\n", next_id="GM-4")
+    out = findings(tmp_path, capsys, text)
+    assert f"line {_line_of(text, indented)} starts with spaces" in out
+    text = backlog().replace(HEAD, HEAD.split("\n")[0] + "\n", 1)
+    out = findings(tmp_path, capsys, text)
+    assert f"the table at line {_line_of(text, HEAD.split(chr(10))[0])} has no separator" in out
+
+
+def test_an_unclosed_comment_is_reported_at_its_line() -> None:
+    assert check_backlog.unclosed_comment("a\nb\n<!-- x") == 3
+    assert check_backlog.unclosed_comment("a\n<!-- ok -->\n") is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("<!-- note -->\n| a |\n", []),
+        ("| a |\n<!-- note -->\n", []),
+        ("x\n\n<!-- sample\n\n| a |\n\n-->\n\ny\n", []),
+        ("<!-- sample\n\n| a |\n\n-->\n| b |\n", [1]),
+        ("| b |\n<!-- sample\n\n| a |\n\n-->\n", [2]),
+        ("<!-- sample\n\n| a |\n\n-->", []),
+        ("| a | <!-- x -->\n| b |\n", [1]),
+        ("x\n<!-- y\n| a |\n\n-->\n", [2]),
+    ],
+)
+def test_comments_hiding_rows_reports_exact_lines(raw: str, expected: list[int]) -> None:
+    assert check_backlog.comments_hiding_rows(raw) == expected
+
+
+# --- no crash on odd shapes --------------------------------------------------------------------
+
+
+def test_a_row_with_an_empty_first_cell_in_an_open_section_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = findings(
+        tmp_path, capsys, backlog(ready=READY_TWO + "| | a | agent | S | d | n | ok |\n")
+    )
+    assert "has no valid ID" in out
+
+
+def test_a_one_cell_row_is_a_finding_not_a_crash(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert "has no valid ID" in findings(tmp_path, capsys, backlog(ready=READY_TWO + "| |\n"))
+
+
+def test_a_short_row_under_a_header_with_the_id_column_last_is_not_a_crash(tmp_path: Path) -> None:
+    head = (
+        "| Item | Who | Effort | Description | Next step | Done when | # |\n"
+        "|---|---|---|---|---|---|---|\n"
+    )
+    assert run(tmp_path, backlog(ready="| a | b | c | d | e | f |\n", head=head)) == 1
+
+
+def test_an_iso_date_without_dashes_is_not_a_date(tmp_path: Path) -> None:
+    assert run(tmp_path, backlog(blocked=brow(2, since="20261127"), ready="")) == 1
+    assert run(tmp_path, archive=ARCHIVE_HEAD + arow(1, closed="20261101")) == 1

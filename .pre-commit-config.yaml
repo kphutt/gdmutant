@@ -115,6 +115,13 @@ repos:
         pass_filenames: false
         always_run: true
 
+      - id: backlog-check
+        name: backlog check (mirrors ci.yml's verify job)
+        entry: uv run python scripts/check_backlog.py gdmutant GM
+        language: system
+        pass_filenames: false
+        always_run: true
+
       # Mirrors ci.yml's license-check job (ADR-0012). That job's own first step is `uv sync
       # --frozen --no-dev` — fine in CI (a throwaway runner), but running it against the SHARED
       # `.venv` uninstalls pre-commit itself mid-hook, which fails outright on Windows ("failed to

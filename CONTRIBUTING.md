@@ -63,7 +63,7 @@ Run this whether or not you installed the hooks. It is the only local command th
 Verify job, the test suite included:
 
 ```sh
-uv run python scripts/verify_local.py                       # lint, format, GDScript lint, types, tests, audit
+uv run python scripts/verify_local.py                       # lint, format, GDScript lint, types, tests, audit, backlog check
 uv run python scripts/verify_local.py --job license-check   # the license gate
 uv run python scripts/verify_local.py --list                # print a job's commands without running them
 ```
@@ -117,6 +117,9 @@ GDMUTANT_GODOT=/path/to/godot uv run pytest tests/test_selftest_live.py -v --no-
 - Commits and PRs carry no AI co-author trailer.
 - Add any new third-party dependency to `docs/credits.md` with its license.
 - Note any change users will notice in `CHANGELOG.md`, under `[Unreleased]`.
+- The maintainer keeps [`gdmutant-backlog.md`](gdmutant-backlog.md),
+  [`gdmutant-archive.md`](gdmutant-archive.md) and [`gdmutant-notes.md`](gdmutant-notes.md), so
+  a PR never edits them. Name the issue your PR fixes with `Closes #NNN`.
 
 ## License
 
