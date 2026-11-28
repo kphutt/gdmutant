@@ -12,6 +12,13 @@ All notable changes to gdmutant are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- On Windows, gdmutant now stops every process a test command leaves running, once the command
+  finishes or times out, including one started on purpose to outlive it, such as a build server.
+  Under `--jobs`, turn off build-server reuse (for example MSBuild's node reuse). (#368, thanks
+  @normanthesquid)
+
 ### Fixed
 
 - Under GdUnit4 and GUT, a mutant whose own file Godot cannot compile is now scored `invalid`,
@@ -20,6 +27,8 @@ All notable changes to gdmutant are recorded here. The format follows
   which a file to mutate does not compile is now refused. Any other file that does not compile is
   named in a warning, since the tests that load it did not run, if the suite still wrote its
   report. (#359)
+- On Windows, a timed-out test command's child processes are now stopped even if the command
+  itself has already exited. (#368, thanks @normanthesquid)
 
 ## [0.1.8] - 2026-11-26
 
