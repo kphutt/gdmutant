@@ -1,12 +1,39 @@
-"""Check a repo's three backlog files. Exit 0 clean, 1 on a finding, 2 if a file is missing.
+"""Check a repo's three backlog files. Exit 0 clean, 1 on a finding, 2 on a usage or input error.
 
-Usage: check_backlog.py <project> <PREFIX> [root]
+Usage: check_backlog.py <project> <PREFIX> [root] [--private-id REGEX] [--private-host HOST]
+       [--allow-host HOST] [--private-file PATH]
+
+Each option may repeat, and `--option=value` works too. Any other argument is an error (exit 2).
+Every input is checked against the one form it may take, never against a list of bad forms, so
+a malformed value exits 2 instead of loading and then matching nothing. `<project>` is ASCII
+letters, digits, `.`, `_` and `-`, starting with a letter or digit; `<PREFIX>` is two or three
+capital letters; `[root]` is an existing directory. A HOST is two or more dot-separated labels of
+ASCII letters, digits and hyphens, with no hyphen at either end of a label; case is folded. A
+REGEX must compile, have no space at either end, never match empty text, and hold no anchor
+(`^`, `$`, `\\A`, `\\Z`), since it is searched inside each line. A private host that an
+`--allow-host` covers is an error, since it could never match. `-h` or `--help` prints help
+only as the lone argument, and a flag whose next argument starts with `-` is missing its value:
+write such a value as `--option=-value`.
+
+`--private-file PATH` reads private patterns from a file kept outside the repo, so a public repo
+never has to write them down. One entry per line, `id:REGEX` or `host:HOST`; blank lines and
+lines starting with `#` are skipped. The file is read as UTF-8, a BOM and Windows line endings
+are ignored, and a space before or after an entry's kind or value is an error. The
+`CHECK_BACKLOG_PRIVATE_FILE` environment variable names one more such file; set but empty, it
+is an error. Every file named, by the variable or by the option, adds to `--private-id` and
+`--private-host`, and a path named twice is read once. A file inside the checked repo is
+refused. An unreadable file or a bad line exits 2. A finding from a file entry names the file
+line and never prints the pattern or the text it matched.
 
 Every structural assumption the checks rely on is itself checked, so a missing, renamed or
 misshapen part is a finding, never a silent skip: section names and counts, table headers and
 separator rows, each row's cell count, each row's ID and anchor, the Next ID line, the
-Blocks and Blocked by links, and the archive table. Columns are looked up by their header name,
-never by counting from either end. Digits are ASCII only, and lines are split on "\\n" only.
+Blocks and Blocked by links, and the archive table. No file may point at a private tracker: the
+raw text, HTML comments included, is scanned for text matching `--private-id`, and for a URL on
+`--private-host` or a built-in hosted-tracker host (minus `--allow-host`). Those are findings. A
+phrase such as "see the private ticket" only prints a `check:` note and never changes the exit
+code. Columns are looked up by their header name, never by counting from either end. Digits
+are ASCII only, and lines are split on "\\n" only.
 
 `main` takes the full argv, program name first, so `main(sys.argv)` is the whole entry point and
 tests can call it directly. The script is lint-clean under ruff's default rules plus E, B and E501,
@@ -14,6 +41,7 @@ and `ruff format --check`, all at 100 columns, so a repo can paste it in unchang
 """
 
 import contextlib
+import os
 import re
 import sys
 from datetime import date
@@ -33,6 +61,52 @@ COMMENT = re.compile(r"<!--(?:-?>|.*?-->|.*)", re.S)
 CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.*?[^`])\1(?!`)")
 # A delimiter row of one or more cells, with at least one pipe: `---|---`, `--- |`, `:-: |`.
 DELIMITER_ROW = re.compile(r"(?=[^|]*-)(?=.*\|)[\s:|-]+")
+# Hosted trackers whose URLs are findings unless `--allow-host` exempts them. Not exhaustive:
+# `--private-host` adds more, and `--private-id` catches an ID whatever the host.
+TRACKER_HOSTS = (
+    "linear.app",
+    "atlassian.net",
+    "app.asana.com",
+    "shortcut.com",
+    "clickup.com",
+    "monday.com",
+    "trello.com",
+    "notion.so",
+    "notion.site",
+)
+# A dotted name, with or without a scheme. The lookbehind stops `notlinear.app` from reading as
+# `linear.app`; a name just after a single `/` (a path, not `//host`) is skipped in the code.
+HOSTLIKE = re.compile(r"(?<![\w.-])(?:[a-z0-9-]+\.)+[a-z0-9-]+", re.I)
+# Before the host scan, as a browser reads a host: the IDNA dots (fullwidth, ideographic and
+# halfwidth) become `.`, and zero-width characters and the soft hyphen are dropped.
+HOST_SPELLING = str.maketrans(
+    {"\uff0e": ".", "\u3002": ".", "\uff61": "."}
+    | dict.fromkeys(["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad"])
+)
+# `https:/linear.app`: one slash after a scheme still reads as a URL, unlike a path segment.
+SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:/\Z")
+# The one accepted form of a `--private-host`, `--allow-host` or `host:` value: a name HOSTLIKE
+# can read, with real DNS label rules. ASCII only, and checked before the value is lowercased,
+# since `str.lower()` turns the Kelvin sign into `k`. Case is then folded, as HOSTLIKE ignores it.
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+HOST_VALUE = re.compile(rf"{_LABEL}(?:\.{_LABEL})+")
+# A project name: the stem of the three file names, so never a path.
+PROJECT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+EMPTY_MATCH = "matches empty text; it must match the ID itself"
+# A phrase that reads like a pointer to a private item. Only a prompt to look, never a finding.
+# It spans line breaks and hyphens. Each form needs a lead word or an article, so "skip private
+# items" and "private vulnerability reporting" are not hits.
+_ARTICLE = r"(?:the|a|an|our)[\s-]+"
+_PRIVATE = r"(?:(?:related|linked)[\s-]+)?(?:private|internal)[\s-]+(?:[A-Za-z]+[\s-]+)?"
+PRIVATE_POINTER = re.compile(
+    r"\b(?:"
+    rf"(?:see|per|via|in|at|related|linked|tracked)[\s-]+(?:{_ARTICLE})?{_PRIVATE}"
+    r"(?:ticket|tracker|issue|finding|item)s?"
+    rf"|{_ARTICLE}{_PRIVATE}(?:ticket|tracker|issue|finding|item|repository|repo)s?"
+    rf"|{_ARTICLE}(?:linear|jira|asana|shortcut|clickup|trello|notion)[\s-]+(?:ticket|issue|item)s?"
+    r")\b",
+    re.I,
+)
 
 
 def mask_code_spans(text: str) -> str:
@@ -256,19 +330,316 @@ def check_links(rows: dict, open_ids: set, prefix: str, problems: list[str]) -> 
                 )
 
 
+def host_problem(host: str) -> str | None:
+    """Why `host` is not a host name HOSTLIKE could read from a file, or None. Never quotes it.
+
+    The only accepted form is two or more labels joined by dots, each label ASCII letters, digits
+    and hyphens, with no hyphen at either end of a label. Anything else could never match, so it
+    is refused. The reason names a common slip, as a hint; the form itself is the rule.
+    """
+    if HOST_VALUE.fullmatch(host):
+        return None
+    if "://" in host:
+        return "not a scheme"
+    if "*" in host:
+        return "not a wildcard (a name already matches its subdomains)"
+    if ":" in host:
+        return "not a port"
+    return (
+        "two or more dot-separated labels of ASCII letters, digits and hyphens, "
+        "with no dot or hyphen at either end of a label"
+    )
+
+
+def id_problem(value: str) -> str | None:
+    """Why `value` is not a usable private ID pattern, or None. Never quotes it.
+
+    It must be a regular expression that compiles, has no space at either end, and cannot match
+    empty text (a pattern that does would point at every line, or at none).
+    """
+    if not value:
+        return "needs a valid regular expression"
+    if value != value.strip():
+        return "has a space at its start or end; write \\s or [ ] inside the pattern instead"
+    try:
+        rule = re.compile(value)
+    except re.error:
+        return "needs a valid regular expression"
+    if rule.search("") is not None:
+        return EMPTY_MATCH
+    if has_anchor(value):
+        return (
+            "has an anchor (^, $, \\A or \\Z); patterns are searched inside each line, "
+            "so an anchor would miss an ID with text around it"
+        )
+    return None
+
+
+def has_anchor(pattern: str) -> bool:
+    """True if `pattern` holds `^`, `$`, `\\A`, `\\Z` or `\\z` outside a character class.
+
+    An escaped `\\^` or `\\$` and a `^` or `$` inside `[...]` are literal text, so they pass.
+    `\\A` and `\\Z` do not compile inside a class, so any one found is an anchor.
+    """
+    i, in_class = 0, False
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "\\":
+            if pattern[i + 1 : i + 2] in ("A", "Z", "z"):
+                return True
+            i += 2
+            continue
+        if in_class:
+            in_class = c != "]"
+        elif c == "[":
+            i += 1
+            i += pattern.startswith("^", i)  # a negated class
+            i += pattern.startswith("]", i)  # a `]` first in a class is literal
+            in_class = True
+            continue
+        elif c in "^$":
+            return True
+        i += 1
+    return False
+
+
+def empty_match_line(rule: re.Pattern, raw: dict) -> str | None:
+    """Where `rule` matches empty text in the files, as 'file line N', or None.
+
+    A pattern such as `\\b` passes the load-time check, since it needs text around it, so the
+    scan looks for an empty match in the files themselves.
+    """
+    for name, text in raw.items():
+        for line_no, line in enumerate(text.split("\n"), start=1):
+            if any(m.start() == m.end() for m in rule.finditer(line)):
+                return f"{name} line {line_no}"
+    return None
+
+
+def host_in(host: str, domains) -> bool:
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def check_private_pointers(raw: str, name: str, opts: dict, problems: list[str], notes: list[str]):
+    """Scan the raw text, comments included, since the file is public as written.
+
+    A match for `--private-id`, or a URL on a private or built-in tracker host that is not
+    allowed, is a finding. A pointer-like phrase is only a note.
+    """
+    hosts = [*TRACKER_HOSTS, *opts["private_host"]]
+    for line_no, line in enumerate(raw.split("\n"), start=1):
+        found = [m.group(0) for r in opts["private_id"] for m in r.finditer(line)]
+        # A rule from the private file is named by its line there, never by what it matched.
+        found += [f"private file line {n}" for r, n in opts["file_id"] if r.search(line)]
+        seen = line.translate(HOST_SPELLING)  # what a browser would read as the host
+        for m in HOSTLIKE.finditer(seen):
+            before = seen[: m.start()]
+            if before.endswith("/") and not before.endswith("//") and not SCHEME.search(before):
+                continue  # `x/linear.app`: a path segment, not a host
+            host = m.group(0).lower()
+            if host_in(host, opts["allow_host"]):
+                continue
+            if host_in(host, hosts):
+                found.append(host)
+            found += [f"private file line {n}" for h, n in opts["file_host"] if host_in(host, [h])]
+        for what in found:
+            problems.append(
+                f"{name}: line {line_no} points at a private tracker item ({what!r}); "
+                "a public row must stand on its own"
+            )
+    for m in PRIVATE_POINTER.finditer(raw):
+        line_no = raw.count("\n", 0, m.start()) + 1
+        notes.append(
+            f"check: {name}: line {line_no} reads like a pointer to a private item "
+            f"({' '.join(m.group(0).split())!r}); confirm the row stands on its own"
+        )
+
+
+def repo_top(root: Path) -> Path | None:
+    """The git work tree holding `root` (a `.git` entry in it or a parent), or None."""
+    here = root.resolve()
+    return next((d for d in (here, *here.parents) if (d / ".git").exists()), None)
+
+
+def load_private_file(path: str, opts: dict, root: Path) -> str | None:
+    """Add the entries of a private file to `opts`, or return the error to print (exit 2).
+
+    A file inside the checked repo is refused, since a committed pattern file is the leak this
+    option exists to prevent. Errors name the file line and never quote it: the line is the
+    private pattern.
+    """
+    top = repo_top(root)
+    try:
+        if top is not None and Path(path).resolve().is_relative_to(top):
+            return "--private-file must be outside the repository, so the list is never committed"
+    except (OSError, ValueError):
+        return "--private-file could not be read"
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig")
+    except (OSError, ValueError):  # ValueError covers UnicodeDecodeError
+        return "--private-file could not be read"
+    before = len(opts["file_id"]) + len(opts["file_host"])
+    for line_no, line in enumerate(text.split("\n"), start=1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        kind, _, value = line.partition(":")
+        where = f"--private-file line {line_no}"
+        if kind not in ("id", "host"):
+            return f"{where} must be id:REGEX or host:HOST, with nothing before or after it"
+        if kind == "id":
+            if problem := id_problem(value):
+                return f"{where} {problem}"
+            opts["file_id"].append((re.compile(value), line_no))
+        elif problem := host_problem(value):
+            return f"{where} needs a host name such as example.com, {problem}"
+        else:
+            opts["file_host"].append((value.lower(), line_no))
+    if len(opts["file_id"]) + len(opts["file_host"]) == before:
+        return "--private-file has no rules, so it would check nothing; add id: or host: lines"
+    return None
+
+
+HELP = """usage: check_backlog.py <project> <PREFIX> [root] [options]
+
+Checks <project>-backlog.md, <project>-archive.md and <project>-notes.md in [root] (default .).
+Exit 0 when clean, 1 on findings, 2 on a usage or input error.
+
+arguments:
+  <project>            ASCII letters, digits, '.', '_' and '-', starting with a letter or digit
+  <PREFIX>             two or three capital letters A-Z
+  [root]               an existing directory
+
+options (each may repeat; --option=value works too):
+  -h, --help           print this help and exit 0; only on its own, with no other argument
+  --private-id REGEX   fail on text matching REGEX anywhere in a line: a valid pattern with
+                       no anchor (^, $, \\A, \\Z), no space at either end, and no match on
+                       empty text
+  --private-host HOST  fail on a URL on HOST or a subdomain of it; no --allow-host may cover it
+  --allow-host HOST    exempt a public page on HOST or a subdomain of it
+  --private-file PATH  read id:REGEX and host:HOST lines from a file outside the repository;
+                       a file with no rules is an error; adds to CHECK_BACKLOG_PRIVATE_FILE
+
+A HOST is two or more labels joined by dots, such as example.com. Each label is ASCII letters,
+digits and hyphens, with no hyphen at either end. Case does not matter. Anything else, such as
+a scheme, a port, a path, a wildcard, a trailing dot or a space, is an error. A one-word
+intranet host such as jira is not a HOST: match it with --private-id instead.
+
+A flag's value is the next argument unless that starts with '-'; then the value is missing,
+which is an error. Write a value that starts with '-' as --option=value.
+
+environment:
+  CHECK_BACKLOG_PRIVATE_FILE  one more --private-file, read as well as every flag;
+                              set but empty is an error"""
+USAGE = (
+    "usage: check_backlog.py <project> <PREFIX> [root] [--private-id REGEX] "
+    "[--private-host HOST] [--allow-host HOST] [--private-file PATH]"
+)
+OPTIONS = {
+    "--private-id": "private_id",
+    "--private-host": "private_host",
+    "--allow-host": "allow_host",
+    "--private-file": "private_file",
+}
+VALUE_OF = {
+    "--private-id": "a valid regular expression",
+    "--private-host": "a host name such as example.com",
+    "--allow-host": "a host name such as example.com",
+    "--private-file": "a path",
+}
+
+
+def parse_args(argv: list[str]) -> tuple[list[str], dict] | str:
+    """Split argv into positionals and options, or return the text to print.
+
+    Each argument is read once, in order: a flag's value is never also read as a flag, so a
+    value of `-h` can never turn into a request for help. HELP comes back only for a lone
+    `-h` or `--help`; anything else returned as a string is an error (exit 2).
+    """
+    opts: dict = {key: [] for key in (*OPTIONS.values(), "file_id", "file_host")}
+    positional = [argv[0]] if argv else []
+    rest = iter(argv[1:])
+    for arg in rest:
+        if arg in ("-h", "--help"):
+            if len(argv) != 2:
+                return f"{arg} prints help only on its own; drop the other arguments, or drop {arg}"
+            return HELP
+        if not arg.startswith("-"):
+            positional.append(arg)
+            continue
+        flag, has_value, value = arg.partition("=")
+        if flag not in OPTIONS:
+            return f"unknown argument: {arg}"
+        if not has_value:
+            value = next(rest, None)
+            if value is None or value.startswith("-"):
+                return (
+                    f"{flag} needs {VALUE_OF[flag]}; write one that starts with '-' as {flag}=VALUE"
+                )
+        key = OPTIONS[flag]
+        if key == "private_id":
+            if problem := id_problem(value):
+                return f"--private-id {problem}"
+            opts[key].append(re.compile(value))
+        elif key == "private_file":
+            if not value:
+                return "--private-file needs a path"
+            opts[key].append(value)
+        elif problem := host_problem(value):
+            return f"{flag} needs a host name such as example.com, {problem}"
+        else:
+            opts[key].append(value.lower())
+    return positional, opts
+
+
 def main(argv: list[str]) -> int:
     # Findings quote file text, which may hold characters a Windows console code page lacks.
     with contextlib.suppress(AttributeError, OSError, ValueError):
         sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
-    if len(argv) < 3:
-        print("usage: check_backlog.py <project> <PREFIX> [root]")
+    parsed = parse_args(argv)
+    if parsed is HELP:
+        print(HELP)
+        return 0
+    if isinstance(parsed, str):
+        print(parsed)
         return 2
-    project, prefix = argv[1], argv[2]
+    args, opts = parsed
+    if not 3 <= len(args) <= 4:
+        print(USAGE)
+        return 2
+    project, prefix = args[1], args[2]
+    if not PROJECT.fullmatch(project):
+        print(
+            "project must be ASCII letters, digits, '.', '_' and '-', starting with a letter "
+            f"or digit, got {project!r}"
+        )
+        return 2
     if not re.fullmatch(r"[A-Z]{2,3}", prefix):
         print(f"prefix must be two or three capital letters, got {prefix!r}")
         return 2
     prefix = re.escape(prefix)
-    root = Path(argv[3]) if len(argv) > 3 else Path(".")
+    root_arg = args[3] if len(args) > 3 else "."
+    root = Path(root_arg)
+    if not root_arg or not root.is_dir():
+        print(f"root must be an existing directory, got {root_arg!r}")
+        return 2
+    env_file = os.environ.get("CHECK_BACKLOG_PRIVATE_FILE")
+    if env_file == "":
+        print("CHECK_BACKLOG_PRIVATE_FILE is set but empty; unset it or name a file")
+        return 2
+    # The variable and every --private-file all apply; a path named twice is read once.
+    paths = [*([env_file] if env_file else []), *opts["private_file"]]
+    for path in dict.fromkeys(str(Path(x).resolve()) for x in paths):
+        error = load_private_file(path, opts, root)
+        if error:
+            print(error)
+            return 2
+    # A private host inside an allowed one is exempted before it is checked, so it never matches.
+    pairs = [("a --private-host value", h) for h in opts["private_host"]]
+    pairs += [(f"--private-file line {n}", h) for h, n in opts["file_host"]]
+    for where, host in pairs:
+        if host_in(host, opts["allow_host"]):
+            print(f"{where} names a host an --allow-host covers, so it could never match")
+            return 2
     files = {k: root / f"{project}-{k}.md" for k in ("backlog", "archive", "notes")}
     missing = [str(p) for p in files.values() if not p.is_file()]
     if missing:
@@ -282,8 +653,15 @@ def main(argv: list[str]) -> int:
         except UnicodeDecodeError:
             print(f"{p.name} is not valid UTF-8")
             return 2
+    rules = [("--private-id", r) for r in opts["private_id"]]
+    rules += [(f"--private-file line {n}", r) for r, n in opts["file_id"]]
+    for where, rule in rules:
+        if spot := empty_match_line(rule, {files[k].name: raw[k] for k in raw}):
+            print(f"{where} {EMPTY_MATCH} (it does at {spot})")
+            return 2
 
     problems: list[str] = []
+    notes: list[str] = []
     for k, p in files.items():
         if not raw[k].strip():
             problems.append(f"{p.name} is empty")
@@ -302,6 +680,8 @@ def main(argv: list[str]) -> int:
 
     backlog = strip_comments(raw["backlog"])
     archive = strip_comments(raw["archive"])
+    for k, p in files.items():
+        check_private_pointers(raw[k], p.name, opts, problems, notes)
     rows: list[tuple[str, dict | None]] = []  # (id, cells by column name) from every table
 
     # The backlog: each section by name, each table in the section it sits in.
@@ -406,7 +786,7 @@ def main(argv: list[str]) -> int:
         if m.group(1) != m.group(2).lower():
             problems.append(f"archive anchor {m.group(1)!r} does not match {m.group(2)}")
 
-    for p in problems:
+    for p in [*problems, *notes]:
         print(p)
     print("clean" if not problems else f"{len(problems)} finding(s)")
     return 1 if problems else 0

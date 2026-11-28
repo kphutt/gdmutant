@@ -489,3 +489,10 @@ def test_backlog_gate_fails_on_three_empty_files(tmp_path: Path) -> None:
     for kind in _BACKLOG_KINDS:
         (tmp_path / f"gdmutant-{kind}.md").write_text("", encoding="utf-8")
     assert check_backlog.main(["check_backlog.py", "gdmutant", "GM", str(tmp_path)]) == 1
+
+
+def test_backlog_gate_fails_on_an_unknown_argument(tmp_path: Path) -> None:
+    for kind in _BACKLOG_KINDS:
+        (tmp_path / f"gdmutant-{kind}.md").write_text("", encoding="utf-8")
+    argv = ["check_backlog.py", "gdmutant", "GM", str(tmp_path), "--no-such-flag"]
+    assert check_backlog.main(argv) == 2
