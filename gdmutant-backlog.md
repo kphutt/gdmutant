@@ -37,7 +37,6 @@ Next ID: GM-2
 
 | # | Item | Who | Effort | Description | Next step | Done when |
 |---|---|---|---|---|---|---|
-| GM-1 | Start the backlog | agent | M | The three files, seeded with the open work. | Merge the seeding PR | The check in the how-to-start guide passes |
 
 ## Blocked
 
@@ -48,6 +47,7 @@ Next ID: GM-2
 
 | # | Item | Who | Effort | Description | Next step | Done when |
 |---|---|---|---|---|---|---|
+| GM-1 | Start the backlog | agent | M | The three files, seeded with the open work. | Open the seeding PR with `Closes: GM-1` | `uv run python scripts/check_backlog.py gdmutant GM` exits 0 with the open work in the tables |
 
 ## Needs definition
 

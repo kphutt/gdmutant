@@ -227,12 +227,12 @@ def test_a_comment_hiding_a_row_in_the_archive(tmp_path: Path) -> None:
 
 
 def test_a_sample_row_set_apart_by_blank_lines_is_fine(tmp_path: Path) -> None:
-    archive = ARCHIVE + "\n<!--\nSample:\n\n| GM-9 | x |\n\n-->\n"
+    archive = ARCHIVE + "\n<!-- sample\nSample:\n\n| GM-9 | x |\n\n-->\n"
     assert run(tmp_path, backlog(ready=ROW_TWO), archive=archive) == 0
 
 
 def test_ids_inside_comments_do_not_count(tmp_path: Path) -> None:
-    archive = ARCHIVE + "\n<!--\nSample:\n\n| GM-1 | x |\n\n-->\n"
+    archive = ARCHIVE + "\n<!-- sample\nSample:\n\n| GM-1 | x |\n\n-->\n"
     assert run(tmp_path, backlog(ready=ROW_TWO), archive=archive) == 0
 
 
@@ -354,6 +354,11 @@ def test_a_marked_sample_comment_that_touches_a_table_is_still_a_finding(tmp_pat
     assert run(tmp_path, backlog(ready=ROW_TWO + COMMENT)) == 1
 
 
+def test_the_word_sample_on_the_next_line_is_not_a_marker(tmp_path: Path) -> None:
+    archive = ARCHIVE + _apart("<!--\nSample:")
+    assert run(tmp_path, backlog(ready=ROW_TWO), archive=archive) == 1
+
+
 def test_the_sample_marker_ignores_case_and_needs_a_word_boundary(tmp_path: Path) -> None:
     ok = ARCHIVE + _apart("<!-- SAMPLE row")
     assert run(tmp_path, backlog(ready=ROW_TWO), archive=ok) == 0
@@ -377,3 +382,36 @@ def test_findings_in_both_files_are_each_reported(
     assert run(tmp_path, backlog(ready=ROW_TWO) + bad, archive=ARCHIVE + bad) == 1
     out = capsys.readouterr().out
     assert "p-backlog.md" in out and "p-archive.md" in out
+
+
+_SECTIONS = ["In progress", "Blocked", "Ready to build", "Needs definition"]
+
+
+@pytest.mark.parametrize("section", _SECTIONS)
+def test_a_renamed_required_section_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], section: str
+) -> None:
+    text = backlog(ready=ROW_TWO).replace(f"## {section}", f"## {section} (old)")
+    assert run(tmp_path, text) == 1
+    assert f"required section '{section}' is missing or renamed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("section", _SECTIONS)
+def test_a_removed_required_section_is_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], section: str
+) -> None:
+    text = backlog(ready=ROW_TWO).replace(f"## {section}\n", "")
+    assert run(tmp_path, text) == 1
+    assert f"required section '{section}' is missing or renamed" in capsys.readouterr().out
+
+
+def test_trailing_spaces_after_a_section_name_are_fine(tmp_path: Path) -> None:
+    text = backlog(ready=ROW_TWO).replace("## Blocked\n", "## Blocked  \n")
+    assert run(tmp_path, text) == 0
+
+
+def test_a_renamed_active_section_cannot_hide_a_row_without_done_when(tmp_path: Path) -> None:
+    text = backlog(ready="| GM-2 | a | agent | S | d | n |  |\n").replace(
+        "## Ready to build", "## Ready"
+    )
+    assert run(tmp_path, text) == 1

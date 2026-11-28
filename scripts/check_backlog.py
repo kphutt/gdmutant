@@ -2,10 +2,9 @@
 
 Usage: check_backlog.py <project> <PREFIX> [root]
 
-This is the backlogs kit's check (as of kit commit 9f823cc), reformatted to pass this repo's ruff
-rules (named helpers instead of lambdas, lines under 100 columns) with the same logic. `main`
-takes the full argv, program name first, so `main(sys.argv)` is the whole entry point and tests
-can call it directly.
+`main` takes the full argv, program name first, so `main(sys.argv)` is the whole entry point and
+tests can call it directly. The script is lint-clean under ruff's default rules plus E, B and E501,
+and `ruff format --check`, all at 100 columns, so a repo can paste it in unchanged.
 """
 
 import re
@@ -38,7 +37,7 @@ def comments_hiding_rows(raw: str) -> list[int]:
         last = raw.count("\n", 0, m.end())
         inside = [n for n in range(first, last + 1) if is_row(n)]
         touches = is_row(first - 1) or is_row(last + 1) or any(is_row(n + 1) for n in inside)
-        marked = re.match(r"<!--\s*sample\b", m.group(0), re.I) is not None
+        marked = re.match(r"<!--[ \t]*sample\b", m.group(0), re.I) is not None
         if inside and (touches or not marked):
             found.append(first + 1)
     return found
@@ -93,7 +92,12 @@ def main(argv: list[str]) -> int:
 
     # Every active row needs a Done when (the last column, or the one before Since in Blocked).
     active = ("In progress", "Blocked", "Ready to build")
-    for sec in re.split(r"^## ", backlog, flags=re.M)[1:]:
+    sections = re.split(r"^## ", backlog, flags=re.M)[1:]
+    present = {sec.split("\n", 1)[0].strip() for sec in sections}
+    for required in (*active, "Needs definition"):
+        if required not in present:
+            problems.append(f"required section '{required}' is missing or renamed")
+    for sec in sections:
         name = sec.split("\n", 1)[0].strip()
         if name not in active:
             continue
