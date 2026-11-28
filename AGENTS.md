@@ -185,7 +185,8 @@ GDMUTANT_GDUNIT4_CLONE=<path-to-a-gdUnit4-checkout> uv run pytest tests/test_dog
 - [`docs/credits.md`](docs/credits.md): third-party licenses.
 - [`gdmutant-backlog.md`](gdmutant-backlog.md): open work, in order. Closed work is in
   [`gdmutant-archive.md`](gdmutant-archive.md), and facts git can't show are in
-  [`gdmutant-notes.md`](gdmutant-notes.md). Only `chore(backlog):` PRs edit all three.
+  [`gdmutant-notes.md`](gdmutant-notes.md). Only the maintainer's `chore(backlog):` PRs edit all
+  three.
 - `Closes: GM-NN`: the line a pull request body uses to name the backlog item it finishes (see
   "The backlog" below).
 
@@ -198,8 +199,8 @@ request's body). `tests/test_docs_frontmatter.py` pins both halves of that rule.
 ## The backlog
 
 Open work lives in `gdmutant-backlog.md`, closed work in `gdmutant-archive.md`, and facts git can't
-show in `gdmutant-notes.md`. Only `chore(backlog):` PRs change them (setup, seed, sync and rule
-changes), so a feature PR (a contributor's included) never edits them.
+show in `gdmutant-notes.md`. Only the maintainer's `chore(backlog):` PRs change them (setup, seed,
+sync and rule changes), so a feature PR (a contributor's included) never edits them.
 `scripts/check_backlog.py gdmutant GM` checks their structure and runs in `ci.yml`'s `verify` job
 and the pre-push hooks.
 
@@ -231,9 +232,9 @@ Closes #377
    contributor's PR has no `Closes: GM-NN` line, so its row stays in In progress while its Item
    cell cites that open PR (`#NNN`), and the maintainer adds the `Closes:` line in the squash body
    at merge. When an outside PR opens whose body links an issue an existing row cites (`Fixes #NNN`,
-   `Closes #NNN` or `Refs #NNN`), add the PR's `#NNN` to that row's Item cell and move the row to
-   In progress; a PR that links no cited issue gets a new row. A row in In progress with no open PR
-   claiming it moves back to Ready to build.
+   `Closes #NNN`, `Resolves #NNN` or `Refs #NNN`), add the PR's `#NNN` to that row's Item cell and
+   move the row to In progress; a PR that links no cited issue gets a new row. A row in In progress
+   with no open PR claiming it moves back to Ready to build.
 6. Turn accepted issues into rows. Each new row takes the `Next ID`, and the same commit raises it.
 7. Run `uv run python scripts/check_backlog.py gdmutant GM` and the public-readiness scan on the
    three files.
